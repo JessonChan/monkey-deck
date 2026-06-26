@@ -38,10 +38,10 @@
 
 ## B. 当前进度快照
 
-- **当前阶段**:阶段 0(地基)—— 待启动
+- **当前阶段**:阶段 0(地基)—— 进行中(用户并行搭建 Wails3 脚手架)
 - **当前焦点**:(待定,阶段 0 启动后填)
 - **最后更新**:2026-06-26(初始化本文件)
-- **可运行状态**:❌ 尚未脚手架(只有治理文档);git 仓库已初始化(`main`),`.gitignore` 已排除 `references/`
+- **可运行状态**:❌ 脚手架已搭(go.mod/build/frontend/internal/Taskfile.yml)但**无 main.go,不能编译**,且尚未首次 commit;图标已就位
 
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 
@@ -53,11 +53,11 @@
 
 | # | 任务 | 状态 | 备注 |
 |---|---|---|---|
-| 0.1 | Wails3 脚手架(React+TS 模板 + go module,确认 module 路径) | todo | 路径见 AGENTS.md §0.5 |
-| 0.2 | 引入 `acp-go-sdk`,搭 `internal/acp/`(Handler 回调 + Runner 生命周期,照搬 RAK) | todo | 参考 `references/.../acp/runner.go` |
+| 0.1 | Wails3 脚手架(React+TS 模板 + go module) | in-progress | 用户已搭(go.mod/build/frontend/Taskfile);待补 main.go + 改 APP_NAME(见 §F) |
+| 0.2 | 引入 `acp-go-sdk`,搭 `internal/acp/`(Handler 回调 + Runner 生命周期,照搬 RAK) | in-progress | 用户已建 internal/acp/{handler,runner,proc}.go(未验证) |
 | 0.3 | 单 harness(opencode)接入:Init→NewSession→Prompt→StopReason | todo | |
 | 0.4 | 进程组回收(Setpgid + kill -PGID + 活跃集合,reap 只在结束后) | todo | AGENTS.md §3.2 |
-| 0.5 | SQLite schema v1 + `internal/store/`(projects/sessions/messages/usage) | todo | |
+| 0.5 | SQLite schema v1 + `internal/store/`(projects/sessions/messages/usage) | in-progress | 用户已建 internal/store/{store,projects,sessions,messages}.go(未验证) |
 | 0.6 | 前端对话视图:binding + event 流式渲染 SessionUpdate | todo | |
 | 0.7 | model 注入(cwd 写 opencode.json,provider/model 格式) | todo | AGENTS.md §3.5 |
 | 0.8 | 端到端验证:单项目单 session 一轮对话跑通 | todo | **阶段 0 验收线** |
@@ -101,11 +101,21 @@
 
 > 未决问题、已知缺陷、卡住的事。解决的标 ✅ 并注明。
 
-- (暂无)
+- 🚧 **脚手架无 `main.go`**:不能编译 → 整个脚手架(build/ internal/ frontend/ go.mod Taskfile.yml)尚未首次 commit(§6.2 要求 commit 能编译)。补 main.go(app 入口)后解锁。
+- 🚧 **身份占位未改**:`Taskfile.yml` APP_NAME=`testapp`;`build/config.yml` productName=`My Product` / company=`My Company` / identifier=`com.mycompany.myproduct`。需统一改为 monkey-deck。
+- [ ] 数据目录默认路径、opencode 探测(§D 遗留)
 
 ---
 
 ## G. 工作日志(追加,最新在上)
+
+### 2026-06-26(续:脚手架接入、图标、版本核对)
+- 发现用户并行搭建了 Wails3 脚手架(`go.mod` / `build/` / `frontend/` / `internal/{acp,store}` / `Taskfile.yml`),全部 untracked。
+- 核对:wails CLI 与 go module 同为 `v3.0.0-alpha2.106`(= 最新);module 路径 + `modernc.org/sqlite` 已在 go.mod 落实。
+- 按指令设图标:`monkey-deck-icon.png`(2048²)→ `build/appicon.png`,并 `wails3 generate icons` 重新生成 `darwin/icons.icns` / `windows/icon.ico` / `darwin/Assets.car`。
+- 修 `.gitignore`:移除误加的 `/build/`(那是 Wails3 源码脚手架,须入库)。
+- AGENTS.md §0.5 增「Wails 版本纪律」(CLI + module + bindings 三者同步、禁锁旧版)。
+- **阻塞见 §F**:脚手架无 `main.go`(不编译)、APP_NAME=testapp、config.yml 占位值。首次脚手架 commit 待补 main.go + 改身份后再做。
 
 ### 2026-06-26
 - 初始化项目:写 `AGENTS.md`(工程约束)+ `PROCESS.md`(本文件)。
