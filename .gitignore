@@ -1,0 +1,34 @@
+# 外部只读参考(软链 / 外部仓库,永不入库 —— 见 AGENTS.md §0.2)
+references/
+
+# Go 构建产物
+/bin/
+/dist/
+/build/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+coverage.html
+
+# 前端构建产物(node_modules 永不入库;lockfile 必须入库)
+node_modules/
+frontend/dist/
+*.app
+
+# 本地数据 / 日志(SQLite 是运行时数据,不入库)
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# 注:Wails 生成的 bindings 走 `wails3 gen bindings` 重新生成,是否入库到脚手架时再定。
