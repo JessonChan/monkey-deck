@@ -53,12 +53,21 @@ const TOOL_STATUS_MAP: Record<string, { label: string; cls: string }> = {
 export default function ChatView(props: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const { items } = props;
+  // 用户是否贴底:记最近一次滚动的「贴底」状态。新消息到来时只在贴底才自动滚,
+  // 用户向上翻阅历史时不打断(避免每条新消息强制拽回底部)。
+  const stickToBottomRef = useRef(true);
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // 距底 ≤ 80px 视为贴底(留出阅读余量,避免最后一行差几像素被判为「不在底部」)。
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 80;
+  };
   // 性能:仅渲染最近 MAX_RENDER 条,封顶 DOM 节点数与内存(长对话不卡)。
   const MAX_RENDER = 200;
   const visible = items.length > MAX_RENDER ? items.slice(-MAX_RENDER) : items;
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [items, props.permission]);
 
   const pct = props.usage.size > 0 ? Math.min(100, Math.round((props.usage.used / props.usage.size) * 100)) : 0;
@@ -90,7 +99,7 @@ export default function ChatView(props: Props) {
         </div>
       </header>
 
-      <div className="chat-body" ref={scrollRef} data-testid="chat-body">
+      <div className="chat-body" ref={scrollRef} onScroll={onScroll} data-testid="chat-body">
         {items.length === 0 && <div className="chat-placeholder">发一条消息开始对话…</div>}
         {items.length > visible.length && <div className="cap-hint">仅显示最近 {visible.length} 条(共 {items.length})</div>}
         {visible.map((item, i) => (
