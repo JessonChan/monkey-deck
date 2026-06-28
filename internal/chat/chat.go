@@ -25,9 +25,9 @@ import (
 
 // 事件名(前端 Events.On 监听这些)。
 const (
-	EventUpdate     = "chat:event"      // SessionEvent(流式 chunk / tool / usage)
-	EventPermission = "chat:permission" // PermissionPrompt(需用户裁决)
-	EventStatus     = "chat:status"     // StatusPayload(会话状态:started/prompting/idle/error/closed)
+	EventUpdate      = "chat:event"        // SessionEvent(流式 chunk / tool / usage)
+	EventPermission  = "chat:permission"   // PermissionPrompt(需用户裁决)
+	EventStatus      = "chat:status"       // StatusPayload(会话状态:started/prompting/idle/error/closed)
 	EventSessionMeta = "chat:session-meta" // SessionMetaPayload(标题等元信息更新)
 )
 
@@ -61,8 +61,8 @@ type liveSession struct {
 	proj   *store.Project
 
 	mu       sync.Mutex
-	agentBuf strings.Builder  // 累积本轮 agent_message_chunk 文本
-	thought  strings.Builder  // 累积本轮 agent_thought_chunk 文本
+	agentBuf strings.Builder // 累积本轮 agent_message_chunk 文本
+	thought  strings.Builder // 累积本轮 agent_thought_chunk 文本
 	tools    map[string]*toolAccum
 	seq      int64 // 单调序号,流式事件防乱序(§4.3)
 }
@@ -532,6 +532,16 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 		// opencode 发来的会话标题(更优,覆盖自动标题)。
 		if err := s.st.UpdateSessionTitle(s.ctx, sessionID, e.Title); err == nil {
 			s.emitSessionMeta(sessionID, e.Title)
+		}
+	}
+	if e.Kind == "usage_update" {
+		// 回写 token 用量快照,使重开会话能恢复占比(§1.6);cost 可能为 nil。
+		cost := 0.0
+		if e.Cost != nil {
+			cost = *e.Cost
+		}
+		if err := s.st.UpdateSessionUsage(s.ctx, sessionID, e.Used, e.Size, cost); err != nil {
+			slog.Warn("persist usage", "err", err)
 		}
 	}
 	s.emit(EventUpdate, e)

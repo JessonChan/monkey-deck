@@ -43,13 +43,17 @@ type Project struct {
 
 // Session 一个 ACP session(钉在 project 上)。
 type Session struct {
-	ID          string `json:"id"`
-	ProjectID   string `json:"projectId"`
-	ACPSession  string `json:"acpSession"`
-	Title       string `json:"title"`
-	Model       string `json:"model"`
-	CreatedAt   int64  `json:"createdAt"`
-	UpdatedAt   int64  `json:"updatedAt"`
+	ID         string `json:"id"`
+	ProjectID  string `json:"projectId"`
+	ACPSession string `json:"acpSession"`
+	Title      string `json:"title"`
+	Model      string `json:"model"`
+	// token 用量(最后一次 SessionUsageUpdate 的快照,使重开会话能恢复占比,§1.6)。
+	UsedTokens int64   `json:"usedTokens"`
+	SizeTokens int64   `json:"sizeTokens"`
+	Cost       float64 `json:"cost"`
+	CreatedAt  int64   `json:"createdAt"`
+	UpdatedAt  int64   `json:"updatedAt"`
 }
 
 // New 打开(或创建)SQLite 并跑迁移。dbPath 为空时用内存库(测试用)。

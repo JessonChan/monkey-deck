@@ -8,6 +8,16 @@ import (
 	"github.com/google/uuid"
 )
 
+// sessionColumns / scanSession:统一 session 的列与扫描,避免多处 SELECT/Scan 漂移(§1.5)。
+const sessionColumns = `id,project_id,acp_session_id,title,model,used_tokens,size_tokens,cost,created_at,updated_at`
+
+func scanSession(r interface {
+	Scan(dest ...any) error
+}, se *Session) error {
+	return r.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model,
+		&se.UsedTokens, &se.SizeTokens, &se.Cost, &se.CreatedAt, &se.UpdatedAt)
+}
+
 // --- Sessions ---
 
 // CreateSession 新建 session(钉在 project 上)。model 为空用项目默认。
@@ -43,6 +53,14 @@ func (s *Store) UpdateSessionTitle(ctx context.Context, id, title string) error 
 	return err
 }
 
+// UpdateSessionUsage 回写 token 用量快照(used/size/cost),使重开会话能恢复占比(§1.6)。
+func (s *Store) UpdateSessionUsage(ctx context.Context, id string, used, size int64, cost float64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET used_tokens=?, size_tokens=?, cost=?, updated_at=? WHERE id=?`,
+		used, size, cost, now(), id)
+	return err
+}
+
 // TouchSession 更新 updated_at。
 func (s *Store) TouchSession(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET updated_at=? WHERE id=?`, now(), id)
@@ -52,7 +70,7 @@ func (s *Store) TouchSession(ctx context.Context, id string) error {
 // ListSessions 列出某项目的全部 session(按更新时间倒序)。
 func (s *Store) ListSessions(ctx context.Context, projectID string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id,project_id,acp_session_id,title,model,created_at,updated_at FROM sessions WHERE project_id=? ORDER BY updated_at DESC`,
+		`SELECT `+sessionColumns+` FROM sessions WHERE project_id=? ORDER BY updated_at DESC`,
 		projectID)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
@@ -61,7 +79,7 @@ func (s *Store) ListSessions(ctx context.Context, projectID string) ([]Session, 
 	var out []Session
 	for rows.Next() {
 		var se Session
-		if err := rows.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model, &se.CreatedAt, &se.UpdatedAt); err != nil {
+		if err := scanSession(rows, &se); err != nil {
 			return nil, err
 		}
 		out = append(out, se)
@@ -72,13 +90,10 @@ func (s *Store) ListSessions(ctx context.Context, projectID string) ([]Session, 
 // GetSession 取单个 session。
 func (s *Store) GetSession(ctx context.Context, id string) (*Session, error) {
 	var se Session
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id,project_id,acp_session_id,title,model,created_at,updated_at FROM sessions WHERE id=?`, id).
-		Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model, &se.CreatedAt, &se.UpdatedAt)
-	if err == sql.ErrNoRows {
+	if err := scanSession(s.db.QueryRowContext(ctx,
+		`SELECT `+sessionColumns+` FROM sessions WHERE id=?`, id), &se); err == sql.ErrNoRows {
 		return nil, nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}
 	return &se, nil
