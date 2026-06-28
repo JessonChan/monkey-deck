@@ -120,6 +120,7 @@ spawn harness 子进程（独立进程组,见 §3.2）
 - **每个 session 的 `cwd` = 一个项目目录**（磁盘上的真实路径）。项目 = 目录,session 钉在目录上。
 - session 要能**恢复**:`LoadSession(sessionID)` resume 已有对话上下文（支撑「关掉再打开,对话还在」）。这是核心产品体验,不是可选项。
 - **禁止**把 session 和目录脱钩（比如弄一个无 cwd 的「全局 session」）。无目录上下文的降级路径要显式标注,不作为正常路径。
+- **每个 session 独占一个 git worktree**(参考 orca parallel worktree 模型):git 项目建 session 时自动 `git worktree add` 建独立分支(`md/<session-id>`)与工作目录(在 `<dataDir>/worktrees/<session-id>`),session 的 cwd 指向该 worktree;非 git 项目降级为项目目录本身。并行 session 互不污染,可对比、可合并(`MergeSession` = `git merge` 进主仓库)。这不违反 §1.1 纯 ACP——opencode 仍走 ACP,只是 cwd 换成 worktree。
 
 ### 1.5 数据本地是真相（SQLite）
 - **本地 SQLite 是唯一真相来源**。没有中央 server、没有云端、没有「server 侧镜像」。message / session / usage / 配置全在本地一个 `.db` 文件里。
@@ -234,8 +235,11 @@ monkey-deck/
 ### 5.2 SQLite 测试用临时文件,不污染用户数据
 - store 测试用 `t.TempDir()` 下的临时 db,跑完即弃。**禁止**测试读写用户的真实应用数据目录。
 
-### 5.3 KISS + 修 bug 必配测试
-- 用最简单直白的方式实现,重复 3 次再抽象。
+### 5.3 KISS + 成熟库优先 + references 优先参考 + Less is More
+- **references/ 优先参考(硬约束)**:任何功能的实现——无论 UI 还是功能设计——**先看 `references/` 下的项目(orca / wesight / real-agent-kanban)有没有对应实现**,参考其做法再动手。能用 read/search/find 从参考项目里学到方案就不凭空设计。**先参考后动手。**
+- **成熟库优先(硬约束)**:任何功能,**先搜索有没有成熟的代码库 / 库可以满足需要**,而不是自己动手写。能用成熟库解决的就不自己造轮子。自研只在「没有成熟方案 / 方案太重 / 有特殊定制」时考虑,且在 commit 里说明理由。**先搜后写,不搜不写。**
+- **KISS**:用最简单直白的方式实现,重复 3 次再抽象。
+- **Less is More**:相同的功能,**越少的代码越是好代码**——更少 bug、更低维护成本。能用 10 行解决的不用 50 行。**删掉后功能不变的代码就该删。**
 - **每个 bug 修复必须配一个能复现该 bug 的测试**,先复现再修。测试比修复更重要。
 
 ### 5.4 已知/可预见的 ACP 坑（从 RAK 参考迁移,预先防范）
@@ -255,6 +259,7 @@ monkey-deck/
 10. **多 session 并发:opencode 完全支持同目录多对话**(本项目实证,纠正早期误判):每个 ACP session 在 opencode 内有独立 git snapshot(`~/.local/share/opencode/snapshot/`),同 cwd 起多个 `opencode acp` 进程并发稳定。诊断证明:3 个全新并发 session 同 cwd + 文件读取题全部通过。**教训**:不要把 provider/model 的不稳当成 opencode/ACP 的限制。
 11. **持续多轮 "peer disconnected before response" 常是 model/provider 不稳**(本项目实证):默认 `zai-coding-plan/glm-5.1` 在持续多轮(约 3 轮后)会 `peer disconnected before response`(opencode 侧静默退出,stderr 无错);换 `zai/glm-4.6` 后 5 轮全稳。**根因**:某些 provider/plan 档 model 在持续 ACP 调用下不稳(限流/异常致 opencode 退出)。**修法**:① 默认/项目 model 优先选已知稳定的(如 `zai/glm-4.6`);② SendMessage 失败(peer disconnected)自动重试 + LoadSession 重连;③ 提供 model 选择 UI 让用户切换。**验证**:/tmp/wesight-study 3 对话 ×10 题,glm-5.1 频繁断、glm-4.6 稳(2026-06-27)。
 12. **用 encoding/json 持久化的 struct,字段必须导出**(本项目实证):`internal/chat/chat.go` 的 `toolAccum`(供 `persistTurn` 写库的 tool 累积器)字段全是非导出小写(`id/title/status/kind`),而 Go `encoding/json` **只序列化导出字段**,导致 `json.Marshal(t)` 产出 `"{}"`、写进 `messages.content`。前端 `messagesToItems` 再 `JSON.parse("{}")` 得空对象 → tool 卡片 `title/status` 全空(状态标签 fallback 成破折号「—」)、`rawInput/rawOutput` 缺失(展开空壳,「点不开」)。**只有历史恢复的 tool 受影响**,实时流式 tool 走 SessionEvent 不经此路径,故「有些能开、有些不能」。**修法**:① toolAccum 字段导出 + json tag,并补 `RawInput/RawOutput` 字段;`handleEvent` 在 `tool_call` 存 rawInput、`tool_call_update` 存 rawOutput;② 前端 `messagesToItems` 解析 rawInput/rawOutput;③ ToolCard 状态 fallback 空值显示「未知」而非破折号。**验证**:`TestToolAccumSerializesAllFields` 断言 marshal 不再是 `{}` 且含全部字段;before/after 对比证明旧 DB 记录破折号+不可展开、新记录正常。**教训**:**凡是用 json.Marshal 落盘 / 跨边界传输的 Go struct,字段必须导出(加 json tag);非导出字段被静默吞掉,不报错,只表现为数据丢失**——这类 bug 极隐蔽。
+13. **ACP 协议无 queue;turn 中途发新消息用 cancel-then-reprompt;Stop/打断必须取消 turn ctx 而非 harness ctx**(本项目实证 + 协议调研):① 协议层 `session/prompt` 是**同步请求-响应**,baseline 只保证 `session/new`/`session/prompt`/`session/cancel`/`session/update`,**无排队语义**;turn 未结束不能发下一个 prompt。② turn 中途发新消息的唯一正确做法 = 发 `session/cancel` notification → agent 停 LLM/中止 tool → 回 `StopReason::cancelled` → 再发新 prompt。SDK 在 Prompt 的 ctx 取消时会自动补发 `session/cancel`(`client_gen.go` Prompt + 测试 `TestPromptCancellationSendsCancelAndAllowsNewSession`),且**连接保持可用**。③ **坑**:`StopSession` 原本取消 `ls.cancel`(startLive 的 harness ctx,`exec.CommandContext` 绑的)→ **直接杀 opencode 进程**,而非干净 `session/cancel`;Stop 按钮实为「干掉 agent」,下条消息得重 spawn。**修法**:`liveSession` 存 per-turn `turnCancel`,Stop/InterruptAndSend 取消它(干净 session/cancel,harness 存活);`runPrompt` 用 `turnCtx.Err()!=nil` 区分取消(干净 idle)/peer-disconnected(重连)/其它(error)。④ 排队缓冲做**前端**(FIFO,turn 结束自动续发);打断(`InterruptAndSend`)置 `suppressIdle` 防被取消的轮发 idle 误触发 auto-continue。**验证**:`internal/chat/queue_test.go`(mock chatConn)busy 守卫/打断/干净停止 ✅(2026-06-28)。
 （本项目自己踩到的坑,持续往这里补,写清「现象 + 根因 + 修法 + 验证」。）
 
 ---
