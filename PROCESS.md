@@ -38,12 +38,16 @@
 
 ## B. 当前进度快照
 
-- **当前阶段**:阶段 0(地基)—— 进行中(用户并行搭建 Wails3 脚手架)
-- **当前焦点**:(待定,阶段 0 启动后填)
-- **最后更新**:2026-06-26(初始化本文件)
-- **可运行状态**:❌ 脚手架已搭(go.mod/build/frontend/internal/Taskfile.yml)但**无 main.go,不能编译**,且尚未首次 commit;图标已就位
-
-> 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
+- **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
+- **当前焦点**:对话体验打磨(切会话不丢进行中输出、token 占比持久化与展示、历史可读性)
+- **最后更新**:2026-06-28
+- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计。`go test ./internal/...` 通过、前端 `tsc` 通过。
+- **本次(2026-06-28)改动**:
+  1. 会话状态按 session 隔离(items/usage/status/permission 各为 map)——修「切走再切回丢失正在输出的历史」。
+  2. token 用量持久化(migration 0003 + `sessions.used_tokens/size_tokens/cost` + `UpdateSessionUsage`),handleEvent 收到 usage_update 回写;重开会话恢复占比而非清零。
+  3. 用量条视觉:加高(3→5px)、显示百分比、分级配色(绿/蓝/琥珀/红随占比)、数字支持 k/M、无数据时隐藏。
+  4. 聊天历史展示:每轮用户消息前的回合分隔(带时间锚点)+ agent 消息时间戳。
+  5. bindings 重生(顺带清掉 stale 的 DeleteSession/MergeSession/worktree 字段,这些前端未用)。
 
 ---
 
@@ -65,10 +69,12 @@
 **阶段 0 验收**:能新建一个「项目(目录)」,在 UI 里发一句话,看到 opencode 通过 ACP 回复并流式展示,进程干净退出不泄漏。
 
 ### 阶段 1(待阶段 0 验收后细化)
-- [ ] 多项目 / 目录管理
-- [ ] session 列表 + `LoadSession` 恢复
-- [ ] 用量统计展示
-- [ ] 重启后状态恢复
+- [x] 多项目 / 目录管理
+- [x] session 列表 + `LoadSession` 恢复
+- [x] 用量统计展示
+- [x] 重启后状态恢复
+- [x] 会话状态隔离(切会话不丢进行中输出)— 2026-06-28
+- [x] token 用量持久化(重开恢复占比)— 2026-06-28
 
 ### 阶段 2 / 3+:见 AGENTS.md §3.1、§7(推迟)
 
@@ -108,6 +114,24 @@
 ---
 
 ## G. 工作日志(追加,最新在上)
+
+### 2026-06-28(对话体验打磨:会话隔离 / token 持久化 / 历史展示)
+**问题与根因**
+- 「切走再切回丢失正在输出的历史」:`App.tsx` 只有一个 `items` state + 事件处理按 `selectedSessionId` 过滤;切走后流式事件被丢弃,切回只重读 DB,而进行中的 turn 在 `runPrompt` 返回前未落库 → 进行中内容丢失。
+- 「token 占比不好」:usage 完全不持久化(session 表无字段),重开会话清零;且进度条 3px、无百分比、配色单一。
+- 历史可读性:无时间戳、多轮边界不清晰。
+
+**改动(原子分组,待分别提交)**
+1. `frontend/src/App.tsx`:`items/usage/status/permission` 改为按 session 的 map(`itemsBySession` 等);事件处理器去掉 `selectedSessionId` 过滤(总是写「事件所属 session」的缓存);`openSession` 有缓存则不重读 DB(保留进行中的流式);新增 `loadedSessionsRef` 标记已加载 session。`selectedSessionIdRef` 仅用于 status 事件的错误过滤,不进 effect 依赖(避免每次切换重订阅)。
+2. `internal/store/migrations/0003_session_usage.sql`:`sessions` 加 `used_tokens/size_tokens/cost`。
+3. `internal/store/store.go` + `sessions.go`:`Session` 加 `UsedTokens/SizeTokens int64`、`Cost float64`;`sessionColumns`/`scanSession` 统一列与扫描;新增 `UpdateSessionUsage`。
+4. `internal/chat/chat.go`:`handleEvent` 收到 `usage_update` 回写 `UpdateSessionUsage`(cost nil 兜底)。
+5. `frontend/src/components/ChatView.tsx` + `index.css` + `types.ts`:用量条加高/百分比/分级配色(`usage-low/mid/high/crit`)/`formatTokens` 支持 M;`ChatItem` 加 `ts`;回合分隔(`TurnDivider`)+ agent 消息时间戳(`formatTime`)。`App.tsx` `openSession` 从持久化恢复 token 占比。
+6. `wails3 generate bindings` 重生(加 usage 字段;清掉 stale 的 DeleteSession/MergeSession/worktree)。
+
+**验证**:`go test ./internal/...` 通过(含新增 `TestSessionUsagePersist`);前端 `bunx tsc --noEmit` 通过;`go build ./internal/...` + `go vet` 干净。
+**改了哪些文件**:`frontend/src/{App.tsx,components/ChatView.tsx,index.css,types.ts}`、`frontend/bindings/.../{chatservice.js,models.js}`、`internal/{chat/chat.go,store/{store.go,sessions.go,store_test.go}}`、`internal/store/migrations/0003_session_usage.sql`。
+**下一步**:可提交(建议拆 4 个原子 commit:① 切会话隔离 fix ② token 持久化 backend+test ③ 重生 bindings ④ 用量条+历史展示 UI)。
 
 ### 2026-06-26(续:脚手架接入、图标、版本核对)
 - 发现用户并行搭建了 Wails3 脚手架(`go.mod` / `build/` / `frontend/` / `internal/{acp,store}` / `Taskfile.yml`),全部 untracked。
