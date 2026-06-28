@@ -554,26 +554,36 @@ func (s *ChatService) SendMessage(sessionID, text string) error {
 	if ls.busy {
 		return fmt.Errorf("session busy: 一轮对话进行中,请等待或打断")
 	}
-	s.startTurn(ls, sessionID, text)
+	if err := s.startTurn(ls, sessionID, text); err != nil {
+		return err
+	}
 	return nil
 }
 
 // startTurn 同步置 busy + 起后台 runPrompt。调用方须持 ls.sendMu —— 保证 busy 置位与
 // runPrompt 启动原子,杜绝两轮 Prompt 重叠。负责:resetBuffers → 持久化用户消息 →
 // 推 user 事件 → 推 prompting。
-func (s *ChatService) startTurn(ls *liveSession, sessionID, text string) {
+func (s *ChatService) startTurn(ls *liveSession, sessionID, text string) error {
 	ls.resetBuffers()
 	ls.mu.Lock()
 	ls.busy = true
 	ls.mu.Unlock()
 
+	// 用户消息是本轮真相来源,先落库。失败必须中止本轮并把错误暴露给用户 ——
+	// 否则 UI 已显示用户消息但 DB 没有,重开会话就丢了(数据一致性)。
 	if _, err := s.st.AppendMessage(s.ctx, sessionID, "user", "", text, ""); err != nil {
-		slog.Warn("persist user msg", "err", err)
+		ls.mu.Lock()
+		ls.busy = false
+		ls.mu.Unlock()
+		detail := "保存消息失败:" + err.Error()
+		s.emitStatus(sessionID, "error", detail)
+		return fmt.Errorf("%s", detail)
 	}
 	s.maybeAutoTitle(sessionID, text)
 	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "user_message_chunk", Text: text})
 	s.emitStatus(sessionID, "prompting", "")
 	go s.runPrompt(ls, sessionID, text)
+	return nil
 }
 
 // InterruptAndSend 打断当前 turn 并立即发送新消息(前端队列面板「立即发送」按钮)。
@@ -609,8 +619,7 @@ func (s *ChatService) InterruptAndSend(sessionID, text string) error {
 			<-done
 		}
 	}
-	s.startTurn(ls, sessionID, text)
-	return nil
+	return s.startTurn(ls, sessionID, text)
 }
 
 // SendAndWaitSync 同步发送并等待回复(供驱动/测试用;GUI 用异步 SendMessage)。
