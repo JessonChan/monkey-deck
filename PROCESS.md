@@ -40,7 +40,7 @@
 
 - **当前阶段**:阶段 0(地基)—— 进行中(用户并行搭建 Wails3 脚手架)
 - **当前焦点**:(待定,阶段 0 启动后填)
-- **最后更新**:2026-06-26(初始化本文件)
+- **最后更新**:2026-06-28(侧栏标题与红绿灯重叠修复 + references/ 改绝对路径)
 - **可运行状态**:❌ 脚手架已搭(go.mod/build/frontend/internal/Taskfile.yml)但**无 main.go,不能编译**,且尚未首次 commit;图标已就位
 
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
@@ -109,6 +109,13 @@
 
 ## G. 工作日志(追加,最新在上)
 
+### 2026-06-28
+- **fix(ui)**:侧栏标题「Monkey Deck」与 macOS 红绿灯重叠。窗口用 `MacTitleBarHiddenInset`(main.go),红绿灯 overlay 在 webview 上,原 `padding-left:76px` 间隙不足。改 `frontend/src/index.css` 的 `.sidebar-header` `padding-left` 76→84px。
+- **docs**:`references/` 不在 worktree 里(主源码树外部、不入库),worktree 读不到。AGENTS.md 的具体读取路径(§0.1/§0.2/§0.4/§2.1/§5.4)与 PROCESS.md 改用绝对路径 `/Users/jessonchan/temp/monkey-deck/references`;§0.2 增「绝对路径(给 git worktree 用)」说明块,声明下文 `references/xxx` 均指该绝对路径。
+- 改动文件:`frontend/src/index.css`、`AGENTS.md`、`PROCESS.md`。
+- 验证:CSS 热重载肉眼确认;路径绝对化 `grep` 复核。
+- **下一步**:继续阶段 0 待办(§C)。
+
 ### 2026-06-26(续:脚手架接入、图标、版本核对)
 - 发现用户并行搭建了 Wails3 脚手架(`go.mod` / `build/` / `frontend/` / `internal/{acp,store}` / `Taskfile.yml`),全部 untracked。
 - 核对:wails CLI 与 go module 同为 `v3.0.0-alpha2.106`(= 最新);module 路径 + `modernc.org/sqlite` 已在 go.mod 落实。
@@ -119,7 +126,7 @@
 
 ### 2026-06-26
 - 初始化项目:写 `AGENTS.md`(工程约束)+ `PROCESS.md`(本文件)。
-- 调研参考:`references/real-agent-kanban` 的 ACP 实现(`internal/acp`)、`references/wesight` 的产品形态。
+- 调研参考:`/Users/jessonchan/temp/monkey-deck/references/real-agent-kanban` 的 ACP 实现(`internal/acp`)、`/Users/jessonchan/temp/monkey-deck/references/wesight` 的产品形态。
 - 确认两项决策(§D→§E):module = `github.com/jessonchan/monkey-deck`;SQLite 驱动 = `modernc.org/sqlite`。
 - 加固治理:AGENTS.md 增 §0.4(wesight MIT 署名)、§6.2(Git 多提交/原子提交纪律);`.gitignore` 排除 `references/` 与构建产物;git 仓库初始化(`main`)。
 - **下一步**:启动阶段 0.1(Wails3 脚手架)。
