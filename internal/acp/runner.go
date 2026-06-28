@@ -24,6 +24,10 @@ import (
 	"github.com/coder/acp-go-sdk"
 )
 
+// StopReason 透传 SDK 的 StopReason,供 internal/chat 等业务包引用
+//(§2.1:internal/acp 是 ACP 唯一封装层,业务包不直接 import SDK)。
+type StopReason = acp.StopReason
+
 // Runner 驱动单个 harness(opencode acp)。
 type Runner struct {
 	HarnessCmd []string // 启动命令,如 ["opencode","acp"]

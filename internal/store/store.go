@@ -47,9 +47,11 @@ type Session struct {
 	ProjectID   string `json:"projectId"`
 	ACPSession  string `json:"acpSession"`
 	Title       string `json:"title"`
-	Model       string `json:"model"`
-	CreatedAt   int64  `json:"createdAt"`
-	UpdatedAt   int64  `json:"updatedAt"`
+	Model        string `json:"model"`
+	WorktreePath string `json:"worktreePath"` // session 的 git worktree 路径(cwd 锚点);空=用项目目录
+	Branch       string `json:"branch"`       // 该 session 对应的 git 分支(merge/清理用)
+	CreatedAt    int64  `json:"createdAt"`
+	UpdatedAt    int64  `json:"updatedAt"`
 }
 
 // New 打开(或创建)SQLite 并跑迁移。dbPath 为空时用内存库(测试用)。

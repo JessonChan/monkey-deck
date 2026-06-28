@@ -20,14 +20,15 @@ import (
 	"github.com/jessonchan/monkey-deck/internal/acp"
 	"github.com/jessonchan/monkey-deck/internal/config"
 	"github.com/jessonchan/monkey-deck/internal/store"
+	"github.com/jessonchan/monkey-deck/internal/worktree"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // 事件名(前端 Events.On 监听这些)。
 const (
-	EventUpdate     = "chat:event"      // SessionEvent(流式 chunk / tool / usage)
-	EventPermission = "chat:permission" // PermissionPrompt(需用户裁决)
-	EventStatus     = "chat:status"     // StatusPayload(会话状态:started/prompting/idle/error/closed)
+	EventUpdate      = "chat:event"        // SessionEvent(流式 chunk / tool / usage)
+	EventPermission  = "chat:permission"   // PermissionPrompt(需用户裁决)
+	EventStatus      = "chat:status"       // StatusPayload(会话状态:started/prompting/idle/error/closed)
 	EventSessionMeta = "chat:session-meta" // SessionMetaPayload(标题等元信息更新)
 )
 
@@ -54,17 +55,34 @@ type toolAccum struct {
 	RawOutput any    `json:"rawOutput,omitempty"`
 }
 
+// chatConn 是 *acp.ChatSession 的最小行为接口,供单测注入 mock(AGENTS.md §5.1:
+// ACP 行为靠接口注入 mock,单测不启真 harness)。*acp.ChatSession 满足此接口。
+type chatConn interface {
+	Prompt(ctx context.Context, message string, timeout time.Duration) (acp.StopReason, error)
+	Close()
+	RespondPermission(id, optionID string) bool
+}
+
 // liveSession 一个活跃的 ACP 对话(内存态,钉在某个 db session 上)。
 type liveSession struct {
-	chat   *acp.ChatSession
-	cancel context.CancelFunc // 取消正在进行的 Prompt
-	proj   *store.Project
+	chat chatConn
+	proj *store.Project
 
 	mu       sync.Mutex
-	agentBuf strings.Builder  // 累积本轮 agent_message_chunk 文本
-	thought  strings.Builder  // 累积本轮 agent_thought_chunk 文本
+	agentBuf strings.Builder // 累积本轮 agent_message_chunk 文本
+	thought  strings.Builder // 累积本轮 agent_thought_chunk 文本
 	tools    map[string]*toolAccum
 	seq      int64 // 单调序号,流式事件防乱序(§4.3)
+
+	// 单 turn 生命周期:ACP 协议无 queue,一个 session 同时只允许一个 Prompt
+	// (session/prompt 是同步请求-响应,turn 未结束前不能发下一个,见 §5.4 调研结论)。
+	// sendMu 串行化所有「发起 turn」入口(SendMessage / InterruptAndSend),
+	// busy 在 sendMu 保护下同步置位,杜绝两轮 Prompt 重叠(治本并发隐患)。
+	sendMu       sync.Mutex
+	busy         bool               // 本轮 Prompt 进行中
+	turnCancel   context.CancelFunc // 取消本轮 Prompt(干净 session/cancel,非杀进程)
+	turnDone     chan struct{}      // 本轮 runPrompt 返回时关闭(供 InterruptAndSend 等待其落定)
+	suppressIdle bool               // InterruptAndSend 置位:本轮结束不发 idle(打断后由新轮发 prompting,避免触发前端 auto-continue 误续发)
 }
 
 func (ls *liveSession) resetBuffers() {
@@ -215,6 +233,12 @@ func (s *ChatService) RemoveProject(id string) error {
 		}
 	}
 	s.mu.Unlock()
+	// 清理该项目下所有 session 的 worktree + 分支。
+	if sess, err := s.st.ListSessions(s.ctx, id); err == nil {
+		for _, se := range sess {
+			s.cleanupWorktree(&se)
+		}
+	}
 	return s.st.DeleteProject(s.ctx, id)
 }
 
@@ -225,7 +249,7 @@ func (s *ChatService) ListSessions(projectID string) ([]store.Session, error) {
 	return s.st.ListSessions(s.ctx, projectID)
 }
 
-// CreateSession 新建 session 并立即启动 ACP 对话(spawn harness → NewSession,§1.3)。
+// CreateSession 新建 session。git 项目自动建独立 worktree+分支(并行隔离);否则用项目目录。
 func (s *ChatService) CreateSession(projectID, title string) (*store.Session, error) {
 	proj, err := s.st.GetProject(s.ctx, projectID)
 	if err != nil {
@@ -242,7 +266,138 @@ func (s *ChatService) CreateSession(projectID, title string) (*store.Session, er
 	if err != nil {
 		return nil, err
 	}
+	// git 项目:为该 session 建独立 worktree+分支(并行隔离;失败降级用项目目录)。
+	if worktree.IsRepo(proj.Path) {
+		short := se.ID
+		if len(short) > 8 {
+			short = short[:8]
+		}
+		branch := "md/" + short
+		wtPath := filepath.Join(s.cfg.DataDir, "worktrees", se.ID)
+		if err := worktree.Create(proj.Path, branch, wtPath, ""); err != nil {
+			slog.Warn("create session worktree failed, fallback to project dir", "err", err)
+		} else if err := s.st.SetSessionWorktree(s.ctx, se.ID, wtPath, branch); err != nil {
+			slog.Warn("persist session worktree failed", "err", err)
+		} else {
+			se.WorktreePath, se.Branch = wtPath, branch
+		}
+	}
 	return se, nil
+}
+
+// cleanupWorktree 删除某 session 的 worktree + 分支(若存在)。非 git session 无操作。
+func (s *ChatService) cleanupWorktree(se *store.Session) {
+	if se.WorktreePath == "" || se.Branch == "" {
+		return
+	}
+	proj, err := s.st.GetProject(s.ctx, se.ProjectID)
+	if err != nil || proj == nil {
+		return
+	}
+	if err := worktree.Remove(proj.Path, se.WorktreePath, se.Branch); err != nil {
+		slog.Warn("cleanup worktree", "session", se.ID, "err", err)
+	}
+}
+
+// DeleteSession 删除 session(关闭活跃 harness + 清理 worktree + 删 DB 记录)。
+func (s *ChatService) DeleteSession(sessionID string) error {
+	s.mu.Lock()
+	if ls, ok := s.active[sessionID]; ok {
+		ls.chat.Close()
+		delete(s.active, sessionID)
+	}
+	s.mu.Unlock()
+	if se, _ := s.st.GetSession(s.ctx, sessionID); se != nil {
+		s.cleanupWorktree(se)
+	}
+	return s.st.DeleteSession(s.ctx, sessionID)
+}
+
+// MergeSession 自动提交 session worktree 改动 + 把分支合并进项目主仓库。
+// agent 改了文件但没 commit 也行——AutoCommit 先提交,再 git merge。一键完成,不需命令行。
+func (s *ChatService) MergeSession(sessionID string) (string, error) {
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if se == nil || se.Branch == "" {
+		return "", fmt.Errorf("session 无独立分支(非 git 项目或未建 worktree)")
+	}
+	proj, err := s.st.GetProject(s.ctx, se.ProjectID)
+	if err != nil {
+		return "", err
+	}
+	if proj == nil {
+		return "", fmt.Errorf("project not found")
+	}
+	// 1. 自动提交 worktree 里 agent 的未提交改动(如果有)
+	if se.WorktreePath != "" {
+		msg := se.Title
+		if msg == "" {
+			msg = "monkey-deck session " + se.ID[:8]
+		}
+		if err := worktree.AutoCommit(se.WorktreePath, msg); err != nil {
+			return "", fmt.Errorf("提交 session 改动失败: %w", err)
+		}
+	}
+	// 2. 合并 + 返回结果摘要
+	mergeOut, err := worktree.MergeBranch(proj.Path, se.Branch)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(mergeOut) == "" {
+		return "✅ 合并完成(无新变更)", nil
+	}
+	return "✅ 合并成功\n" + mergeOut, nil
+}
+
+// SessionDiff 返回该 session 分支相对主仓库的变更摘要(diff --stat + commit log)。
+// 供前端在分支标签旁展示"这个分支改了什么",让用户决定是否合并。
+func (s *ChatService) SessionDiff(sessionID string) (string, error) {
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if se == nil || se.Branch == "" {
+		return "", nil
+	}
+	proj, err := s.st.GetProject(s.ctx, se.ProjectID)
+	if err != nil {
+		return "", err
+	}
+	if proj == nil {
+		return "", nil
+	}
+	stat, _ := worktree.DiffStat(proj.Path, se.Branch)
+	log, _ := worktree.BranchLog(proj.Path, se.Branch)
+	// 也检查 worktree 里未提交的改动(agent 改了文件但没 commit 时 DiffStat 看不到)
+	uncommitted := ""
+	if se.WorktreePath != "" {
+		uncommitted, _ = worktree.UncommittedStat(se.WorktreePath)
+	}
+	var sb strings.Builder
+	if log != "" {
+		sb.WriteString("提交:\n" + log + "\n\n")
+	}
+	if stat != "" {
+		sb.WriteString("已提交变更:\n" + stat + "\n")
+	}
+	if uncommitted != "" {
+		sb.WriteString("\n未提交改动:\n" + uncommitted)
+	}
+	if sb.Len() == 0 {
+		return "暂无变更", nil
+	}
+	return sb.String(), nil
+}
+
+// SessionChanges 返回该 session worktree 的文件级变更列表(VS Code 风格:逐文件 + M/A/D/U 状态)。
+func (s *ChatService) SessionChanges(sessionID string) ([]worktree.FileChange, error) {
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil || se == nil || se.WorktreePath == "" {
+		return nil, nil
+	}
+	return worktree.StatusFiles(se.WorktreePath)
 }
 
 // OpenSession 打开已有 session:有 acp_session_id 则 LoadSession 恢复,否则新建 ACP session(§1.4)。
@@ -290,6 +445,10 @@ func (s *ChatService) ensureLive(sessionID string) error {
 // startLive 启动一个 liveSession(spawn harness + Init + NewSession/LoadSession)。
 func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessionID string, resume bool) error {
 	runner := acp.NewRunner(s.cfg.HarnessCmd, nil, se.Model)
+	cwd := proj.Path
+	if se.WorktreePath != "" {
+		cwd = se.WorktreePath // 每个 session 独占 worktree(并行隔离)
+	}
 
 	ls := &liveSession{proj: proj, tools: map[string]*toolAccum{}}
 	onEvent := func(e acp.SessionEvent) {
@@ -300,22 +459,21 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 		s.emit(EventPermission, p)
 	}
 
-	ctx, cancel := context.WithCancel(s.ctx)
+	// harness 生命周期挂到 s.ctx(随应用退出);运行期不独立 cancel ——
+	// 关闭 session 走 Close()(kill 进程组),停止单轮走 turnCancel(干净 session/cancel)。
 	var (
 		chat *acp.ChatSession
 		err  error
 	)
 	if resume {
-		chat, err = runner.LoadChatSession(ctx, proj.Path, acpSessionID, onEvent, onPermission)
+		chat, err = runner.LoadChatSession(s.ctx, cwd, acpSessionID, onEvent, onPermission)
 	} else {
-		chat, err = runner.NewChatSession(ctx, proj.Path, onEvent, onPermission)
+		chat, err = runner.NewChatSession(s.ctx, cwd, onEvent, onPermission)
 	}
 	if err != nil {
-		cancel()
 		return fmt.Errorf("start acp session: %w", err)
 	}
-	ls.chat = chat
-	ls.cancel = cancel
+	ls.chat = chat // chatConn 接口(chat *acp.ChatSession 满足)
 
 	s.mu.Lock()
 	s.active[se.ID] = ls
@@ -365,9 +523,9 @@ func (s *ChatService) LoadMessages(sessionID string) ([]store.Message, error) {
 // --- Messaging ---
 
 // SendMessage 发送用户消息并驱动 opencode 回复(Prompt,§1.3)。
-// 期间 SessionUpdate 回调并发流入 → 经 event 流式推前端;Prompt 返回后持久化。
+// 仅在 idle 时可用:协议规定一个 session 同时只允许一个 Prompt(§5.4 调研结论)。
+// turn 进行中时前端应把消息入前端队列(不调本方法);busy 守卫兜底防竞态。
 func (s *ChatService) SendMessage(sessionID, text string) error {
-	// 懒启动:首条消息时 spawn harness(避免 idle disconnect)。
 	if err := s.ensureLive(sessionID); err != nil {
 		return err
 	}
@@ -377,18 +535,67 @@ func (s *ChatService) SendMessage(sessionID, text string) error {
 	if ls == nil {
 		return fmt.Errorf("session not active: %s", sessionID)
 	}
-	ls.resetBuffers()
+	ls.sendMu.Lock()
+	defer ls.sendMu.Unlock()
+	if ls.busy {
+		return fmt.Errorf("session busy: 一轮对话进行中,请等待或打断")
+	}
+	s.startTurn(ls, sessionID, text)
+	return nil
+}
 
-	// 持久化用户消息。
+// startTurn 同步置 busy + 起后台 runPrompt。调用方须持 ls.sendMu —— 保证 busy 置位与
+// runPrompt 启动原子,杜绝两轮 Prompt 重叠。负责:resetBuffers → 持久化用户消息 →
+// 推 user 事件 → 推 prompting。
+func (s *ChatService) startTurn(ls *liveSession, sessionID, text string) {
+	ls.resetBuffers()
+	ls.mu.Lock()
+	ls.busy = true
+	ls.mu.Unlock()
+
 	if _, err := s.st.AppendMessage(s.ctx, sessionID, "user", "", text, ""); err != nil {
-		return err
+		slog.Warn("persist user msg", "err", err)
 	}
 	s.maybeAutoTitle(sessionID, text)
-	// 即时把用户消息也走一次 event(前端可统一处理)。
 	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "user_message_chunk", Text: text})
-
 	s.emitStatus(sessionID, "prompting", "")
 	go s.runPrompt(ls, sessionID, text)
+}
+
+// InterruptAndSend 打断当前 turn 并立即发送新消息(前端队列面板「立即发送」按钮)。
+// 协议无 queue:turn 进行中发新消息的唯一正确做法 = session/cancel 当前 turn →
+// 等其落定 → 发新 prompt。本方法把这几步原子化(sendMu 保护):
+//   - 置 suppressIdle:本轮 runPrompt 结束时不发 idle(否则前端 auto-continue 会误续发)
+//   - turnCancel:干净 session/cancel(SDK 自动发,非杀进程,连接保持可用)
+//   - <-turnDone:等本轮落定(persist 仍执行,partial 回复不丢)
+//   - startTurn:发新消息(发 prompting)
+// 当前空闲时等价于 SendMessage。其余排队消息由前端持有,本方法不动(用户选「保留其余」)。
+func (s *ChatService) InterruptAndSend(sessionID, text string) error {
+	if err := s.ensureLive(sessionID); err != nil {
+		return err
+	}
+	s.mu.RLock()
+	ls := s.active[sessionID]
+	s.mu.RUnlock()
+	if ls == nil {
+		return fmt.Errorf("session not active: %s", sessionID)
+	}
+	ls.sendMu.Lock()
+	defer ls.sendMu.Unlock()
+	if ls.busy {
+		ls.mu.Lock()
+		ls.suppressIdle = true
+		tc := ls.turnCancel
+		done := ls.turnDone
+		ls.mu.Unlock()
+		if tc != nil {
+			tc()
+		}
+		if done != nil {
+			<-done
+		}
+	}
+	s.startTurn(ls, sessionID, text)
 	return nil
 }
 
@@ -438,11 +645,28 @@ func (s *ChatService) SendAndWaitSync(sessionID, text string) (string, error) {
 	return agentText, nil
 }
 
-// runPrompt 在后台执行 Prompt(可能很久),结果回写 db + 推 status。
+// runPrompt 在后台执行一轮 Prompt(可能很久):建 turn 上下文 → Prompt(同步)→
+// 持久化累积回复 → 推 status。turn 上下文取消时 SDK 自动发 session/cancel(干净取消,
+// 非杀进程,连接保持可用 —— 见 SDK client_gen.go Prompt + TestPromptCancellationSendsCancelAndAllowsNewSession)。
+//
+// 取消判定:turnCtx.Err()!=nil = 被 StopSession/InterruptAndSend 取消(干净停止,推 idle),
+// 与 peer disconnected(harness 崩,拆连接重连)及其它错误(idle 超时等,推 error)区分。
+// suppressIdle(InterruptAndSend 置位)时本轮不发任何 status:打断后由新轮发 prompting,
+// 避免前端看到瞬态 idle 触发 auto-continue 误续发。
 func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string) {
-	ctx, cancel := context.WithCancel(s.ctx)
-	defer cancel()
-	stopReason, err := ls.chat.Prompt(ctx, text, 300*time.Second)
+	turnCtx, turnCancel := context.WithCancel(s.ctx)
+	done := make(chan struct{})
+	ls.mu.Lock()
+	ls.turnCancel = turnCancel
+	ls.turnDone = done
+	ls.mu.Unlock()
+	defer func() {
+		turnCancel()
+		close(done)
+	}()
+
+	stopReason, err := ls.chat.Prompt(turnCtx, text, 300*time.Second)
+
 	ls.mu.Lock()
 	agentText := ls.agentBuf.String()
 	thoughtText := ls.thought.String()
@@ -450,9 +674,26 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string) {
 	for _, t := range ls.tools {
 		tools = append(tools, t)
 	}
+	suppressed := ls.suppressIdle
+	ls.suppressIdle = false
+	// emit 前清 busy:保证前端收到 idle 时 busy 已 false,drain→SendMessage 不会撞上 stale busy。
+	ls.busy = false
+	ls.turnCancel = nil
+	ls.turnDone = nil
 	ls.mu.Unlock()
 
+	cancelled := err != nil && turnCtx.Err() != nil
+	// 持久化已收到的部分回复(取消/失败也不丢)。
+	s.persistTurn(sessionID, agentText, thoughtText, tools)
+
+	if suppressed {
+		return // 打断:不发 status,新轮 startTurn 会发 prompting
+	}
 	if err != nil {
+		if cancelled {
+			s.emitStatus(sessionID, "idle", "cancelled")
+			return
+		}
 		detail := err.Error()
 		if acp.IsPeerDisconnected(err) {
 			detail = "agent 进程已断开,下条消息将自动重连"
@@ -464,12 +705,9 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string) {
 			s.reapIfIdle()
 		}
 		slog.Error("prompt failed", "session", sessionID, "err", err)
-		// 持久化已收到的部分回复(即使失败也不丢)。
-		s.persistTurn(sessionID, agentText, thoughtText, tools)
 		s.emitStatus(sessionID, "error", detail)
 		return
 	}
-	s.persistTurn(sessionID, agentText, thoughtText, tools)
 	s.emitStatus(sessionID, "idle", "stopReason="+string(stopReason))
 }
 
@@ -551,7 +789,8 @@ func (s *ChatService) RespondPermission(sessionID, reqID, optionID string) error
 	return nil
 }
 
-// StopSession 取消正在进行的 Prompt(用户点「停止」)。
+// StopSession 取消正在进行的 Prompt(用户点「停止」):发干净 session/cancel(非杀进程),
+// harness 与连接保持可用。runPrompt 在 Prompt 返回后推 idle/cancelled,前端据此切回可发送态。
 func (s *ChatService) StopSession(sessionID string) error {
 	s.mu.RLock()
 	ls, ok := s.active[sessionID]
@@ -559,8 +798,15 @@ func (s *ChatService) StopSession(sessionID string) error {
 	if !ok {
 		return nil
 	}
-	ls.cancel()
-	s.emitStatus(sessionID, "idle", "stopped by user")
+	ls.mu.Lock()
+	tc := ls.turnCancel
+	ls.mu.Unlock()
+	if tc != nil {
+		tc()
+	} else {
+		// 无在跑 turn(竞态/重复点):直接推 idle 兜底,避免前端卡在 prompting。
+		s.emitStatus(sessionID, "idle", "")
+	}
 	return nil
 }
 

@@ -11,6 +11,12 @@ import (
 	"strings"
 )
 
+// FileChange 一个文件的变更状态(VS Code 风格)。
+type FileChange struct {
+	Path   string `json:"path"`
+	Status string `json:"status"` // M=修改 A=新增 D=删除 U=未跟踪 R=重命名
+}
+
 // ErrNotARepo 路径不是 git 仓库。
 var ErrNotARepo = errors.New("not a git repository")
 
@@ -72,11 +78,115 @@ func Remove(repoPath, targetPath, branch string) error {
 	return nil
 }
 
-// MergeBranch 把 branch 合并进 repoPath 的当前 HEAD(标准 git merge,非 FF 由 git 决定)。
-// 冲突时返回 error(含 git 的冲突信息),由上层提示用户。
-func MergeBranch(repoPath, branch string) error {
-	_, err := git(repoPath, "merge", "--no-edit", branch)
-	return err
+// MergeBranch 把 branch 合并进 repoPath 的当前 HEAD,返回 git 合并输出(含变更统计)。
+// 冲突时返回 error(含 git 冲突信息)。
+func MergeBranch(repoPath, branch string) (string, error) {
+	out, err := git(repoPath, "merge", "--no-edit", branch)
+	if err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+// DiffStat 返回 branch 相对 repoPath 当前 HEAD 的变更摘要(git diff --stat)。
+// 格式如 "3 files changed, 15 insertions(+), 5 deletions(-)"。无变更返回空串。
+func DiffStat(repoPath, branch string) (string, error) {
+	// 先找 merge-base(分支与当前 HEAD 的共同祖先),只看 branch 的增量
+	base, err := git(repoPath, "merge-base", "HEAD", branch)
+	if err != nil {
+		return "", err
+	}
+	out, err := git(repoPath, "diff", "--stat", base, branch)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// BranchLog 返回 branch 相对 base 的 commit 列表(一行一条),供"这个分支干了什么"展示。
+func BranchLog(repoPath, branch string) (string, error) {
+	base, err := git(repoPath, "merge-base", "HEAD", branch)
+	if err != nil {
+		return "", err
+	}
+	out, err := git(repoPath, "log", "--oneline", base+".."+branch)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// UncommittedStat 返回 worktreePath 里未提交的改动摘要(staged + unstaged + untracked)。
+// agent 改了文件但没 commit 时,DiffStat(已提交差异)看不到——这里补上。
+func UncommittedStat(worktreePath string) (string, error) {
+	out, err := git(worktreePath, "diff", "--stat", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	// untracked 文件(diff HEAD 看不到)
+	untracked, _ := git(worktreePath, "ls-files", "--others", "--exclude-standard")
+	if untracked != "" {
+		if out != "" {
+			out += "\n"
+		}
+		for _, f := range strings.Split(untracked, "\n") {
+			out += "新文件: " + f + "\n"
+		}
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// StatusFiles 返回 worktreePath 里所有变更的文件列表(VS Code 风格:逐文件 + 状态)。
+// 用 git status --porcelain 解析,包含 staged/unstaged/untracked。
+func StatusFiles(worktreePath string) ([]FileChange, error) {
+	out, err := git(worktreePath, "status", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	var files []FileChange
+	for _, line := range strings.Split(out, "\n") {
+		if len(line) < 3 {
+			continue
+		}
+		code := strings.TrimSpace(line[:2])
+		path := strings.TrimSpace(line[3:])
+		st := "M"
+		switch {
+		case strings.Contains(code, "A"):
+			st = "A"
+		case strings.Contains(code, "D"):
+			st = "D"
+		case strings.Contains(code, "R"):
+			st = "R"
+		case strings.Contains(code, "?"):
+			st = "U"
+		case strings.Contains(code, "M"):
+			st = "M"
+		}
+		files = append(files, FileChange{Path: path, Status: st})
+	}
+	return files, nil
+}
+
+// HasChanges 报告 worktreePath 是否有未提交的改动(含 untracked)。
+func HasChanges(worktreePath string) bool {
+	out, err := git(worktreePath, "status", "--porcelain")
+	return err == nil && strings.TrimSpace(out) != ""
+}
+
+// AutoCommit 在 worktreePath 里 git add . + git commit(若有改动)。无改动则跳过。
+// message 为提交信息。用 -c 设置身份(不依赖全局 git config)。
+func AutoCommit(worktreePath, message string) error {
+	if !HasChanges(worktreePath) {
+		return nil
+	}
+	if _, err := git(worktreePath, "add", "."); err != nil {
+		return err
+	}
+	if _, err := git(worktreePath, "-c", "user.email=monkey-deck@local", "-c", "user.name=Monkey Deck", "commit", "-qm", message); err != nil {
+		return err
+	}
+	return nil
 }
 
 // BranchExists 报告 branch 是否存在于 repoPath。

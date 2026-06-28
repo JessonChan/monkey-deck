@@ -52,7 +52,7 @@ func (s *Store) TouchSession(ctx context.Context, id string) error {
 // ListSessions 列出某项目的全部 session(按更新时间倒序)。
 func (s *Store) ListSessions(ctx context.Context, projectID string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id,project_id,acp_session_id,title,model,created_at,updated_at FROM sessions WHERE project_id=? ORDER BY updated_at DESC`,
+		`SELECT id,project_id,acp_session_id,title,model,worktree_path,branch,created_at,updated_at FROM sessions WHERE project_id=? ORDER BY updated_at DESC`,
 		projectID)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
@@ -61,7 +61,7 @@ func (s *Store) ListSessions(ctx context.Context, projectID string) ([]Session, 
 	var out []Session
 	for rows.Next() {
 		var se Session
-		if err := rows.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model, &se.CreatedAt, &se.UpdatedAt); err != nil {
+		if err := rows.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model, &se.WorktreePath, &se.Branch, &se.CreatedAt, &se.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, se)
@@ -73,8 +73,8 @@ func (s *Store) ListSessions(ctx context.Context, projectID string) ([]Session, 
 func (s *Store) GetSession(ctx context.Context, id string) (*Session, error) {
 	var se Session
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id,project_id,acp_session_id,title,model,created_at,updated_at FROM sessions WHERE id=?`, id).
-		Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model, &se.CreatedAt, &se.UpdatedAt)
+		`SELECT id,project_id,acp_session_id,title,model,worktree_path,branch,created_at,updated_at FROM sessions WHERE id=?`, id).
+		Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model, &se.WorktreePath, &se.Branch, &se.CreatedAt, &se.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -87,5 +87,13 @@ func (s *Store) GetSession(ctx context.Context, id string) (*Session, error) {
 // DeleteSession 删除 session(级联删 message)。
 func (s *Store) DeleteSession(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id=?`, id)
+	return err
+}
+
+// SetSessionWorktree 记录 session 的 git worktree 路径与分支(创建 worktree 后调)。
+func (s *Store) SetSessionWorktree(ctx context.Context, id, worktreePath, branch string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET worktree_path=?, branch=?, updated_at=? WHERE id=?`,
+		worktreePath, branch, now(), id)
 	return err
 }
