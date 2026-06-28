@@ -122,6 +122,20 @@ func (s *ChatService) ServiceShutdown() error {
 	return nil
 }
 
+// ToggleMaximise 双击顶部标题栏时切换窗口最大化/还原(非 fullscreen)。
+// 单窗口桌面应用,取首个窗口。
+func (s *ChatService) ToggleMaximise() {
+	app := application.Get()
+	if app == nil {
+		return
+	}
+	wins := app.Window.GetAll()
+	if len(wins) == 0 {
+		return
+	}
+	wins[0].ToggleMaximise()
+}
+
 // emit 经 Wails3 event 推前端(§4.3)。
 func (s *ChatService) emit(name string, data any) {
 	app := application.Get()

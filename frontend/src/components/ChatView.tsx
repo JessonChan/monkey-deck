@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { ChatItem, PermissionPrompt, StatusPayload } from "../types";
 import Composer from "./Composer";
@@ -54,9 +55,15 @@ export default function ChatView(props: Props) {
   const pct = props.usage.size > 0 ? Math.min(100, Math.round((props.usage.used / props.usage.size) * 100)) : 0;
   const s = STATUS_MAP[props.status] || { label: props.status, cls: "" };
 
+  const onTitleMouseDown = (e: React.MouseEvent) => {
+    if (e.detail !== 2) return;
+    if ((e.target as HTMLElement).closest("button, input, a")) return;
+    void ChatService.ToggleMaximise();
+  };
+
   return (
     <div className="chat-view">
-      <header className="chat-header">
+      <header className="chat-header" onMouseDown={onTitleMouseDown}>
         <div className="chat-header-info">
           <span className="chat-project" title={props.project?.path || ""}>{props.project?.name || ""}</span>
           <span className="chat-sep">/</span>

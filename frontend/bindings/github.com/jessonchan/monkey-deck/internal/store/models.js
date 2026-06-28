@@ -196,22 +196,6 @@ export class Session {
              */
             this["model"] = "";
         }
-        if (!("worktreePath" in $$source)) {
-            /**
-             * session 的 git worktree 路径(cwd 锚点);空=用项目目录
-             * @member
-             * @type {string}
-             */
-            this["worktreePath"] = "";
-        }
-        if (!("branch" in $$source)) {
-            /**
-             * 该 session 对应的 git 分支(merge/清理用)
-             * @member
-             * @type {string}
-             */
-            this["branch"] = "";
-        }
         if (!("createdAt" in $$source)) {
             /**
              * @member
