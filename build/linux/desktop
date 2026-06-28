@@ -1,13 +1,13 @@
 [Desktop Entry]
 Version=1.0
-Name=My Product
-Comment=A testapp application
+Name=Monkey Deck
+Comment=ACP 桌面客户端 —— 以项目/目录为单位管理编码 agent 的对话
 # The Exec line includes %u to pass the URL to the application
-Exec=/usr/local/bin/testapp %u
+Exec=/usr/local/bin/monkey-deck %u
 Terminal=false
 Type=Application
-Icon=testapp
+Icon=monkey-deck
 Categories=Utility;
-StartupWMClass=testapp
+StartupWMClass=monkey-deck
 
  

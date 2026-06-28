@@ -3,26 +3,26 @@
 #
 # The lines below are called `modelines`. See `:help modeline`
 
-name: "testapp"
+name: "monkey-deck"
 arch: ${GOARCH}
 platform: "linux"
-version: "0.1.0"
+version: "0.0.1"
 section: "default"
 priority: "extra"
 maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
-description: "A testapp application"
-vendor: "My Company"
+description: "ACP 桌面客户端 —— 以项目/目录为单位管理编码 agent 的对话"
+vendor: "jessonchan"
 homepage: "https://wails.io"
 license: "MIT"
 release: "1"
 
 contents:
-  - src: "./bin/testapp"
-    dst: "/usr/local/bin/testapp"
+  - src: "./bin/monkey-deck"
+    dst: "/usr/local/bin/monkey-deck"
   - src: "./build/appicon.png"
-    dst: "/usr/share/icons/hicolor/128x128/apps/testapp.png"
-  - src: "./build/linux/testapp.desktop"
-    dst: "/usr/share/applications/testapp.desktop"
+    dst: "/usr/share/icons/hicolor/128x128/apps/monkey-deck.png"
+  - src: "./build/linux/monkey-deck.desktop"
+    dst: "/usr/share/applications/monkey-deck.desktop"
 
 # Default dependencies for the GTK4 + WebKitGTK 6.0 stack (Ubuntu 24.04+ / Debian 13+)
 depends:

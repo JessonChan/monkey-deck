@@ -1,15 +1,15 @@
 {
 	"fixed": {
-		"file_version": "0.1.0"
+		"file_version": "0.0.1"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "0.1.0",
-			"CompanyName": "My Company",
-			"FileDescription": "A testapp application",
-			"LegalCopyright": "© 2026, My Company",
-			"ProductName": "My Product",
-			"Comments": "This is a comment"
+			"ProductVersion": "0.0.1",
+			"CompanyName": "jessonchan",
+			"FileDescription": "ACP 桌面客户端 —— 以项目/目录为单位管理编码 agent 的对话",
+			"LegalCopyright": "(c) 2026, jessonchan",
+			"ProductName": "Monkey Deck",
+			"Comments": "Pure ACP desktop client for coding agents"
 		}
 	}
 }
