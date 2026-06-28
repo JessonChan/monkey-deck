@@ -217,6 +217,12 @@ monkey-deck/
 ### 4.3 streaming 体验
 - `SessionUpdate` 经 Wails3 event 推前端,前端做流式渲染。**别等整轮 Prompt 返回才更新 UI**——工具调用、model trace 要边到边显。
 
+### 4.4 禁止裸露结构化/技术格式(硬约束)
+- **绝不把结构化/技术格式(JSON、协议字段、原始 cwd/path/config、工具 I/O 的原始对象)直接展示给用户。**
+- 工具调用的 input/output 等结构化数据,必须先提取「主文本」(如 output/command/content);提取不到时转成可读的 `键: 值` 行,而不是吐 `{...}` JSON。
+- 会话/项目元信息(如 cwd)用人话呈现(「工作目录:/tmp」),不展示原始字段名 + 引号。
+- **理由**:用户是人不是协议解析器;`{"cwd":"/tmp"}` 这种技术格式直接抛给用户 = 没做 UI。
+
 ---
 
 ## 5. 测试与质量
@@ -245,6 +251,9 @@ monkey-deck/
 7. **安全切片**:`id[:8]` 当 id 不足 8 字符会 panic,用 safe slice。
 8. **改 Go 导出方法签名后必须重新 `wails3 gen bindings`**,否则前端用旧签名。
 
+9. **opencode stdio ACP 空闲即断连**(本项目实证):会话 `NewSession` 后若不及时发 `Prompt`,opencode 会在约 1 秒内主动关闭 stdio 连接(`connection closed cause="peer connection closed"`),随后 `Prompt` 报 `broken pipe`。**根因**:opencode 的 stdio ACP server 对空闲连接有即时回收。**修法**:harness 懒启动(lazy spawn)——`CreateSession` 只建 DB 记录,`SendMessage` 首条消息时才 spawn harness + Init + NewSession + Prompt;turn 间保持 harness 活跃,`peer disconnected` 时拆掉、下条消息用 `LoadSession`(resume)重连。**验证**:server 模式驱动 GUI 连发两轮对话 + reload 后历史恢复均通过(2026-06-26)。
+10. **多 session 并发:opencode 完全支持同目录多对话**(本项目实证,纠正早期误判):每个 ACP session 在 opencode 内有独立 git snapshot(`~/.local/share/opencode/snapshot/`),同 cwd 起多个 `opencode acp` 进程并发稳定。诊断证明:3 个全新并发 session 同 cwd + 文件读取题全部通过。**教训**:不要把 provider/model 的不稳当成 opencode/ACP 的限制。
+11. **持续多轮 "peer disconnected before response" 常是 model/provider 不稳**(本项目实证):默认 `zai-coding-plan/glm-5.1` 在持续多轮(约 3 轮后)会 `peer disconnected before response`(opencode 侧静默退出,stderr 无错);换 `zai/glm-4.6` 后 5 轮全稳。**根因**:某些 provider/plan 档 model 在持续 ACP 调用下不稳(限流/异常致 opencode 退出)。**修法**:① 默认/项目 model 优先选已知稳定的(如 `zai/glm-4.6`);② SendMessage 失败(peer disconnected)自动重试 + LoadSession 重连;③ 提供 model 选择 UI 让用户切换。**验证**:/tmp/wesight-study 3 对话 ×10 题,glm-5.1 频繁断、glm-4.6 稳(2026-06-27)。
 （本项目自己踩到的坑,持续往这里补,写清「现象 + 根因 + 修法 + 验证」。）
 
 ---
@@ -298,6 +307,7 @@ monkey-deck/
 - [ ] agent 执行有静默超时 + peer-disconnected 崩溃检测 + 清理?(§3.3)
 - [ ] `RequestPermission` 走「UI 提示 + 默认动作 + 超时兜底」,没裸跑也没死等?(§3.4)
 - [ ] model 是 `provider/model` 格式?(§3.5)
+- [ ] 没把结构化/技术格式(JSON、原始 cwd / 工具 I/O 对象)裸露给用户?(§4.4)
 - [ ] 没碰 `references/` 下任何文件?(§0.2)
 - [ ] 代码若借用自 wesight,已按 MIT 协议署名(版权声明 + 许可文本 + THIRD_PARTY_LICENSES 登记)?(§0.4)
 - [ ] ACP 相关单测用 mock,没启真 harness?(§5.1)
