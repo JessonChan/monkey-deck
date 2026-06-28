@@ -726,21 +726,23 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string) {
 }
 
 // persistTurn 把本轮累积的 agent 回复 + 工具调用写库。
+// 顺序:thought → agent → tools。匹配实时流式渲染的心智模型(agent 边回复边调用工具,
+// 历史 agent 文本在前、tool 卡片在后),避免历史恢复时 tool 卡片出现在 agent 回复之前。
 func (s *ChatService) persistTurn(sessionID, agentText, thoughtText string, tools []*toolAccum) {
 	if thoughtText != "" {
 		if _, err := s.st.AppendMessage(s.ctx, sessionID, "thought", "agent_thought_chunk", thoughtText, ""); err != nil {
 			slog.Warn("persist thought", "err", err)
 		}
 	}
+	if strings.TrimSpace(agentText) != "" {
+		if _, err := s.st.AppendMessage(s.ctx, sessionID, "agent", "agent_message_chunk", agentText, ""); err != nil {
+			slog.Warn("persist agent", "err", err)
+		}
+	}
 	for _, t := range tools {
 		body, _ := json.Marshal(t)
 		if _, err := s.st.AppendMessage(s.ctx, sessionID, "tool", "tool_call", string(body), t.ID); err != nil {
 			slog.Warn("persist tool", "err", err)
-		}
-	}
-	if strings.TrimSpace(agentText) != "" {
-		if _, err := s.st.AppendMessage(s.ctx, sessionID, "agent", "agent_message_chunk", agentText, ""); err != nil {
-			slog.Warn("persist agent", "err", err)
 		}
 	}
 }
