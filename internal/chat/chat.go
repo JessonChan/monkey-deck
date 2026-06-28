@@ -46,10 +46,12 @@ type SessionMetaPayload struct {
 
 // toolAccum 累积一个 tool call 的状态(供持久化)。
 type toolAccum struct {
-	id     string
-	title  string
-	status string
-	kind   string
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Status    string `json:"status"`
+	Kind      string `json:"kind"`
+	RawInput  any    `json:"rawInput,omitempty"`
+	RawOutput any    `json:"rawOutput,omitempty"`
 }
 
 // liveSession 一个活跃的 ACP 对话(内存态,钉在某个 db session 上)。
@@ -480,7 +482,7 @@ func (s *ChatService) persistTurn(sessionID, agentText, thoughtText string, tool
 	}
 	for _, t := range tools {
 		body, _ := json.Marshal(t)
-		if _, err := s.st.AppendMessage(s.ctx, sessionID, "tool", "tool_call", string(body), t.id); err != nil {
+		if _, err := s.st.AppendMessage(s.ctx, sessionID, "tool", "tool_call", string(body), t.ID); err != nil {
 			slog.Warn("persist tool", "err", err)
 		}
 	}
@@ -506,20 +508,23 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 		ls.thought.WriteString(e.Text)
 		e.Text = ls.thought.String()
 	case "tool_call":
-		ls.tools[e.ToolCallID] = &toolAccum{id: e.ToolCallID, title: e.ToolTitle, status: e.ToolStatus, kind: e.ToolKind}
+		ls.tools[e.ToolCallID] = &toolAccum{ID: e.ToolCallID, Title: e.ToolTitle, Status: e.ToolStatus, Kind: e.ToolKind, RawInput: e.RawInput}
 	case "tool_call_update":
 		if t, ok := ls.tools[e.ToolCallID]; ok {
 			if e.ToolTitle != "" {
-				t.title = e.ToolTitle
+				t.Title = e.ToolTitle
 			}
 			if e.ToolStatus != "" {
-				t.status = e.ToolStatus
+				t.Status = e.ToolStatus
 			}
 			if e.ToolKind != "" {
-				t.kind = e.ToolKind
+				t.Kind = e.ToolKind
+			}
+			if e.RawOutput != nil {
+				t.RawOutput = e.RawOutput
 			}
 		} else {
-			ls.tools[e.ToolCallID] = &toolAccum{id: e.ToolCallID, title: e.ToolTitle, status: e.ToolStatus, kind: e.ToolKind}
+			ls.tools[e.ToolCallID] = &toolAccum{ID: e.ToolCallID, Title: e.ToolTitle, Status: e.ToolStatus, Kind: e.ToolKind, RawOutput: e.RawOutput}
 		}
 	}
 	ls.mu.Unlock()

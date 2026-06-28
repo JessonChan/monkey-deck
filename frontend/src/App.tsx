@@ -151,15 +151,19 @@ export default function App() {
       let title = "";
       let status = "";
       let kind = "";
+      let rawInput: unknown;
+      let rawOutput: unknown;
       try {
-        const parsed = JSON.parse(m.content) as { title?: string; status?: string; kind?: string };
+        const parsed = JSON.parse(m.content) as { title?: string; status?: string; kind?: string; rawInput?: unknown; rawOutput?: unknown };
         title = parsed.title || "";
         status = parsed.status || "";
         kind = parsed.kind || "";
+        rawInput = parsed.rawInput;
+        rawOutput = parsed.rawOutput;
       } catch {
         title = m.content;
       }
-      return { type: "tool", id: m.toolCallId || m.id, title, status, kind };
+      return { type: "tool", id: m.toolCallId || m.id, title, status, kind, rawInput, rawOutput };
     });
   }, []);
 

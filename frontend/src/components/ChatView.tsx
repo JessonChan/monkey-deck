@@ -158,7 +158,7 @@ function MessageActions({ text }: { text: string }) {
 }
 
 function ToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
-  const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "—", cls: "" };
+  const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
   const [copiedIn, setCopiedIn] = useState(false);
   const [copiedOut, setCopiedOut] = useState(false);
   const inputR = item.rawInput != null ? extractToolText(item.rawInput) : null;

@@ -272,6 +272,7 @@ input, textarea { font-family: inherit; }
 .tc-running { color: var(--accent-2); background: rgba(10, 132, 255, 0.16); }
 .tc-done { color: var(--green); background: rgba(48, 209, 88, 0.12); }
 .tc-fail { color: var(--red); background: rgba(255, 69, 58, 0.14); }
+.tc-unknown { color: var(--text-3); background: var(--bg); }
 .tool-section { margin: 8px 0 0; }
 .tool-section-label { font-size: 10.5px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
 .tool-pre {
