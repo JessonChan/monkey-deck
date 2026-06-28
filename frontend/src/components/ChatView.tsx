@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type ComponentPropsWithoutRef } from "react";
+import { Fragment, memo, useEffect, useRef, useState, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
@@ -52,6 +52,9 @@ export default function ChatView(props: Props) {
   }, [items, props.permission]);
 
   const pct = props.usage.size > 0 ? Math.min(100, Math.round((props.usage.used / props.usage.size) * 100)) : 0;
+  // 分级配色:上下文越满越警示(绿 → 琥珀 → 红),让占比一眼可读。
+  const usageLevel = pct >= 85 ? "crit" : pct >= 60 ? "high" : pct >= 30 ? "mid" : "low";
+  const hasUsage = props.usage.used > 0 || props.usage.size > 0 || props.usage.cost > 0;
   const s = STATUS_MAP[props.status] || { label: props.status, cls: "" };
 
   return (
@@ -74,7 +77,13 @@ export default function ChatView(props: Props) {
       <div className="chat-body" ref={scrollRef} data-testid="chat-body">
         {items.length === 0 && <div className="chat-placeholder">发一条消息开始对话…</div>}
         {items.length > visible.length && <div className="cap-hint">仅显示最近 {visible.length} 条(共 {items.length})</div>}
-        {visible.map((item) => <ChatRow key={item.id} item={item} />)}
+        {visible.map((item, i) => (
+          <Fragment key={item.id}>
+            {/* 回合分隔:每条用户消息(首条除外)前插一条带时间的分隔线,让多轮对话边界清晰。 */}
+            {item.type === "user" && i > 0 && <TurnDivider ts={item.ts} />}
+            <ChatRow item={item} />
+          </Fragment>
+        ))}
         {props.permission && <PermissionCard prompt={props.permission} onRespond={props.onRespondPermission} />}
         {props.status === "prompting" && items.length > 0 && (
           <div className="typing-indicator"><span /> <span /> <span /></div>
@@ -84,14 +93,17 @@ export default function ChatView(props: Props) {
       {props.error && <div className="error-bar">⚠ {props.error}</div>}
 
       <footer className="chat-footer">
-        <div className="usage-bar" title="上下文用量">
-          <div className="usage-track"><div className="usage-fill" style={{ width: `${pct}%` }} /></div>
-          <span className="usage-text">
-            {formatTokens(props.usage.used)}
-            {props.usage.size > 0 && ` / ${formatTokens(props.usage.size)}`}
-            {props.usage.cost > 0 && ` · $${props.usage.cost.toFixed(4)}`}
-          </span>
-        </div>
+        {hasUsage && (
+          <div className={`usage-bar usage-${usageLevel}`} title="上下文用量" data-testid="usage-bar">
+            <div className="usage-track"><div className="usage-fill" style={{ width: `${pct}%` }} /></div>
+            <span className="usage-text">
+              {formatTokens(props.usage.used)}
+              {props.usage.size > 0 && ` / ${formatTokens(props.usage.size)}`}
+              {props.usage.size > 0 && ` · ${pct}%`}
+              {props.usage.cost > 0 && ` · $${props.usage.cost.toFixed(4)}`}
+            </span>
+          </div>
+        )}
         <Composer
           disabled={props.status === "prompting"}
           prompting={props.status === "prompting"}
@@ -123,7 +135,10 @@ const ChatRow = memo(function ChatRow({ item }: { item: ChatItem }) {
               {item.text + (item.streaming ? " ▋" : "")}
             </ReactMarkdown>
           </div>
-          {!item.streaming && item.text && <MessageActions text={item.text} />}
+          <div className="msg-meta">
+            {item.ts && <span className="msg-time">{formatTime(item.ts)}</span>}
+            {!item.streaming && item.text && <MessageActions text={item.text} />}
+          </div>
         </div>
       </div>
     );
@@ -268,9 +283,32 @@ function extractCodeChild(children: ComponentPropsWithoutRef<"pre">["children"])
 }
 
 function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
 }
+
+// 回合分隔:发丝线 + 时间,清晰划分每一轮对话(用户消息前的锚点)。
+function TurnDivider({ ts }: { ts?: number }) {
+  return (
+    <div className="turn-divider">
+      <span className="turn-divider-line" />
+      {ts && <span className="turn-divider-time">{formatTime(ts)}</span>}
+      <span className="turn-divider-line" />
+    </div>
+  );
+}
+
+// 时间格式化:今天显示 HH:mm;跨天显示 MM-DD HH:mm;无 ts 返回空。
+function formatTime(ts?: number): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  const now = new Date();
+  const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  if (d.toDateString() === now.toDateString()) return hm;
+  return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${hm}`;
+}
+function pad2(n: number): string { return n < 10 ? `0${n}` : String(n); }
 // 把结构化数据转成人可读文本,绝不把 {…} / JSON 原样给用户(AGENTS.md §4.4)。
 // string 原样;record 渲染成「键: 值」逐行;数组逐项;嵌套对象/数组用紧凑单行兜底。
 function formatHuman(v: unknown): string {

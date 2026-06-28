@@ -7,22 +7,27 @@ import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import Icon from "./components/Icon";
 
+// 按 session 隔离的状态:切走再切回时,进行中的流式输出 / 用量 / 状态 / 权限都保留在各自缓存里,
+// 不会因「切走→事件被丢弃→切回只剩 DB 已落库内容」而丢失正在输出的内容。
+type Usage = { used: number; size: number; cost: number };
+const EMPTY_USAGE: Usage = { used: 0, size: 0, cost: 0 };
+
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [items, setItems] = useState<ChatItem[]>([]);
-  const [status, setStatus] = useState<StatusPayload["status"] | "empty">("empty");
-  const [statusDetail, setStatusDetail] = useState("");
-  const [usage, setUsage] = useState<{ used: number; size: number; cost: number }>({
-    used: 0,
-    size: 0,
-    cost: 0,
-  });
-  const [permission, setPermission] = useState<PermissionPrompt | null>(null);
+
+  const [itemsBySession, setItemsBySession] = useState<Record<string, ChatItem[]>>({});
+  const [usageBySession, setUsageBySession] = useState<Record<string, Usage>>({});
+  const [statusBySession, setStatusBySession] = useState<Record<string, StatusPayload["status"] | "empty">>({});
+  const [statusDetailBySession, setStatusDetailBySession] = useState<Record<string, string>>({});
+  const [permissionBySession, setPermissionBySession] = useState<Record<string, PermissionPrompt | null>>({});
   const [error, setError] = useState<string | null>(null);
 
+  // 标记哪些 session 已从 DB 加载进缓存;有缓存(含进行中的流式)就不再重读 DB,避免切回丢内容。
+  const loadedSessionsRef = useRef<Set<string>>(new Set());
+  // 选中 session 的 ref:仅用于 status 事件的「错误只弹当前查看会话」过滤,不进 effect 依赖(避免每次切换都重订阅)。
   const selectedSessionIdRef = useRef<string | null>(null);
   selectedSessionIdRef.current = selectedSessionId;
 
@@ -36,71 +41,73 @@ export default function App() {
     setSessions(list || []);
   }, []);
 
-  // 把一条 SessionEvent 应用到 items(流式累积)。
+  // 把一条 SessionEvent 合并进指定 session 的 items(纯函数,防乱序)。
+  const applyEventToItems = useCallback((cur: ChatItem[], ev: SessionEvent): ChatItem[] => {
+    const next = [...cur];
+    const last = next[next.length - 1];
+    switch (ev.kind) {
+      case "user_message_chunk":
+        if (last && last.type === "user") return next; // 已有 user,不重复
+        next.push({ type: "user", id: `u-${Date.now()}`, text: ev.text || "", ts: Date.now() });
+        return next;
+      case "agent_message_chunk":
+        if (last && last.type === "agent" && last.streaming) {
+          // 累积全文 + 序号:序号更小(乱序迟到)则忽略,否则替换(非追加,防乱码)
+          if (ev.seq == null || last.seq == null || ev.seq >= last.seq) {
+            next[next.length - 1] = { ...last, text: ev.text || "", seq: ev.seq };
+          }
+        } else {
+          next.push({ type: "agent", id: `a-${ev.seq ?? Date.now()}`, text: ev.text || "", streaming: true, seq: ev.seq, ts: Date.now() });
+        }
+        return next;
+      case "agent_thought_chunk":
+        if (last && last.type === "thought" && last.streaming) {
+          if (ev.seq == null || last.seq == null || ev.seq >= last.seq) {
+            next[next.length - 1] = { ...last, text: ev.text || "", seq: ev.seq };
+          }
+        } else {
+          next.push({ type: "thought", id: `t-${ev.seq ?? Date.now()}`, text: ev.text || "", streaming: true, seq: ev.seq });
+        }
+        return next;
+      case "tool_call":
+      case "tool_call_update": {
+        const id = ev.toolCallId || `tool-${Date.now()}`;
+        const idx = next.findIndex((it) => it.type === "tool" && it.id === id);
+        const existing = idx >= 0 ? (next[idx] as Extract<ChatItem, { type: "tool" }>) : null;
+        const toolItem = {
+          type: "tool" as const,
+          id,
+          title: ev.toolTitle || existing?.title || "",
+          status: ev.toolStatus || existing?.status || "pending",
+          kind: ev.toolKind || existing?.kind || "",
+          rawInput: ev.rawInput ?? existing?.rawInput,
+          rawOutput: ev.rawOutput ?? existing?.rawOutput,
+        };
+        if (idx >= 0) next[idx] = toolItem;
+        else next.push(toolItem);
+        return next;
+      }
+      case "session_info":
+      default:
+        return next;
+    }
+  }, []);
+
+  // 事件入口:总是写入「事件所属 session」的缓存(不再过滤 selectedSessionId),
+  // 这样切走时进行中的流式仍累积在缓存里,切回即见。
   const applyEvent = useCallback((ev: SessionEvent) => {
-    if (ev.sessionId !== selectedSessionIdRef.current) return;
     if (ev.kind === "usage_update") {
-      setUsage((u) => ({
-        used: ev.used ?? u.used,
-        size: ev.size ?? u.size,
-        cost: ev.cost ?? u.cost,
-      }));
+      setUsageBySession((prev) => {
+        const old = prev[ev.sessionId] ?? EMPTY_USAGE;
+        return { ...prev, [ev.sessionId]: { used: ev.used ?? old.used, size: ev.size ?? old.size, cost: ev.cost ?? old.cost } };
+      });
       return;
     }
-    setItems((prev) => {
-      const next = [...prev];
-      const last = next[next.length - 1];
-      switch (ev.kind) {
-        case "user_message_chunk":
-          if (last && last.type === "user") {
-            return next; // 已有 user,不重复
-          }
-          next.push({ type: "user", id: `u-${Date.now()}`, text: ev.text || "" });
-          return next;
-        case "agent_message_chunk":
-          if (last && last.type === "agent" && last.streaming) {
-            // 累积全文 + 序号:序号更小(乱序迟到)则忽略,否则替换(非追加,防乱码)
-            if (ev.seq == null || last.seq == null || ev.seq >= last.seq) {
-              next[next.length - 1] = { ...last, text: ev.text || "", seq: ev.seq };
-            }
-          } else {
-            next.push({ type: "agent", id: `a-${ev.seq ?? Date.now()}`, text: ev.text || "", streaming: true, seq: ev.seq });
-          }
-          return next;
-        case "agent_thought_chunk":
-          if (last && last.type === "thought" && last.streaming) {
-            if (ev.seq == null || last.seq == null || ev.seq >= last.seq) {
-              next[next.length - 1] = { ...last, text: ev.text || "", seq: ev.seq };
-            }
-          } else {
-            next.push({ type: "thought", id: `t-${ev.seq ?? Date.now()}`, text: ev.text || "", streaming: true, seq: ev.seq });
-          }
-          return next;
-        case "tool_call":
-        case "tool_call_update": {
-          const id = ev.toolCallId || `tool-${Date.now()}`;
-          const idx = next.findIndex((it) => it.type === "tool" && it.id === id);
-          const existing = idx >= 0 ? (next[idx] as Extract<ChatItem, { type: "tool" }>) : null;
-          const toolItem = {
-            type: "tool" as const,
-            id,
-            title: ev.toolTitle || existing?.title || "",
-            status: ev.toolStatus || existing?.status || "pending",
-            kind: ev.toolKind || existing?.kind || "",
-            rawInput: ev.rawInput ?? existing?.rawInput,
-            rawOutput: ev.rawOutput ?? existing?.rawOutput,
-          };
-          if (idx >= 0) next[idx] = toolItem;
-          else next.push(toolItem);
-          return next;
-        }
-        case "session_info":
-          return next;
-        default:
-          return next;
-      }
-    });
-  }, []);
+    setItemsBySession((prev) => ({
+      ...prev,
+      [ev.sessionId]: applyEventToItems(prev[ev.sessionId] ?? [], ev),
+    }));
+  }, [applyEventToItems]);
 
   // 启动:加载项目 + 订阅事件。
   useEffect(() => {
@@ -109,29 +116,31 @@ export default function App() {
       if (e.data) applyEvent(e.data);
     });
     const offPerm = Events.On("chat:permission", (e: { data: PermissionPrompt }) => {
-      if (e.data && e.data.sessionId === selectedSessionIdRef.current) setPermission(e.data);
+      // 权限请求也按 session 缓存;切走再切回仍在。
+      if (e.data) setPermissionBySession((prev) => ({ ...prev, [e.data.sessionId]: e.data }));
     });
     const offStatus = Events.On("chat:status", (e: { data: StatusPayload }) => {
       const s = e.data;
-      if (!s || s.sessionId !== selectedSessionIdRef.current) return;
-      setStatus(s.status);
-      setStatusDetail(s.detail || "");
-      if (s.status === "error") setError(s.detail || "出错");
-      else setError(null);
-      // 回合结束:清掉最后 agent/thought 的 streaming 标志(去光标 + 显复制按钮)
+      if (!s) return;
+      setStatusBySession((prev) => ({ ...prev, [s.sessionId]: s.status }));
+      setStatusDetailBySession((prev) => ({ ...prev, [s.sessionId]: s.detail || "" }));
+      // 错误提示只对当前查看的 session 弹(切走时不在意别的 session 的错误条)。
+      if (s.status === "error" && s.sessionId === selectedSessionIdRef.current) setError(s.detail || "出错");
+      // 回合结束:清掉该 session 最后 agent/thought 的 streaming 标志(去光标 + 显复制按钮)。
       if (s.status === "idle" || s.status === "error") {
-        setItems((prev) => {
-          const next = prev.map((it) =>
-            it.type === "agent" || it.type === "thought" ? { ...it, streaming: false } : it
-          );
-          return next;
+        setItemsBySession((prev) => {
+          const cur = prev[s.sessionId];
+          if (!cur) return prev;
+          return {
+            ...prev,
+            [s.sessionId]: cur.map((it) => (it.type === "agent" || it.type === "thought" ? { ...it, streaming: false } : it)),
+          };
         });
       }
     });
     const offMeta = Events.On("chat:session-meta", (e: { data: { sessionId: string; title: string } }) => {
       const m = e.data;
       if (!m || !m.title) return;
-      // 更新会话标题(侧栏 + 当前会话头)
       setSessions((prev) => prev.map((s) => (s.id === m.sessionId ? { ...s, title: m.title } : s)));
     });
     return () => {
@@ -145,9 +154,9 @@ export default function App() {
   // 把持久化消息转成展示 items。
   const messagesToItems = useCallback((msgs: Message[]): ChatItem[] => {
     return msgs.map((m): ChatItem => {
-      if (m.role === "user") return { type: "user", id: m.id, text: m.content };
-      if (m.role === "agent") return { type: "agent", id: m.id, text: m.content };
-      if (m.role === "thought") return { type: "thought", id: m.id, text: m.content };
+      if (m.role === "user") return { type: "user", id: m.id, text: m.content, ts: m.createdAt };
+      if (m.role === "agent") return { type: "agent", id: m.id, text: m.content, ts: m.createdAt };
+      if (m.role === "thought") return { type: "thought", id: m.id, text: m.content, ts: m.createdAt };
       let title = "";
       let status = "";
       let kind = "";
@@ -163,7 +172,7 @@ export default function App() {
       } catch {
         title = m.content;
       }
-      return { type: "tool", id: m.toolCallId || m.id, title, status, kind, rawInput, rawOutput };
+      return { type: "tool", id: m.toolCallId || m.id, title, status, kind, rawInput, rawOutput, ts: m.createdAt };
     });
   }, []);
 
@@ -172,26 +181,31 @@ export default function App() {
     async (projectId: string) => {
       setSelectedProjectId(projectId);
       setSelectedSessionId(null);
-      setItems([]);
-      setStatus("empty");
       await refreshSessions(projectId);
     },
     [refreshSessions]
   );
 
   // 打开 session:OpenSession + 加载历史。
+  // 关键:有缓存(含进行中的流式)就保留缓存,仅首次打开才从 DB 读 —— 否则切回会丢正在输出的内容。
   const openSession = useCallback(
     async (sessionId: string) => {
       setSelectedSessionId(sessionId);
-      setPermission(null);
-      setUsage({ used: 0, size: 0, cost: 0 });
-      setStatus("idle");
       setError(null);
       await ChatService.OpenSession(sessionId);
-      const msgs = await ChatService.LoadMessages(sessionId);
-      setItems(messagesToItems(msgs || []));
+      // 从持久化的 session 用量恢复 token 占比(无 live 记录时),使重开会话不归零(§1.6)。
+      setUsageBySession((prev) => {
+        if (prev[sessionId]) return prev;
+        const se = sessions.find((x) => x.id === sessionId);
+        return { ...prev, [sessionId]: { used: se?.usedTokens ?? 0, size: se?.sizeTokens ?? 0, cost: se?.cost ?? 0 } };
+      });
+      if (!loadedSessionsRef.current.has(sessionId)) {
+        loadedSessionsRef.current.add(sessionId);
+        const msgs = await ChatService.LoadMessages(sessionId);
+        setItemsBySession((prev) => ({ ...prev, [sessionId]: messagesToItems(msgs || []) }));
+      }
     },
-    [messagesToItems]
+    [messagesToItems, sessions]
   );
 
   // 新建 session。
@@ -213,12 +227,12 @@ export default function App() {
     async (text: string) => {
       if (!selectedSessionId || !text.trim()) return;
       setError(null);
-      setStatus("prompting");
+      setStatusBySession((prev) => ({ ...prev, [selectedSessionId]: "prompting" }));
       try {
         await ChatService.SendMessage(selectedSessionId, text);
       } catch (e) {
         setError(String(e));
-        setStatus("idle");
+        setStatusBySession((prev) => ({ ...prev, [selectedSessionId]: "idle" }));
       }
     },
     [selectedSessionId]
@@ -234,7 +248,6 @@ export default function App() {
       if (action === "stop") {
         void stopSession();
       } else {
-        // clear / new 都=新建会话(monkey-deck 无原地清空,新会话即清空)
         void createSession();
       }
     },
@@ -243,19 +256,19 @@ export default function App() {
 
   const respondPermission = useCallback(
     async (optionId: string) => {
-      if (!selectedSessionId || !permission) return;
-      setPermission(null);
-      await ChatService.RespondPermission(selectedSessionId, permission.id, optionId);
+      if (!selectedSessionId) return;
+      const perm = permissionBySession[selectedSessionId];
+      if (!perm) return;
+      setPermissionBySession((prev) => ({ ...prev, [selectedSessionId]: null }));
+      await ChatService.RespondPermission(selectedSessionId, perm.id, optionId);
     },
-    [selectedSessionId, permission]
+    [selectedSessionId, permissionBySession]
   );
 
   const closeSession = useCallback(async () => {
     if (!selectedSessionId) return;
     await ChatService.CloseSession(selectedSessionId);
     setSelectedSessionId(null);
-    setItems([]);
-    setStatus("empty");
   }, [selectedSessionId]);
 
   const addProject = useCallback(async () => {
@@ -287,7 +300,6 @@ export default function App() {
       if (selectedProjectId === projectId) {
         setSelectedProjectId(null);
         setSelectedSessionId(null);
-        setItems([]);
         setSessions([]);
       }
       await refreshProjects();
@@ -299,6 +311,16 @@ export default function App() {
     () => projects.find((p) => p.id === selectedProjectId) || null,
     [projects, selectedProjectId]
   );
+
+  // 渲染用:取当前选中 session 的切片(无选中 → 空)。
+  const items = useMemo(
+    () => (selectedSessionId ? itemsBySession[selectedSessionId] ?? [] : []),
+    [itemsBySession, selectedSessionId]
+  );
+  const usage = (selectedSessionId ? usageBySession[selectedSessionId] : undefined) ?? EMPTY_USAGE;
+  const status = (selectedSessionId ? statusBySession[selectedSessionId] : undefined) ?? "empty";
+  const statusDetail = (selectedSessionId ? statusDetailBySession[selectedSessionId] : undefined) ?? "";
+  const permission = (selectedSessionId ? permissionBySession[selectedSessionId] : undefined) ?? null;
 
   return (
     <div className="app">
