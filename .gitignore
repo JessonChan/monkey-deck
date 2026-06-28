@@ -17,6 +17,11 @@ coverage.html
 node_modules/
 frontend/dist/
 *.app
+# 移动端(本项目不支持;wails3 update build-assets 会重建 build/ios build/android,删掉并忽略)
+build/ios/
+build/android/
+# Taskfile 运行缓存
+.task/
 
 # 本地数据 / 日志(SQLite 是运行时数据,不入库)
 *.db
