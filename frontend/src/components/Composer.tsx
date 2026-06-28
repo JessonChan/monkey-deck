@@ -77,7 +77,8 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // 中文输入法(IME)composing 中:Enter 用于选词,不提交/不触发命令。
-    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    // isComposing 已覆盖 IME 场景,不再依赖已废弃的 keyCode===229。
+    if (e.nativeEvent.isComposing) return;
     if (slashOpen) {
       if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx((i) => Math.min(i + 1, filtered.length - 1)); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); setSlashIdx((i) => Math.max(i - 1, 0)); return; }
