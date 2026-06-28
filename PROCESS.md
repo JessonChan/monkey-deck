@@ -46,14 +46,15 @@
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
 - **当前焦点**:对话体验打磨(切会话不丢进行中输出、token 占比持久化与展示、历史可读性)
-- **最后更新**:2026-06-28
+- **最后更新**:2026-06-28(代码审查修复轮)
 - **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计。`go test ./internal/...` 通过、前端 `tsc` 通过。
-- **本次(2026-06-28)改动**:
-  1. 会话状态按 session 隔离(items/usage/status/permission 各为 map)——修「切走再切回丢失正在输出的历史」。
-  2. token 用量持久化(migration 0003 + `sessions.used_tokens/size_tokens/cost` + `UpdateSessionUsage`),handleEvent 收到 usage_update 回写;重开会话恢复占比而非清零。
-  3. 用量条视觉:加高(3→5px)、显示百分比、分级配色(绿/蓝/琥珀/红随占比)、数字支持 k/M、无数据时隐藏。
-  4. 聊天历史展示:每轮用户消息前的回合分隔(带时间锚点)+ agent 消息时间戳。
-  5. bindings 重生(顺带清掉 stale 的 DeleteSession/MergeSession/worktree 字段,这些前端未用)。
+- **本次(2026-06-28)改动**(代码审查 5 项确认修复):
+  1. `#2` persistTurn 写库顺序改 thought→agent→tools,历史恢复 tool 卡片不再出现在 agent 回复之前(与实时流式一致)。
+  2. `#1` startTurn 持久化用户消息失败时回滚 busy + 推 error + 返回错(SendMessage/InterruptAndSend 传播),杜绝「UI 有消息但 DB 没有」。
+  3. `#21` KillAllOpencode 误杀用户终端 opencode —— 引入 pgidFile(dataDir/opencode-pgids.json)持久化本应用 spawn 过的 pgid,启动时只杀命中文件者;`SetPgidFile` 在 ServiceStartup 配置。
+  4. `#15` ChatView 自动滚底加「贴底检测」(stickToBottomRef + onScroll,80px 余量),用户向上翻阅历史时不被新消息拽回底部。
+  5. `#16` Composer 移除已废弃的 keyCode===229 检查,isComposing 已覆盖 IME。
+- **审查中判定为非 bug / 不改**(附理由见会话):#3/#4/#6/#9/#10/#12/#13/#14/#17/#18/#19/#20。#7/#8 经核实为误报(pending map 超时与 ctx 取消两分支均 delete;Prompt goroutine 由 defer cancel() 必然退出)。
 
 ---
 
@@ -123,6 +124,20 @@
 ---
 
 ## G. 工作日志(追加,最新在上)
+
+### 2026-06-28(fix:代码审查 5 项确认修复 —— 持久化顺序 / 写失败感知 / KillAll 误杀 / 滚底打扰 / keyCode)
+- **起因**:对 chat/acp/前端做一轮代码审查,列 21 条疑似问题。逐条核实代码事实后,**确认 5 条真 bug、2 条误报、其余非 bug/过度优化/阶段外**。
+- **确认修复**:
+  1. `#2`(`chat.go` persistTurn):写库顺序原为 thought→tools→agent,历史恢复时 tool 卡片排在 agent 回复之前,与实时流式不一致。改 thought→agent→tools。
+  2. `#1`(`chat.go` startTurn):用户消息持久化只 `slog.Warn`,但已推 user_message_chunk,DB 失败则重开丢失。改为失败时回滚 busy + 推 error status + 返回 error;startTurn 签名 void→error,SendMessage/InterruptAndSend 传播。
+  3. `#21`(`acp/proc.go` KillAllOpencode):启动时无差别杀所有 `opencode acp`,会误杀用户在其它终端跑的 opencode。引入 pgidFile(`dataDir/opencode-pgids.json`)持久化本应用 spawn 过的 pgid:register/unregisterHarness 落盘;`SetPgidFile` 在 ServiceStartup 配置;KillAllOpencode 只杀 pgid 命中文件者,杀完清空。新增 `proc_pgidfile_test.go`(3 用例:round-trip / 缺失&损坏容错 / 禁用态)。
+  4. `#15`(`ChatView.tsx`):每条新消息强制 `scrollTop=scrollHeight`,用户向上翻阅历史被打断。加 `stickToBottomRef` + `onScroll`(距底 ≤80px 视为贴底),新消息只在贴底时滚。
+  5. `#16`(`Composer.tsx`):移除已废弃的 `e.keyCode === 229`,`isComposing` 已覆盖 IME。
+- **核实为误报(非 bug)**:#7 `handler.pending` —— 超时分支(151-162)与 ctx 取消分支(163-169)均 `delete(h.pending, id)`,无泄漏;#8 `runner.Prompt` watchdog goroutine —— `defer cancel()` 在 Prompt 返回时必然触发 `promptCtx.Done()`,goroutine 必退。
+- **判定非 bug / 不改(理由)**:#3 `ls.chat` 不会在 Prompt 期间变 nil(interface 值,Close 不置 nil);#4 作者自承正确;#5/#9/#13 过度优化(每轮一次 map / 每消息一次 by-id SELECT / 每次 O(n) find,均可忽略,§5.3 KISS);#6 macOS `ps` 格式稳定且 grep 已窄;#10 空 DefaultModel 是设计(用 opencode global config);#11 drainQueue 在 await 前已置 prompting(#11 自相矛盾);#12 ref 模式正确(#12 自承对);#14 useCallback 稳定引用;#17 命名/行为均符合预期;#18 goroutine 追踪属阶段 3+;#19 `SetMaxOpenConns(1)` 是 modernc sqlite 串行化必需(设计选择);#20 HarnessCmd 无 UI 入口故无需持久化。
+- **改了哪些文件**:`internal/chat/chat.go`、`internal/acp/proc.go`、`internal/acp/proc_pgidfile_test.go`(新)、`frontend/src/components/ChatView.tsx`、`frontend/src/components/Composer.tsx`、`PROCESS.md`(本节 + §B)。
+- **验证**:`go build ./...` ✅;`go test ./internal/...` ✅(4 packages ok,含新增 3 用例);前端 `bunx tsc --noEmit` ✅。
+- **下一步**:可拆 3 个原子 commit(① chat #2#1 ② acp #21+test ③ 前端 #15#16)提交。
 
 ### 2026-06-28(fix:侧栏标题与 macOS 红绿灯重叠 + references 改绝对路径)
 - **fix(ui)**:侧栏标题「Monkey Deck」与 macOS 红绿灯重叠。窗口用 `MacTitleBarHiddenInset`(main.go),红绿灯 overlay 在 webview 上,原 `padding-left:76px` 间隙不足。改 `frontend/src/index.css` 的 `.sidebar-header` `padding-left` 76→84px。
