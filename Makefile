@@ -1,4 +1,4 @@
-.PHONY: all bindings dev build test test-integration clean server fmt vet tidy
+.PHONY: all bindings dev dev-frontend build build-frontend app package run test test-integration clean server fmt vet tidy
 
 # monkey-deck Makefile(AGENTS.md §0.5)
 WAILS3 ?= /Users/jessonchan/go/bin/wails3
@@ -12,16 +12,26 @@ dev:
 	$(WAILS3) dev -config ./build/config.yml
 
 ## 仅前端 dev
-dev:frontend:
+dev-frontend:
 	cd frontend && bun run dev
 
 ## 构建前端
-build:frontend:
+build-frontend:
 	cd frontend && bun run build
 
-## 产出桌面应用
+## 只产出裸二进制 bin/monkey-deck(不刷新 bin/monkey-deck.app)
 build: $(WAILS3)
 	$(WAILS3) build
+
+## 打包成 bin/monkey-deck.app(= build + cp 新二进制进 .app + codesign)。「build 后开 .app」用这个,不是 build
+app: package
+
+package: $(WAILS3)
+	$(WAILS3) task package
+
+## 直接跑最新裸二进制(不经 .app,最快验证 build 产物)
+run: build
+	./bin/monkey-deck
 
 ## 后端单测(不含真 harness 集成测试)
 test:
