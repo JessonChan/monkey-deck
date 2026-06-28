@@ -45,15 +45,11 @@
 
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
-- **当前焦点**:对话体验打磨(切会话不丢进行中输出、token 占比持久化与展示、历史可读性)
+- **当前焦点**:会话标题自动生成(修「标题一直是第一句话」)
 - **最后更新**:2026-06-28
-- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计。`go test ./internal/...` 通过、前端 `tsc` 通过。
+- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、**会话标题 LLM 自动生成(fallback + 异步精修)**。`go test ./internal/...` 通过、前端 `tsc` 通过。
 - **本次(2026-06-28)改动**:
-  1. 会话状态按 session 隔离(items/usage/status/permission 各为 map)——修「切走再切回丢失正在输出的历史」。
-  2. token 用量持久化(migration 0003 + `sessions.used_tokens/size_tokens/cost` + `UpdateSessionUsage`),handleEvent 收到 usage_update 回写;重开会话恢复占比而非清零。
-  3. 用量条视觉:加高(3→5px)、显示百分比、分级配色(绿/蓝/琥珀/红随占比)、数字支持 k/M、无数据时隐藏。
-  4. 聊天历史展示:每轮用户消息前的回合分隔(带时间锚点)+ agent 消息时间戳。
-  5. bindings 重生(顺带清掉 stale 的 DeleteSession/MergeSession/worktree 字段,这些前端未用)。
+  1. **修「标题一直用第一句话」**(见 §G 2026-06-28 标题条 + AGENTS.md §5.4 #14):根因 = opencode 实证不发 ACP `session_info_update` 标题。新增 `internal/titlegen`(fallback 纯本地归一化 + LLM 异步精修,读 opencode.json provider 配置调 OpenAI 兼容接口,关 thinking 防推理 model 空回);chat.go 首条消息先写 fallback 再异步覆盖(不冲用户改名)。真实 glm-5.2 验证「README 翻译为中文并添加安装说明」1.6s ✅。
 
 ---
 
@@ -123,6 +119,18 @@
 ---
 
 ## G. 工作日志(追加,最新在上)
+
+### 2026-06-28(fix:会话标题自动生成 —— 修「标题一直是第一句话」)
+- **现象**:所有会话标题永远停在「首条用户消息截断 24 字」,从不更新。
+- **调研(实证)**:ACP 协议**有**标题机制(SDK `SessionInfoUpdate.Title`,discriminator `session_info_update`;但 `session/new` 响应**无** title)。写独立诊断程序(`acpdiag`)抓取 opencode 1.17.10 一轮完整 turn + end_turn 后 25s 的全部 `SessionUpdate`:只有 `available_commands_update`/`agent_thought_chunk`/`tool_call`/`tool_call_update`/`agent_message_chunk`,**从不发 `session_info_update`**。→ 原 `handleEvent` 的 `session_info` 分支永不触发 = 根因。参考 wesight(MIT)—— 它自生成标题,不依赖 agent。
+- **修法**(新 `internal/titlegen`,移植 wesight `sessionTitle.ts`/`coworkUtil.ts` 思路,保留 MIT 署名):
+  1. `FallbackTitle`:纯本地归一化(去 markdown/标签/引号/列表标记,截断 50 字),**立即**给出可读标题。
+  2. `Generate`:读会话 model 对应的 opencode.json provider 配置(`~/.config/opencode/opencode.json` + cwd,cwd 覆盖全局),调 OpenAI 兼容 `/chat/completions` 异步精修;带 `thinking:{type:"disabled"}`,若 provider 不认返 400 自动去掉重试。
+  3. **chat.go**:`maybeAutoTitle` 改用 `FallbackTitle`;`startTurn` 首条消息(标题原为空)先写 fallback 立即推 `chat:session-meta`,再 `go refineTitleAsync` 用 LLM 覆盖(仅当标题仍是 fallback、未被用户改名时)。保留原 `session_info` handler(无害,opencode 将来发了也能用)。
+- **坑中坑(实证)**:GLM-5.2 是推理模型,不关 thinking 时 `max_tokens` 全花在 `reasoning_content`、`content` 空(`finish_reason=length`)。`thinking:{type:"disabled"` 关闭后 `reasoning_tokens=0`、content 正常。`thinking:false`(布尔)会 400。
+- **改了哪些文件**:`internal/titlegen/{titlegen.go,titlegen_test.go,live_test.go(integration)}`(新)、`internal/chat/chat.go`(maybeAutoTitle/refineTitleAsync/startTurn/import,删 makeTitle)、`AGENTS.md`(§5.4 #14)、`PROCESS.md`(本节 + §B/§C)。
+- **验证**:`go test ./internal/...` ✅(titlegen 单测:纯函数/provider 解析/httptest Generate/GenerateHTTPError);`go test -tags integration -run TestLiveGenerate` 真实 bigmodel/glm-5.2 → `README 翻译为中文并添加安装说明` 1.6s ✅;`go build ./internal/...` + `go vet` 干净。临时诊断程序在 `/var/folders/.../T/opencode/acpdiag`(不入库)。
+- **下一步**:用户实测一轮真实对话确认侧栏标题随首条消息变成本地精修后的标题;若想用更便宜/独立的标题 model,可后续加 settings 配置项。
 
 ### 2026-06-28(fix:侧栏标题与 macOS 红绿灯重叠 + references 改绝对路径)
 - **fix(ui)**:侧栏标题「Monkey Deck」与 macOS 红绿灯重叠。窗口用 `MacTitleBarHiddenInset`(main.go),红绿灯 overlay 在 webview 上,原 `padding-left:76px` 间隙不足。改 `frontend/src/index.css` 的 `.sidebar-header` `padding-left` 76→84px。
