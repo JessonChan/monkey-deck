@@ -73,7 +73,7 @@ input, textarea { font-family: inherit; }
   align-items: center;
   justify-content: space-between;
   height: 52px;
-  padding: 0 12px 0 76px;            /* 左侧留出红绿灯空间 */
+  padding: 0 12px 0 84px;            /* 左侧留出红绿灯空间(MacTitleBarHiddenInset 下需 ~80px+) */
   -webkit-app-region: drag;
 }
 .sidebar-title {

@@ -21,13 +21,17 @@
 
 1. **本文件** —— 搞清楚规矩。
 2. **PROCESS.md** —— 搞清楚现在做到哪、下一步干什么(进度追踪,见 §0.3)。
-3. **ACP 协议怎么用**:看 `references/real-agent-kanban/internal/acp/`（`runner.go` 的完整生命周期、`handler.go` 的回调实现）——这是 ACP client 用法的权威范例,**直接照搬其生命周期与回调模式**。
-4. **UI / 产品形态参考**:`references/wesight`（[github.com/freestylefly/wesight](https://github.com/freestylefly/wesight)）——桌面 agent 工作区、统一 agent 管理、model 路由、运行时监控、菜单栏 HUD 等概念可作 UI 灵感。**仅参考形态,不照搬其工作原理**（wesight 多为 CLI 子进程管理,我们是纯 ACP）。
+3. **ACP 协议怎么用**:看 `/Users/jessonchan/temp/monkey-deck/references/real-agent-kanban/internal/acp/`（`runner.go` 的完整生命周期、`handler.go` 的回调实现）——这是 ACP client 用法的权威范例,**直接照搬其生命周期与回调模式**。
+4. **UI / 产品形态参考**:`/Users/jessonchan/temp/monkey-deck/references/wesight`（[github.com/freestylefly/wesight](https://github.com/freestylefly/wesight)）——桌面 agent 工作区、统一 agent 管理、model 路由、运行时监控、菜单栏 HUD 等概念可作 UI 灵感。**仅参考形态,不照搬其工作原理**（wesight 多为 CLI 子进程管理,我们是纯 ACP）。
 5. 按需查阅 ACP 协议规范本身与 `coder/acp-go-sdk`。
 
 **禁止跳过阅读直接写代码。** ACP 生命周期搞错（比如把 client 当 server、漏掉 SessionUpdate 回调、Prompt 当成纯异步）是一切偏离的源头。
 
 ### 0.2 references/ 是只读参考,严禁改动
+
+> **绝对路径(给 git worktree 用)**:`references/` 不入库、不在各 worktree 里。它的真实位置在**主源码树**:
+> `/Users/jessonchan/temp/monkey-deck/references`
+> （含 `real-agent-kanban/`、`wesight/`、`orca/`、`DeepSeek-Reasonix/`）。下文凡写 `references/xxx` 的,均指此绝对路径下的对应子目录——在任意 worktree 里直接按这个绝对路径读即可。
 
 - `references/`（`real-agent-kanban/`、`wesight/`）是**参考资料,只读**。
 - **严禁创建、修改、删除 `references/` 下的任何文件或内容**,严禁往里面写测试产物 / 构建产物 / 临时文件。要验证想法就在本项目自己的代码里验证。
@@ -54,10 +58,10 @@
 
 ### 0.4 借用代码的协议署名(wesight 为 MIT)
 
-- `references/wesight` 是 **MIT 协议**。**凡是从 wesight 借用 / 改写的代码,必须保留 MIT 协议署名:**
+- `/Users/jessonchan/temp/monkey-deck/references/wesight` 是 **MIT 协议**。**凡是从 wesight 借用 / 改写的代码,必须保留 MIT 协议署名:**
   - **文件级**:被借用代码的文件顶部保留 MIT 版权声明与许可文本(原作者 copyright 行 + "Permission is hereby granted..." 全文)。
   - **项目级**:在 `THIRD_PARTY_LICENSES.md`(或 `NOTICE.md`)登记一条「来源 = wesight (MIT) / 借用了哪些文件 / 原版权声明」。
-- 从 `references/real-agent-kanban` 借用代码同理,**先确认其 LICENSE 文件,按对应协议署名**。
+- 从 `/Users/jessonchan/temp/monkey-deck/references/real-agent-kanban` 借用代码同理,**先确认其 LICENSE 文件,按对应协议署名**。
 - **禁止**把借用代码当成原创、抹掉版权声明。借一行也算;只参考思路(不抄代码)不受此约束。
 
 ---
@@ -141,7 +145,7 @@ spawn harness 子进程（独立进程组,见 §3.2）
 monkey-deck/
 ├── AGENTS.md                  # 本文件(规矩)
 ├── PROCESS.md                 # 开发追踪(进度/决策/下一步),见 §0.3
-├── references/                # 只读参考(real-agent-kanban / wesight),严禁改动
+├── references/                # 只读参考(real-agent-kanban / wesight),严禁改动;不入库,实际在主源码树 /Users/jessonchan/temp/monkey-deck/references(见 §0.2)
 ├── go.mod                     # 单一 Go module
 ├── main.go                    # Wails3 application.New() 入口
 ├── internal/
@@ -244,7 +248,7 @@ monkey-deck/
 
 ### 5.4 已知/可预见的 ACP 坑（从 RAK 参考迁移,预先防范）
 
-> 这些是 RAK 实测揪出的 ACP 实战问题（详见 `references/real-agent-kanban/AGENTS.md` §5.4）,在我们的栈里**大概率会复发**。先记录、先防,踩到了就在这里补本项目实证。
+> 这些是 RAK 实测揪出的 ACP 实战问题（详见 `/Users/jessonchan/temp/monkey-deck/references/real-agent-kanban/AGENTS.md` §5.4）,在我们的栈里**大概率会复发**。先记录、先防,踩到了就在这里补本项目实证。
 
 1. **model 必须是 `provider/model` 格式**,裸名 → 占位 model → 0 产出静默 idle（见 §3.5）。
 2. **harness 崩溃 = `peer disconnected`**,不要当成普通 error 静默吞,要触发清理 + 用户可见提示。

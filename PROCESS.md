@@ -124,6 +124,12 @@
 
 ## G. 工作日志(追加,最新在上)
 
+### 2026-06-28(fix:侧栏标题与 macOS 红绿灯重叠 + references 改绝对路径)
+- **fix(ui)**:侧栏标题「Monkey Deck」与 macOS 红绿灯重叠。窗口用 `MacTitleBarHiddenInset`(main.go),红绿灯 overlay 在 webview 上,原 `padding-left:76px` 间隙不足。改 `frontend/src/index.css` 的 `.sidebar-header` `padding-left` 76→84px。
+- **docs**:`references/` 不在 worktree 里(主源码树外部、不入库),worktree 读不到。AGENTS.md 的具体读取路径(§0.1/§0.2/§0.4/§2.1/§5.4)与 PROCESS.md 改用绝对路径 `/Users/jessonchan/temp/monkey-deck/references`;§0.2 增「绝对路径(给 git worktree 用)」说明块,声明下文 `references/xxx` 均指该绝对路径。
+- 改动文件:`frontend/src/index.css`、`AGENTS.md`、`PROCESS.md`。
+- 验证:CSS 热重载肉眼确认;路径绝对化 `grep` 复核。
+
 ### 2026-06-28(feat:对话排队 + 打断;修 StopSession 杀进程 bug)
 - **起因**:问「ACP 是否有对话 queue」。调研结论(写进 §E + AGENTS.md §5.4 #13):**ACP 协议无 queue**——`session/prompt` 是同步请求-响应,turn 未结束不能发下一个;协议对「turn 中途发新消息」的唯一答案是 `session/cancel`(notification)→ agent 回 `StopReason::cancelled` → 再发新 prompt。即 **cancel-then-reprompt,非 queue**。RAK 的 queue 全是任务级看板派发(我们不做);wesight 非 ACP 无参考。
 - **发现的 bug**:`StopSession` 原本 `ls.cancel()` 取消的是 **startLive 的 harness ctx**(`exec.CommandContext` 绑的)→ 直接**杀 opencode 进程**,而非干净 `session/cancel`。Stop 按钮实际是「干掉 agent」,下条消息得重新 spawn。修法:存 per-turn `turnCancel`,Stop/打断取消它(干净 session/cancel,harness 存活,连接可用)。
@@ -195,7 +201,7 @@
 
 ### 2026-06-26
 - 初始化项目:写 `AGENTS.md`(工程约束)+ `PROCESS.md`(本文件)。
-- 调研参考:`references/real-agent-kanban` 的 ACP 实现(`internal/acp`)、`references/wesight` 的产品形态。
+- 调研参考:`/Users/jessonchan/temp/monkey-deck/references/real-agent-kanban` 的 ACP 实现(`internal/acp`)、`/Users/jessonchan/temp/monkey-deck/references/wesight` 的产品形态。
 - 确认两项决策(§D→§E):module = `github.com/jessonchan/monkey-deck`;SQLite 驱动 = `modernc.org/sqlite`。
 - 加固治理:AGENTS.md 增 §0.4(wesight MIT 署名)、§6.2(Git 多提交/原子提交纪律);`.gitignore` 排除 `references/` 与构建产物;git 仓库初始化(`main`)。
 - **下一步**:启动阶段 0.1(Wails3 脚手架)。
