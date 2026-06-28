@@ -20,6 +20,7 @@ import (
 	"github.com/jessonchan/monkey-deck/internal/acp"
 	"github.com/jessonchan/monkey-deck/internal/config"
 	"github.com/jessonchan/monkey-deck/internal/store"
+	"github.com/jessonchan/monkey-deck/internal/titlegen"
 	"github.com/jessonchan/monkey-deck/internal/worktree"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -171,37 +172,48 @@ func (s *ChatService) emitSessionMeta(sessionID, title string) {
 	s.emit(EventSessionMeta, SessionMetaPayload{SessionID: sessionID, Title: title})
 }
 
-// maybeAutoTitle 会话无标题时,用首条消息生成标题并持久化 + 推前端(兜底;opencode 的 session_info 标题更优,见 handleEvent)。
-func (s *ChatService) maybeAutoTitle(sessionID, text string) {
+// maybeAutoTitle 会话无标题时,用首条消息生成「兜底纯文本标题」并持久化 + 推前端。
+// 返回写入的兜底标题(空 = 未写入:会话已有标题或消息为空)。
+//
+// 注意:opencode 1.17.10 实证不发 ACP 的 session_info_update(标题),故不能依赖
+// agent 生成标题 —— 见 AGENTS.md §5.4 #14。兜底标题立即给出,更精准的标题由
+// refineTitleAsync 异步调 LLM 生成(refineTitle 只在标题仍是兜底值时覆盖,不冲掉用户改名)。
+func (s *ChatService) maybeAutoTitle(sessionID, text string) string {
 	se, err := s.st.GetSession(s.ctx, sessionID)
 	if err != nil || se == nil || se.Title != "" {
+		return ""
+	}
+	title := titlegen.FallbackTitle(text, "")
+	if title == "" {
+		return ""
+	}
+	if err := s.st.UpdateSessionTitle(s.ctx, sessionID, title); err != nil {
+		return ""
+	}
+	s.emitSessionMeta(sessionID, title)
+	return title
+}
+
+// refineTitleAsync 在后台用 LLM 生成更精准的会话标题(仅首条消息时触发)。
+// model = 会话 model(provider/model),cwd = session 工作目录(用于定位 opencode.json)。
+// 仅当当前标题仍是兜底标题 fallbackTitle(或空)时才覆盖 —— 避免冲掉用户手动改名。
+// 任何失败(provider 无配置/网络错/空回复)静默回退,fallbackTitle 保留。后台执行,不阻塞对话。
+func (s *ChatService) refineTitleAsync(sessionID, model, cwd, firstMsg, fallbackTitle string) {
+	title := titlegen.Generate(s.ctx, model, cwd, firstMsg)
+	if title == "" || title == fallbackTitle {
 		return
 	}
-	title := makeTitle(text)
-	if title == "" {
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil || se == nil {
 		return
+	}
+	if se.Title != "" && se.Title != fallbackTitle {
+		return // 用户已手动改名,不覆盖
 	}
 	if err := s.st.UpdateSessionTitle(s.ctx, sessionID, title); err != nil {
 		return
 	}
 	s.emitSessionMeta(sessionID, title)
-}
-
-// makeTitle 从消息文本生成简短标题(换行→空格,截断 ~24 字)。
-func makeTitle(text string) string {
-	t := strings.TrimSpace(text)
-	if t == "" {
-		return ""
-	}
-	for _, r := range []string{"\n", "\r", "\t"} {
-		t = strings.ReplaceAll(t, r, " ")
-	}
-	t = strings.TrimSpace(t)
-	rs := []rune(t)
-	if len(rs) > 24 {
-		return string(rs[:24]) + "…"
-	}
-	return t
 }
 
 // --- Projects ---
@@ -570,10 +582,25 @@ func (s *ChatService) startTurn(ls *liveSession, sessionID, text string) {
 	if _, err := s.st.AppendMessage(s.ctx, sessionID, "user", "", text, ""); err != nil {
 		slog.Warn("persist user msg", "err", err)
 	}
-	s.maybeAutoTitle(sessionID, text)
+	fallback := s.maybeAutoTitle(sessionID, text)
 	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "user_message_chunk", Text: text})
 	s.emitStatus(sessionID, "prompting", "")
 	go s.runPrompt(ls, sessionID, text)
+	// 仅首条消息:异步用 LLM 把兜底标题精修成更贴切的(AGENTS.md §5.4 #14)。
+	if fallback != "" && ls.proj != nil {
+		se, _ := s.st.GetSession(s.ctx, sessionID)
+		if se != nil {
+			cwd := ls.proj.Path
+			if se.WorktreePath != "" {
+				cwd = se.WorktreePath
+			}
+			m := se.Model
+			if m == "" {
+				m = ls.proj.Model
+			}
+			go s.refineTitleAsync(sessionID, m, cwd, text, fallback)
+		}
+	}
 }
 
 // InterruptAndSend 打断当前 turn 并立即发送新消息(前端队列面板「立即发送」按钮)。
