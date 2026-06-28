@@ -1,4 +1,5 @@
 import { useState } from "react";
+import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import { Plus, ChevronDown, Folder, X, MessageCircle } from "lucide-react";
 
@@ -45,9 +46,15 @@ export default function Sidebar(props: Props) {
     if (p) props.onAddProjectByPath(p);
   };
 
+  const onTitleMouseDown = (e: React.MouseEvent) => {
+    if (e.detail !== 2) return;
+    if ((e.target as HTMLElement).closest("button, input, a")) return;
+    void ChatService.ToggleMaximise();
+  };
+
   return (
     <aside className="sidebar" data-testid="sidebar">
-      <div className="sidebar-header">
+      <div className="sidebar-header" onMouseDown={onTitleMouseDown}>
         <span className="sidebar-title">Monkey Deck</span>
         <button className="icon-btn" data-testid="add-project" onClick={startAdd} title="添加项目目录">
           <Plus size={17} />
