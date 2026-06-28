@@ -46,6 +46,12 @@ export interface StatusPayload {
   detail?: string;
 }
 
+// 排队消息(前端队列:ACP 协议无 queue,turn 进行中的消息先入前端队列,回合结束自动续发)。
+export interface QueueItem {
+  id: string;
+  text: string;
+}
+
 // 前端展示用的对话条目(由持久化历史 + 实时流式合并而来)。
 export type ChatItem =
   | { type: "user"; id: string; text: string }

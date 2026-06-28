@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Events } from "@wailsio/runtime";
 import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, PermissionPrompt, SessionEvent, StatusPayload } from "./types";
+import type { ChatItem, PermissionPrompt, SessionEvent, StatusPayload, QueueItem } from "./types";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
-import Icon from "./components/Icon";
+import { Sparkles } from "lucide-react";
+import GitPanel from "./components/GitPanel";
+import type { FileChange } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -22,6 +24,10 @@ export default function App() {
   });
   const [permission, setPermission] = useState<PermissionPrompt | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [queue, setQueue] = useState<QueueItem[]>([]);     // 前端 FIFO 队列(turn 中发的消息)
+  const [composerValue, setComposerValue] = useState("");  // composer 受控文本(支持撤回回填)
+  const queueRef = useRef<QueueItem[]>([]);
+  const userStoppedRef = useRef(false);                    // 用户主动停止:抑制该次 idle 的 auto-continue
 
   const selectedSessionIdRef = useRef<string | null>(null);
   selectedSessionIdRef.current = selectedSessionId;
@@ -127,6 +133,11 @@ export default function App() {
           return next;
         });
       }
+      // 回合结束后刷新 Git 面板的 diff(agent 可能改了文件)
+      if (s.status === "idle") {
+        const sid = selectedSessionIdRef.current;
+        if (sid) { ChatService.SessionDiff(sid).then(d => setSessionDiff(d || "")).catch(() => {}); ChatService.SessionChanges(sid).then(setSessionChanges).catch(() => {}); }
+      }
     });
     const offMeta = Events.On("chat:session-meta", (e: { data: { sessionId: string; title: string } }) => {
       const m = e.data;
@@ -141,6 +152,31 @@ export default function App() {
       offMeta();
     };
   }, [refreshProjects, applyEvent]);
+
+  // auto-continue:status 转 idle 时,若非用户主动停止且队列非空,自动发下一条(FIFO)。
+  // 每条排队消息 = 一个独立 turn,按序逐个发(协议无 queue,一次只一个 Prompt)。
+  const drainQueue = useCallback(async () => {
+    const q = queueRef.current;
+    if (q.length === 0) return;
+    const next = q[0];
+    queueRef.current = q.slice(1);
+    setQueue(queueRef.current);
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    setError(null);
+    setStatus("prompting");
+    try {
+      await ChatService.SendMessage(sid, next.text);
+    } catch (e) {
+ setError(String(e));
+      setStatus("idle");
+    }
+  }, []);
+  useEffect(() => {
+    if (status !== "idle") return;
+    if (userStoppedRef.current) { userStoppedRef.current = false; return; } // 用户主动停:不自动续发
+    void drainQueue();
+  }, [status, drainQueue]);
 
   // 把持久化消息转成展示 items。
   const messagesToItems = useCallback((msgs: Message[]): ChatItem[] => {
@@ -173,6 +209,8 @@ export default function App() {
       setSelectedProjectId(projectId);
       setSelectedSessionId(null);
       setItems([]);
+      setQueue([]); queueRef.current = []; setComposerValue("");
+      userStoppedRef.current = false;
       setStatus("empty");
       await refreshSessions(projectId);
     },
@@ -184,12 +222,22 @@ export default function App() {
     async (sessionId: string) => {
       setSelectedSessionId(sessionId);
       setPermission(null);
-      setUsage({ used: 0, size: 0, cost: 0 });
       setStatus("idle");
+      setQueue([]); queueRef.current = []; setComposerValue("");
+      userStoppedRef.current = false;
       setError(null);
       await ChatService.OpenSession(sessionId);
       const msgs = await ChatService.LoadMessages(sessionId);
       setItems(messagesToItems(msgs || []));
+      try {
+        const diff = await ChatService.SessionDiff(sessionId);
+        setSessionDiff(diff || "");
+      } catch {
+        setSessionDiff("");
+      }
+      try {
+        setSessionChanges(await ChatService.SessionChanges(sessionId));
+      } catch { setSessionChanges(null); }
     },
     [messagesToItems]
   );
@@ -208,10 +256,16 @@ export default function App() {
     }
   }, [selectedProjectId, refreshSessions, openSession]);
 
-  // 发送消息。
+  // 发送消息:idle 直发;prompting(一轮进行中)入前端队列,回合结束自动续发(§5.4 协议无 queue)。
   const sendMessage = useCallback(
     async (text: string) => {
       if (!selectedSessionId || !text.trim()) return;
+      if (status === "prompting") {
+        const item: QueueItem = { id: "q" + Date.now() + Math.random().toString(36).slice(2, 6), text };
+        queueRef.current = [...queueRef.current, item];
+        setQueue(queueRef.current);
+        return;
+      }
       setError(null);
       setStatus("prompting");
       try {
@@ -221,13 +275,42 @@ export default function App() {
         setStatus("idle");
       }
     },
-    [selectedSessionId]
+    [selectedSessionId, status]
   );
 
   const stopSession = useCallback(async () => {
     if (!selectedSessionId) return;
+    userStoppedRef.current = true; // 抑制本次 idle 的 auto-continue(用户主动停,不自动续发;队列保留)
     await ChatService.StopSession(selectedSessionId);
   }, [selectedSessionId]);
+
+  // 立即发送:打断当前 turn,这条插队先发(其余保留排队)。后端 InterruptAndSend 原子完成
+  // (cancel + 等落定 + 发新);被取消的轮不发 idle,故 status 保持 prompting,不会误触发 auto-continue。
+  const interruptQueue = useCallback(async (id: string) => {
+    const item = queueRef.current.find((q) => q.id === id);
+    if (!item) return;
+    queueRef.current = queueRef.current.filter((q) => q.id !== id);
+    setQueue(queueRef.current);
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    setError(null);
+    userStoppedRef.current = false;
+    setStatus("prompting");
+    try {
+      await ChatService.InterruptAndSend(sid, item.text);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  // 撤回编辑:移出队列,文本回填 composer。
+  const revokeQueue = useCallback((id: string) => {
+    const item = queueRef.current.find((q) => q.id === id);
+    if (!item) return;
+    queueRef.current = queueRef.current.filter((q) => q.id !== id);
+    setQueue(queueRef.current);
+    setComposerValue((prev) => (prev.trim() ? prev + "\n" + item.text : item.text));
+  }, []);
 
   const handleComposerAction = useCallback(
     (action: "clear" | "new" | "stop") => {
@@ -255,7 +338,28 @@ export default function App() {
     await ChatService.CloseSession(selectedSessionId);
     setSelectedSessionId(null);
     setItems([]);
+    setQueue([]); queueRef.current = []; setComposerValue("");
     setStatus("empty");
+  }, [selectedSessionId]);
+
+  const [mergeResult, setMergeResult] = useState<string | null>(null);
+  const [sessionDiff, setSessionDiff] = useState<string | null>(null);
+  const [sessionChanges, setSessionChanges] = useState<FileChange[] | null>(null);
+  const mergeSession = useCallback(async () => {
+    if (!selectedSessionId) return;
+    try {
+      const result = await ChatService.MergeSession(selectedSessionId);
+      setError(null);
+      setMergeResult(result || "✅ 合并完成");
+      setTimeout(() => setMergeResult(null), 6000);
+      // 合并后刷新 diff(变为"无变更")
+      try { setSessionDiff(await ChatService.SessionDiff(selectedSessionId) || ""); } catch {}
+    } catch (e) {
+      const msg = "❌ 合并失败: " + String(e);
+      setError(msg);
+      setMergeResult(msg);
+      setTimeout(() => setMergeResult(null), 8000);
+    }
   }, [selectedSessionId]);
 
   const addProject = useCallback(async () => {
@@ -300,6 +404,11 @@ export default function App() {
     [projects, selectedProjectId]
   );
 
+  const activeSession = useMemo(
+    () => sessions.find((s) => s.id === selectedSessionId) || null,
+    [sessions, selectedSessionId]
+  );
+
   return (
     <div className="app">
       <Sidebar
@@ -330,11 +439,28 @@ export default function App() {
             onAction={handleComposerAction}
             onRespondPermission={respondPermission}
             onCloseSession={closeSession}
+            onMerge={mergeSession}
+            mergeResult={mergeResult}
+            sessionDiff={sessionDiff}
+            queue={queue}
+            onInterruptQueue={interruptQueue}
+            onRevokeQueue={revokeQueue}
+            composerValue={composerValue}
+            onComposerChange={setComposerValue}
           />
         ) : (
           <EmptyState />
         )}
       </main>
+      {activeSession?.branch && (
+        <GitPanel
+          branch={activeSession.branch}
+          changes={sessionChanges}
+          commitCount={0}
+          mergeResult={mergeResult}
+          onMerge={mergeSession}
+        />
+      )}
     </div>
   );
 }
@@ -342,7 +468,7 @@ export default function App() {
 function EmptyState() {
   return (
     <div className="empty-state">
-      <div className="empty-logo"><Icon name="sparkles" size={30} /></div>
+      <div className="empty-logo"><Sparkles size={30} /></div>
       <h2>Monkey Deck</h2>
       <p>ACP 桌面客户端 · 以项目目录为锚点管理编码 agent 对话</p>
       <p className="empty-hint">← 在左侧添加一个项目目录开始</p>

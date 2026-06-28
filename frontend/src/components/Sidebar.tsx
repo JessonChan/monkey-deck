@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import Icon from "./Icon";
+import { Plus, ChevronDown, Folder, X, MessageCircle } from "lucide-react";
 
 interface Props {
   projects: Project[];
@@ -50,7 +50,7 @@ export default function Sidebar(props: Props) {
       <div className="sidebar-header">
         <span className="sidebar-title">Monkey Deck</span>
         <button className="icon-btn" data-testid="add-project" onClick={startAdd} title="添加项目目录">
-          <Icon name="plus" size={17} />
+          <Plus size={17} />
         </button>
       </div>
 
@@ -82,14 +82,14 @@ export default function Sidebar(props: Props) {
             <div key={p.id} className="project-item-wrap">
               <div className={`project-item ${props.selectedProjectId === p.id ? "active" : ""}`}>
                 <button className={`caret ${isOpen ? "open" : ""}`} onClick={() => toggle(p.id)}>
-                  <Icon name="chevron" size={13} style={{ transform: isOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }} />
+                  <ChevronDown size={13} style={{ transform: isOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }} />
                 </button>
                 <button className="project-main" data-testid={`project-${p.id}`} onClick={() => handleProject(p)}>
-                  <Icon name="folder" size={15} />
+                  <Folder size={15} />
                   <span className="project-name" title={p.path}>{p.name}</span>
                 </button>
                 <button className="icon-btn small" onClick={() => props.onRemoveProject(p.id)} title="移除项目">
-                  <Icon name="close" size={13} />
+                  <X size={13} />
                 </button>
               </div>
               {isOpen && props.selectedProjectId === p.id && (
@@ -101,12 +101,12 @@ export default function Sidebar(props: Props) {
                       data-testid={`session-${s.id}`}
                       onClick={() => props.onSelectSession(s.id)}
                     >
-                      <Icon name="bubble" size={13} />
+                      <MessageCircle size={13} />
                       <span className="session-label">{s.title || "新对话"}</span>
                     </button>
                   ))}
                   <button className="session-item new" onClick={props.onCreateSession} data-testid="new-session">
-                    <Icon name="plus" size={13} />
+                    <Plus size={13} />
                     <span className="session-label">新对话</span>
                   </button>
                 </div>

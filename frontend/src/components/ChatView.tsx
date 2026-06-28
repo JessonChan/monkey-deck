@@ -2,10 +2,11 @@ import { memo, useEffect, useRef, useState, type ComponentPropsWithoutRef } from
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, PermissionPrompt, StatusPayload } from "../types";
+import type { ChatItem, PermissionPrompt, StatusPayload, QueueItem } from "../types";
 import Composer from "./Composer";
+import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
-import Icon from "./Icon";
+import { X, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert } from "lucide-react";
 
 interface Usage { used: number; size: number; cost: number; }
 
@@ -18,11 +19,19 @@ interface Props {
   usage: Usage;
   error: string | null;
   permission: PermissionPrompt | null;
+  mergeResult: string | null;
+  sessionDiff: string | null;
   onSend: (text: string) => void;
   onStop: () => void;
   onAction: (action: "clear" | "new" | "stop") => void;
   onRespondPermission: (optionId: string) => void;
   onCloseSession: () => void;
+  onMerge: () => void;
+  queue: QueueItem[];
+  onInterruptQueue: (id: string) => void;
+  onRevokeQueue: (id: string) => void;
+  composerValue: string;
+  onComposerChange: (v: string) => void;
 }
 
 const STATUS_MAP: Record<string, { label: string; cls: string }> = {
@@ -66,7 +75,7 @@ export default function ChatView(props: Props) {
         <div className="chat-header-actions">
           {s.label && <span className={`status-badge ${s.cls}`}>{s.label}</span>}
           <button className="icon-btn small" onClick={props.onCloseSession} title="关闭会话">
-            <Icon name="close" size={14} />
+            <X size={14} />
           </button>
         </div>
       </header>
@@ -82,6 +91,7 @@ export default function ChatView(props: Props) {
       </div>
 
       {props.error && <div className="error-bar">⚠ {props.error}</div>}
+      {props.mergeResult && <div className={`merge-result ${props.mergeResult.startsWith("✅") ? "ok" : "fail"}`}>{props.mergeResult}</div>}
 
       <footer className="chat-footer">
         <div className="usage-bar" title="上下文用量">
@@ -92,8 +102,15 @@ export default function ChatView(props: Props) {
             {props.usage.cost > 0 && ` · $${props.usage.cost.toFixed(4)}`}
           </span>
         </div>
+        <QueuePanel
+          queue={props.queue}
+          onInterrupt={props.onInterruptQueue}
+          onRevoke={props.onRevokeQueue}
+        />
         <Composer
-          disabled={props.status === "prompting"}
+          value={props.composerValue}
+          onChange={props.onComposerChange}
+          disabled={!props.session}
           prompting={props.status === "prompting"}
           model={props.session?.model || ""}
           onSend={props.onSend}
@@ -116,7 +133,7 @@ const ChatRow = memo(function ChatRow({ item }: { item: ChatItem }) {
   if (item.type === "agent") {
     return (
       <div className="row row-agent" data-testid="msg-agent">
-        <div className="avatar"><Icon name="sparkles" size={15} /></div>
+        <div className="avatar"><Sparkles size={15} /></div>
         <div className="bubble-agent-wrap">
           <div className="bubble-agent">
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeRenderer, pre: PreRenderer }}>
@@ -133,7 +150,7 @@ const ChatRow = memo(function ChatRow({ item }: { item: ChatItem }) {
       <Collapsible
         className="thought-block"
         open={!!item.streaming}
-        summary={<><Icon name="brain" size={13} /> {item.streaming ? "思考中…" : "思考过程"}</>}
+        summary={<><Brain size={13} /> {item.streaming ? "思考中…" : "思考过程"}</>}
         summaryClassName="thought-summary"
       >
         <div className="thought-text">{item.text}</div>
@@ -151,7 +168,7 @@ function MessageActions({ text }: { text: string }) {
   return (
     <div className="msg-actions">
       <button className="msg-action-btn" onClick={copy} data-testid="copy-msg">
-        <Icon name={copied ? "check" : "copy"} size={12} /> {copied ? "已复制" : "复制"}
+        {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "已复制" : "复制"}
       </button>
     </div>
   );
@@ -171,7 +188,7 @@ function ToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
       open={false}
       summaryClassName="tool-summary"
       summary={<>
-        <Icon name="tool" size={13} />
+        <Wrench size={13} />
         <span className="tool-title">{item.title || "工具调用"}</span>
         {item.kind && <span className="tool-kind">{item.kind}</span>}
         <span className={`tool-status ${st.cls}`}>{st.label}</span>
@@ -181,7 +198,7 @@ function ToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
         <div className="tool-section">
           <div className="tool-section-head">
             <span className="tool-section-label">输入</span>
-            <button className="msg-action-btn" onClick={copyIn}><Icon name={copiedIn ? "check" : "copy"} size={11} /></button>
+            <button className="msg-action-btn" onClick={copyIn}>{copiedIn ? <Check size={11} /> : <Copy size={11} />}</button>
           </div>
           <pre className={inputR.fallback ? "tool-pre" : "tool-pre tool-term"}>{inputR.text}</pre>
         </div>
@@ -192,7 +209,7 @@ function ToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
             <span className="tool-section-label">
               输出{outputR.exit != null ? ` · exit ${outputR.exit}` : ""}{outputR.truncated ? " · 截断" : ""}
             </span>
-            <button className="msg-action-btn" onClick={copyOut}><Icon name={copiedOut ? "check" : "copy"} size={11} /></button>
+            <button className="msg-action-btn" onClick={copyOut}>{copiedOut ? <Check size={11} /> : <Copy size={11} />}</button>
           </div>
           <pre className={outputR.fallback ? "tool-pre" : "tool-pre tool-term"}>{outputR.text}</pre>
         </div>
@@ -205,7 +222,7 @@ function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRes
   return (
     <div className="permission-card" data-testid="permission-card">
       <div className="permission-head">
-        <Icon name="shield" size={18} />
+        <ShieldAlert size={18} />
         <div>
           <div className="permission-title">{prompt.title || "权限请求"}</div>
           {prompt.toolName && <div className="permission-tool">{prompt.toolName}</div>}
@@ -249,7 +266,7 @@ function CodeBox({ language, raw }: { language: string; raw: string }) {
       <div className="code-box-head">
         <span className="code-lang">{language}</span>
         <button className="msg-action-btn" onClick={copy} data-testid="copy-code">
-          <Icon name={copied ? "check" : "copy"} size={12} /> {copied ? "已复制" : "复制"}
+          {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "已复制" : "复制"}
         </button>
       </div>
       <pre className="code-box-pre"><code>{raw}</code></pre>

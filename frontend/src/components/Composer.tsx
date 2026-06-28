@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
-import Icon from "./Icon";
+import { Paperclip, X, Slash, Square, ArrowUp } from "lucide-react";
 
 interface Props {
-  disabled: boolean;
-  prompting: boolean;
+  value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
+  onChange: (v: string) => void;
+  disabled: boolean;        // 无 session 时禁用全部交互
+  prompting: boolean;       // 一轮进行中:显示停止键 + send 提示将排队
   model: string;
   onSend: (text: string) => void;
   onStop: () => void;
@@ -26,33 +28,31 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { cmd: "/stop", desc: "停止生成", action: "stop" },
 ];
 
-export default function Composer({ disabled, prompting, model, onSend, onStop, onAction }: Props) {
-  const [text, setText] = useState("");
+export default function Composer({ value, onChange, disabled, prompting, model, onSend, onStop, onAction }: Props) {
   const [attachments, setAttachments] = useState<string[]>([]);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   const slashQuery = useMemo(() => {
-    const t = text.trimStart();
-    if (t.startsWith("/") && !/\s/.test(t)) return t.slice(1).toLowerCase();
-    return null;
-  }, [text]);
+    if (!value.startsWith("/")) return null;
+    const rest = value.slice(1);
+    return rest.includes(" ") ? null : rest;
+  }, [value]);
   const filtered = useMemo(
     () => (slashQuery == null ? [] : SLASH_COMMANDS.filter((c) => c.cmd.slice(1).startsWith(slashQuery))),
     [slashQuery]
   );
   useEffect(() => {
-    const open = slashQuery != null && filtered.length > 0;
-    setSlashOpen(open);
-    if (open) setSlashIdx(0);
+    setSlashOpen(filtered.length > 0);
+    setSlashIdx(0);
   }, [slashQuery, filtered.length]);
 
   const autoGrow = (el: HTMLTextAreaElement) => {
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 220) + "px";
   };
-  useEffect(() => { if (ref.current) autoGrow(ref.current); }, [text]);
+  useEffect(() => { if (ref.current) autoGrow(ref.current); }, [value]);
 
   const injectAttachments = (base: string) => {
     if (attachments.length === 0) return base;
@@ -60,16 +60,17 @@ export default function Composer({ disabled, prompting, model, onSend, onStop, o
     return base.trim() ? `${base}\n\n${lines}` : lines;
   };
   const submit = (finalText?: string) => {
-    const t = (finalText ?? text).trim();
-    if ((!t && attachments.length === 0) || (disabled && !finalText)) return;
-    onSend(injectAttachments(t));
-    setText("");
+    if (disabled) return;
+    const t = (finalText ?? value).trim();
+    if (!t && attachments.length === 0) return;
+    onSend(injectAttachments(t));   // App 决定: idle 直发 / prompting 入队
+    onChange("");
     setAttachments([]);
     requestAnimationFrame(() => { if (ref.current) ref.current.style.height = "auto"; });
   };
   const pickSlash = (c: SlashCommand) => {
     if (c.action) onAction(c.action);
-    else if (c.insert) setText(c.insert);
+    else if (c.insert) onChange(c.insert);
     setSlashOpen(false);
     requestAnimationFrame(() => ref.current?.focus());
   };
@@ -93,6 +94,7 @@ export default function Composer({ disabled, prompting, model, onSend, onStop, o
     } catch { /* 取消静默 */ }
   };
   const baseName = (p: string) => p.split(/[/\\]/).pop() || p;
+  const empty = !value.trim() && attachments.length === 0;
 
   return (
     <div className="composer" data-testid="composer">
@@ -112,8 +114,8 @@ export default function Composer({ disabled, prompting, model, onSend, onStop, o
           <div className="att-chips" data-testid="att-chips">
             {attachments.map((p) => (
               <span key={p} className="att-chip" title={p}>
-                <span className="att-chip-name"><Icon name="paperclip" size={11} /> {baseName(p)}</span>
-                <button className="att-chip-x" onClick={() => setAttachments((prev) => prev.filter((x) => x !== p))}><Icon name="close" size={11} /></button>
+                <span className="att-chip-name"><Paperclip size={11} /> {baseName(p)}</span>
+                <button className="att-chip-x" onClick={() => setAttachments((prev) => prev.filter((x) => x !== p))}><X size={11} /></button>
               </span>
             ))}
           </div>
@@ -123,9 +125,9 @@ export default function Composer({ disabled, prompting, model, onSend, onStop, o
           ref={ref}
           className="composer-input"
           data-testid="composer-input"
-          value={text}
-          placeholder="给 monkey-deck 发消息…   (Enter 发送 · Shift+Enter 换行 · 输入 / 看命令)"
-          onChange={(e) => setText(e.target.value)}
+          value={value}
+          placeholder={prompting ? "排队下一条…(Enter 入队 · 本轮结束后自动发)" : "给 monkey-deck 发消息…   (Enter 发送 · Shift+Enter 换行 · 输入 / 看命令)"}
+          onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKeyDown}
           rows={2}
         />
@@ -133,30 +135,35 @@ export default function Composer({ disabled, prompting, model, onSend, onStop, o
         <div className="compose-bar">
           <div className="compose-tools">
             <button className="tool-btn" data-testid="attach-btn" onClick={addFiles} disabled={disabled} title="附加文件(@/path 注入)">
-              <Icon name="paperclip" size={17} />
+              <Paperclip size={17} />
             </button>
             <button
               className="tool-btn"
-              onClick={() => { setText((p) => (p.startsWith("/") ? p : "/" + p)); requestAnimationFrame(() => ref.current?.focus()); }}
+              onClick={() => { onChange(value.startsWith("/") ? value : "/" + value); requestAnimationFrame(() => ref.current?.focus()); }}
               disabled={disabled}
               title="输入 / 召出命令菜单"
             >
-              <Icon name="slash" size={17} />
+              <Slash size={17} />
             </button>
           </div>
           <div className="compose-right">
             {model && <span className="composer-model" title="当前 model">{model}</span>}
             {attachments.length > 0 && <span className="composer-count">{attachments.length} 附件</span>}
-            {text.length > 0 && <span className="composer-count">{text.length} 字</span>}
-            {prompting ? (
-              <button className="send-btn stop" data-testid="stop-btn" onClick={onStop} title="停止">
-                <Icon name="stop" size={15} />
-              </button>
-            ) : (
-              <button className="send-btn" data-testid="send-btn" onClick={() => submit()} disabled={disabled || (!text.trim() && attachments.length === 0)} title="发送">
-                <Icon name="send" size={17} />
+            {value.length > 0 && <span className="composer-count">{value.length} 字</span>}
+            {prompting && (
+              <button className="send-btn stop" data-testid="stop-btn" onClick={onStop} title="停止当前生成(不清理队列)">
+                <Square size={15} />
               </button>
             )}
+            <button
+              className="send-btn"
+              data-testid="send-btn"
+              onClick={() => submit()}
+              disabled={disabled || empty}
+              title={prompting ? "排队发送(本轮结束后自动发)" : "发送"}
+            >
+              <ArrowUp size={17} />
+            </button>
           </div>
         </div>
       </div>
