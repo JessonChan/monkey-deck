@@ -120,7 +120,8 @@ func (s *ChatService) ServiceStartup(ctx context.Context, options application.Se
 	}
 	s.st = st
 	s.loadPersistedConfig()
-	acp.KillAllOpencode() // 启动时清上轮残留 opencode(§3.2)
+	acp.SetPgidFile(filepath.Join(s.cfg.DataDir, "opencode-pgids.json")) // §3.2:限定 KillAll 范围到本应用残留
+	acp.KillAllOpencode()                                                // 启动时清上轮残留 opencode(§3.2)
 	slog.Info("chat service started", "dataDir", s.cfg.DataDir)
 	return nil
 }

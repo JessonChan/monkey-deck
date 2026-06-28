@@ -20,7 +20,9 @@ package acp
 //     ⚠️ 不做周期性 reap:运行中时逃逸 worker 与孤儿无法区分,周期 reap 会误杀活跃 worker(§5.4 #5)。
 
 import (
+	"encoding/json"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -86,18 +88,68 @@ func isNoProcess(err error) bool {
 var (
 	activeMu        sync.RWMutex
 	activeHarnesses = map[int]struct{}{} // pgid 集合;当前活跃的 harness 进程组(Setpgid 后 pgid==主 PID)
+
+	// pgidFile:持久化记录「本应用 spawn 过的 harness pgid」,跨进程存活。
+	// 启动时 KillAllOpencode 只杀 pgid 在此文件中的残留进程 —— 避免误杀用户在其它终端
+	// 跑的 opencode(§3.2 回收范围只限本应用)。空字符串 = 不启用(单测/未配置)。
+	pgidFile string
 )
+
+// SetPgidFile 配置 pgid 持久化文件路径(应用启动时调一次,传 dataDir 下的文件)。
+func SetPgidFile(path string) { pgidFile = path }
+
+// readPgidFile 读回 pgid 集合;文件不存在/损坏返回空集(容错:宁可漏杀不误杀)。
+func readPgidFile() map[int]struct{} {
+	set := map[int]struct{}{}
+	if pgidFile == "" {
+		return set
+	}
+	b, err := os.ReadFile(pgidFile)
+	if err != nil {
+		return set // 不存在视为空
+	}
+	var pgids []int
+	if err := json.Unmarshal(b, &pgids); err != nil {
+		return set // 损坏视为空(容错)
+	}
+	for _, p := range pgids {
+		set[p] = struct{}{}
+	}
+	return set
+}
+
+// writePgidFile 落盘当前 active 集合(best-effort:写失败只告警,不影响运行)。
+func writePgidFile() {
+	if pgidFile == "" {
+		return
+	}
+	activeMu.RLock()
+	pgids := make([]int, 0, len(activeHarnesses))
+	for p := range activeHarnesses {
+		pgids = append(pgids, p)
+	}
+	activeMu.RUnlock()
+	b, err := json.Marshal(pgids)
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(pgidFile, b, 0o644); err != nil {
+		slog.Warn("write pgid file", "err", err)
+	}
+}
 
 func registerHarness(pgid int) {
 	activeMu.Lock()
 	activeHarnesses[pgid] = struct{}{}
 	activeMu.Unlock()
+	writePgidFile()
 }
 
 func unregisterHarness(pgid int) {
 	activeMu.Lock()
 	delete(activeHarnesses, pgid)
 	activeMu.Unlock()
+	writePgidFile()
 }
 
 func isActiveHarness(pgid int) bool {
@@ -167,18 +219,32 @@ func ActiveHarnessCount() int {
 // ReapStrayOpencode 导出版(杀掉所有非活跃 opencode)。多 session 时只能在 ActiveHarnessCount()==0 调。
 func ReapStrayOpencode() int { return reapStrayOpencode() }
 
-// KillAllOpencode 杀掉所有 opencode acp 进程(应用启动时调,清上轮残留)。
+// KillAllOpencode 杀掉「本应用上轮残留」的 opencode acp 进程(应用启动时调)。
+// 只杀 pgid 命中持久化 pgidFile 的进程 —— 不误杀用户在其它终端跑的 opencode(§3.2
+// 回收范围只限本应用)。杀完清空 pgidFile(本轮重新登记)。
 func KillAllOpencode() int {
+	tracked := readPgidFile()
+	if len(tracked) == 0 {
+		// 未配置 pgidFile 或上轮干净退出:不杀任何进程(保守,宁可漏杀不误杀)。
+		return 0
+	}
 	killed := 0
 	for _, p := range listOpencodeProcs() {
+		if _, ok := tracked[p.pgid]; !ok {
+			continue // 不属于本应用:用户的终端 opencode 等,跳过
+		}
 		if err := syscall.Kill(p.pid, syscall.SIGKILL); err != nil && !isNoProcess(err) {
-			slog.Warn("startup kill opencode", "pid", p.pid, "err", err)
+			slog.Warn("startup kill opencode", "pid", p.pid, "pgid", p.pgid, "err", err)
 			continue
 		}
 		killed++
 	}
 	if killed > 0 {
-		slog.Info("startup: killed leftover opencode processes", "count", killed)
+		slog.Info("startup: killed leftover opencode processes (this app only)", "count", killed)
+	}
+	// 清空登记文件:本轮 registerHarness 会重新写入。best-effort。
+	if pgidFile != "" {
+		_ = os.WriteFile(pgidFile, []byte("[]"), 0o644)
 	}
 	return killed
 }
