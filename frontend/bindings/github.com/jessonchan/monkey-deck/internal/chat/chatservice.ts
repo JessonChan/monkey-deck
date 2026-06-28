@@ -180,6 +180,14 @@ export function StopSession(sessionID: string): $CancellablePromise<void> {
 }
 
 /**
+ * ToggleMaximise 双击顶部标题栏时切换窗口最大化/还原(非 fullscreen)。
+ * 单窗口桌面应用,取首个窗口。
+ */
+export function ToggleMaximise(): $CancellablePromise<void> {
+    return $Call.ByID(4042443743);
+}
+
+/**
  * UpdateProject 更新项目 name/model。
  */
 export function UpdateProject(id: string, name: string, model: string): $CancellablePromise<void> {
