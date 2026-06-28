@@ -196,21 +196,27 @@ export class Session {
              */
             this["model"] = "";
         }
-        if (!("worktreePath" in $$source)) {
+        if (!("usedTokens" in $$source)) {
             /**
-             * session 的 git worktree 路径(cwd 锚点);空=用项目目录
+             * token 用量(最后一次 SessionUsageUpdate 的快照,使重开会话能恢复占比,§1.6)。
              * @member
-             * @type {string}
+             * @type {number}
              */
-            this["worktreePath"] = "";
+            this["usedTokens"] = 0;
         }
-        if (!("branch" in $$source)) {
+        if (!("sizeTokens" in $$source)) {
             /**
-             * 该 session 对应的 git 分支(merge/清理用)
              * @member
-             * @type {string}
+             * @type {number}
              */
-            this["branch"] = "";
+            this["sizeTokens"] = 0;
+        }
+        if (!("cost" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cost"] = 0;
         }
         if (!("createdAt" in $$source)) {
             /**

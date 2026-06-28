@@ -38,7 +38,7 @@ export function CloseSession(sessionID) {
 }
 
 /**
- * CreateSession 新建 session。git 项目自动建独立 worktree+分支(并行隔离);否则用项目目录。
+ * CreateSession 新建 session 并立即启动 ACP 对话(spawn harness → NewSession,§1.3)。
  * @param {string} projectID
  * @param {string} title
  * @returns {$CancellablePromise<store$0.Session | null>}
@@ -47,15 +47,6 @@ export function CreateSession(projectID, title) {
     return $Call.ByID(447560252, projectID, title).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType3($result);
     }));
-}
-
-/**
- * DeleteSession 删除 session(关闭活跃 harness + 清理 worktree + 删 DB 记录)。
- * @param {string} sessionID
- * @returns {$CancellablePromise<void>}
- */
-export function DeleteSession(sessionID) {
-    return $Call.ByID(2627033561, sessionID);
 }
 
 /**
@@ -98,16 +89,6 @@ export function LoadMessages(sessionID) {
     return $Call.ByID(3750202340, sessionID).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType8($result);
     }));
-}
-
-/**
- * MergeSession 把该 session 的分支合并进项目主仓库当前 HEAD(git merge,§orca-style 并行合并)。
- * 冲突时返回 error(含 git 冲突信息),由前端提示用户。
- * @param {string} sessionID
- * @returns {$CancellablePromise<void>}
- */
-export function MergeSession(sessionID) {
-    return $Call.ByID(1693648596, sessionID);
 }
 
 /**
