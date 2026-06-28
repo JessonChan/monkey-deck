@@ -38,14 +38,17 @@ export interface Session {
     "model": string;
 
     /**
-     * session 的 git worktree 路径(cwd 锚点);空=用项目目录
+     * session 的 git worktree(并行隔离用,§1.4)。空 = 非 git 项目或未建,直接用项目目录。
      */
     "worktreePath": string;
+    "branch": string;
 
     /**
-     * 该 session 对应的 git 分支(merge/清理用)
+     * token 用量(最后一次 SessionUsageUpdate 的快照,使重开会话能恢复占比,§1.6)。
      */
-    "branch": string;
+    "usedTokens": number;
+    "sizeTokens": number;
+    "cost": number;
     "createdAt": number;
     "updatedAt": number;
 }

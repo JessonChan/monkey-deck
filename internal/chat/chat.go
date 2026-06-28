@@ -772,6 +772,16 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 			s.emitSessionMeta(sessionID, e.Title)
 		}
 	}
+	if e.Kind == "usage_update" {
+		// 回写 token 用量快照,使重开会话能恢复占比(§1.6);cost 可能为 nil。
+		cost := 0.0
+		if e.Cost != nil {
+			cost = *e.Cost
+		}
+		if err := s.st.UpdateSessionUsage(s.ctx, sessionID, e.Used, e.Size, cost); err != nil {
+			slog.Warn("persist usage", "err", err)
+		}
+	}
 	s.emit(EventUpdate, e)
 }
 

@@ -227,6 +227,16 @@ input, textarea { font-family: inherit; }
 
 .msg-actions { display: flex; gap: 4px; margin-top: 5px; opacity: 0; transition: opacity 0.12s; }
 .row-agent:hover .msg-actions { opacity: 1; }
+.msg-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.msg-time { font-size: 10.5px; color: var(--text-3); font-family: var(--mono); }
+
+/* 回合分隔:每一轮用户消息前的时间锚点,让多轮边界一目了然。 */
+.turn-divider {
+  max-width: 760px; margin: 14px auto 8px; padding: 0 28px; width: 100%;
+  display: flex; align-items: center; gap: 10px;
+}
+.turn-divider-line { flex: 1; height: 1px; background: var(--sep); }
+.turn-divider-time { font-size: 10.5px; color: var(--text-3); font-family: var(--mono); white-space: nowrap; }
 .msg-action-btn {
   font-size: 11px; color: var(--text-3); padding: 3px 8px;
   border-radius: 5px; display: inline-flex; align-items: center; gap: 4px;
@@ -343,9 +353,17 @@ input, textarea { font-family: inherit; }
 
 .chat-footer { border-top: 1px solid var(--sep); padding: 9px 0 13px; background: var(--bg); }
 .usage-bar { max-width: 760px; margin: 0 auto 7px; padding: 0 28px; display: flex; align-items: center; gap: 9px; }
-.usage-track { flex: 1; height: 3px; background: var(--elev); border-radius: 2px; overflow: hidden; }
-.usage-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 2px; transition: width 0.3s; }
+.usage-track { flex: 1; height: 5px; background: var(--elev); border-radius: 3px; overflow: hidden; }
+.usage-fill { height: 100%; border-radius: 3px; transition: width 0.3s, background 0.3s; }
 .usage-text { font-size: 10.5px; color: var(--text-3); font-family: var(--mono); white-space: nowrap; }
+/* 分级配色:占比越高越警示(绿 → 琥珀 → 红),让上下文余量一眼可读。 */
+.usage-low  .usage-fill { background: linear-gradient(90deg, var(--green), #5ce08a); }
+.usage-low  .usage-text { color: var(--text-3); }
+.usage-mid  .usage-fill { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.usage-high .usage-fill { background: linear-gradient(90deg, var(--amber), #ffe55c); }
+.usage-high .usage-text { color: var(--amber); }
+.usage-crit .usage-fill { background: linear-gradient(90deg, var(--red), #ff7a72); }
+.usage-crit .usage-text { color: var(--red); }
 
 /* ─── Composer(原生精致) ─── */
 .composer { max-width: 800px; margin: 0 auto; padding: 0 28px 4px; position: relative; }

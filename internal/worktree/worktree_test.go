@@ -51,7 +51,7 @@ func TestCreateMergeRemove(t *testing.T) {
 	}
 
 	// 3. merge worktree 分支进主仓库
-	if err := MergeBranch(root, branch); err != nil {
+	if _, err := MergeBranch(root, branch); err != nil {
 		t.Fatalf("MergeBranch: %v", err)
 	}
 	b, _ = os.ReadFile(filepath.Join(root, "a.txt"))

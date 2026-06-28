@@ -54,9 +54,9 @@ export interface QueueItem {
 
 // 前端展示用的对话条目(由持久化历史 + 实时流式合并而来)。
 export type ChatItem =
-  | { type: "user"; id: string; text: string }
-  | { type: "agent"; id: string; text: string; streaming?: boolean; seq?: number }
-  | { type: "thought"; id: string; text: string; streaming?: boolean; seq?: number }
+  | { type: "user"; id: string; text: string; ts?: number }
+  | { type: "agent"; id: string; text: string; streaming?: boolean; seq?: number; ts?: number }
+  | { type: "thought"; id: string; text: string; streaming?: boolean; seq?: number; ts?: number }
   | {
       type: "tool";
       id: string; // toolCallId
@@ -65,4 +65,5 @@ export type ChatItem =
       kind: string;
       rawInput?: unknown;
       rawOutput?: unknown;
+      ts?: number;
     };

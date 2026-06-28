@@ -97,3 +97,36 @@ func TestProjectSessionMessageCRUD(t *testing.T) {
 		t.Fatalf("cascade delete failed: sessions=%d msgs=%d", len(sesss2), len(msgs2))
 	}
 }
+
+// TestSessionUsagePersist 校验 token 用量快照的写入与读回(重开会话恢复占比,§1.6)。
+func TestSessionUsagePersist(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	p, err := s.CreateProject(ctx, "demo", "/tmp/demo2", "zai/glm-4.6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := s.CreateSession(ctx, p.ID, "", "zai/glm-4.6")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 新建时用量为 0。
+	got, _ := s.GetSession(ctx, sess.ID)
+	if got.UsedTokens != 0 || got.SizeTokens != 0 || got.Cost != 0 {
+		t.Fatalf("new session usage should be zero: %+v", got)
+	}
+
+	// 回写用量快照,GetSession / ListSessions 都应读到。
+	if err := s.UpdateSessionUsage(ctx, sess.ID, 12345, 200000, 0.0123); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetSession(ctx, sess.ID)
+	if got.UsedTokens != 12345 || got.SizeTokens != 200000 || got.Cost != 0.0123 {
+		t.Fatalf("usage not persisted via GetSession: %+v", got)
+	}
+	list, _ := s.ListSessions(ctx, p.ID)
+	if len(list) != 1 || list[0].UsedTokens != 12345 || list[0].SizeTokens != 200000 || list[0].Cost != 0.0123 {
+		t.Fatalf("usage not persisted via ListSessions: %+v", list)
+	}
+}
