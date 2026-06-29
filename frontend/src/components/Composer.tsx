@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
-import { Paperclip, X, Slash, Square, ArrowUp } from "lucide-react";
+import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
+import type { Mention } from "../types";
+import { Paperclip, X, Slash, Square, ArrowUp, File, Folder } from "lucide-react";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -8,7 +10,9 @@ interface Props {
   disabled: boolean;        // 无 session 时禁用全部交互
   prompting: boolean;       // 一轮进行中:显示停止键 + send 提示将排队
   model: string;
-  onSend: (text: string) => void;
+  history: string[];        // 输入框历史(上下键翻):该 session 全部发过的消息,无长度限制
+  sessionId: string;        // @autocomplete 浏览此 session 的 cwd
+  onSend: (text: string, mentions: Mention[]) => void;
   onStop: () => void;
   onAction: (action: "clear" | "new" | "stop") => void;
 }
@@ -28,14 +32,36 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { cmd: "/stop", desc: "停止生成", action: "stop" },
 ];
 
-export default function Composer({ value, onChange, disabled, prompting, model, onSend, onStop, onAction }: Props) {
-  const [attachments, setAttachments] = useState<string[]>([]);
+// 从光标位置向前找当前 token:若以 @ 开头,返回 @ 的起点 + @ 之后的查询文本。
+function detectMention(text: string, pos: number): { start: number; query: string } | null {
+  let i = pos - 1;
+  while (i >= 0 && !/\s/.test(text[i])) i--;
+  const wordStart = i + 1;
+  if (text[wordStart] !== "@") return null;
+  return { start: wordStart, query: text.slice(wordStart + 1, pos) };
+}
+
+export default function Composer({ value, onChange, disabled, prompting, model, history, sessionId, onSend, onStop, onAction }: Props) {
+  const [attachments, setAttachments] = useState<string[]>([]);      // 回形针附件(绝对路径,chip 展示)
+  const [mentions, setMentions] = useState<Mention[]>([]);          // @autocomplete 选中的文件/文件夹(相对 cwd)
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const cursorRef = useRef(0);                                       // 光标位置(供 @ 插入定位)
   // IME 合成追踪:compositionStart/End 手动记录,配合 isComposing + keyCode===229 三重保险,
   // 彻底防中文输入法选词确认的 Enter 被误判为发送(部分 macOS IME 下 isComposing 不可靠)。
   const composingRef = useRef(false);
+
+  // --- 上下键翻历史 ---
+  // navIdx = -1:未翻历史(显示当前草稿);否则指向 history 数组的下标(当前展示的那条)。
+  // history 按时间升序(末尾=最新)。↑ 向旧、↓ 向新,翻过最新恢复草稿。
+  const navRef = useRef(-1);
+  const draftRef = useRef("");
+
+  // --- @autocomplete ---
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionIdx, setMentionIdx] = useState(0);
+  const [mentionItems, setMentionItems] = useState<FileNode[]>([]);
 
   const slashQuery = useMemo(() => {
     if (!value.startsWith("/")) return null;
@@ -57,18 +83,48 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
   };
   useEffect(() => { if (ref.current) autoGrow(ref.current); }, [value]);
 
-  const injectAttachments = (base: string) => {
-    if (attachments.length === 0) return base;
-    const lines = attachments.map((p) => `@${p}`).join("\n");
-    return base.trim() ? `${base}\n\n${lines}` : lines;
-  };
+  // @ 触发:每次 value 变化,据光标位置判定是否在 @ 提及中,拉目录列表过滤。
+  const mentionInfo = useMemo(() => detectMention(value, cursorRef.current), [value]);
+  useEffect(() => {
+    if (!sessionId || slashOpen) { setMentionOpen(false); return; }
+    if (!mentionInfo) { setMentionOpen(false); return; }
+    const q = mentionInfo.query;
+    const slash = q.lastIndexOf("/");
+    const dir = slash >= 0 ? q.slice(0, slash) : "";
+    const filter = slash >= 0 ? q.slice(slash + 1) : q;
+    let cancelled = false;
+    ChatService.SessionListDir(sessionId, dir).then((nodes) => {
+      if (cancelled) return;
+      const list = (nodes || [])
+        .filter((n) => n.name !== ".git")
+        .filter((n) => n.name.toLowerCase().includes(filter.toLowerCase()))
+        .sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
+        .slice(0, 12);
+      setMentionItems(list);
+      setMentionIdx(0);
+      setMentionOpen(list.length > 0);
+    }).catch(() => setMentionOpen(false));
+    return () => { cancelled = true; };
+  }, [mentionInfo, sessionId, slashOpen]);
+
+  const baseName = (p: string) => p.split(/[/\\]/).pop() || p;
+  const empty = !value.trim() && attachments.length === 0 && mentions.length === 0;
+
   const submit = (finalText?: string) => {
     if (disabled) return;
     const t = (finalText ?? value).trim();
-    if (!t && attachments.length === 0) return;
-    onSend(injectAttachments(t));   // App 决定: idle 直发 / prompting 入队
+    // 收集有效提及:@autocomplete 选中的需仍在文本里(用户可能已删掉);回形针附件总是有效。
+    const inline = mentions.filter((m) => t.includes("@" + m.path));
+    const clips = attachments.map((p) => ({ path: p, name: baseName(p) }));
+    const all = [...inline, ...clips];
+    if (!t && all.length === 0) return;
+    onSend(t, all);
     onChange("");
     setAttachments([]);
+    setMentions([]);
+    navRef.current = -1;
+    setMentionOpen(false);
+    setSlashOpen(false);
     requestAnimationFrame(() => { if (ref.current) ref.current.style.height = "auto"; });
   };
   const pickSlash = (c: SlashCommand) => {
@@ -78,17 +134,99 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
     requestAnimationFrame(() => ref.current?.focus());
   };
 
+  // 选中一个 @ 候选:把 @query 替换成 @完整路径 + 尾随空格,记录提及,光标移到末尾。
+  const pickMention = (node: FileNode) => {
+    const pos = cursorRef.current;
+    const m = detectMention(value, pos);
+    if (!m) return;
+    const token = "@" + node.path + " ";
+    const next = value.slice(0, m.start) + token + value.slice(pos);
+    onChange(next);
+    setMentions((prev) => {
+      if (prev.some((x) => x.path === node.path)) return prev;
+      return [...prev, { path: node.path, name: node.name }];
+    });
+    setMentionOpen(false);
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (el) { const caret = m.start + token.length; el.focus(); el.selectionStart = el.selectionEnd = caret; cursorRef.current = caret; }
+    });
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // 中文输入法(IME)composing 中:Enter 用于选词,不提交/不触发命令。
     // 三重检查:手动 ref 追踪(最可靠)+ isComposing(标准)+ keyCode 229(已废弃但兜底)。
     if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return;
+
+    // 斜杠命令菜单(优先级最高)
     if (slashOpen) {
       if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx((i) => Math.min(i + 1, filtered.length - 1)); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); setSlashIdx((i) => Math.max(i - 1, 0)); return; }
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickSlash(filtered[slashIdx]); return; }
       if (e.key === "Escape") { e.preventDefault(); setSlashOpen(false); return; }
     }
+    // @ 提及菜单
+    if (mentionOpen) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((i) => Math.min(i + 1, mentionItems.length - 1)); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => Math.max(i - 1, 0)); return; }
+      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickMention(mentionItems[mentionIdx]); return; }
+      if (e.key === "Escape") { e.preventDefault(); setMentionOpen(false); return; }
+    }
+
+    // 上下键翻历史:仅当光标在首行(↑)/末行(↓),且无菜单时。
+    const el = ref.current;
+    if (el && e.key === "ArrowUp" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      const before = value.slice(0, el.selectionStart);
+      if (!before.includes("\n")) {
+        e.preventDefault();
+        navigateHistory(-1);
+        return;
+      }
+    }
+    if (el && e.key === "ArrowDown" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      if (navRef.current === -1) return; // 未在翻历史,让光标正常下移
+      const after = value.slice(el.selectionStart);
+      if (!after.includes("\n")) {
+        e.preventDefault();
+        navigateHistory(1);
+        return;
+      }
+    }
+
     if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); submit(); }
+  };
+
+  // dir = -1 向旧(↑),dir = 1 向新(↓)。翻到最新之后恢复草稿。
+  const navigateHistory = (dir: number) => {
+    if (history.length === 0) return;
+    if (navRef.current === -1) {
+      if (dir > 0) return; // 未在翻历史,↓ 无意义
+      draftRef.current = value; // 进入翻历史前存当前草稿
+      navRef.current = history.length - 1;
+    } else {
+      const next = navRef.current - dir; // dir=-1(↑向旧) → idx 减;dir=1(↓向新) → idx 增
+      if (next >= history.length) { navRef.current = -1; onChange(draftRef.current); moveCursorEnd(); return; }
+      if (next < 0) { navRef.current = 0; }
+      else { navRef.current = next; }
+    }
+    onChange(history[navRef.current]);
+    moveCursorEnd();
+  };
+  const moveCursorEnd = () => {
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (el) { el.selectionStart = el.selectionEnd = el.value.length; cursorRef.current = el.value.length; }
+    });
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    cursorRef.current = e.target.selectionEnd ?? 0;
+    navRef.current = -1; // 真实输入(非翻历史)→ 退出翻历史模式
+    onChange(e.target.value);
+  };
+  const handleSelect = () => {
+    const el = ref.current;
+    if (el) cursorRef.current = el.selectionEnd ?? 0;
   };
 
   const addFiles = async () => {
@@ -97,8 +235,6 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
       if (paths && paths.length) setAttachments((prev) => [...prev, ...paths]);
     } catch { /* 取消静默 */ }
   };
-  const baseName = (p: string) => p.split(/[/\\]/).pop() || p;
-  const empty = !value.trim() && attachments.length === 0;
 
   return (
     <div className="composer" data-testid="composer">
@@ -112,14 +248,31 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
           ))}
         </div>
       )}
+      {mentionOpen && (
+        <div className="slash-popover mention-popover" data-testid="mention-popover">
+          {mentionItems.map((n, i) => (
+            <button key={n.path} className={`slash-item ${i === mentionIdx ? "active" : ""}`} onMouseEnter={() => setMentionIdx(i)} onClick={() => pickMention(n)}>
+              {n.isDir ? <Folder size={13} /> : <File size={13} />}
+              <span className="slash-cmd">{n.name}</span>
+              {n.isDir && <span className="slash-desc">文件夹</span>}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="compose-card">
-        {attachments.length > 0 && (
+        {(attachments.length > 0 || mentions.length > 0) && (
           <div className="att-chips" data-testid="att-chips">
             {attachments.map((p) => (
               <span key={p} className="att-chip" title={p}>
                 <span className="att-chip-name"><Paperclip size={11} /> {baseName(p)}</span>
                 <button className="att-chip-x" onClick={() => setAttachments((prev) => prev.filter((x) => x !== p))}><X size={11} /></button>
+              </span>
+            ))}
+            {mentions.map((m) => (
+              <span key={m.path} className="att-chip att-chip-mention" title={"@" + m.path}>
+                <span className="att-chip-name"><File size={11} /> {m.name}</span>
+                <button className="att-chip-x" onClick={() => { setMentions((prev) => prev.filter((x) => x.path !== m.path)); }}><X size={11} /></button>
               </span>
             ))}
           </div>
@@ -130,8 +283,9 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
           className="composer-input"
           data-testid="composer-input"
           value={value}
-          placeholder={prompting ? "排队下一条…(Enter 入队 · 本轮结束后自动发)" : "给 monkey-deck 发消息…   (Enter 发送 · Shift+Enter 换行 · 输入 / 看命令)"}
-          onChange={(e) => onChange(e.target.value)}
+          placeholder={prompting ? "排队下一条…(Enter 入队 · 本轮结束后自动发)" : "给 monkey-deck 发消息…   (Enter 发送 · Shift+Enter 换行 · @ 提文件 · / 看命令 · ↑↓ 翻历史)"}
+          onChange={handleChange}
+          onSelect={handleSelect}
           onKeyDown={onKeyDown}
           onCompositionStart={() => { composingRef.current = true; }}
           onCompositionEnd={() => { composingRef.current = false; }}
@@ -140,7 +294,7 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
 
         <div className="compose-bar">
           <div className="compose-tools">
-            <button className="tool-btn" data-testid="attach-btn" onClick={addFiles} disabled={disabled} title="附加文件(@/path 注入)">
+            <button className="tool-btn" data-testid="attach-btn" onClick={addFiles} disabled={disabled} title="附加文件(经 ACP ResourceLink 发送)">
               <Paperclip size={17} />
             </button>
             <button
@@ -154,7 +308,7 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
           </div>
           <div className="compose-right">
             {model && <span className="composer-model" title="当前 model">{model}</span>}
-            {attachments.length > 0 && <span className="composer-count">{attachments.length} 附件</span>}
+            {(attachments.length > 0 || mentions.length > 0) && <span className="composer-count">{attachments.length + mentions.length} 引用</span>}
             {prompting && (
               <button className="send-btn stop" data-testid="stop-btn" onClick={onStop} title="停止当前生成(不清理队列)">
                 <Square size={15} />

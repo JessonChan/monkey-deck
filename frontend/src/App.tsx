@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Events } from "@wailsio/runtime";
 import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, PermissionPrompt, SessionEvent, StatusPayload, QueueItem } from "./types";
+import type { ChatItem, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention } from "./types";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import { Sparkles } from "lucide-react";
@@ -38,6 +38,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({});  // 前端 FIFO 队列(按 session 隔离,切走保留)
   const [draftBySession, setDraftBySession] = useState<Record<string, string>>({});  // composer 草稿(按 session 隔离,切走保留)
+  const [historyBySession, setHistoryBySession] = useState<Record<string, string[]>>({});  // 输入框历史(上下键翻):按 session 隔离,seed 自 DB + 每次发送追加
   const queueBySessionRef = useRef<Record<string, QueueItem[]>>({});
   const userStoppedRef = useRef(false);                    // 用户主动停止:抑制该次 idle 的 auto-continue
 
@@ -157,6 +158,7 @@ export default function App() {
   const hasMore = (selectedSessionId ? hasMoreBySession[selectedSessionId] : undefined) ?? false;
   const loadingMore = (selectedSessionId ? loadingMoreBySession[selectedSessionId] : undefined) ?? false;
   const queue = (selectedSessionId ? queueBySession[selectedSessionId] : undefined) ?? [];
+  const history = (selectedSessionId ? historyBySession[selectedSessionId] : undefined) ?? [];
   const composerValue = (selectedSessionId ? draftBySession[selectedSessionId] : undefined) ?? "";
   const onComposerChange = useCallback((text: string) => {
     const sid = selectedSessionIdRef.current;
@@ -250,7 +252,7 @@ export default function App() {
     setError(null);
     setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
     try {
-      await ChatService.SendMessage(sid, next.text);
+      await ChatService.SendMessage(sid, next.text, (next.mentions || []).map((m) => ({ path: m.path, name: m.name })));
     } catch (e) {
  setError(String(e));
       setStatusBySession((prev) => ({ ...prev, [sid]: "idle" }));
@@ -338,6 +340,14 @@ export default function App() {
         setItemsBySession((prev) => ({ ...prev, [sessionId]: messagesToItems(page) }));
         setHasMoreBySession((prev) => ({ ...prev, [sessionId]: hasMorePage }));
       }
+      // 输入框历史 seed:从 DB 取全部用户消息(无长度限制),供上下键翻历史。
+      // 仅首次打开 seed(后续本会话的发送由 sendMessage 追加,不覆盖)。
+      if (!(sessionId in historyBySession)) {
+        try {
+          const hist = await ChatService.ListUserMessages(sessionId);
+          setHistoryBySession((prev) => ({ ...prev, [sessionId]: hist || [] }));
+        } catch { setHistoryBySession((prev) => ({ ...prev, [sessionId]: [] })); }
+      }
       try {
         const diff = await ChatService.SessionDiff(sessionId);
         setSessionDiff(diff || "");
@@ -392,11 +402,20 @@ export default function App() {
   }, [selectedProjectId, refreshSessions, openSession, selectProject]);
 
   // 发送消息:idle 直发;prompting(一轮进行中)入前端队列,回合结束自动续发(§5.4 协议无 queue)。
+  // mentions(@提及)经 ACP ContentBlock::ResourceLink 发给 agent;入队时随 QueueItem 携带。
+  // 只要按过发送键就记进输入框历史(上下键翻历史),无论后端是否成功/排队。
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, mentions: Mention[]) => {
       if (!selectedSessionId || !text.trim()) return;
+      // 记进历史(按发送键即记录,含排队/被拒的 —— 用户要求)
+      setHistoryBySession((prev) => {
+        const cur = prev[selectedSessionId] || [];
+        if (cur[cur.length - 1] === text) return prev; // 与最后一条相同则不重复
+        return { ...prev, [selectedSessionId]: [...cur, text] };
+      });
+      const attachments = mentions.map((m) => ({ path: m.path, name: m.name }));
       if (status === "prompting") {
-        const item: QueueItem = { id: "q" + Date.now() + Math.random().toString(36).slice(2, 6), text };
+        const item: QueueItem = { id: "q" + Date.now() + Math.random().toString(36).slice(2, 6), text, mentions };
         const prev = queueBySessionRef.current[selectedSessionId] || [];
         queueBySessionRef.current = { ...queueBySessionRef.current, [selectedSessionId]: [...prev, item] };
         setQueueBySession(queueBySessionRef.current);
@@ -405,7 +424,7 @@ export default function App() {
       setError(null);
       setStatusBySession((prev) => ({ ...prev, [selectedSessionId]: "prompting" }));
       try {
-        await ChatService.SendMessage(selectedSessionId, text);
+        await ChatService.SendMessage(selectedSessionId, text, attachments);
       } catch (e) {
         setError(String(e));
         setStatusBySession((prev) => ({ ...prev, [selectedSessionId]: "idle" }));
@@ -434,7 +453,7 @@ export default function App() {
     userStoppedRef.current = false;
     setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
     try {
-      await ChatService.InterruptAndSend(sid, item.text);
+      await ChatService.InterruptAndSend(sid, item.text, (item.mentions || []).map((m) => ({ path: m.path, name: m.name })));
     } catch (e) {
       setError(String(e));
     }
@@ -650,6 +669,8 @@ export default function App() {
               onRevokeQueue={revokeQueue}
               composerValue={composerValue}
               onComposerChange={onComposerChange}
+              history={history}
+              sessionId={selectedSessionId}
               hasMore={hasMore}
               loadingMore={loadingMore}
               onLoadMore={() => selectedSessionId && loadMoreMessages(selectedSessionId)}

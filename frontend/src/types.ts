@@ -46,10 +46,18 @@ export interface StatusPayload {
   detail?: string;
 }
 
+// @提及的文件/目录引用,经 ACP ContentBlock::ResourceLink 发给 agent。
+// 与后端 internal/acp.Attachment 对齐(由 bindings 生成)。
+export interface Mention {
+  path: string;  // 相对 cwd 或绝对路径
+  name: string;  // 显示名
+}
+
 // 排队消息(前端队列:ACP 协议无 queue,turn 进行中的消息先入前端队列,回合结束自动续发)。
 export interface QueueItem {
   id: string;
   text: string;
+  mentions?: Mention[];
 }
 
 // 前端展示用的对话条目(由持久化历史 + 实时流式合并而来)。

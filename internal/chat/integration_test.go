@@ -54,7 +54,7 @@ func TestIntegrationServiceConversation(t *testing.T) {
 	t.Logf("session created: %s (acp=%s)", sess.ID, sess.ACPSession)
 	t.Cleanup(func() { svc.CloseSession(sess.ID) })
 
-	if err := svc.SendMessage(sess.ID, "用一句话简短地打个招呼"); err != nil {
+	if err := svc.SendMessage(sess.ID, "用一句话简短地打个招呼", nil); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 

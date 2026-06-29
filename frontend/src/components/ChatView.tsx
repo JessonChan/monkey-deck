@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, PermissionPrompt, StatusPayload, QueueItem } from "../types";
+import type { ChatItem, PermissionPrompt, StatusPayload, QueueItem, Mention } from "../types";
 import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
@@ -22,7 +22,7 @@ interface Props {
   permission: PermissionPrompt | null;
   mergeResult: string | null;
   sessionDiff: string | null;
-  onSend: (text: string) => void;
+  onSend: (text: string, mentions: Mention[]) => void;
   onStop: () => void;
   onAction: (action: "clear" | "new" | "stop") => void;
   onRespondPermission: (optionId: string) => void;
@@ -33,6 +33,8 @@ interface Props {
   onRevokeQueue: (id: string) => void;
   composerValue: string;
   onComposerChange: (v: string) => void;
+  history: string[];
+  sessionId: string;
   hasMore: boolean;
   loadingMore: boolean;
   onLoadMore: () => void;
@@ -201,6 +203,8 @@ export default function ChatView(props: Props) {
           onSend={props.onSend}
           onStop={props.onStop}
           onAction={props.onAction}
+          history={props.history}
+          sessionId={props.sessionId}
         />
       </footer>
     </div>

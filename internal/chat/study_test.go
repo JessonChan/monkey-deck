@@ -90,7 +90,7 @@ func TestStudyWesight(t *testing.T) {
 		for qi, q := range studyQ[label] {
 			ans, lastErr := "", error(nil)
 			for attempt := 0; attempt < 3; attempt++ {
-				a, err := svc.SendAndWaitSync(se.ID, q)
+				a, err := svc.SendAndWaitSync(se.ID, q, nil)
 				ans, lastErr = a, err
 				if err == nil {
 					break

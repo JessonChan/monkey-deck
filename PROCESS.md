@@ -45,10 +45,11 @@
 
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
-- **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理 SCM 化(含审查 5 项修复)+ 会话标题修复 + 右侧文件管理面板(tab:文件/源代码管理)+ **AI 提交/AI 合并(SCM 结合 AI)** 均已完成;继续对话体验打磨
-- **最后更新**:2026-06-29(AI 提交 / AI 合并)
+- **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理 SCM 化(含审查 5 项修复)+ 会话标题修复 + 右侧文件管理面板(tab:文件/源代码管理)+ **AI 提交/AI 合并(SCM 结合 AI)** 均已完成;继续对话体验打磨(**输入框上下键翻历史 + @ 提及文件/文件夹(经 ACP ResourceLink 发送)**)
+- **最后更新**:2026-06-29(输入框:上下键翻历史 + @ 提及)
 - **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、会话标题(opencode 经 session/list 权威标题 + 瞬时 fallback)、源代码管理 SCM(提交/暂存/丢弃/单文件 diff/并发守卫/**AI 提交/AI 合并**)、三栏可拖拽分隔线、**右侧文件浏览/管理(树+预览+增删改)**、**窗口尺寸/位置/最大化记忆(ui_state.json)**。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
 - **近期改动汇总**:
+  - **输入框:上下键翻历史 + @ 提及文件/文件夹**(2026-06-29):① 上下键翻当前 session 全部已发消息(无长度限制;按发送键即记进历史,含排队/被拒的;seed 自 DB `ListUserMessages` + 本会话发送追加;仅光标在首/末行且无菜单时触发);② `@` 触发当前 cwd 文件/文件夹选择器(复用 `SessionListDir`,支持 `/` 进子目录、键入过滤、↑↓ 选择);选中插入 `@相对路径` 文本 + 记录;发送时每个提及经 **ACP `ContentBlock::ResourceLink`(`file://` URI)** 发给 agent(协议 baseline,所有 agent 必须支持),文本照常作 `TextBlock` 发出。后端:`internal/acp` 加 `Attachment{Path,Name}` + `ChatSession.Prompt` 改签名加 `[]Attachment` + `buildPromptBlocks/fileURI`;`chatConn` 接口 + `SendMessage/InterruptAndSend/SendAndWaitSync/startTurn/runPrompt` 透传;store 加 `ListUserMessages`;`QueueItem` 携带 `mentions`。前端:Composer 重写(history 导航 + @autocomplete + mention chips),App `historyBySession` + `sendMessage(text,mentions)`。详见 §G。
   - **AI 提交 / AI 合并(SCM 结合 AI)**(2026-06-29):协议调研确认 ACP 无 sub-agent/委派原语(单连接单 agent,但可并发多 session);sub agent 是客户端层概念。用户拍板:**AI 提交 = 架构 A(复用当前 session 发 prompt,上下文最完整、最 ACP 纯)**;**AI 合并 = 确定性 merge + AI 生成合并 message(用 opencode 会话标题作 merge message subject)**。后端:`SessionAICommit`(复用 SendMessage)+ `mergeCommitMessage`(纯函数)+ `MergeBranch` 加 message(`--no-ff -m`);前端 GitPanel 加「✨ AI 提交」按钮。详见 §G / §E。
   - **源码管理逻辑审查 5 项修复**(2026-06-29):① merge 不再 AutoCommit(SCM 面板成提交唯一真相)② StatusFiles 修重命名 `->`/引号 ③ 单文件 diff(FileDiff+点击展开)④ turn 进行中禁用 SCM 写操作(前后端 busy 守卫)。详见 §G。
   - **右侧文件管理面板**(2026-06-29):新增 `internal/fsview`(受限工作目录浏览/管理,git 仓库尊重 .gitignore)+ chat 7 个绑定 + SidePanel(tab:文件/源代码管理)+ FilePanel(懒加载树、git 状态徽标、文件预览、新建/重命名/删除)。详见 §G。
@@ -130,6 +131,25 @@
 ---
 
 ## G. 工作日志(追加,最新在上)
+
+### 2026-06-29(feat:输入框上下键翻历史 + @ 提及文件/文件夹 —— 经 ACP ResourceLink 发送)
+- **起因**:用户要求两个输入框增强。① 上下键翻当前 session 对话历史(发过的消息按 ↑ 向旧、↓ 向新翻,无长度限制;按过发送键即算,含未达后端/被拒的)。② `@` 提及某文件/文件夹;用户明确要「结合 ACP 协议发送」。
+- **协议调研(对 acp-go-sdk v0.13.5 实证)**:`session/prompt` 的 `Prompt` 字段是 `[]ContentBlock`,baseline 要求 agent **MUST** 支持 `ContentBlock::Text` 与 `ContentBlock::ResourceLink`;`ResourceLink{type:"resource_link",uri,name}` 用 `file://` URI 让 agent 访问文件。`Resource`(内嵌内容)需 agent 声明 `promptCapabilities.embeddedContext`(可选),故选 **ResourceLink(baseline,稳)**。→ 「结合 ACP」= 把 @ 提及作为 `ResourceLink` block 发,不是塞 `@path` 文本让 agent 自己解析。
+- **设计**:
+  - **上下键翻历史**:`historyBySession`(按 session 隔离)—— openSession 时 seed 自 DB(`ListUserMessages`,全部用户消息文本,无长度限制);`sendMessage` 入口处(按发送键)即追加一条(idle 直发 / prompting 入队 都记)。Composer:`navRef`(-1=未翻/显示草稿)只在「无菜单 + 光标在首行(↑)/末行(↓)」时翻;真实输入(`handleChange`)退出翻历史模式;翻过最新恢复草稿。
+  - **@ 提及**:打字触发 `@`(detectMention:从光标向前找以 `@` 开头的 token)→ 弹当前 cwd 文件/文件夹选择器(复用 `SessionListDir`,支持 `/` 进子目录、键入过滤、↑↓ 选择、Enter/Tab 选中、Esc 关)。选中插入 `@相对路径 ` 文本 + 记 `mentions`;提及以 chip 展示(可删)。发送时文本作 `TextBlock`、每个提及作 `ResourceLink`(相对路径解析进 session cwd 拼 `file://` 绝对 URI)。回形针附件一并升级为 ResourceLink(不再注入 `@path` 文本行)。
+- **改动**:
+  - `internal/store/messages.go`:`ListUserMessages`(只取 role=user,按 seq 升序,无 limit)。
+  - `internal/acp/runner.go`:加 `Attachment{Path,Name}`;`ChatSession.Prompt` 改签名加 `[]Attachment`;`buildPromptBlocks`(TextBlock + 逐个 ResourceLink)+ `fileURI`(相对 workDir 拼 file://)。`promptblocks_test.go`(新)。
+  - `internal/chat/chat.go`:`chatConn.Prompt` 加 attachments;`SendMessage/InterruptAndSend/SendAndWaitSync/startTurn/runPrompt` 透传;`SessionAICommit` 传 nil;`ListUserMessages` 绑定。
+  - 测试同步:`queue_test.go`(`fakeChat.Prompt` + 各 SendMessage/InterruptAndSend 加 nil)、`integration_test.go`(chat/acp)、`resume_test.go`、`study_test.go`;`store_test.go` 加 `TestListUserMessages`。
+  - `frontend/src/types.ts`:`Mention` + `QueueItem.mentions`。
+  - `frontend/src/App.tsx`:`historyBySession`(seed+append)+ `sendMessage(text,mentions)`;drainQueue/interruptQueue 透传 mentions;传 history/sessionId 给 ChatView。
+  - `frontend/src/components/{ChatView,Composer}.tsx`:ChatView 透传 history/sessionId、onSend 签名改 (text,mentions);Composer 重写(history 导航 + @autocomplete + mention chips)。
+  - `frontend/bindings/*`(regen,+acp.Attachment / ListUserMessages / SendMessage+attachments)。
+- **改了哪些文件**:`internal/store/{messages.go,store_test.go}`、`internal/acp/{runner.go,integration_test.go,resume_test.go,promptblocks_test.go(新)}`、`internal/chat/{chat.go,queue_test.go,integration_test.go,study_test.go}`、`frontend/src/{types.ts,App.tsx,components/{ChatView,Composer}.tsx}`、`frontend/bindings/*(regen)`、PROCESS.md。
+- **验证**:`go build ./internal/...` ✅;`go test ./internal/...` ✅(8 packages;新增 `TestBuildPromptBlocks`/`TestFileURI`/`TestListUserMessages` ✅);`gofmt -l`(我改的文件干净);`bunx tsc --noEmit` ✅;`bun run build:dev` ✅(329 modules)。**未做实机验证**(待 `wails3 dev`):@ 提及实际发给 opencode 后是否被正确读取为 ResourceLink、上下键翻历史在多 session 间的隔离。
+- **设计说明**:① 文本里的 `@路径` 与 ResourceLink 会让 agent 拿到两次引用(无害;保留文本为可读性)。② staleness:@ 提及在 submit 时过滤「仍在文本里的」(用户删掉的不发);回形针附件(chip)总是有效。③ 翻历史只作用于当前 session(不跨 session);切走保留草稿(`draftBySession`)+ 翻历史状态本地于 Composer。
 
 ### 2026-06-29(feat:窗口尺寸/位置/最大化记忆 —— ui_state.json)
 - **起因**:用户要求「打开时记住上一次的窗口状态——上次默认窗口就用默认尺寸,上次最大化就最大化打开」。讨论落盘方式后定:用本地 JSON 文件(不进 SQLite,因窗口几何是 UI 运行时状态非业务数据),文件名经讨论定为 `ui_state.json`(留 UI state 扩展空间,不放结构性配置)。
