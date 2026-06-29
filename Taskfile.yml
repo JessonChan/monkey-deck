@@ -15,6 +15,7 @@ includes:
 tasks:
   build:
     summary: Builds the application
+    deps: [bindings]
     cmds:
       - task: "{{OS}}:build"
 
@@ -28,8 +29,14 @@ tasks:
     cmds:
       - task: "{{OS}}:run"
 
+  bindings:
+    summary: Regenerate frontend bindings from Go methods (not in git; needed by frontend)
+    cmds:
+      - wails3 generate bindings
+
   dev:
     summary: Runs the application in development mode
+    deps: [bindings]
     cmds:
       - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
 

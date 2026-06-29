@@ -7,20 +7,20 @@ WAILS3 ?= /Users/jessonchan/go/bin/wails3
 bindings:
 	$(WAILS3) generate bindings
 
-## 热重载开发(Go + 前端一起)
-dev:
+## 热重载开发(Go + 前端一起);先 regen bindings(bindings 不入库,启动时生成)
+dev: bindings
 	$(WAILS3) dev -config ./build/config.yml
 
-## 仅前端 dev
-dev-frontend:
+## 仅前端 dev;先 regen bindings(前端 import 依赖)
+dev-frontend: bindings
 	cd frontend && bun run dev
 
-## 构建前端
-build-frontend:
+## 构建前端;先 regen bindings
+build-frontend: bindings
 	cd frontend && bun run build
 
-## 只产出裸二进制 bin/monkey-deck(不刷新 bin/monkey-deck.app)
-build: $(WAILS3)
+## 只产出裸二进制 bin/monkey-deck(不刷新 bin/monkey-deck.app);先 regen bindings
+build: bindings $(WAILS3)
 	$(WAILS3) build
 
 ## 打包成 bin/monkey-deck.app(= build + cp 新二进制进 .app + codesign)。「build 后开 .app」用这个,不是 build
