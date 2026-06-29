@@ -147,6 +147,12 @@ export default function App() {
   const status = (selectedSessionId ? statusBySession[selectedSessionId] : undefined) ?? "empty";
   const statusDetail = (selectedSessionId ? statusDetailBySession[selectedSessionId] : undefined) ?? "";
   const permission = (selectedSessionId ? permissionBySession[selectedSessionId] : undefined) ?? null;
+  // 侧栏状态指示用:哪些 session 正有待决权限。openSession 不再清权限(原 316 行会清掉 →
+  // 切回该 session 卡片消失、再也点不到,只能等 5 分钟超时),故待决权限跨切换保留,切回仍可见。
+  const permPendingBySession = useMemo(
+    () => Object.fromEntries(Object.entries(permissionBySession).filter(([, v]) => v).map(([k]) => [k, true])) as Record<string, boolean>,
+    [permissionBySession]
+  );
   const hasMore = (selectedSessionId ? hasMoreBySession[selectedSessionId] : undefined) ?? false;
   const loadingMore = (selectedSessionId ? loadingMoreBySession[selectedSessionId] : undefined) ?? false;
   const queue = (selectedSessionId ? queueBySession[selectedSessionId] : undefined) ?? [];
@@ -282,12 +288,23 @@ export default function App() {
     });
   }, []);
 
-  // 选项目 → 加载 sessions。
+  // 选项目 → 加载 sessions。切项目时清空所有 per-session 缓存,防止旧项目的
+  // streaming/items 等残留泄漏到新项目(尤其 loadedSessionsRef 不清会导致跳过 DB 重载)。
   const selectProject = useCallback(
     async (projectId: string) => {
       setSelectedProjectId(projectId);
       setSelectedSessionId(null);
-      setQueueBySession({}); queueBySessionRef.current = {}; setDraftBySession({});
+      setQueueBySession({}); queueBySessionRef.current = {};
+      setDraftBySession({});
+      setItemsBySession({});
+      setStatusBySession({});
+      setStatusDetailBySession({});
+      setPermissionBySession({});
+      setUsageBySession({});
+      setHasMoreBySession({});
+      setLoadingMoreBySession({});
+      loadedSessionsRef.current = new Set();
+      oldestSeqRef.current = {};
       userStoppedRef.current = false;
       await refreshSessions(projectId);
     },
@@ -302,7 +319,6 @@ export default function App() {
       if (projectId && projectId !== selectedProjectId) setSelectedProjectId(projectId);
       setSelectedSessionId(sessionId);
       setUnreadBySession((prev) => { if (!prev[sessionId]) return prev; const n = { ...prev }; delete n[sessionId]; return n; });
-      setPermissionBySession((prev) => ({ ...prev, [sessionId]: null }));
       userStoppedRef.current = false;
       setError(null);
       await ChatService.OpenSession(sessionId);
@@ -354,7 +370,8 @@ export default function App() {
     }
   }, [loadingMoreBySession, hasMoreBySession, messagesToItems]);
 
-  // 新建 session。projectId 为空时用当前选中项目(每个项目项有自己的新对话按钮)。
+  // 新建 session:projectId 为空时用当前选中项目(每个项目项有自己的新对话按钮);
+  // 预初始化空状态,防止 openSession 异步加载窗口期读到残留。
   const createSession = useCallback(async (projectId?: string) => {
     const pid = projectId ?? selectedProjectId;
     if (!pid) return;
@@ -362,6 +379,9 @@ export default function App() {
       if (pid !== selectedProjectId) await selectProject(pid);
       const se = await ChatService.CreateSession(pid, "");
       if (se) {
+        setItemsBySession((prev) => ({ ...prev, [se.id]: [] }));
+        setStatusBySession((prev) => ({ ...prev, [se.id]: "empty" }));
+        loadedSessionsRef.current.add(se.id);
         await refreshSessions(pid);
         await openSession(se.id);
       }
@@ -599,6 +619,7 @@ export default function App() {
           statusBySession={statusBySession}
           activityBySession={activityBySession}
           unreadBySession={unreadBySession}
+          permPendingBySession={permPendingBySession}
         />
       </Panel>
       <Separator className="resize-handle" />
