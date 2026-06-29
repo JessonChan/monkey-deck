@@ -115,15 +115,48 @@ func Remove(repoPath, targetPath, branch string) error {
 	return nil
 }
 
+// MergeConflictError 表示合并因冲突失败。Files 为冲突文件路径(相对仓库根)。
+// MergeBranch 在冲突时会自动 git merge --abort,把主仓库回滚到合并前——主仓库是项目
+// 所有 session 的共享根,绝不能卡在半合并状态(否则后续 worktree 创建 / diff / 同项目
+// 其它 session 合并全部受影响,且应用内无冲突解决 UI,只能靠终端救场)。
+type MergeConflictError struct {
+	Files []string
+}
+
+func (e *MergeConflictError) Error() string {
+	return "合并冲突: " + strings.Join(e.Files, ", ")
+}
+
 // MergeBranch 把 branch 合并进 repoPath 的当前 HEAD,用 message 作为合并提交信息,
 // 返回 git 合并输出(含变更统计)。--no-ff 强制生成 merge commit(即使可快进),
-// 使指定的 message 生效并保留分支历史。冲突时返回 error(含 git 冲突信息)。
+// 使指定的 message 生效并保留分支历史。
+//
+// 失败(冲突或其它原因)时自动 git merge --abort 回滚主仓库到合并前,保证主仓库始终干净:
+// 冲突返回 *MergeConflictError(含冲突文件);非冲突失败返回原始 git 错误。
 func MergeBranch(repoPath, branch, message string) (string, error) {
 	out, err := git(repoPath, "merge", "--no-ff", "-m", message, branch)
 	if err != nil {
+		// 必须先抓冲突文件再 abort:abort 后 index 就干净了,U 列清空。
+		conflicted, _ := conflictedFiles(repoPath)
+		_, _ = git(repoPath, "merge", "--abort") // 无 merge 进行中时是空操作,忽略错误
+		if len(conflicted) > 0 {
+			return "", &MergeConflictError{Files: conflicted}
+		}
 		return "", err
 	}
 	return out, nil
+}
+
+// conflictedFiles 返回当前未合并(conflicted)的文件路径(相对仓库根);无冲突返回 nil。
+func conflictedFiles(repoPath string) ([]string, error) {
+	out, err := git(repoPath, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
 }
 
 // DiffStat 返回 branch 相对 repoPath 当前 HEAD 的变更摘要(git diff --stat)。

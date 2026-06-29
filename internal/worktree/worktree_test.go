@@ -1,6 +1,7 @@
 package worktree
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,6 +73,63 @@ func TestCreateMergeRemove(t *testing.T) {
 	}
 	if BranchExists(root, branch) {
 		t.Fatal("branch still exists after Remove")
+	}
+}
+
+// 冲突时 MergeBranch 必须 git merge --abort 把主仓库回滚到合并前,
+// 返回 *MergeConflictError 列出冲突文件。主仓库绝不卡在半合并状态
+// (复现并锁守:此前冲突会留 MERGE_HEAD + 冲突标记,应用内无解,只能终端救场)。
+func TestMergeBranchConflictAborts(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	must(t, runGit(root, "init", "-q", root))
+	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("base"), 0o644))
+	must(t, runGit(root, "add", "."))
+	must(t, runGit(root, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init"))
+
+	// 分支侧:在 worktree 改 a.txt 同一行并提交
+	wt := filepath.Join(t.TempDir(), "wt-conflict")
+	branch := "md/conflict"
+	must(t, Create(root, branch, wt, ""))
+	must(t, os.WriteFile(filepath.Join(wt, "a.txt"), []byte("agent-side"), 0o644))
+	must(t, runGit(wt, "add", "."))
+	must(t, runGit(wt, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "agent"))
+
+	// 主仓库侧:也改 a.txt 同一行并提交 → 合并必冲突
+	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("main-side"), 0o644))
+	must(t, runGit(root, "add", "."))
+	must(t, runGit(root, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "main"))
+
+	headBefore, _ := git(root, "rev-parse", "HEAD")
+
+	_, err := MergeBranch(root, branch, "Merge "+branch+": 冲突测试")
+	if err == nil {
+		t.Fatal("MergeBranch should fail on conflict")
+	}
+	var ce *MergeConflictError
+	if !errors.As(err, &ce) {
+		t.Fatalf("want *MergeConflictError, got %T: %v", err, err)
+	}
+	if len(ce.Files) != 1 || ce.Files[0] != "a.txt" {
+		t.Fatalf("conflict files = %v, want [a.txt]", ce.Files)
+	}
+
+	// 主仓库必须回到合并前:无 MERGE_HEAD、a.txt 是主仓库版本(无冲突标记)、HEAD 未动、工作区干净。
+	if _, e := git(root, "rev-parse", "--verify", "-q", "MERGE_HEAD"); e == nil {
+		t.Fatal("MERGE_HEAD still present — repo stuck in merge state")
+	}
+	b, _ := os.ReadFile(filepath.Join(root, "a.txt"))
+	if string(b) != "main-side" {
+		t.Fatalf("a.txt = %q after abort, want %q (rolled back, no conflict markers)", b, "main-side")
+	}
+	headAfter, _ := git(root, "rev-parse", "HEAD")
+	if headAfter != headBefore {
+		t.Fatalf("HEAD moved: %s -> %s", headBefore, headAfter)
+	}
+	if files, _ := StatusFiles(root); len(files) != 0 {
+		t.Fatalf("working tree not clean after abort: %+v", files)
 	}
 }
 

@@ -393,6 +393,11 @@ func (s *ChatService) MergeSession(sessionID string) (string, error) {
 	}
 	mergeOut, err := worktree.MergeBranch(proj.Path, se.Branch, mergeCommitMessage(se.Branch, se.Title))
 	if err != nil {
+		var conflictErr *worktree.MergeConflictError
+		if errors.As(err, &conflictErr) {
+			return "", fmt.Errorf("合并因 %d 个文件冲突已取消(主仓库未改动)。请在源代码管理面板协调这些文件后重试:\n  %s",
+				len(conflictErr.Files), strings.Join(conflictErr.Files, "\n  "))
+		}
 		return "", err
 	}
 	var sb strings.Builder

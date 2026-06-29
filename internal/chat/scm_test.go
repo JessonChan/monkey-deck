@@ -184,6 +184,39 @@ func TestMergeSessionNoAutoCommit(t *testing.T) {
 	}
 }
 
+// 冲突时 MergeSession 返回可读错误(主仓库已回滚),不把原始 git stderr 抛给前端(§4.4)。
+func TestMergeSessionConflictMessage(t *testing.T) {
+	svc, sid, wt := newSCMService(t)
+	ctx := context.Background()
+	ses, _ := svc.st.GetSession(ctx, sid)
+	proj, _ := svc.st.GetProject(ctx, ses.ProjectID)
+	root := proj.Path
+
+	// 分支侧:改 a.txt 同一行并提交
+	mustWrite(t, filepath.Join(wt, "a.txt"), "agent-side")
+	mustRunGit(t, wt, "add", ".")
+	mustRunGit(t, wt, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "agent")
+	// 主仓库侧:也改 a.txt 同一行并提交 → 合并必冲突
+	mustWrite(t, filepath.Join(root, "a.txt"), "main-side")
+	mustRunGit(t, root, "add", ".")
+	mustRunGit(t, root, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "main")
+
+	_, err := svc.MergeSession(sid)
+	if err == nil {
+		t.Fatal("MergeSession should fail on conflict")
+	}
+	msg := err.Error()
+	for _, want := range []string{"已取消", "a.txt"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error %q missing %q", msg, want)
+		}
+	}
+	// 主仓库 a.txt 仍是主仓库版本(已回滚,无冲突标记)
+	if b, _ := os.ReadFile(filepath.Join(root, "a.txt")); string(b) != "main-side" {
+		t.Fatalf("a.txt = %q, want main-side (repo rolled back)", b)
+	}
+}
+
 // E:turn 进行中(busy)时,源代码管理写操作应被拒绝;读操作(SessionChanges)不受影响。
 func TestSCMBusyGuard(t *testing.T) {
 	svc, sid, _ := newSCMService(t)
