@@ -62,6 +62,8 @@ type chatConn interface {
 	Prompt(ctx context.Context, message string, timeout time.Duration) (acp.StopReason, error)
 	Close()
 	RespondPermission(id, optionID string) bool
+	// SessionTitle 经 ACP session/list 取 opencode 生成的权威标题(§5.4 #14)。
+	SessionTitle(ctx context.Context) (string, error)
 }
 
 // liveSession 一个活跃的 ACP 对话(内存态,钉在某个 db session 上)。
@@ -175,9 +177,9 @@ func (s *ChatService) emitSessionMeta(sessionID, title string) {
 // maybeAutoTitle 会话无标题时,用首条消息生成「兜底纯文本标题」并持久化 + 推前端。
 // 返回写入的兜底标题(空 = 未写入:会话已有标题或消息为空)。
 //
-// 注意:opencode 1.17.10 实证不发 ACP 的 session_info_update(标题),故不能依赖
-// agent 生成标题 —— 见 AGENTS.md §5.4 #14。兜底标题立即给出,更精准的标题由
-// refineTitleAsync 异步调 LLM 生成(refineTitle 只在标题仍是兜底值时覆盖,不冲掉用户改名)。
+// 这是**瞬时兜底**:opencode 尚未生成标题前给侧栏一个可读标题。opencode 的权威标题
+// 经 session/list 读取(见 runPrompt,§5.4 #14)—— opencode 实证不发 session_info_update
+// 通知,但会在 turn 结束后通过 session/list 的 SessionInfo.Title 暴露它生成的标题。
 func (s *ChatService) maybeAutoTitle(sessionID, text string) string {
 	se, err := s.st.GetSession(s.ctx, sessionID)
 	if err != nil || se == nil || se.Title != "" {
@@ -194,21 +196,19 @@ func (s *ChatService) maybeAutoTitle(sessionID, text string) string {
 	return title
 }
 
-// refineTitleAsync 在后台用 LLM 生成更精准的会话标题(仅首条消息时触发)。
-// model = 会话 model(provider/model),cwd = session 工作目录(用于定位 opencode.json)。
-// 仅当当前标题仍是兜底标题 fallbackTitle(或空)时才覆盖 —— 避免冲掉用户手动改名。
-// 任何失败(provider 无配置/网络错/空回复)静默回退,fallbackTitle 保留。后台执行,不阻塞对话。
-func (s *ChatService) refineTitleAsync(sessionID, model, cwd, firstMsg, fallbackTitle string) {
-	title := titlegen.Generate(s.ctx, model, cwd, firstMsg)
-	if title == "" || title == fallbackTitle {
+// syncSessionTitle 经 session/list 取 opencode 为本 session 生成的权威标题,
+// 若与当前存储标题不同则覆盖 + 推前端(§5.4 #14)。opencode 在 turn 结束后才暴露标题,
+// 故在 runPrompt 成功后调用。失败(无标题/session/list 不可用)静默跳过,fallback 保留。
+func (s *ChatService) syncSessionTitle(ls *liveSession, sessionID string) {
+	tctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
+	title, err := ls.chat.SessionTitle(tctx)
+	if err != nil || title == "" {
 		return
 	}
-	se, err := s.st.GetSession(s.ctx, sessionID)
-	if err != nil || se == nil {
+	se, _ := s.st.GetSession(s.ctx, sessionID)
+	if se == nil || se.Title == title {
 		return
-	}
-	if se.Title != "" && se.Title != fallbackTitle {
-		return // 用户已手动改名,不覆盖
 	}
 	if err := s.st.UpdateSessionTitle(s.ctx, sessionID, title); err != nil {
 		return
@@ -582,25 +582,10 @@ func (s *ChatService) startTurn(ls *liveSession, sessionID, text string) {
 	if _, err := s.st.AppendMessage(s.ctx, sessionID, "user", "", text, ""); err != nil {
 		slog.Warn("persist user msg", "err", err)
 	}
-	fallback := s.maybeAutoTitle(sessionID, text)
+	s.maybeAutoTitle(sessionID, text)
 	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "user_message_chunk", Text: text})
 	s.emitStatus(sessionID, "prompting", "")
 	go s.runPrompt(ls, sessionID, text)
-	// 仅首条消息:异步用 LLM 把兜底标题精修成更贴切的(AGENTS.md §5.4 #14)。
-	if fallback != "" && ls.proj != nil {
-		se, _ := s.st.GetSession(s.ctx, sessionID)
-		if se != nil {
-			cwd := ls.proj.Path
-			if se.WorktreePath != "" {
-				cwd = se.WorktreePath
-			}
-			m := se.Model
-			if m == "" {
-				m = ls.proj.Model
-			}
-			go s.refineTitleAsync(sessionID, m, cwd, text, fallback)
-		}
-	}
 }
 
 // InterruptAndSend 打断当前 turn 并立即发送新消息(前端队列面板「立即发送」按钮)。
@@ -683,6 +668,7 @@ func (s *ChatService) SendAndWaitSync(sessionID, text string) (string, error) {
 		return agentText, err
 	}
 	s.emitStatus(sessionID, "idle", "stopReason="+string(stopReason))
+	s.syncSessionTitle(ls, sessionID)
 	return agentText, nil
 }
 
@@ -749,6 +735,8 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string) {
 		s.emitStatus(sessionID, "error", detail)
 		return
 	}
+	// 取 opencode 生成的权威标题覆盖兜底标题(§5.4 #14)。
+	s.syncSessionTitle(ls, sessionID)
 	s.emitStatus(sessionID, "idle", "stopReason="+string(stopReason))
 }
 

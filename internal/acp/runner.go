@@ -228,6 +228,22 @@ func (cs *ChatSession) RespondPermission(id, optionID string) bool {
 	return cs.Handler.RespondPermission(id, optionID)
 }
 
+// SessionTitle 通过 session/list 取 opencode 为本 session 生成的权威标题(§5.4 #14)。
+// opencode 实证不发 session_info_update 通知,但会把它生成的标题写进自身库并通过
+// session/list 的 SessionInfo.Title 暴露。返回空串 = 暂无标题或 session/list 不可用。
+func (cs *ChatSession) SessionTitle(ctx context.Context) (string, error) {
+	lr, err := cs.Conn.ListSessions(ctx, acp.ListSessionsRequest{})
+	if err != nil {
+		return "", err
+	}
+	for _, s := range lr.Sessions {
+		if s.SessionId == cs.SessionID && s.Title != nil {
+			return *s.Title, nil
+		}
+	}
+	return "", nil
+}
+
 // Close 销毁 session:kill 整个 harness 进程组 + 注销活跃(§3.2)。
 func (cs *ChatSession) Close() {
 	pgid := 0
