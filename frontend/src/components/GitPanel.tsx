@@ -21,6 +21,8 @@ interface Props {
   onUnstage: (paths: string[]) => Promise<void>;
   onDiscard: (paths: string[]) => Promise<void>;
   onCommit: (message: string) => Promise<void>;
+  // embedded=true 时隐藏顶部标题行(由 SidePanel 的 tab 接管标题)。
+  embedded?: boolean;
 }
 
 // 状态字母 → 文案 + 配色(VS Code 风格)。
@@ -42,6 +44,7 @@ export default function GitPanel({
   onUnstage,
   onDiscard,
   onCommit,
+  embedded,
 }: Props) {
   const [message, setMessage] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -98,10 +101,12 @@ export default function GitPanel({
 
   return (
     <aside className="git-panel" data-testid="git-panel">
-      <div className="git-panel-head">
-        <Folder size={13} />
-        <span className="git-panel-title">源代码管理</span>
-      </div>
+      {!embedded && (
+        <div className="git-panel-head">
+          <Folder size={13} />
+          <span className="git-panel-title">源代码管理</span>
+        </div>
+      )}
 
       <div className="git-scm-branch" title={branch}>
         <GitBranch size={12} />
