@@ -15,6 +15,9 @@ import (
 type FileChange struct {
 	Path   string `json:"path"`
 	Status string `json:"status"` // M=修改 A=新增 D=删除 U=未跟踪 R=重命名
+	// Staged=true 表示已进暂存区(index 有改动);false 表示工作区改动。
+	// 一个文件可能同时出现在两组(如 MM:已暂存后又有新改动),参考 VS Code 的 Changes / Staged Changes 两组。
+	Staged bool `json:"staged"`
 }
 
 // ErrNotARepo 路径不是 git 仓库。
@@ -32,6 +35,21 @@ func git(repoPath string, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// gitRaw 同 git 但不对输出做 TrimSpace。porcelain 输出每行前两位是状态列(可能是空格),
+// 整体 TrimSpace 会吞掉首行前导空格,破坏 XY 列解析。StatusFiles 等需逐行精确格式的场景用它。
+func gitRaw(repoPath string, args ...string) (string, error) {
+	full := append([]string{"-C", repoPath}, args...)
+	out, err := exec.Command("git", full...).Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
+		}
+		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return string(out), nil
 }
 
 // IsRepo 报告 path 是否在一个 git 工作树内。
@@ -136,10 +154,11 @@ func UncommittedStat(worktreePath string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// StatusFiles 返回 worktreePath 里所有变更的文件列表(VS Code 风格:逐文件 + 状态)。
-// 用 git status --porcelain 解析,包含 staged/unstaged/untracked。
+// StatusFiles 返回 worktreePath 里的文件级变更(VS Code 风格:暂存 / 工作区两组)。
+// 解析 git status --porcelain 的 XY 两列:X=index(暂存),Y=worktree(工作区)。
+// 一个文件若同时被暂存又有工作区改动(如 MM),会返回两条:一条 Staged=true、一条 Staged=false。
 func StatusFiles(worktreePath string) ([]FileChange, error) {
-	out, err := git(worktreePath, "status", "--porcelain")
+	out, err := gitRaw(worktreePath, "status", "--porcelain")
 	if err != nil {
 		return nil, err
 	}
@@ -148,24 +167,39 @@ func StatusFiles(worktreePath string) ([]FileChange, error) {
 		if len(line) < 3 {
 			continue
 		}
-		code := strings.TrimSpace(line[:2])
+		x, y := line[0], line[1]
 		path := strings.TrimSpace(line[3:])
-		st := "M"
-		switch {
-		case strings.Contains(code, "A"):
-			st = "A"
-		case strings.Contains(code, "D"):
-			st = "D"
-		case strings.Contains(code, "R"):
-			st = "R"
-		case strings.Contains(code, "?"):
-			st = "U"
-		case strings.Contains(code, "M"):
-			st = "M"
+		if path == "" {
+			continue
 		}
-		files = append(files, FileChange{Path: path, Status: st})
+		if x == '?' && y == '?' { // 未跟踪:只进工作区组
+			files = append(files, FileChange{Path: path, Status: "U", Staged: false})
+			continue
+		}
+		if x != ' ' && x != '?' { // 暂存组(index 有改动)
+			files = append(files, FileChange{Path: path, Status: statusLetter(x), Staged: true})
+		}
+		if y != ' ' && y != '?' { // 工作区组
+			files = append(files, FileChange{Path: path, Status: statusLetter(y), Staged: false})
+		}
 	}
 	return files, nil
+}
+
+// statusLetter 把 porcelain 单列状态码映射成对外展示字母。
+func statusLetter(c byte) string {
+	switch c {
+	case 'M', 'T':
+		return "M"
+	case 'A':
+		return "A"
+	case 'D':
+		return "D"
+	case 'R', 'C':
+		return "R" // 复制按重命名展示
+	default:
+		return "M"
+	}
 }
 
 // HasChanges 报告 worktreePath 是否有未提交的改动(含 untracked)。
@@ -187,6 +221,68 @@ func AutoCommit(worktreePath, message string) error {
 		return err
 	}
 	return nil
+}
+
+// Stage 把 paths 加入暂存区。paths 为空表示暂存全部(git add -A)。
+func Stage(worktreePath string, paths ...string) error {
+	args := []string{"add", "-A"}
+	if len(paths) > 0 {
+		args = append([]string{"add", "--"}, paths...)
+	}
+	_, err := git(worktreePath, args...)
+	return err
+}
+
+// Unstage 把 paths 移出暂存区(git restore --staged)。paths 为空表示移出全部。
+func Unstage(worktreePath string, paths ...string) error {
+	args := []string{"restore", "--staged", "."}
+	if len(paths) > 0 {
+		args = append([]string{"restore", "--staged", "--"}, paths...)
+	}
+	_, err := git(worktreePath, args...)
+	return err
+}
+
+// Discard 丢弃工作区改动:已跟踪文件 checkout 还原,未跟踪文件 clean 删除。
+// 只应用于工作区(Staged=false)的文件;暂存区改动用 Unstage。路径为空无操作。
+func Discard(worktreePath string, paths ...string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	// 用 ls-files 区分已跟踪 / 未跟踪(在 index 里的算已跟踪)
+	out, _ := git(worktreePath, append([]string{"ls-files", "--"}, paths...)...)
+	tracked := make(map[string]bool)
+	for _, p := range strings.Split(out, "\n") {
+		if p = strings.TrimSpace(p); p != "" {
+			tracked[p] = true
+		}
+	}
+	var trackedP, untrackedP []string
+	for _, p := range paths {
+		if tracked[p] {
+			trackedP = append(trackedP, p)
+		} else {
+			untrackedP = append(untrackedP, p)
+		}
+	}
+	if len(trackedP) > 0 {
+		if _, err := git(worktreePath, append([]string{"checkout", "--"}, trackedP...)...); err != nil {
+			return err
+		}
+	}
+	if len(untrackedP) > 0 {
+		if _, err := git(worktreePath, append([]string{"clean", "-f", "--"}, untrackedP...)...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Commit 提交已暂存的改动(只 commit index,不自动 add;区别于 AutoCommit)。
+// 无暂存改动时返回 git 的 "nothing to commit" 错误。
+func Commit(worktreePath, message string) error {
+	_, err := git(worktreePath, "-c", "user.email=monkey-deck@local", "-c", "user.name=Monkey Deck", "commit", "-qm", message)
+	return err
 }
 
 // BranchExists 报告 branch 是否存在于 repoPath。

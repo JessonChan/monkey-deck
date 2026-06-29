@@ -85,3 +85,95 @@ func runGit(dir string, args ...string) error {
 	cmd.Dir = dir
 	return cmd.Run()
 }
+
+// 验证 StatusFiles 的暂存/工作区两组分离,以及 Stage/Unstage/Discard/Commit 全流程。
+func TestStageUnstageCommitDiscard(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := t.TempDir()
+	must(t, runGit(repo, "init", "-q", repo))
+	must(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("a"), 0o644))
+	must(t, os.WriteFile(filepath.Join(repo, "b.txt"), []byte("b"), 0o644))
+	must(t, runGit(repo, "add", "."))
+	must(t, runGit(repo, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init"))
+
+	// 制造三类工作区改动:修改已跟踪 a、删除已跟踪 b、新增未跟踪 c
+	must(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("a-mod"), 0o644))
+	must(t, os.Remove(filepath.Join(repo, "b.txt")))
+	must(t, os.WriteFile(filepath.Join(repo, "c.txt"), []byte("c-new"), 0o644))
+
+	// 全部应出现在工作区组(Staged=false)
+	got, err := StatusFiles(repo)
+	must(t, err)
+	if !hasChange(got, "a.txt", "M", false) || !hasChange(got, "b.txt", "D", false) || !hasChange(got, "c.txt", "U", false) {
+		t.Fatalf("initial status wrong: %+v", got)
+	}
+	if hasStaged(got) {
+		t.Fatalf("expected no staged entries yet: %+v", got)
+	}
+
+	// 暂存 a.txt → 应进暂存组
+	must(t, Stage(repo, "a.txt"))
+	got, _ = StatusFiles(repo)
+	if !hasChange(got, "a.txt", "M", true) {
+		t.Fatalf("a.txt not staged: %+v", got)
+	}
+
+	// 取消暂存 a.txt → 回到工作区组
+	must(t, Unstage(repo, "a.txt"))
+	got, _ = StatusFiles(repo)
+	if hasStaged(got) {
+		t.Fatalf("expected no staged after unstage: %+v", got)
+	}
+	if !hasChange(got, "a.txt", "M", false) {
+		t.Fatalf("a.txt not back to worktree group: %+v", got)
+	}
+
+	// Stage 全部 + 提交(只 commit index)→ 工作区干净
+	must(t, Stage(repo)) // 空 paths = add -A
+	must(t, Commit(repo, "stage and commit"))
+	got, _ = StatusFiles(repo)
+	if len(got) != 0 {
+		t.Fatalf("expected clean tree after commit, got %+v", got)
+	}
+
+	// Commit 无暂存改动应报错(nothing to commit)
+	if err := Commit(repo, "empty"); err == nil {
+		t.Fatal("Commit on nothing-staged should error")
+	}
+
+	// 制造新改动后测 Discard:未跟踪文件被删除、已跟踪修改被还原
+	must(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("dirty"), 0o644))
+	must(t, os.WriteFile(filepath.Join(repo, "d.txt"), []byte("d-new"), 0o644))
+	must(t, Discard(repo, "a.txt", "d.txt"))
+	got, _ = StatusFiles(repo)
+	if len(got) != 0 {
+		t.Fatalf("expected clean after discard, got %+v", got)
+	}
+	b, _ := os.ReadFile(filepath.Join(repo, "a.txt"))
+	if string(b) != "a-mod" { // 提交过的内容是 a-mod
+		t.Fatalf("tracked file not restored by Discard: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "d.txt")); err == nil {
+		t.Fatal("untracked file not removed by Discard")
+	}
+}
+
+func hasChange(got []FileChange, path, status string, staged bool) bool {
+	for _, f := range got {
+		if f.Path == path && f.Status == status && f.Staged == staged {
+			return true
+		}
+	}
+	return false
+}
+
+func hasStaged(got []FileChange) bool {
+	for _, f := range got {
+		if f.Staged {
+			return true
+		}
+	}
+	return false
+}
