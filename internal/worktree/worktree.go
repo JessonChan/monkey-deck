@@ -115,10 +115,11 @@ func Remove(repoPath, targetPath, branch string) error {
 	return nil
 }
 
-// MergeBranch 把 branch 合并进 repoPath 的当前 HEAD,返回 git 合并输出(含变更统计)。
-// 冲突时返回 error(含 git 冲突信息)。
-func MergeBranch(repoPath, branch string) (string, error) {
-	out, err := git(repoPath, "merge", "--no-edit", branch)
+// MergeBranch 把 branch 合并进 repoPath 的当前 HEAD,用 message 作为合并提交信息,
+// 返回 git 合并输出(含变更统计)。--no-ff 强制生成 merge commit(即使可快进),
+// 使指定的 message 生效并保留分支历史。冲突时返回 error(含 git 冲突信息)。
+func MergeBranch(repoPath, branch, message string) (string, error) {
+	out, err := git(repoPath, "merge", "--no-ff", "-m", message, branch)
 	if err != nil {
 		return "", err
 	}

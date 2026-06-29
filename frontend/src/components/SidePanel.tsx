@@ -17,6 +17,8 @@ interface Props {
   onUnstage: (paths: string[]) => Promise<void>;
   onDiscard: (paths: string[]) => Promise<void>;
   onCommit: (message: string) => Promise<void>;
+  // AI 提交:转发给 GitPanel。
+  onAICommit: () => Promise<void>;
   onDiff: (path: string, staged: boolean) => Promise<string>;
   busy: boolean;
 }
@@ -69,6 +71,7 @@ export default function SidePanel(props: Props) {
             onStage={props.onStage}
             onUnstage={props.onUnstage}
             onDiscard={props.onDiscard}
+            onAICommit={props.onAICommit}
             onCommit={props.onCommit}
             onDiff={props.onDiff}
             busy={props.busy}

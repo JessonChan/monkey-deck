@@ -248,3 +248,28 @@ func mustWrite(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+// mergeCommitMessage:有标题用标题,空标题降级,始终带分支前缀。
+func TestMergeCommitMessage(t *testing.T) {
+	cases := []struct{ branch, title, want string }{
+		{"md/abc12345", "README 中文化及安装说明", "Merge md/abc12345: README 中文化及安装说明"},
+		{"md/abc12345", "  去除首尾空白  ", "Merge md/abc12345: 去除首尾空白"},
+		{"md/abc12345", "", "Merge md/abc12345: session 改动"},
+		{"md/abc12345", "   ", "Merge md/abc12345: session 改动"},
+	}
+	for _, c := range cases {
+		if got := mergeCommitMessage(c.branch, c.title); got != c.want {
+			t.Errorf("mergeCommitMessage(%q,%q) = %q, want %q", c.branch, c.title, got, c.want)
+		}
+	}
+}
+
+// aiCommitPrompt:必须含关键指令(Conventional Commits、git add、禁止 push)。
+func TestAICommitPrompt(t *testing.T) {
+	p := aiCommitPrompt()
+	for _, want := range []string{"Conventional Commits", "git add", "git commit", "不要执行 push"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("aiCommitPrompt missing %q\n%s", want, p)
+		}
+	}
+}

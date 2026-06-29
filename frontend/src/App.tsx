@@ -414,6 +414,13 @@ export default function App() {
     catch (e) { setError(String(e)); throw e; }
     finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
   }, [selectedSessionId]);
+  // AI 提交:让当前 session 的 agent 自动提交。触发一轮 turn;turn 结束(idle)时
+  // 已有 effect 自动刷新 sessionChanges,故无需手动 finally 刷新。
+  const aiCommit = useCallback(async () => {
+    if (!selectedSessionId) throw new Error("无活动 session");
+    try { await ChatService.SessionAICommit(selectedSessionId); setError(null); }
+    catch (e) { setError(String(e)); throw e; }
+  }, [selectedSessionId]);
 
   // 点击文件查看改动(staged 区分暂存/工作区上下文)。读操作,turn 进行中也允许。
   const fileDiff = useCallback(async (path: string, staged: boolean) => {
@@ -545,6 +552,7 @@ export default function App() {
               onUnstage={unstageFiles}
               onDiscard={discardFiles}
               onCommit={commitSession}
+              onAICommit={aiCommit}
               onDiff={fileDiff}
               busy={status === "prompting"}
             />

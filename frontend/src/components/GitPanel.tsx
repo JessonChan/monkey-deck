@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   Check,
+  Sparkles,
 } from "lucide-react";
 import type { FileChange } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 
@@ -20,6 +21,8 @@ interface Props {
   onStage: (paths: string[]) => Promise<void>;
   onUnstage: (paths: string[]) => Promise<void>;
   onDiscard: (paths: string[]) => Promise<void>;
+  // AI 提交:让当前 session 的 agent 自动生成提交信息并提交(复用对话,架构 A)。
+  onAICommit: () => Promise<void>;
   onCommit: (message: string) => Promise<void>;
   // 点击文件查看改动(staged 区分暂存/工作区上下文)。
   onDiff: (path: string, staged: boolean) => Promise<string>;
@@ -47,6 +50,7 @@ export default function GitPanel({
   onStage,
   onUnstage,
   onDiscard,
+  onAICommit,
   onCommit,
   onDiff,
   busy,
@@ -78,6 +82,17 @@ export default function GitPanel({
       setErr(null);
       await onCommit(msg);
       setMessage(""); // 成功才清空,失败保留让用户改
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+
+  // AI 提交:让 agent 自动生成信息并提交。失败时显示内联错误。
+  const aiCommit = async () => {
+    if (busy) return;
+    try {
+      setErr(null);
+      await onAICommit();
     } catch (e) {
       setErr(String(e));
     }
@@ -180,6 +195,15 @@ export default function GitPanel({
         onClick={commit}
       >
         <Check size={14} /> 提交{staged.length > 0 ? ` (${staged.length})` : ""}
+      </button>
+      <button
+        className="git-ai-btn"
+        data-testid="ai-commit-btn"
+        title="让当前会话的 AI 审视改动、生成提交信息并提交"
+        disabled={busy || (changes != null && changes.length === 0)}
+        onClick={aiCommit}
+      >
+        <Sparkles size={14} /> AI 提交
       </button>
 
       {err && <div className="git-commit-err" data-testid="commit-error">{err}</div>}

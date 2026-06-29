@@ -51,13 +51,19 @@ func TestCreateMergeRemove(t *testing.T) {
 		t.Fatalf("isolation broken: main repo changed before merge: %q", b)
 	}
 
-	// 3. merge worktree 分支进主仓库
-	if _, err := MergeBranch(root, branch); err != nil {
+	// 3. merge worktree 分支进主仓库(--no-ff -m 强制用指定 message 生成 merge commit)
+	msg := "Merge md/test: 测试合并信息"
+	if _, err := MergeBranch(root, branch, msg); err != nil {
 		t.Fatalf("MergeBranch: %v", err)
 	}
 	b, _ = os.ReadFile(filepath.Join(root, "a.txt"))
 	if string(b) != "a-changed-by-agent" {
 		t.Fatalf("merge did not apply: %q", b)
+	}
+	// --no-ff -m 应生成一条 merge commit,其信息等于传入的 message
+	got, _ := git(root, "log", "-1", "--pretty=%s")
+	if got != msg {
+		t.Fatalf("merge commit message = %q, want %q", got, msg)
 	}
 
 	// 4. remove worktree + branch

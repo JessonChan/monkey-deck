@@ -364,7 +364,7 @@ func (s *ChatService) MergeSession(sessionID string) (string, error) {
 	if proj == nil {
 		return "", fmt.Errorf("project not found")
 	}
-	mergeOut, err := worktree.MergeBranch(proj.Path, se.Branch)
+	mergeOut, err := worktree.MergeBranch(proj.Path, se.Branch, mergeCommitMessage(se.Branch, se.Title))
 	if err != nil {
 		return "", err
 	}
@@ -385,6 +385,36 @@ func (s *ChatService) MergeSession(sessionID string) (string, error) {
 		}
 	}
 	return sb.String(), nil
+}
+
+// mergeCommitMessage 组合并到主仓库时用的提交信息:优先用 opencode 生成的会话标题
+//(AI 对本次工作的总结,经 session/list 取得)作主题,标题为空时降级到分支名。
+// 纯函数,便于单测。
+func mergeCommitMessage(branch, title string) string {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		t = "session 改动"
+	}
+	return "Merge " + branch + ": " + t
+}
+
+// aiCommitPrompt 是「AI 提交」发给当前 session 的指令(架构 A:复用 session,上下文最完整)。
+// 让 agent 自己审视改动、生成 Conventional Commits 信息并提交。纯函数,便于单测。
+func aiCommitPrompt() string {
+	return "请帮我提交当前工作目录的未提交改动:\n" +
+		"1. 先运行 git status 与 git diff 了解当前有哪些改动;\n" +
+		"2. 基于改动内容,生成一条符合 Conventional Commits 规范的提交信息" +
+		"(格式「类型: 简述」,如 feat: / fix: / refactor: / docs:,必要时补 body 说明动机);\n" +
+		"3. 执行 git add -A 暂存全部改动,再 git commit 完成提交。\n" +
+		"不要执行 push。提交完成后用一句话说明你提交了什么。"
+}
+
+// SessionAICommit 让当前 session 的 agent 自动提交未提交改动(AI 提交,架构 A)。
+// 复用 SendMessage 发送一段指令:agent 自己审视改动、生成提交信息并提交。
+// 复用现有 turn 生命周期 / 权限 UI / 流式渲染,提交作为一轮对话显示在聊天里(可审计)。
+// 仅 idle 可用(busy 由 SendMessage 守卫);无改动时 agent 会自行说明。
+func (s *ChatService) SessionAICommit(sessionID string) error {
+	return s.SendMessage(sessionID, aiCommitPrompt())
 }
 
 // SessionDiff 返回该 session 分支相对主仓库的变更摘要(diff --stat + commit log)。
