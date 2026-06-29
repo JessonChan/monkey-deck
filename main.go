@@ -38,7 +38,7 @@ func main() {
 		Height: 840,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
-			Backdrop:                application.MacBackdropTranslucent,
+			Backdrop:                application.MacBackdropNormal, // 改为不透明，减少动画闪烁
 			TitleBar:                application.MacTitleBarHiddenInset,
 		},
 		BackgroundColour: application.NewRGB(35, 35, 35),
