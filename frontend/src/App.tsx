@@ -415,6 +415,12 @@ export default function App() {
     finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
   }, [selectedSessionId]);
 
+  // 点击文件查看改动(staged 区分暂存/工作区上下文)。读操作,turn 进行中也允许。
+  const fileDiff = useCallback(async (path: string, staged: boolean) => {
+    if (!selectedSessionId) return "";
+    return await ChatService.SessionFileDiff(selectedSessionId, path, staged);
+  }, [selectedSessionId]);
+
   const addProject = useCallback(async () => {
     try {
       const path = await ChatService.PickDirectory();
@@ -536,6 +542,8 @@ export default function App() {
               onUnstage={unstageFiles}
               onDiscard={discardFiles}
               onCommit={commitSession}
+              onDiff={fileDiff}
+              busy={status === "prompting"}
             />
           </Panel>
         </>
