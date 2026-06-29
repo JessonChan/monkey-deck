@@ -368,16 +368,10 @@ function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRes
         </div>
       </div>
       <div className="permission-actions">
-        {prompt.options.map((o) => (
-          <button
-            key={o.optionId}
-            className={`perm-btn ${o.kind.startsWith("allow") ? "perm-allow" : "perm-deny"}`}
-            data-testid={`perm-${o.optionId}`}
-            onClick={() => onRespond(o.optionId)}
-          >
-            {o.name}
-          </button>
-        ))}
+        <button className="perm-btn perm-allow" data-testid="perm-once" onClick={() => onRespond("once")}>允许本次</button>
+        <button className="perm-btn perm-allow" data-testid="perm-session" onClick={() => onRespond("session")}>本会话允许</button>
+        <button className="perm-btn perm-allow" data-testid="perm-project" onClick={() => onRespond("project")}>本项目允许</button>
+        <button className="perm-btn perm-deny" data-testid="perm-deny" onClick={() => onRespond("deny")}>本次拒绝</button>
       </div>
     </div>
   );
