@@ -59,12 +59,19 @@ input, textarea { font-family: inherit; }
 
 /* ─── 可拖拽分隔线(react-resizable-panels Separator)─── */
 .resize-handle {
-  width: 6px;
-  flex-basis: 6px;
+  width: 1px;
+  flex-basis: 1px;
   background: var(--sep);
   cursor: col-resize;
   position: relative;
   transition: background 0.15s;
+}
+/* 透明伪元素扩大命中区:视觉 1px,鼠标 ±4px 都能抓到 */
+.resize-handle::before {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -4px; right: -4px;
 }
 .resize-handle:hover,
 .resize-handle[data-separator="active"] {
