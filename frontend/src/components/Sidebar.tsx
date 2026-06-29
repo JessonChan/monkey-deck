@@ -135,7 +135,7 @@ export default function Sidebar(props: Props) {
                     return (
                       <button
                         key={s.id}
-                        className={`session-item ${props.selectedSessionId === s.id ? "active" : ""}`}
+                        className={`session-item ${props.selectedSessionId === s.id ? "active" : ""} ${active ? "loading" : ""}`}
                         data-testid={`session-${s.id}`}
                         onClick={() => props.onSelectSession(s.id)}
                       >
