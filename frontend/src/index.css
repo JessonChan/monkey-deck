@@ -57,14 +57,27 @@ input, textarea { font-family: inherit; }
 
 .app { display: flex; height: 100vh; background: var(--bg-window); }
 
+/* ─── 可拖拽分隔线(react-resizable-panels Separator)─── */
+.resize-handle {
+  width: 6px;
+  flex-basis: 6px;
+  background: var(--sep);
+  cursor: col-resize;
+  position: relative;
+  transition: background 0.15s;
+}
+.resize-handle:hover,
+.resize-handle[data-separator="active"] {
+  background: var(--accent-2);
+}
+
 /* ─── Sidebar(vibrancy) ─── */
 .sidebar {
-  width: 256px;
-  flex-shrink: 0;
+  width: 100%;
+  height: 100%;
   background: var(--sidebar);
   backdrop-filter: blur(40px) saturate(1.8);
   -webkit-backdrop-filter: blur(40px) saturate(1.8);
-  border-right: 1px solid var(--sep);
   display: flex;
   flex-direction: column;
 }
@@ -150,7 +163,7 @@ input, textarea { font-family: inherit; }
 .session-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ─── Main / Chat ─── */
-.main { flex: 1; min-width: 0; display: flex; background: var(--bg); }
+.main { width: 100%; height: 100%; min-width: 0; display: flex; background: var(--bg); }
 .chat-view { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
 .chat-header {
@@ -517,8 +530,8 @@ input, textarea { font-family: inherit; }
 
 /* ─── 右侧 Git 面板 ─── */
 .git-panel {
-  width: 240px; flex-shrink: 0;
-  background: var(--bg-panel); border-left: 1px solid var(--sep);
+  width: 100%; height: 100%;
+  background: var(--bg-panel);
   display: flex; flex-direction: column;
   padding: 14px 14px 16px; overflow-y: auto; gap: 14px;
 }

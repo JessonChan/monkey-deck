@@ -45,16 +45,14 @@
 
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
-- **当前焦点**:源码管理面板重建成 VSCode SCM 模型(提交信息框 + 提交 + 暂存/工作区两组 + 逐文件操作)
-- **最后更新**:2026-06-28(源码管理面板 SCM 化)
-- **可运行状态**:✅ 端到端可跑。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
-- **本次(2026-06-28)改动**(源码管理面板,参考 references/vscode SCM):
-  1. 后端 worktree:`FileChange` 加 `Staged` 字段;`StatusFiles` 改用 `gitRaw`(不 trim,修 porcelain 首行前导空格被吞的 latent bug)拆暂存/工作区两组;新增 `Stage/Unstage/Discard/Commit` 原语。
-  2. 后端 chat:加 `worktreeOf` + `SessionStage/SessionUnstage/SessionDiscard/SessionCommit` 绑定(SCM 操作不碰 opencode,只碰 store+worktree)。
-  3. 绑定 regen(wails3 alpha2.106 现生成 `.js` 而非 `.ts`;tsc 以 `noImplicitAny:false` 通过)。
-  4. 前端 `GitPanel.tsx` 重建成 VSCode SCM:提交信息 textarea + 提交按钮(计数/禁用/Cmd+Enter)+「暂存的更改」/「更改」两个折叠组 + 逐文件 stage/unstage/discard + 组级「全部暂存/全部取消暂存」+ 原合并按钮;去掉死的 `expanded` toggle 与 `commitCount`。
-  5. `App.tsx` 加 4 个 SCM callback(操作后刷新 SessionChanges)+ 接入 GitPanel。
-  6. 修一个实测坑:不依赖 `window.confirm`(WKWebView 不保证桥接 → discard 静默失效),discard 改显式点击 + destructive tooltip。
+- **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理面板 SCM 化 + 对话体验打磨(切会话不丢进行中输出、token 占比持久化与展示)
+- **最后更新**:2026-06-29(三栏可拖拽分隔线 — react-resizable-panels v4)
+- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、源码管理 SCM。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
+- **近期改动汇总**:
+  - **三栏可拖拽分隔线**(2026-06-29):react-resizable-panels v4(Group/Panel/Separator),尺寸持久化 localStorage。详见 §G。
+  - **源码管理面板 SCM 化**(2026-06-28):后端 worktree `FileChange.Staged` + `Stage/Unstage/Discard/Commit` 原语 + `StatusFiles` 拆暂存/工作区;chat 加 4 个 SCM 绑定;前端 GitPanel 重建成 VSCode SCM(提交框 + 暂存/工作区两组 + 逐文件操作);修 WKWebView confirm 静默失效(discard 改显式点击)。
+  - **代码审查 5 项修复**(2026-06-28):persistTurn 顺序、startTurn 写失败感知、KillAll 限定本应用 pgid、ChatView 贴底滚屏、Composer keyCode。详见 §G。
+  - 审查中判定非 bug / 不改:#3/#4/#6/#9/#10/#12/#13/#14/#17/#18/#19/#20;#7/#8 误报。
 
 ---
 
@@ -109,6 +107,7 @@
 - **2026-06-26** — Git 多提交、原子提交纪律。理由:用户要求,见 AGENTS.md §6.2。
 - **2026-06-26** — harness 懒启动(lazy spawn):CreateSession 只建 DB 记录,首条消息时才 spawn opencode。理由:opencode stdio ACP 空闲即断连(AGENTS.md §5.4 #9),懒启动避免 idle disconnect + 省资源。
 - **2026-06-28** — ACP 协议无 queue,「turn 中途发新消息」用 **cancel-then-reprompt**(`session/cancel` → 等 cancelled → 新 prompt),不造协议层 queue。理由:`session/prompt` 同步请求-响应,baseline 只保证 new/prompt/cancel/update,无排队语义(见 SDK schema + prompt-turn 文档)。排队缓冲做在前端(FIFO,turn 结束自动续发),打断走干净 `session/cancel`(InterruptAndSend 原子化)。见 AGENTS.md §5.4 #13。
+- **2026-06-29** — 三栏可拖拽分隔线用 `react-resizable-panels`(v4)而非手写。理由:§5.3 成熟库优先;v4 是重写版(Group/Panel/Separator,非旧 PanelGroup/PanelResizeHandle),尺寸用字符串百分比、`orientation`、`useDefaultLayout` 持久化。wesight 的 col-resize 是手写,仅作形态参考不照搬。
 
 ---
 
@@ -125,6 +124,15 @@
 
 ## G. 工作日志(追加,最新在上)
 
+### 2026-06-29(feat:三栏布局可拖拽分隔线 — react-resizable-panels v4)
+- **起因**:用户要求左中右三栏分隔线可拖拽改变区域大小(原固定 256px / flex:1 / 240px,纯静态 border 发丝线)。
+- **选型(§5.3 成熟库优先)**:`react-resizable-panels@4.12.0`(业界标准)。⚠️ **v4 是重写版,API 与 v2 完全不同**——用 `Group`/`Panel`/`Separator`(非 `PanelGroup`/`PanelResizeHandle`);尺寸用字符串百分比(`"18%"`,纯数字=像素);`orientation`(非 `direction`);持久化用 `useDefaultLayout` hook。wesight 的 col-resize 是手写,不照搬(库优先)。
+- **实现**:
+  1. `App.tsx`:外层 `<div class=app>` → `<Group orientation=horizontal>`;Sidebar/`<main>`/GitPanel 各包一层 `<Panel>`(id + min/max/defaultSize 百分比);栏间插 `<Separator class=resize-handle>`;git 栏条件渲染用 `<>...</>` Fragment(**Separator/Panel 必须是 Group 的直接 DOM 子元素**,Fragment 不产生 DOM 故可用);`useDefaultLayout({id:"monkey-deck-layout", onlySaveAfterUserInteractions:true})` 把拖拽位置存 localStorage,重开恢复(且只存用户主动拖拽,不被 git 栏出现/消失的自动重排污染)。
+  2. `index.css`:`.sidebar`/`.git-panel` 去固定 `width`+`flex-shrink:0`,改 `width/height:100%` 填满各自 Panel;去掉 `border-right`/`border-left`(Separator 接管分隔视觉);`.main` `flex:1`→`width/height:100%`(保留 `min-width:0`);新增 `.resize-handle`(6px 命中区、col-resize、hover + 拖拽态高亮 accent)。**v4 拖拽态属性 = `data-separator="active"`**(实证:grep 源码 `"data-separator": G`,G 取 active/inactive),非旧版 `data-resize-handle-state`。
+- **改了哪些文件**:`frontend/package.json`(+react-resizable-panels)、`frontend/src/App.tsx`、`frontend/src/index.css`、PROCESS.md(本节 + §B/§E)。
+- **验证**:`bunx tsc --noEmit` ✅;`bun run build:dev` ✅(315 modules transformed,含新库);DOM 约束(Separator/Panel 直接子元素)已对照 v4 d.ts 确认。
+- **下一步**:实机拖拽体验验证(`wails3 dev`);可选——左栏 collapsible + 折叠按钮。
 
 ### 2026-06-28(feat:源码管理面板 SCM 化 —— 参考 references/vscode,提交工作流 + 暂存/工作区两组)
 - **起因**:用户反馈「源码管理面板还是不对,想想 VSCode 怎么处理的」,并在 references/ 放入 vscode 源码。诊断旧 GitPanel 缺失 SCM 的核心:无提交信息框、无提交按钮(只有「合并进主仓库」且用 session 标题自动提交)、无暂存/工作区两组分离、无逐文件 stage/unstage/discard、`expanded` toggle 是死交互(无 diff)、`commitCount` 永远 0。对照 `references/vscode/src/vs/workbench/contrib/scm/browser/scmViewPane.ts` + `scmInput.ts`:SCM = 提交信息框(InputRenderer)+ 提交按钮(ActionButtonRenderer)+ Changes/Staged Changes 两组(ResourceGroupRenderer)+ 逐文件操作(ResourceRenderer)。
