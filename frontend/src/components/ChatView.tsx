@@ -7,7 +7,7 @@ import type { ChatItem, PermissionPrompt, StatusPayload, QueueItem } from "../ty
 import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
-import { X, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert } from "lucide-react";
+import { X, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight } from "lucide-react";
 
 interface Usage { used: number; size: number; cost: number; }
 
@@ -143,13 +143,29 @@ export default function ChatView(props: Props) {
             {props.loadingMore ? "加载中…" : "加载更多"}
           </button>
         )}
-        {items.map((item, i) => (
-          <Fragment key={item.id}>
-            {/* 回合分隔:每条用户消息(首条除外)前插一条带时间的分隔线,让多轮对话边界清晰。 */}
-            {item.type === "user" && i > 0 && <TurnDivider ts={item.ts} />}
-            <ChatRow item={item} />
-          </Fragment>
-        ))}
+        {items.map((item, i) => {
+          // 连续工具调用折叠:遇到 tool 时,若前一个也是 tool 则跳过(已被组首个处理);
+          // 组首个负责收集后续连续 tool,2 个以上渲染为 ToolGroup,单个仍用 ToolCard。
+          if (item.type === "tool") {
+            const prevIsTool = i > 0 && items[i - 1].type === "tool";
+            if (prevIsTool) return null;
+            const group = [item];
+            for (let j = i + 1; j < items.length; j++) {
+              const next = items[j];
+              if (next.type !== "tool") break;
+              group.push(next);
+            }
+            if (group.length >= 2) return <ToolGroup key={item.id} tools={group} />;
+            return <ToolCard key={item.id} item={item} />;
+          }
+          return (
+            <Fragment key={item.id}>
+              {/* 回合分隔:每条用户消息(首条除外)前插一条带时间的分隔线,让多轮对话边界清晰。 */}
+              {item.type === "user" && i > 0 && <TurnDivider ts={item.ts} />}
+              <ChatRow item={item} />
+            </Fragment>
+          );
+        })}
         {props.permission && <PermissionCard prompt={props.permission} onRespond={props.onRespondPermission} />}
         {props.status === "prompting" && items.length > 0 && (
           <div className="typing-indicator"><span /> <span /> <span /></div>
@@ -218,19 +234,44 @@ const ChatRow = memo(function ChatRow({ item }: { item: ChatItem }) {
     );
   }
   if (item.type === "thought") {
-    return (
-      <Collapsible
-        className="thought-block"
-        open={!!item.streaming}
-        summary={<><Brain size={13} /> {item.streaming ? "思考中…" : "思考过程"}</>}
-        summaryClassName="thought-summary"
-      >
-        <div className="thought-text">{item.text}</div>
-      </Collapsible>
-    );
+    return <ThoughtBlock item={item} />;
   }
   return <ToolCard item={item} />;
 });
+
+// ThoughtBlock:思考块默认折叠(含流式中),summary 显示转圈 spinner;用户展开后记住偏好,
+// 后续新思考块也默认展开;底部「收起」按钮方便长文本尾部直接收回(不用滚回顶部)。
+function ThoughtBlock({ item }: { item: Extract<ChatItem, { type: "thought" }> }) {
+  const [open, setOpen] = useState(() => localStorage.getItem("md:thought-open") === "true");
+  const everOpenedRef = useRef(open);
+  if (open) everOpenedRef.current = true;
+  const toggle = () => {
+    setOpen((prev) => {
+      const next = !prev;
+      localStorage.setItem("md:thought-open", String(next));
+      return next;
+    });
+  };
+  return (
+    <div className="thought-block">
+      <button className={`thought-summary ${open ? "open" : ""}`} onClick={toggle} type="button">
+        {item.streaming ? <span className="thought-spinner" /> : <Brain size={13} />}
+        <span className="thought-summary-label">{item.streaming ? "思考中" : "思考过程"}</span>
+        <ChevronRight size={13} className="thought-chevron" />
+      </button>
+      <div className={`collapse-body ${open ? "open" : ""}`}>
+        <div className="collapse-body-inner">
+          {everOpenedRef.current && (
+            <>
+              <div className="thought-text">{item.text}</div>
+              <button className="thought-collapse-btn" onClick={toggle}>收起</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function MessageActions({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -243,6 +284,28 @@ function MessageActions({ text }: { text: string }) {
         {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "已复制" : "复制"}
       </button>
     </div>
+  );
+}
+
+// 连续工具调用折叠组:2 个以上连续 tool 包进一个 Collapsible,summary 显示数量 + 执行状态。
+// 展开后内部各 tool 仍是独立 ToolCard(各自可再展开看 I/O)。
+function ToolGroup({ tools }: { tools: Extract<ChatItem, { type: "tool" }>[] }) {
+  const anyRunning = tools.some(t => t.status === "pending" || t.status === "in_progress");
+  return (
+    <Collapsible
+      className="tool-group"
+      open={false}
+      summaryClassName="tool-group-summary"
+      summary={<>
+        {anyRunning ? <span className="thought-spinner" /> : <Wrench size={13} />}
+        <span className="tool-group-count">{tools.length} 个工具调用</span>
+        <span className={`tool-group-status ${anyRunning ? "tg-running" : "tg-done"}`}>
+          {anyRunning ? "执行中…" : "已完成"}
+        </span>
+      </>}
+    >
+      {tools.map(t => <ToolCard key={t.id} item={t} />)}
+    </Collapsible>
   );
 }
 

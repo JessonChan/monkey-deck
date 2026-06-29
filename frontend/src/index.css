@@ -322,20 +322,51 @@ input, textarea { font-family: inherit; }
 .thought-block { max-width: 1080px; margin: 4px auto; padding: 0 28px; width: 100%; }
 .thought-summary {
   cursor: pointer; font-size: 12px; color: var(--text-3);
-  padding: 5px 0; user-select: none; display: flex; align-items: center; gap: 6px;
+  padding: 5px 12px; user-select: none; display: flex; align-items: center; gap: 7px;
+  background: var(--elev); border: 1px solid var(--sep); border-radius: var(--r-sm);
+  transition: background 0.12s, border-color 0.12s;
 }
+.thought-summary:hover { background: var(--elev-2); border-color: var(--sep-strong); }
+.thought-summary.open { border-radius: var(--r-sm) var(--r-sm) 0 0; border-bottom-color: transparent; }
+.thought-summary-label { flex: 1; }
 .thought-summary svg { color: var(--amber); }
+.thought-chevron { color: var(--text-3); transition: transform 0.2s ease; }
+.thought-summary.open .thought-chevron { transform: rotate(90deg); }
+.thought-spinner {
+  width: 13px; height: 13px; flex-shrink: 0;
+  border: 2px solid var(--sep-strong); border-top-color: var(--amber);
+  border-radius: 50%; animation: thought-spin 0.6s linear infinite; display: inline-block;
+}
+@keyframes thought-spin { to { transform: rotate(360deg); } }
+.thought-collapse-btn {
+  margin: 2px 0 7px; padding: 3px 12px; font-size: 11px; color: var(--text-3);
+  background: var(--elev); border: 1px solid var(--sep); border-radius: 10px; cursor: pointer;
+}
+.thought-collapse-btn:hover { background: var(--elev-hover); color: var(--text-2); }
 .thought-text {
   font-size: 12px; color: var(--text-3); font-family: var(--mono);
   white-space: pre-wrap; padding: 9px 13px;
   background: rgba(255, 214, 10, 0.04);
-  border-left: 2px solid rgba(255, 214, 10, 0.35);
-  border-radius: 0 var(--r-sm) var(--r-sm) 0;
-  margin: 4px 0 7px; line-height: 1.55; word-break: break-word;
+  border: 1px solid var(--sep); border-top: none;
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  margin: 0 0 7px; line-height: 1.55; word-break: break-word;
 }
 
 /* 工具卡 */
 .tool-card { max-width: 1080px; margin: 4px auto; padding: 0 28px; width: 100%; }
+.tool-group { max-width: 1080px; margin: 4px auto; padding: 0 28px; width: 100%; }
+.tool-group-summary {
+  cursor: pointer; display: flex; align-items: center; gap: 8px;
+  padding: 6px 11px; background: var(--elev);
+  border: 1px solid var(--sep); border-radius: var(--r-sm);
+  font-size: 12.5px; color: var(--text-3); user-select: none; transition: background 0.1s;
+}
+.tool-group-summary:hover { background: var(--elev-2); }
+.tool-group-count { font-weight: 500; color: var(--text-2); }
+.tool-group-status { font-size: 10.5px; padding: 2px 7px; border-radius: 20px; font-weight: 500; }
+.tg-running { color: var(--accent-2); background: rgba(10, 132, 255, 0.16); }
+.tg-done { color: var(--green); background: rgba(48, 209, 88, 0.12); }
+.tool-group .tool-card { max-width: none; margin: 0; padding: 0; }
 .tool-summary {
   cursor: pointer; display: flex; align-items: center; gap: 8px;
   padding: 7px 11px; background: var(--elev);
