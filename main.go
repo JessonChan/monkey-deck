@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"log"
 	"path/filepath"
@@ -8,9 +9,16 @@ import (
 	"github.com/jessonchan/monkey-deck/internal/chat"
 	"github.com/jessonchan/monkey-deck/internal/config"
 	"github.com/jessonchan/monkey-deck/internal/ui"
+	"github.com/jessonchan/monkey-deck/internal/update"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
+
+// currentVersion 是当前应用版本。发布构建时由 -ldflags 注入
+// (见 build/darwin/Taskfile.yml 的 VERSION,源自 `git describe --tags`)。
+// 默认 "dev" = 开发构建,会禁用后台自动检查(见 update.ShouldAutoCheck)。
+// 格式无前导 v,与 release tag 去掉 v 后一致(如 "0.1.0" ↔ tag "v0.1.0")。
+var currentVersion = "dev"
 
 //go:embed all:frontend/dist
 var assets embed.FS
@@ -35,6 +43,39 @@ func main() {
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
 	})
+
+	// 应用自更新(AGENTS.md §0.5 之外的桌面能力,与 ACP 无关):
+	// GitHub Releases 源 + 内置更新窗口 + 发布版后台静默检查。
+	// 配置失败不致命:仅禁用更新菜单与后台检查,应用照常运行。
+	updaterReady := false
+	if err := update.Init(app, currentVersion); err != nil {
+		log.Printf("update: init failed (updates disabled): %v", err)
+	} else {
+		updaterReady = true
+		update.StartBackgroundChecks(context.Background(), app, currentVersion)
+	}
+
+	// 应用菜单:基于默认菜单(保留编辑菜单 剪切/复制/粘贴 —— webview 文本输入必需),
+	// 在 App 子菜单里加「检查更新…」。非 macOS 平台若无 AppMenu 角色则跳过。
+	menu := application.DefaultApplicationMenu()
+	if updaterReady {
+		if item := menu.FindByRole(application.AppMenu); item != nil {
+			if sub := item.GetSubmenu(); sub != nil {
+				sub.AddSeparator()
+				sub.Add("检查更新…").OnClick(func(*application.Context) {
+					// CheckAndInstall 阻塞至流程结束,放 goroutine 不卡 UI 线程。
+					go func() {
+						if err := app.Updater.CheckAndInstall(context.Background()); err != nil {
+							if app.Logger != nil {
+								app.Logger.Error("update", "error", err)
+							}
+						}
+					}()
+				})
+			}
+		}
+	}
+	app.Menu.SetApplicationMenu(menu)
 
 	// 窗口状态记忆:记住上次的尺寸/位置/是否最大化(ui_state.json,AGENTS.md §0.5)。
 	statePath := filepath.Join(cfg.DataDir, "ui_state.json")

@@ -6,6 +6,11 @@ includes:
 vars:
   # Docker image for cross-compilation (used when building on non-macOS)
   CROSS_IMAGE: wails-cross
+  # VERSION 注入 main.currentVersion(应用自更新版本号,无前导 v)。
+  # 发布流程:先 `git tag v0.1.0`,再 build —— git describe 返回 "v0.1.0" → 去前导 v 得 "0.1.0"。
+  # 无 tag/非 git 仓库时回退 "dev"(开发构建,update.ShouldAutoCheck 据此禁用后台检查)。
+  VERSION:
+    sh: 'git describe --tags --always --dirty 2>/dev/null | sed "s/^v//" || echo dev'
 
 tasks:
   build:
@@ -43,7 +48,7 @@ tasks:
     cmds:
       - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.OUTPUT}}"'
     vars:
-      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s"{{end}}'
+      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s -X main.currentVersion={{.VERSION}}"{{end}}'
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
       OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
     env:

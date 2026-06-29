@@ -64,3 +64,31 @@ tasks:
     summary: Builds and runs the Docker image
     cmds:
       - task: common:run:docker
+
+
+  release:darwin:
+    summary: 构建+打包 macOS 应用,产出 GitHub Release 所需的 zip + SHA256SUMS
+    description: |
+      产出 bin/monkey-deck-darwin-<arch>.zip 与 bin/SHA256SUMS。
+      发布流程:① git tag v<版本>  ② task release:darwin  ③ 用输出里的 gh 命令发布。
+      资源名含 darwin/<arch>,命中更新器的默认 asset 匹配。
+    vars:
+      ARCH: '{{.ARCH | default ARCH}}'
+    cmds:
+      - task: darwin:package
+        vars:
+          ARCH: '{{.ARCH}}'
+      - cmd: |
+          set -e
+          cd "{{.BIN_DIR}}"
+          ZIP="{{.APP_NAME}}-darwin-{{.ARCH}}.zip"
+          rm -f "$ZIP" SHA256SUMS
+          # -y 保留 .app 内的符号链接(MacOS 可执行、Resources 等)
+          zip -r -y "$ZIP" "{{.APP_NAME}}.app"
+          shasum -a 256 "$ZIP" > SHA256SUMS
+          VER="$(git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev)"
+          echo "==== 已生成 release 资源(位于 {{.BIN_DIR}}/): $ZIP + SHA256SUMS ===="
+          ls -la "$ZIP" SHA256SUMS
+          echo "二进制内 currentVersion = $VER(应与下方 tag 一致)"
+          echo "发布(确保 tag 与上面的版本一致):"
+          echo "  gh release create \"v$VER\" {{.BIN_DIR}}/SHA256SUMS {{.BIN_DIR}}/$ZIP --title \"v$VER\" --generate-notes"
