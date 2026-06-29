@@ -45,10 +45,11 @@
 
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
-- **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理面板 SCM 化 + 会话标题修复已完成;继续对话体验打磨
+- **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理面板 SCM 化 + 会话标题修复已完成;源码管理逻辑审查 5 项修复完成;继续对话体验打磨
 - **最后更新**:2026-06-29
-- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、会话标题(opencode 经 session/list 权威标题 + 瞬时 fallback)、源码管理 SCM、三栏可拖拽分隔线。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
+- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、会话标题(opencode 经 session/list 权威标题 + 瞬时 fallback)、源码管理 SCM(提交/暂存/丢弃/单文件 diff/并发守卫)、三栏可拖拽分隔线。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
 - **近期改动汇总**:
+  - **源码管理逻辑审查 5 项修复**(2026-06-29):① merge 不再 AutoCommit(只合并已提交内容,SCM 面板成提交唯一真相)② StatusFiles 修重命名 `->`/空格引号 ③ 单文件 diff(FileDiff+点击展开)④ turn 进行中禁用 SCM 写操作(前后端 busy 守卫)。详见 §G。
   - **会话标题修复**(2026-06-29):经 session/list 取 opencode 权威标题(三层:本地 fallback + session/list 轮询 + session_info_update 预留)+ 能力守卫 `CanListSessions`(协议 MUST);撤销 LLM 自生成方案。详见 §G。
   - **三栏可拖拽分隔线**(2026-06-29):react-resizable-panels v4(Group/Panel/Separator),尺寸持久化 localStorage。详见 §G。
   - **源码管理面板 SCM 化**(2026-06-28):后端 worktree `FileChange.Staged` + `Stage/Unstage/Discard/Commit` 原语 + `StatusFiles` 拆暂存/工作区;chat 加 4 个 SCM 绑定;前端 GitPanel 重建成 VSCode SCM(提交框 + 暂存/工作区两组 + 逐文件操作);修 WKWebView confirm 静默失效(discard 改显式点击)。
@@ -125,6 +126,26 @@
 ---
 
 ## G. 工作日志(追加,最新在上)
+
+### 2026-06-29(fix:源码管理逻辑审查 5 项修复 —— merge 语义 / 路径解析 / diff 预览 / 并发守卫)
+- **起因**:对源码管理(worktree + GitPanel + chat SCM 绑定)做一轮逻辑审查,找到 5 处不合理:
+  - **A(设计冲突)**:`MergeSession` 用 `AutoCommit`(git add . + commit)在合并前一把抓所有改动,无视 SCM 面板里用户的精细暂存 —— 用户刻意没暂存的文件也被合并进主仓库,且 message 被覆盖成 session 标题。
+  - **B(bug)**:`StatusFiles` 不解析 porcelain 重命名 `R old -> new` 的 `->`,path 变成整串,后续 add/checkout 全失效。
+  - **C(bug)**:含空格/特殊字符路径被双引号包裹,`TrimSpace` 不去引号 → git 命令命中不了。
+  - **D(缺失)**:无 diff 预览,点击文件看不到改动。
+  - **E(竞争)**:turn 进行中 opencode 写文件时,用户可同时在面板 stage/commit/discard,git index 与 opencode 写入竞争。
+- **修法**:
+  1. **A**:`chat.go` `MergeSession` 删掉 `AutoCommit` 调用,改为只 `MergeBranch`(git merge 本就只合并 commit);若有未提交改动,结果里给出提示(计数 + 「请去源代码管理面板提交」)。删除 `worktree.AutoCommit`(成死代码,§5.3 Less is More)。SCM 面板成为提交的唯一真相来源。
+  2. **B+C**:`worktree.go` `StatusFiles` 解析 path 后:① 检测 ` -> ` 取重命名新名;② `strings.Trim(path, "\"")` 去外层引号。新增 `gitDiff`(diff 退出码 1=有差异属正常,不报错)。
+  3. **D**:新增 `worktree.FileDiff(path, staged)`(staged→`diff --cached`;未跟踪→`--no-index /dev/null` 展示纯新增)+ `chat.SessionFileDiff` 绑定;`GitPanel` 文件名改可点击按钮,点击展开 inline `<pre>` diff(同一时刻只展开一个,staged 决定上下文)。`App.tsx` 加 `fileDiff` callback。
+  4. **E**:`chat.go` 加 `isBusy`(读 `liveSession.busy`)+ `errSCMBusy`;`SessionStage/Unstage/Discard/Commit/MergeSession` 头部加 busy 守卫(读操作 `SessionChanges`/`SessionFileDiff` 不拦,可随时刷新)。前端 GitPanel 加 `busy` prop,turn 进行中禁用所有写按钮/提交框/合并 + 顶部「对话中」标记。
+- **改了哪些文件**:
+  - `internal/worktree/{worktree.go(删 AutoCommit;加 gitDiff/FileDiff;StatusFiles 路径解析), worktree_test.go(TestStatusRenameSpacesAndDiff 新增)}`
+  - `internal/chat/{chat.go(errors 导入;MergeSession 重写;SessionStage/Unstage/Discard/Commit 加 busy 守卫;SessionFileDiff 新增;isBusy+errSCMBusy 新增), scm_test.go(strings 导入;TestMergeSessionNoAutoCommit+TestSCMBusyGuard 新增)}`
+  - `frontend/src/{components/GitPanel.tsx(重写:onDiff/busy prop、文件名点击展开 diff、busy 禁用), App.tsx(fileDiff callback、GitPanel 传 onDiff/busy), index.css(.git-file-diff/.git-file-name-btn/.git-panel-busy 等)}`
+  - `frontend/bindings/*(regen,新增 SessionFileDiff)`
+- **验证**:`go test ./internal/...` 全过(含 `TestStatusRenameSpacesAndDiff` rename/空格/FileDiff 三场景、`TestMergeSessionNoAutoCommit` 已提交合并+未提交不合并+提示、`TestSCMBusyGuard` 5 写操作 busy 拒绝+读操作放行);`go vet ./internal/...` 干净;`go build ./...` 通过;前端 `bunx tsc --noEmit` + `bun run build:dev`(321 modules)通过。
+- **未提交**:改动跨多文件、属同一逻辑主题(源码管理审查),建议按 A/B+C/D/E 拆原子 commit 或作为一组「源码管理审查修复」提交。
 
 ### 2026-06-29(fix:会话标题取 opencode 权威标题(session/list)—— 能力守卫 + 撤销 LLM 自生成)
 - **背景**:上一版(2026-06-28)用「自己调 LLM 生成标题」修「标题一直是第一句话」。用户指出 opencode 每个 session 本就有标题,应直接取。复核发现上一版是「错路的正确实现」。
