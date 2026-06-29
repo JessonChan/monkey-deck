@@ -38,7 +38,7 @@ func TestIntegrationChatSession(t *testing.T) {
 
 	t.Logf("session created: %s, cwd=%s", cs.SessionID, tmp)
 
-	stopReason, err := cs.Prompt(ctx, "用一句话简短地打个招呼", 90*time.Second)
+	stopReason, err := cs.Prompt(ctx, "用一句话简短地打个招呼", nil, 90*time.Second)
 	if err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}

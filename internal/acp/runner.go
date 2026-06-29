@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,8 +27,17 @@ import (
 )
 
 // StopReason 透传 SDK 的 StopReason,供 internal/chat 等业务包引用
-//(§2.1:internal/acp 是 ACP 唯一封装层,业务包不直接 import SDK)。
+// (§2.1:internal/acp 是 ACP 唯一封装层,业务包不直接 import SDK)。
 type StopReason = acp.StopReason
+
+// Attachment 是随 prompt 发给 agent 的文件/目录引用(@提及)。
+// 经 ACP ContentBlock::ResourceLink 发送 —— baseline 能力,所有 agent 必须支持
+// (协议:agent MUST support ContentBlock::ResourceLink in prompts)。
+// Path 相对 session cwd 或绝对路径;Name 是显示名(空则取 Path 基名)。
+type Attachment struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+}
 
 // Runner 驱动单个 harness(opencode acp)。
 type Runner struct {
@@ -230,8 +240,10 @@ func (a *activityTracker) timedOut(timeout time.Duration) bool {
 // timeout 是「静默超时」(从最后一次活动算)——只要 opencode 还在输出就不超时(§3.3)。
 // 有 tool 处于 in_progress 时豁免静默超时(协议级「正在工作」信号,见 activityTracker),
 // 避免「长 tool 期间无 chunk」被误判为卡死。返回 StopReason 与可能的错误。
+// attachments(@提及的文件/目录)经 ACP ContentBlock::ResourceLink 发送(协议 baseline),
+// agent 可直接按 file:// URI 访问;文本本身也照常作为 TextBlock 发出。
 // 崩溃表现为含 "peer disconnected" 的错误(§5.4 #2)。
-func (cs *ChatSession) Prompt(ctx context.Context, message string, timeout time.Duration) (acp.StopReason, error) {
+func (cs *ChatSession) Prompt(ctx context.Context, message string, attachments []Attachment, timeout time.Duration) (acp.StopReason, error) {
 	act := newActivityTracker()
 	act.lastActivity.Store(time.Now().UnixNano())
 
@@ -273,12 +285,39 @@ func (cs *ChatSession) Prompt(ctx context.Context, message string, timeout time.
 
 	resp, err := cs.Conn.Prompt(promptCtx, acp.PromptRequest{
 		SessionId: cs.SessionID,
-		Prompt:    []acp.ContentBlock{acp.TextBlock(message)},
+		Prompt:    buildPromptBlocks(message, attachments, cs.WorkDir),
 	})
 	if err != nil {
 		return "", fmt.Errorf("prompt: %w", err)
 	}
 	return resp.StopReason, nil
+}
+
+// buildPromptBlocks 构造 session/prompt 的 ContentBlock 序列:
+// 首块是文本(用户输入),其后每个 attachment 一个 ResourceLink(file:// URI)。
+// ResourceLink 是协议 baseline(agent MUST support),无需探测 promptCapabilities。
+func buildPromptBlocks(message string, attachments []Attachment, workDir string) []acp.ContentBlock {
+	blocks := []acp.ContentBlock{acp.TextBlock(message)}
+	for _, a := range attachments {
+		name := a.Name
+		if name == "" {
+			name = filepath.Base(a.Path)
+		}
+		blocks = append(blocks, acp.ResourceLinkBlock(name, fileURI(workDir, a.Path)))
+	}
+	return blocks
+}
+
+// fileURI 把(可能相对 workDir 的)路径转成 file:// 绝对 URI,供 agent 按协议访问。
+func fileURI(workDir, path string) string {
+	p := filepath.FromSlash(path)
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(workDir, p)
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	return "file://" + p
 }
 
 // RespondPermission 透传给 handler(前端用户裁决权限请求,§3.4)。

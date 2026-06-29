@@ -183,3 +183,42 @@ func TestListMessagesBefore(t *testing.T) {
 		t.Fatalf("expected 0 messages before seq=1, got %d", len(empty))
 	}
 }
+
+// TestListUserMessages 校验:只取 role=user 的文本,按 seq 升序,无长度限制。
+func TestListUserMessages(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	p, err := s.CreateProject(ctx, "demo", "/tmp/um", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := s.CreateSession(ctx, p.ID, "", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 交替插 user / agent 消息。
+	s.AppendMessage(ctx, sess.ID, "user", "", "第一句", "")
+	s.AppendMessage(ctx, sess.ID, "agent", "agent_message_chunk", "回复1", "")
+	s.AppendMessage(ctx, sess.ID, "user", "", "第二句", "")
+	s.AppendMessage(ctx, sess.ID, "agent", "agent_message_chunk", "回复2", "")
+
+	got, err := s.ListUserMessages(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 user messages, got %d (%v)", len(got), got)
+	}
+	if got[0] != "第一句" || got[1] != "第二句" {
+		t.Fatalf("user messages order wrong: %v", got)
+	}
+
+	// 空 session / 不存在 session 返回空切片无错。
+	got2, err := s.ListUserMessages(ctx, "nope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got2) != 0 {
+		t.Fatalf("expected empty for nonexistent session, got %v", got2)
+	}
+}

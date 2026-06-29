@@ -59,6 +59,27 @@ func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]Message, 
 	return out, rows.Err()
 }
 
+// ListUserMessages 列出某 session 全部用户消息的文本内容(按 seq 升序,无长度限制)。
+// 供输入框「上下键翻历史」用:翻遍该 session 所有发过的消息。
+func (s *Store) ListUserMessages(ctx context.Context, sessionID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT content FROM messages WHERE session_id=? AND role='user' ORDER BY seq ASC`,
+		sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list user messages: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // ListMessagesBefore 游标分页:取 seq < beforeSeq 的最新 limit+1 条(beforeSeq<=0 取最新一页)。
 // 多取 1 条用于判断 hasMore;返回按 seq 升序(与 ListMessages 一致)。前端据此 slice + 判断。
 func (s *Store) ListMessagesBefore(ctx context.Context, sessionID string, beforeSeq int64, limit int) ([]Message, error) {

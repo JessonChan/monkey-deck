@@ -61,7 +61,7 @@ type toolAccum struct {
 // chatConn 是 *acp.ChatSession 的最小行为接口,供单测注入 mock(AGENTS.md §5.1:
 // ACP 行为靠接口注入 mock,单测不启真 harness)。*acp.ChatSession 满足此接口。
 type chatConn interface {
-	Prompt(ctx context.Context, message string, timeout time.Duration) (acp.StopReason, error)
+	Prompt(ctx context.Context, message string, attachments []acp.Attachment, timeout time.Duration) (acp.StopReason, error)
 	Close()
 	RespondPermission(id, optionID string) bool
 	// SessionTitle 经 ACP session/list 取 opencode 生成的权威标题(§5.4 #14)。
@@ -79,12 +79,12 @@ type liveSession struct {
 	chat chatConn
 	proj *store.Project
 
-	mu           sync.Mutex
-	agentBuf     strings.Builder // 累积当前段的 agent_message_chunk 文本
-	thought      strings.Builder // 累积当前段的 agent_thought_chunk 文本
-	tools        map[string]*toolAccum
-	seq          int64 // 单调序号,流式事件防乱序(§4.3)
-	segments     []segEntry  // 已完成的段(类型切换时 flush,持久化时逐段写库)
+	mu            sync.Mutex
+	agentBuf      strings.Builder // 累积当前段的 agent_message_chunk 文本
+	thought       strings.Builder // 累积当前段的 agent_thought_chunk 文本
+	tools         map[string]*toolAccum
+	seq           int64      // 单调序号,流式事件防乱序(§4.3)
+	segments      []segEntry // 已完成的段(类型切换时 flush,持久化时逐段写库)
 	lastChunkKind string     // 上一个 chunk 类型:"thought"/"agent"/"" — 检测段边界
 
 	// 单 turn 生命周期:ACP 协议无 queue,一个 session 同时只允许一个 Prompt
@@ -415,7 +415,7 @@ func (s *ChatService) MergeSession(sessionID string) (string, error) {
 }
 
 // mergeCommitMessage 组合并到主仓库时用的提交信息:优先用 opencode 生成的会话标题
-//(AI 对本次工作的总结,经 session/list 取得)作主题,标题为空时降级到分支名。
+// (AI 对本次工作的总结,经 session/list 取得)作主题,标题为空时降级到分支名。
 // 纯函数,便于单测。
 func mergeCommitMessage(branch, title string) string {
 	t := strings.TrimSpace(title)
@@ -441,7 +441,7 @@ func aiCommitPrompt() string {
 // 复用现有 turn 生命周期 / 权限 UI / 流式渲染,提交作为一轮对话显示在聊天里(可审计)。
 // 仅 idle 可用(busy 由 SendMessage 守卫);无改动时 agent 会自行说明。
 func (s *ChatService) SessionAICommit(sessionID string) error {
-	return s.SendMessage(sessionID, aiCommitPrompt())
+	return s.SendMessage(sessionID, aiCommitPrompt(), nil)
 }
 
 // SessionDiff 返回该 session 分支相对主仓库的变更摘要(diff --stat + commit log)。
@@ -772,12 +772,18 @@ func (s *ChatService) LoadMessagesPage(sessionID string, beforeSeq int64, limit 
 	return s.st.ListMessagesBefore(s.ctx, sessionID, beforeSeq, limit)
 }
 
+// ListUserMessages 取某 session 全部用户消息文本(按时间升序,无长度限制)。
+// 供输入框「上下键翻历史」:翻遍该 session 所有发过的消息。
+func (s *ChatService) ListUserMessages(sessionID string) ([]string, error) {
+	return s.st.ListUserMessages(s.ctx, sessionID)
+}
+
 // --- Messaging ---
 
 // SendMessage 发送用户消息并驱动 opencode 回复(Prompt,§1.3)。
 // 仅在 idle 时可用:协议规定一个 session 同时只允许一个 Prompt(§5.4 调研结论)。
 // turn 进行中时前端应把消息入前端队列(不调本方法);busy 守卫兜底防竞态。
-func (s *ChatService) SendMessage(sessionID, text string) error {
+func (s *ChatService) SendMessage(sessionID, text string, attachments []acp.Attachment) error {
 	if err := s.ensureLive(sessionID); err != nil {
 		return err
 	}
@@ -792,7 +798,7 @@ func (s *ChatService) SendMessage(sessionID, text string) error {
 	if ls.busy {
 		return fmt.Errorf("session busy: 一轮对话进行中,请等待或打断")
 	}
-	if err := s.startTurn(ls, sessionID, text); err != nil {
+	if err := s.startTurn(ls, sessionID, text, attachments); err != nil {
 		return err
 	}
 	return nil
@@ -801,7 +807,7 @@ func (s *ChatService) SendMessage(sessionID, text string) error {
 // startTurn 同步置 busy + 起后台 runPrompt。调用方须持 ls.sendMu —— 保证 busy 置位与
 // runPrompt 启动原子,杜绝两轮 Prompt 重叠。负责:resetBuffers → 持久化用户消息 →
 // 推 user 事件 → 推 prompting。
-func (s *ChatService) startTurn(ls *liveSession, sessionID, text string) error {
+func (s *ChatService) startTurn(ls *liveSession, sessionID, text string, attachments []acp.Attachment) error {
 	ls.resetBuffers()
 	ls.mu.Lock()
 	ls.busy = true
@@ -820,7 +826,7 @@ func (s *ChatService) startTurn(ls *liveSession, sessionID, text string) error {
 	s.maybeAutoTitle(sessionID, text)
 	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "user_message_chunk", Text: text})
 	s.emitStatus(sessionID, "prompting", "")
-	go s.runPrompt(ls, sessionID, text)
+	go s.runPrompt(ls, sessionID, text, attachments)
 	return nil
 }
 
@@ -831,8 +837,9 @@ func (s *ChatService) startTurn(ls *liveSession, sessionID, text string) error {
 //   - turnCancel:干净 session/cancel(SDK 自动发,非杀进程,连接保持可用)
 //   - <-turnDone:等本轮落定(persist 仍执行,partial 回复不丢)
 //   - startTurn:发新消息(发 prompting)
+//
 // 当前空闲时等价于 SendMessage。其余排队消息由前端持有,本方法不动(用户选「保留其余」)。
-func (s *ChatService) InterruptAndSend(sessionID, text string) error {
+func (s *ChatService) InterruptAndSend(sessionID, text string, attachments []acp.Attachment) error {
 	if err := s.ensureLive(sessionID); err != nil {
 		return err
 	}
@@ -857,12 +864,12 @@ func (s *ChatService) InterruptAndSend(sessionID, text string) error {
 			<-done
 		}
 	}
-	return s.startTurn(ls, sessionID, text)
+	return s.startTurn(ls, sessionID, text, attachments)
 }
 
 // SendAndWaitSync 同步发送并等待回复(供驱动/测试用;GUI 用异步 SendMessage)。
 // 返回 agent 文本与错误。失败(peer disconnected)时由调用方重试(下次 ensureLive 会 LoadSession 重连)。
-func (s *ChatService) SendAndWaitSync(sessionID, text string) (string, error) {
+func (s *ChatService) SendAndWaitSync(sessionID, text string, attachments []acp.Attachment) (string, error) {
 	if err := s.ensureLive(sessionID); err != nil {
 		return "", err
 	}
@@ -881,7 +888,7 @@ func (s *ChatService) SendAndWaitSync(sessionID, text string) (string, error) {
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
-	stopReason, err := ls.chat.Prompt(ctx, text, 300*time.Second)
+	stopReason, err := ls.chat.Prompt(ctx, text, attachments, 300*time.Second)
 	ls.mu.Lock()
 	if ls.thought.Len() > 0 {
 		ls.segments = append(ls.segments, segEntry{"thought", ls.thought.String()})
@@ -926,7 +933,7 @@ func (s *ChatService) SendAndWaitSync(sessionID, text string) (string, error) {
 // 与 peer disconnected(harness 崩,拆连接重连)及其它错误(idle 超时等,推 error)区分。
 // suppressIdle(InterruptAndSend 置位)时本轮不发任何 status:打断后由新轮发 prompting,
 // 避免前端看到瞬态 idle 触发 auto-continue 误续发。
-func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string) {
+func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachments []acp.Attachment) {
 	turnCtx, turnCancel := context.WithCancel(s.ctx)
 	done := make(chan struct{})
 	ls.mu.Lock()
@@ -938,7 +945,7 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string) {
 		close(done)
 	}()
 
-	stopReason, err := ls.chat.Prompt(turnCtx, text, 300*time.Second)
+	stopReason, err := ls.chat.Prompt(turnCtx, text, attachments, 300*time.Second)
 
 	ls.mu.Lock()
 	// flush 当前段残留到 segments(thought / agent 分别 flush,顺序保持时序)。

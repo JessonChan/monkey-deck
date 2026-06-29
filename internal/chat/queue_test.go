@@ -38,7 +38,7 @@ func newFakeChat() *fakeChat {
 	}
 }
 
-func (f *fakeChat) Prompt(ctx context.Context, msg string, _ time.Duration) (acp.StopReason, error) {
+func (f *fakeChat) Prompt(ctx context.Context, msg string, _ []acp.Attachment, _ time.Duration) (acp.StopReason, error) {
 	f.mu.Lock()
 	f.prompts = append(f.prompts, msg)
 	f.mu.Unlock()
@@ -57,8 +57,8 @@ func (f *fakeChat) Prompt(ctx context.Context, msg string, _ time.Duration) (acp
 	}
 }
 
-func (f *fakeChat) Close() {}
-func (f *fakeChat) RespondPermission(_, _ string) bool { return true }
+func (f *fakeChat) Close()                                         {}
+func (f *fakeChat) RespondPermission(_, _ string) bool             { return true }
 func (f *fakeChat) SessionTitle(_ context.Context) (string, error) { return f.title, nil }
 
 // release 放行所有阻塞的 Prompt(幂等),供 t.Cleanup 防止 goroutine 泄漏。
@@ -142,12 +142,12 @@ func waitCancelled(t *testing.T, fc *fakeChat, n int) {
 func TestBusyGuardRejectsConcurrentSend(t *testing.T) {
 	svc, sid, fc := newTestService(t)
 
-	if err := svc.SendMessage(sid, "msg1"); err != nil {
+	if err := svc.SendMessage(sid, "msg1", nil); err != nil {
 		t.Fatalf("first send: %v", err)
 	}
 	waitStarted(t, fc, 1) // msg1 的 Prompt 已进入(阻塞中),busy 已置位
 
-	err := svc.SendMessage(sid, "msg2")
+	err := svc.SendMessage(sid, "msg2", nil)
 	if err == nil {
 		t.Fatal("second SendMessage should be rejected while busy")
 	}
@@ -166,13 +166,13 @@ func TestBusyGuardRejectsConcurrentSend(t *testing.T) {
 func TestInterruptAndSendCancelsAndResends(t *testing.T) {
 	svc, sid, fc := newTestService(t)
 
-	if err := svc.SendMessage(sid, "msg1"); err != nil {
+	if err := svc.SendMessage(sid, "msg1", nil); err != nil {
 		t.Fatalf("first send: %v", err)
 	}
 	waitStarted(t, fc, 1)
 
 	// 打断 msg1,立即发 msg2。
-	if err := svc.InterruptAndSend(sid, "msg2"); err != nil {
+	if err := svc.InterruptAndSend(sid, "msg2", nil); err != nil {
 		t.Fatalf("interrupt: %v", err)
 	}
 	waitStarted(t, fc, 2) // msg2 的 Prompt 已进入
@@ -193,7 +193,7 @@ func TestInterruptAndSendCancelsAndResends(t *testing.T) {
 func TestInterruptAndSendWhenIdle(t *testing.T) {
 	svc, sid, fc := newTestService(t)
 
-	if err := svc.InterruptAndSend(sid, "solo"); err != nil {
+	if err := svc.InterruptAndSend(sid, "solo", nil); err != nil {
 		t.Fatalf("interrupt when idle: %v", err)
 	}
 	waitStarted(t, fc, 1)
@@ -210,7 +210,7 @@ func TestInterruptAndSendWhenIdle(t *testing.T) {
 func TestStopSessionCancelsCleanly(t *testing.T) {
 	svc, sid, fc := newTestService(t)
 
-	if err := svc.SendMessage(sid, "msg1"); err != nil {
+	if err := svc.SendMessage(sid, "msg1", nil); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	waitStarted(t, fc, 1)
