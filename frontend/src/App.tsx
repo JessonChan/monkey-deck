@@ -7,6 +7,7 @@ import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import { Sparkles } from "lucide-react";
 import GitPanel from "./components/GitPanel";
+import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import type { FileChange } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 
 // 按 session 隔离的状态:切走再切回时,进行中的流式输出 / 用量 / 状态 / 权限都保留在各自缓存里,
@@ -433,61 +434,83 @@ export default function App() {
     [sessions, selectedSessionId]
   );
 
+  // 三栏布局尺寸持久化:用户拖拽过的分隔位置存 localStorage,重开恢复。
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: "monkey-deck-layout",
+    onlySaveAfterUserInteractions: true,
+  });
+
 
 
   return (
-    <div className="app">
-      <Sidebar
-        projects={projects}
-        selectedProjectId={selectedProjectId}
-        sessions={sessions}
-        selectedSessionId={selectedSessionId}
-        onSelectProject={selectProject}
-        onSelectSession={openSession}
-        onCreateSession={createSession}
-        onAddProject={addProject}
-        onAddProjectByPath={addProjectByPath}
-        onRemoveProject={removeProject}
-      />
-      <main className="main">
-        {selectedSessionId ? (
-          <ChatView
-            project={selectedProject}
-            session={sessions.find((s) => s.id === selectedSessionId) || null}
-            items={items}
-            status={status}
-            statusDetail={statusDetail}
-            usage={usage}
-            error={error}
-            permission={permission}
-            onSend={sendMessage}
-            onStop={stopSession}
-            onAction={handleComposerAction}
-            onRespondPermission={respondPermission}
-            onCloseSession={closeSession}
-            onMerge={mergeSession}
-            mergeResult={mergeResult}
-            sessionDiff={sessionDiff}
-            queue={queue}
-            onInterruptQueue={interruptQueue}
-            onRevokeQueue={revokeQueue}
-            composerValue={composerValue}
-            onComposerChange={setComposerValue}
-          />
-        ) : (
-          <EmptyState />
-        )}
-      </main>
-      {activeSession?.branch && (
-        <GitPanel
-          branch={activeSession.branch}
-          changes={sessionChanges}
-          commitCount={0}
-          mergeResult={mergeResult}
-          onMerge={mergeSession}
+    <Group
+      orientation="horizontal"
+      className="app"
+      id="monkey-deck-layout"
+      defaultLayout={defaultLayout}
+      onLayoutChanged={onLayoutChanged}
+    >
+      <Panel id="sidebar" defaultSize="18%" minSize="12%" maxSize="30%">
+        <Sidebar
+          projects={projects}
+          selectedProjectId={selectedProjectId}
+          sessions={sessions}
+          selectedSessionId={selectedSessionId}
+          onSelectProject={selectProject}
+          onSelectSession={openSession}
+          onCreateSession={createSession}
+          onAddProject={addProject}
+          onAddProjectByPath={addProjectByPath}
+          onRemoveProject={removeProject}
         />
+      </Panel>
+      <Separator className="resize-handle" />
+      <Panel id="main" minSize="30%">
+        <main className="main">
+          {selectedSessionId ? (
+            <ChatView
+              project={selectedProject}
+              session={sessions.find((s) => s.id === selectedSessionId) || null}
+              items={items}
+              status={status}
+              statusDetail={statusDetail}
+              usage={usage}
+              error={error}
+              permission={permission}
+              onSend={sendMessage}
+              onStop={stopSession}
+              onAction={handleComposerAction}
+              onRespondPermission={respondPermission}
+              onCloseSession={closeSession}
+              onMerge={mergeSession}
+              mergeResult={mergeResult}
+              sessionDiff={sessionDiff}
+              queue={queue}
+              onInterruptQueue={interruptQueue}
+              onRevokeQueue={revokeQueue}
+              composerValue={composerValue}
+              onComposerChange={setComposerValue}
+            />
+          ) : (
+            <EmptyState />
+          )}
+        </main>
+      </Panel>
+      {activeSession?.branch && (
+        <>
+          <Separator className="resize-handle" />
+          <Panel id="git" defaultSize="18%" minSize="13%" maxSize="32%">
+            <GitPanel
+              branch={activeSession.branch}
+              changes={sessionChanges}
+              commitCount={0}
+              mergeResult={mergeResult}
+              onMerge={mergeSession}
+            />
+          </Panel>
+        </>
       )}
-    </div>
+    </Group>
   );
 }
 
