@@ -76,15 +76,14 @@ export default function ChatView(props: Props) {
   const hasUsage = props.usage.used > 0 || props.usage.size > 0 || props.usage.cost > 0;
   const s = STATUS_MAP[props.status] || { label: props.status, cls: "" };
 
-  const onTitleMouseDown = (e: React.MouseEvent) => {
-    if (e.detail !== 2) return;
+  const onTitleDoubleClick = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("button, input, a")) return;
     void ChatService.ToggleMaximise();
   };
 
   return (
     <div className="chat-view">
-      <header className="chat-header" onMouseDown={onTitleMouseDown}>
+      <header className="chat-header" onDoubleClick={onTitleDoubleClick}>
         <div className="chat-header-info">
           <span className="chat-project" title={props.project?.path || ""}>{props.project?.name || ""}</span>
           <span className="chat-sep">/</span>

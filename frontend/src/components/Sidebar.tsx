@@ -46,15 +46,14 @@ export default function Sidebar(props: Props) {
     if (p) props.onAddProjectByPath(p);
   };
 
-  const onTitleMouseDown = (e: React.MouseEvent) => {
-    if (e.detail !== 2) return;
+  const onTitleDoubleClick = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("button, input, a")) return;
     void ChatService.ToggleMaximise();
   };
 
   return (
     <aside className="sidebar" data-testid="sidebar">
-      <div className="sidebar-header" onMouseDown={onTitleMouseDown}>
+      <div className="sidebar-header" onDoubleClick={onTitleDoubleClick}>
         <span className="sidebar-title">Monkey Deck</span>
         <button className="icon-btn" data-testid="add-project" onClick={startAdd} title="添加项目目录">
           <Plus size={17} />
