@@ -45,16 +45,16 @@
 
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
-- **当前焦点**:对话体验打磨(切会话不丢进行中输出、token 占比持久化与展示、历史可读性)
-- **最后更新**:2026-06-28(代码审查修复轮)
-- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计。`go test ./internal/...` 通过、前端 `tsc` 通过。
-- **本次(2026-06-28)改动**(代码审查 5 项确认修复):
-  1. `#2` persistTurn 写库顺序改 thought→agent→tools,历史恢复 tool 卡片不再出现在 agent 回复之前(与实时流式一致)。
-  2. `#1` startTurn 持久化用户消息失败时回滚 busy + 推 error + 返回错(SendMessage/InterruptAndSend 传播),杜绝「UI 有消息但 DB 没有」。
-  3. `#21` KillAllOpencode 误杀用户终端 opencode —— 引入 pgidFile(dataDir/opencode-pgids.json)持久化本应用 spawn 过的 pgid,启动时只杀命中文件者;`SetPgidFile` 在 ServiceStartup 配置。
-  4. `#15` ChatView 自动滚底加「贴底检测」(stickToBottomRef + onScroll,80px 余量),用户向上翻阅历史时不被新消息拽回底部。
-  5. `#16` Composer 移除已废弃的 keyCode===229 检查,isComposing 已覆盖 IME。
-- **审查中判定为非 bug / 不改**(附理由见会话):#3/#4/#6/#9/#10/#12/#13/#14/#17/#18/#19/#20。#7/#8 经核实为误报(pending map 超时与 ctx 取消两分支均 delete;Prompt goroutine 由 defer cancel() 必然退出)。
+- **当前焦点**:源码管理面板重建成 VSCode SCM 模型(提交信息框 + 提交 + 暂存/工作区两组 + 逐文件操作)
+- **最后更新**:2026-06-28(源码管理面板 SCM 化)
+- **可运行状态**:✅ 端到端可跑。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
+- **本次(2026-06-28)改动**(源码管理面板,参考 references/vscode SCM):
+  1. 后端 worktree:`FileChange` 加 `Staged` 字段;`StatusFiles` 改用 `gitRaw`(不 trim,修 porcelain 首行前导空格被吞的 latent bug)拆暂存/工作区两组;新增 `Stage/Unstage/Discard/Commit` 原语。
+  2. 后端 chat:加 `worktreeOf` + `SessionStage/SessionUnstage/SessionDiscard/SessionCommit` 绑定(SCM 操作不碰 opencode,只碰 store+worktree)。
+  3. 绑定 regen(wails3 alpha2.106 现生成 `.js` 而非 `.ts`;tsc 以 `noImplicitAny:false` 通过)。
+  4. 前端 `GitPanel.tsx` 重建成 VSCode SCM:提交信息 textarea + 提交按钮(计数/禁用/Cmd+Enter)+「暂存的更改」/「更改」两个折叠组 + 逐文件 stage/unstage/discard + 组级「全部暂存/全部取消暂存」+ 原合并按钮;去掉死的 `expanded` toggle 与 `commitCount`。
+  5. `App.tsx` 加 4 个 SCM callback(操作后刷新 SessionChanges)+ 接入 GitPanel。
+  6. 修一个实测坑:不依赖 `window.confirm`(WKWebView 不保证桥接 → discard 静默失效),discard 改显式点击 + destructive tooltip。
 
 ---
 
@@ -125,6 +125,21 @@
 
 ## G. 工作日志(追加,最新在上)
 
+
+### 2026-06-28(feat:源码管理面板 SCM 化 —— 参考 references/vscode,提交工作流 + 暂存/工作区两组)
+- **起因**:用户反馈「源码管理面板还是不对,想想 VSCode 怎么处理的」,并在 references/ 放入 vscode 源码。诊断旧 GitPanel 缺失 SCM 的核心:无提交信息框、无提交按钮(只有「合并进主仓库」且用 session 标题自动提交)、无暂存/工作区两组分离、无逐文件 stage/unstage/discard、`expanded` toggle 是死交互(无 diff)、`commitCount` 永远 0。对照 `references/vscode/src/vs/workbench/contrib/scm/browser/scmViewPane.ts` + `scmInput.ts`:SCM = 提交信息框(InputRenderer)+ 提交按钮(ActionButtonRenderer)+ Changes/Staged Changes 两组(ResourceGroupRenderer)+ 逐文件操作(ResourceRenderer)。
+- **后端 `internal/worktree/worktree.go`**:
+  - `FileChange` 加 `Staged bool` 字段(一个文件可能同时进两组,如 MM)。
+  - **修一个 latent bug**:新增 `gitRaw`(不 TrimSpace)。`git()` 对整体输出 TrimSpace 会吞掉 porcelain **首行**前导空格(` M a.txt`→`M a.txt`),导致 XY 列错位(首文件被误判 staged + path 被切掉首字母)。旧代码用 `TrimSpace(line[:2])` 掩盖了无法区分暂存/工作区;拆分版暴露后用 `gitRaw` 修。
+  - `StatusFiles` 重写:解析 XY 两列,X→暂存组、Y→工作区组,MM 等双态产出两条。
+  - 新增 `Stage`(add -A / add -- paths)、`Unstage`(restore --staged)、`Discard`(已跟踪 checkout / 未跟踪 clean,用 ls-files 区分)、`Commit`(commit index,区别于 AutoCommit 的 add-all)。
+- **后端 `internal/chat/chat.go`**:加 `worktreeOf(sessionID)` helper + `SessionStage/SessionUnstage/SessionDiscard/SessionCommit` 绑定。SCM 操作只碰 store+worktree,不碰 ACP/opencode,故单测无需启 harness。
+- **绑定 regen**:`make bindings`(wails3 alpha2.106)。CLI 现生成 `.js`(JSDoc + class)而非旧 `.ts`;tsconfig 无 allowJs 但 `noImplicitAny:false`,tsc 通过、运行时字段正确。
+- **前端 `GitPanel.tsx`** 重写成 VSCode SCM:提交信息 textarea(Cmd/Ctrl+Enter 提交)+ 提交按钮(显示暂存计数、无暂存或空消息禁用)+「暂存的更改」/「更改」两个可折叠组 + 逐文件 stage/unstage/discard + 组级「全部暂存」「全部取消暂存」+ 原合并按钮。去掉死的 expanded toggle 与 commitCount prop。
+- **前端 `App.tsx`**:加 `stageFiles/unstageFiles/discardFiles/commitSession` 4 callback(每次操作后 `SessionChanges` 刷新;commit 失败 rethrow 让面板保留信息+内联报错),接入 GitPanel。
+- **实测坑**:`window.confirm` 在 WKWebView 不保证桥接(不桥接则 no-op 返回 false → discard 永不执行,静默坏)。去掉 confirm,discard 改显式点击 + tooltip「丢弃改动 · 不可撤销」。
+- **改了哪些文件**:`internal/worktree/{worktree.go, worktree_test.go}`、`internal/chat/{chat.go, scm_test.go(新)}`、`frontend/src/{App.tsx, components/GitPanel.tsx, index.css}`、`frontend/bindings/*(regen)`、`PROCESS.md`(本节+§B)。
+- **验证**:`go test ./internal/worktree/ ./internal/chat/` 通过(含 `TestStageUnstageCommitDiscard` + `TestSCMBindings` + `TestSCMNoWorktree`,真实 git worktree,不启 opencode);`go build .`、`go vet ./internal/...`、`go test ./internal/...`(4 packages ok);前端 `tsc --noEmit` + `vite build` 通过。
 ### 2026-06-28(fix:代码审查 5 项确认修复 —— 持久化顺序 / 写失败感知 / KillAll 误杀 / 滚底打扰 / keyCode)
 - **起因**:对 chat/acp/前端做一轮代码审查,列 21 条疑似问题。逐条核实代码事实后,**确认 5 条真 bug、2 条误报、其余非 bug/过度优化/阶段外**。
 - **确认修复**:
