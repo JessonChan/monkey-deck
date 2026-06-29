@@ -21,7 +21,7 @@ const PAGE_SIZE = 30;
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessionsByProject, setSessionsByProject] = useState<Record<string, Session[]>>({});
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   const [itemsBySession, setItemsBySession] = useState<Record<string, ChatItem[]>>({});
@@ -40,6 +40,9 @@ export default function App() {
   const queueBySessionRef = useRef<Record<string, QueueItem[]>>({});
   const userStoppedRef = useRef(false);                    // 用户主动停止:抑制该次 idle 的 auto-continue
 
+  // 选中项目的 sessions(派生);sessionsByProject 是全量按项目分组,供侧栏多项目同时展开。
+  const sessions = (selectedProjectId ? sessionsByProject[selectedProjectId] : undefined) ?? [];
+
   // 标记哪些 session 已从 DB 加载进缓存;有缓存(含进行中的流式)就不再重读 DB,避免切回丢内容。
   const loadedSessionsRef = useRef<Set<string>>(new Set());
   // 选中 session 的 ref:仅用于 status 事件的「错误只弹当前查看会话」过滤,不进 effect 依赖(避免每次切换都重订阅)。
@@ -53,7 +56,7 @@ export default function App() {
 
   const refreshSessions = useCallback(async (projectId: string) => {
     const list = await ChatService.ListSessions(projectId);
-    setSessions(list || []);
+    setSessionsByProject((prev) => ({ ...prev, [projectId]: list || [] }));
   }, []);
 
   // 把一条 SessionEvent 合并进指定 session 的 items(纯函数,防乱序)。
@@ -186,7 +189,14 @@ export default function App() {
     const offMeta = Events.On("chat:session-meta", (e: { data: { sessionId: string; title: string } }) => {
       const m = e.data;
       if (!m || !m.title) return;
-      setSessions((prev) => prev.map((s) => (s.id === m.sessionId ? { ...s, title: m.title } : s)));
+      setSessionsByProject((prev) => {
+        const next = { ...prev };
+        for (const pid of Object.keys(next)) {
+          const idx = next[pid].findIndex((s) => s.id === m.sessionId);
+          if (idx >= 0) { const arr = [...next[pid]]; arr[idx] = { ...arr[idx], title: m.title }; next[pid] = arr; }
+        }
+        return next;
+      });
     });
     return () => {
       offUpdate();
@@ -195,6 +205,13 @@ export default function App() {
       offMeta();
     };
   }, [refreshProjects, applyEvent]);
+
+  // 多项目同时展开:项目列表就绪后,把每个项目的 sessions 都加载进 map(本地 SQLite,快)。
+  useEffect(() => {
+    for (const p of projects) {
+      if (!(p.id in sessionsByProject)) void refreshSessions(p.id);
+    }
+  }, [projects, sessionsByProject, refreshSessions]);
 
   // auto-continue:status 转 idle 时,若非用户主动停止且队列非空,自动发下一条(FIFO)。
   // 每条排队消息 = 一个独立 turn,按序逐个发(协议无 queue,一次只一个 Prompt)。
@@ -258,10 +275,12 @@ export default function App() {
     [refreshSessions]
   );
 
-  // 打开 session:OpenSession + 加载历史。
+  // 打开 session:OpenSession + 加载历史。projectId 用于多展开时点开他项目会话一并切到该项目。
   // 关键:有缓存(含进行中的流式)就保留缓存,仅首次打开才从 DB 读 —— 否则切回会丢正在输出的内容。
   const openSession = useCallback(
-    async (sessionId: string) => {
+    async (sessionId: string, projectId?: string) => {
+      const pid = projectId ?? selectedProjectId;
+      if (projectId && projectId !== selectedProjectId) setSelectedProjectId(projectId);
       setSelectedSessionId(sessionId);
       setUnreadBySession((prev) => { if (!prev[sessionId]) return prev; const n = { ...prev }; delete n[sessionId]; return n; });
       setPermissionBySession((prev) => ({ ...prev, [sessionId]: null }));
@@ -270,9 +289,9 @@ export default function App() {
       setError(null);
       await ChatService.OpenSession(sessionId);
       // 从持久化的 session 用量恢复 token 占比(无 live 记录时),使重开会话不归零(§1.6)。
+      const se = (pid ? sessionsByProject[pid] : undefined)?.find((x) => x.id === sessionId);
       setUsageBySession((prev) => {
         if (prev[sessionId]) return prev;
-        const se = sessions.find((x) => x.id === sessionId);
         return { ...prev, [sessionId]: { used: se?.usedTokens ?? 0, size: se?.sizeTokens ?? 0, cost: se?.cost ?? 0 } };
       });
       if (!loadedSessionsRef.current.has(sessionId)) {
@@ -294,7 +313,7 @@ export default function App() {
         setSessionChanges(await ChatService.SessionChanges(sessionId));
       } catch { setSessionChanges(null); }
     },
-    [messagesToItems, sessions]
+    [messagesToItems, selectedProjectId, sessionsByProject]
   );
 
   // 加载更早的历史(分页翻页):取游标 seq 之前的 PAGE_SIZE 条,prepend 到现有 items 前面。
@@ -509,10 +528,10 @@ export default function App() {
   const removeProject = useCallback(
     async (projectId: string) => {
       await ChatService.RemoveProject(projectId);
+      setSessionsByProject((prev) => { if (!(projectId in prev)) return prev; const n = { ...prev }; delete n[projectId]; return n; });
       if (selectedProjectId === projectId) {
         setSelectedProjectId(null);
         setSelectedSessionId(null);
-        setSessions([]);
       }
       await refreshProjects();
     },
@@ -549,7 +568,7 @@ export default function App() {
         <Sidebar
           projects={projects}
           selectedProjectId={selectedProjectId}
-          sessions={sessions}
+          sessionsByProject={sessionsByProject}
           selectedSessionId={selectedSessionId}
           onSelectProject={selectProject}
           onSelectSession={openSession}

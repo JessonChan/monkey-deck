@@ -6,10 +6,10 @@ import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2 } from "lucide-reac
 interface Props {
   projects: Project[];
   selectedProjectId: string | null;
-  sessions: Session[];
+  sessionsByProject: Record<string, Session[]>;
   selectedSessionId: string | null;
   onSelectProject: (id: string) => void;
-  onSelectSession: (id: string) => void;
+  onSelectSession: (sessionId: string, projectId: string) => void;
   onCreateSession: (projectId: string) => void;
   onAddProject: () => void;
   onAddProjectByPath: (path: string) => void;
@@ -105,7 +105,8 @@ export default function Sidebar(props: Props) {
           <div className="sidebar-empty">还没有项目。点右上角 + 添加一个代码目录。</div>
         )}
         {props.projects.map((p) => {
-          const isOpen = expanded.has(p.id) || props.selectedProjectId === p.id;
+          const isOpen = expanded.has(p.id);
+          const projSessions = props.sessionsByProject[p.id] ?? [];
           return (
             <div key={p.id} className="project-item-wrap">
               <div
@@ -123,9 +124,9 @@ export default function Sidebar(props: Props) {
                   <Plus size={13} />
                 </button>
               </div>
-              {isOpen && props.selectedProjectId === p.id && (
+              {isOpen && (
                 <div className="session-list">
-                  {props.sessions.map((s) => {
+                  {projSessions.map((s) => {
                     const st = props.statusBySession[s.id];
                     const active = st === "prompting" || st === "started";
                     const act = props.activityBySession[s.id];
@@ -137,9 +138,9 @@ export default function Sidebar(props: Props) {
                     return (
                       <button
                         key={s.id}
-                        className={`session-item ${props.selectedSessionId === s.id ? "active" : ""} ${active ? "loading" : ""}`}
+                        className={`session-item ${props.selectedSessionId === s.id ? "active" : ""}`}
                         data-testid={`session-${s.id}`}
-                        onClick={() => props.onSelectSession(s.id)}
+                        onClick={() => props.onSelectSession(s.id, p.id)}
                       >
                         <span className={`session-dot ${cls}`} title={label} />
                         <span className="session-label">{s.title || "新对话"}</span>
