@@ -202,8 +202,10 @@ export default function App() {
     }
   }, []);
   useEffect(() => {
-    if (status !== "idle") return;
-    if (userStoppedRef.current) { userStoppedRef.current = false; return; } // 用户主动停:不自动续发
+    // idle 和 error 都触发 drain:error 时(如 peer disconnected)队列不能卡死,
+    // 下一条会走 ensureLive 重连。用户主动停则不续发(队列保留)。
+    if (status !== "idle" && status !== "error") return;
+    if (userStoppedRef.current) { userStoppedRef.current = false; return; }
     void drainQueue();
   }, [status, drainQueue]);
 
