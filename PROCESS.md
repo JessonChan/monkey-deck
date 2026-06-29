@@ -132,6 +132,13 @@
 
 ## G. 工作日志(追加,最新在上)
 
+### 2026-06-29(fix:合并冲突自动 git merge --abort —— 主仓库不再卡死)
+- **起因**:本轮「合并 md/f7940d3b 进主分支」实证发现「合并进主仓库」功能致命缺陷:`MergeBranch` 撞冲突只返回 error、不 `git merge --abort`,主仓库留在半合并状态(MERGE_HEAD + 冲突标记 + unmerged index)。后果:合并按钮陷入「You have not concluded your merge」错误循环,应用内无冲突解决 UI 也无 abort,只能终端/外部 agent 救场(本次即如此);主仓库是项目所有 session 的共享根,卡死波及后续 worktree 创建 / diff / 同项目其它 session 合并。
+- **改法**:① `worktree.MergeBranch` 失败时先抓冲突文件(`git diff --name-only --diff-filter=U`)再 `git merge --abort`(主仓库回滚到合并前),冲突返回新类型 `*MergeConflictError{Files}`、非冲突失败返回原始 git 错误;② `chat.MergeSession` 用 `errors.As` 识别该类型,返回可读提示「合并因 N 个文件冲突已取消(主仓库未改动)+ 文件列表」,不再把原始 git stderr 抛前端(§4.4)。**关键不变量:主仓库始终干净。**
+- **改了哪些文件**:`internal/worktree/{worktree.go(MergeConflictError + MergeBranch abort + conflictedFiles), worktree_test.go(TestMergeBranchConflictAborts)}`、`internal/chat/{chat.go(MergeSession 可读错误), scm_test.go(TestMergeSessionConflictMessage)}`、PROCESS.md(本节)。
+- **验证**:`go test ./internal/worktree/ ./internal/chat/` ✅(新增 `TestMergeBranchConflictAborts` 断言冲突→`*MergeConflictError`+`[a.txt]`+repo 干净[无 MERGE_HEAD/无冲突标记/HEAD 未动/工作区干净]、`TestMergeSessionConflictMessage` 断言可读错误含「已取消」+「a.txt」;`TestCreateMergeRemove`/`TestMergeSessionNoAutoCommit`/`TestSCMBindings`/`TestSCMBusyGuard` 无回归);`go test ./internal/...` ✅(7 packages);`go vet`/`gofmt` 干净。
+- **后续可改进(用户认可「后续再改进」)**:① 冲突错误 toast 当前 8s 自动消失,致命状态偏短,可改 sticky;② 真要应用内解决冲突,再做 3-way merge UI(在那之前保持 abort+清晰提示);③ merge message 用会话标题可能名不副实(会话做多件事后标题停于最初意图);④ 缺跨 session 的 `proj.Path` 锁(同项目两 session 并发合并可能 index lock 竞争)。
+
 ### 2026-06-29(feat:输入框上下键翻历史 + @ 提及文件/文件夹 —— 经 ACP ResourceLink 发送)
 - **起因**:用户要求两个输入框增强。① 上下键翻当前 session 对话历史(发过的消息按 ↑ 向旧、↓ 向新翻,无长度限制;按过发送键即算,含未达后端/被拒的)。② `@` 提及某文件/文件夹;用户明确要「结合 ACP 协议发送」。
 - **协议调研(对 acp-go-sdk v0.13.5 实证)**:`session/prompt` 的 `Prompt` 字段是 `[]ContentBlock`,baseline 要求 agent **MUST** 支持 `ContentBlock::Text` 与 `ContentBlock::ResourceLink`;`ResourceLink{type:"resource_link",uri,name}` 用 `file://` URI 让 agent 访问文件。`Resource`(内嵌内容)需 agent 声明 `promptCapabilities.embeddedContext`(可选),故选 **ResourceLink(baseline,稳)**。→ 「结合 ACP」= 把 @ 提及作为 `ResourceLink` block 发,不是塞 `@path` 文本让 agent 自己解析。
