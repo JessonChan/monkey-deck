@@ -157,11 +157,40 @@ export function SessionChanges(sessionID: string): $CancellablePromise<worktree$
 }
 
 /**
+ * SessionCommit 提交已暂存的改动(只 commit index,不自动 add)。
+ * 提交信息由前端传入,区别于 MergeSession 用 session 标题自动提交。
+ */
+export function SessionCommit(sessionID: string, message: string): $CancellablePromise<void> {
+    return $Call.ByID(3853162461, sessionID, message);
+}
+
+/**
  * SessionDiff 返回该 session 分支相对主仓库的变更摘要(diff --stat + commit log)。
  * 供前端在分支标签旁展示"这个分支改了什么",让用户决定是否合并。
  */
 export function SessionDiff(sessionID: string): $CancellablePromise<string> {
     return $Call.ByID(2727965895, sessionID);
+}
+
+/**
+ * SessionDiscard 丢弃工作区改动(已跟踪还原 / 未跟踪删除)。只作用于工作区,不动暂存区。
+ */
+export function SessionDiscard(sessionID: string, paths: string[] | null): $CancellablePromise<void> {
+    return $Call.ByID(2948754490, sessionID, paths);
+}
+
+/**
+ * SessionStage 暂存文件;paths 为空暂存全部(供源码管理面板,参考 VS Code SCM)。
+ */
+export function SessionStage(sessionID: string, paths: string[] | null): $CancellablePromise<void> {
+    return $Call.ByID(115348126, sessionID, paths);
+}
+
+/**
+ * SessionUnstage 取消暂存文件;paths 为空取消全部。
+ */
+export function SessionUnstage(sessionID: string, paths: string[] | null): $CancellablePromise<void> {
+    return $Call.ByID(2132742431, sessionID, paths);
 }
 
 /**

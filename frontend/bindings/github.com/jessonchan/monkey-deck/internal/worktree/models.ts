@@ -11,4 +11,10 @@ export interface FileChange {
      * M=修改 A=新增 D=删除 U=未跟踪 R=重命名
      */
     "status": string;
+
+    /**
+     * Staged=true 表示已进暂存区(index 有改动);false 表示工作区改动。
+     * 一个文件可能同时出现在两组(如 MM:已暂存后又有新改动),参考 VS Code 的 Changes / Staged Changes 两组。
+     */
+    "staged": boolean;
 }
