@@ -1,7 +1,7 @@
 import { useState } from "react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import { Plus, ChevronDown, Folder, X, MessageCircle } from "lucide-react";
+import { Plus, ChevronDown, Folder, X } from "lucide-react";
 
 interface Props {
   projects: Project[];
@@ -14,6 +14,7 @@ interface Props {
   onAddProject: () => void;
   onAddProjectByPath: (path: string) => void;
   onRemoveProject: (id: string) => void;
+  statusBySession: Record<string, string>;
 }
 
 export default function Sidebar(props: Props) {
@@ -100,17 +101,21 @@ export default function Sidebar(props: Props) {
               </div>
               {isOpen && props.selectedProjectId === p.id && (
                 <div className="session-list">
-                  {props.sessions.map((s) => (
-                    <button
-                      key={s.id}
-                      className={`session-item ${props.selectedSessionId === s.id ? "active" : ""}`}
-                      data-testid={`session-${s.id}`}
-                      onClick={() => props.onSelectSession(s.id)}
-                    >
-                      <MessageCircle size={13} />
-                      <span className="session-label">{s.title || "新对话"}</span>
-                    </button>
-                  ))}
+                  {props.sessions.map((s) => {
+                    const st = props.statusBySession[s.id];
+                    const cls = st === "prompting" || st === "started" ? "running" : st === "error" ? "error" : "";
+                    return (
+                      <button
+                        key={s.id}
+                        className={`session-item ${props.selectedSessionId === s.id ? "active" : ""}`}
+                        data-testid={`session-${s.id}`}
+                        onClick={() => props.onSelectSession(s.id)}
+                      >
+                        <span className={`session-dot ${cls}`} />
+                        <span className="session-label">{s.title || "新对话"}</span>
+                      </button>
+                    );
+                  })}
                   <button className="session-item new" onClick={props.onCreateSession} data-testid="new-session">
                     <Plus size={13} />
                     <span className="session-label">新对话</span>
