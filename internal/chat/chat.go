@@ -19,6 +19,7 @@ import (
 
 	"github.com/jessonchan/monkey-deck/internal/acp"
 	"github.com/jessonchan/monkey-deck/internal/config"
+	"github.com/jessonchan/monkey-deck/internal/fsview"
 	"github.com/jessonchan/monkey-deck/internal/store"
 	"github.com/jessonchan/monkey-deck/internal/titlegen"
 	"github.com/jessonchan/monkey-deck/internal/worktree"
@@ -474,6 +475,87 @@ func (s *ChatService) SessionCommit(sessionID, message string) error {
 		return err
 	}
 	return worktree.Commit(wt, message)
+}
+
+// --- 文件浏览 / 管理(右侧「文件」面板)---
+
+// cwdOf 返回 session 的有效工作目录:git 项目用 worktree,否则用项目目录。
+// 与 worktreeOf 不同:worktreeOf 仅返回 worktree(非 git 报错),cwdOf 对任意 session 都有值。
+func (s *ChatService) cwdOf(sessionID string) (string, error) {
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if se == nil {
+		return "", fmt.Errorf("session not found: %s", sessionID)
+	}
+	proj, err := s.st.GetProject(s.ctx, se.ProjectID)
+	if err != nil {
+		return "", err
+	}
+	if proj == nil {
+		return "", fmt.Errorf("project not found")
+	}
+	if se.WorktreePath != "" {
+		return se.WorktreePath, nil
+	}
+	return proj.Path, nil
+}
+
+// SessionListDir 列出 session 工作目录下 rel(相对路径)的直接子项。
+// rel 为空表示根。路径钉在 cwd,防越界;git 仓库尊重 .gitignore。
+func (s *ChatService) SessionListDir(sessionID, rel string) ([]fsview.FileNode, error) {
+	root, err := s.cwdOf(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return fsview.ListDir(root, rel)
+}
+
+// SessionReadFile 读取 session 工作目录下 rel 的文本内容(预览用)。
+func (s *ChatService) SessionReadFile(sessionID, rel string) (string, error) {
+	root, err := s.cwdOf(sessionID)
+	if err != nil {
+		return "", err
+	}
+	return fsview.ReadFile(root, rel)
+}
+
+// SessionCreateFile 在 session 工作目录下新建文件(含内容)。
+func (s *ChatService) SessionCreateFile(sessionID, rel, content string) error {
+	root, err := s.cwdOf(sessionID)
+	if err != nil {
+		return err
+	}
+	return fsview.CreateFile(root, rel, content)
+}
+
+// SessionCreateDir 在 session 工作目录下新建目录。
+func (s *ChatService) SessionCreateDir(sessionID, rel string) error {
+	root, err := s.cwdOf(sessionID)
+	if err != nil {
+		return err
+	}
+	return fsview.CreateDir(root, rel)
+}
+
+// SessionDeletePath 删除 session 工作目录下的文件或目录(递归)。
+func (s *ChatService) SessionDeletePath(sessionID, rel string) error {
+	root, err := s.cwdOf(sessionID)
+	if err != nil {
+		return err
+	}
+	return fsview.DeletePath(root, rel)
+}
+
+// SessionRenamePath 把 session 工作目录下的 rel 改名为 newName(叶子名)。
+// 返回新的相对路径。
+func (s *ChatService) SessionRenamePath(sessionID, rel, newName string) (string, error) {
+	root, err := s.cwdOf(sessionID)
+	if err != nil {
+		return "", err
+	}
+	return fsview.RenamePath(root, rel, newName)
 }
 
 // OpenSession 打开已有 session:有 acp_session_id 则 LoadSession 恢复,否则新建 ACP session(§1.4)。
