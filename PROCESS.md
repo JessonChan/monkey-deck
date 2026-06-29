@@ -45,11 +45,11 @@
 
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
-- **当前焦点**:会话标题自动生成(修「标题一直是第一句话」)
-- **最后更新**:2026-06-28
-- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、**会话标题 LLM 自动生成(fallback + 异步精修)**。`go test ./internal/...` 通过、前端 `tsc` 通过。
-- **本次(2026-06-28)改动**:
-  1. **修「标题一直用第一句话」**(见 §G 2026-06-28 标题条 + AGENTS.md §5.4 #14):根因 = opencode 实证不发 ACP `session_info_update` 标题。新增 `internal/titlegen`(fallback 纯本地归一化 + LLM 异步精修,读 opencode.json provider 配置调 OpenAI 兼容接口,关 thinking 防推理 model 空回);chat.go 首条消息先写 fallback 再异步覆盖(不冲用户改名)。真实 glm-5.2 验证「README 翻译为中文并添加安装说明」1.6s ✅。
+- **当前焦点**:会话标题取 opencode 权威标题(经 session/list)——彻底修「标题一直是第一句话」
+- **最后更新**:2026-06-29
+- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、**会话标题(opencode 经 session/list 的权威标题 + 瞬时 fallback)**。`go test ./internal/...` 通过、前端 `tsc` 通过。
+- **本次(2026-06-29)改动**:
+  1. **修「标题一直用第一句话」—— 正解(见 §G 2026-06-29 + AGENTS.md §5.4 #14)**:根因 = opencode 实证不发 ACP `session_info_update`,但**生成标题并经 `session/list` 暴露**。新增 `ChatSession.SessionTitle`(runner.go 调 `conn.ListSessions` 过滤本 session 取 `Title`)+ `chat.go syncSessionTitle`(runPrompt 成功后覆盖 DB + 推 meta);`maybeAutoTitle` 用 `titlegen.FallbackTitle` 作瞬时兜底。**撤销**上一版的 LLM 自生成方案(重复调 LLM、更慢)。诊断证明 session/list 第一轮 poll 即得 opencode 标题。
 
 ---
 
@@ -120,17 +120,23 @@
 
 ## G. 工作日志(追加,最新在上)
 
-### 2026-06-28(fix:会话标题自动生成 —— 修「标题一直是第一句话」)
-- **现象**:所有会话标题永远停在「首条用户消息截断 24 字」,从不更新。
-- **调研(实证)**:ACP 协议**有**标题机制(SDK `SessionInfoUpdate.Title`,discriminator `session_info_update`;但 `session/new` 响应**无** title)。写独立诊断程序(`acpdiag`)抓取 opencode 1.17.10 一轮完整 turn + end_turn 后 25s 的全部 `SessionUpdate`:只有 `available_commands_update`/`agent_thought_chunk`/`tool_call`/`tool_call_update`/`agent_message_chunk`,**从不发 `session_info_update`**。→ 原 `handleEvent` 的 `session_info` 分支永不触发 = 根因。参考 wesight(MIT)—— 它自生成标题,不依赖 agent。
-- **修法**(新 `internal/titlegen`,移植 wesight `sessionTitle.ts`/`coworkUtil.ts` 思路,保留 MIT 署名):
-  1. `FallbackTitle`:纯本地归一化(去 markdown/标签/引号/列表标记,截断 50 字),**立即**给出可读标题。
-  2. `Generate`:读会话 model 对应的 opencode.json provider 配置(`~/.config/opencode/opencode.json` + cwd,cwd 覆盖全局),调 OpenAI 兼容 `/chat/completions` 异步精修;带 `thinking:{type:"disabled"}`,若 provider 不认返 400 自动去掉重试。
-  3. **chat.go**:`maybeAutoTitle` 改用 `FallbackTitle`;`startTurn` 首条消息(标题原为空)先写 fallback 立即推 `chat:session-meta`,再 `go refineTitleAsync` 用 LLM 覆盖(仅当标题仍是 fallback、未被用户改名时)。保留原 `session_info` handler(无害,opencode 将来发了也能用)。
-- **坑中坑(实证)**:GLM-5.2 是推理模型,不关 thinking 时 `max_tokens` 全花在 `reasoning_content`、`content` 空(`finish_reason=length`)。`thinking:{type:"disabled"` 关闭后 `reasoning_tokens=0`、content 正常。`thinking:false`(布尔)会 400。
-- **改了哪些文件**:`internal/titlegen/{titlegen.go,titlegen_test.go,live_test.go(integration)}`(新)、`internal/chat/chat.go`(maybeAutoTitle/refineTitleAsync/startTurn/import,删 makeTitle)、`AGENTS.md`(§5.4 #14)、`PROCESS.md`(本节 + §B/§C)。
-- **验证**:`go test ./internal/...` ✅(titlegen 单测:纯函数/provider 解析/httptest Generate/GenerateHTTPError);`go test -tags integration -run TestLiveGenerate` 真实 bigmodel/glm-5.2 → `README 翻译为中文并添加安装说明` 1.6s ✅;`go build ./internal/...` + `go vet` 干净。临时诊断程序在 `/var/folders/.../T/opencode/acpdiag`(不入库)。
-- **下一步**:用户实测一轮真实对话确认侧栏标题随首条消息变成本地精修后的标题;若想用更便宜/独立的标题 model,可后续加 settings 配置项。
+### 2026-06-29(fix:会话标题取 opencode 权威标题(session/list)—— 撤销 LLM 自生成)
+- **背景**:上一版(2026-06-28)用「自己调 LLM 生成标题」修「标题一直是第一句话」。用户指出 opencode 每个 session 本就有标题,应直接取。复核发现上一版是「错路的正确实现」。
+- **深入诊断(实证)**:
+  - opencode 1.17.10 **生成**标题并存自身库 `~/.local/share/opencode/opencode.db` 的 `session.title`(如 `ses_...` →「README 中文化及安装说明」)。
+  - 它**不发** ACP `session_info_update` 通知(上一版已证实),但**经 ACP `session/list` 的 `SessionInfo.Title` 暴露**:诊断程序 turn 结束后 `conn.ListSessions` 第一轮 poll(0 延迟)即返回该标题。
+  - → 真正的修法是协议级读 opencode 标题,不是自己再调一次 LLM(重复、更慢)。
+- **修法**:
+  1. `internal/acp/runner.go`:新增 `ChatSession.SessionTitle(ctx)`(调 `conn.ListSessions` 过滤本 session 取 `Title`)。
+  2. `internal/chat/chat.go`:`chatConn` 接口加 `SessionTitle`;新增 `syncSessionTitle`(runPrompt/SendAndWaitSync 成功后调,标题不同则覆盖 DB + 推 `chat:session-meta`);`maybeAutoTitle` 用 `titlegen.FallbackTitle`(纯本地)作瞬时兜底。**删除** `refineTitleAsync` 与 LLM 自生成路径。
+  3. `internal/titlegen`:精简为只保留 `FallbackTitle/Normalize/BuildContext`(瞬时兜底),删除 `Generate`/provider 解析/HTTP/thinking 重试等 ~150 行(冗余)。保留 wesight MIT 署名。
+- **改了哪些文件**:`internal/acp/runner.go`(SessionTitle)、`internal/chat/{chat.go(chatConn/syncSessionTitle/runPrompt/SendAndWaitSync/startTurn/maybeAutoTitle,删 refineTitleAsync), queue_test.go(fakeChat.SessionTitle+title 字段), title_test.go(新增 3 回归测试)}`、`internal/titlegen/{titlegen.go(精简),titlegen_test.go(精简),删 live_test.go}`、`AGENTS.md`(§5.4 #14 重写)、`PROCESS.md`(本节 + §B)。
+- **验证**:`go test ./internal/...` 通过;`TestSyncSessionTitle{Overrides,EmptyNoClobber,SameNoRewrite}` ✅;诊断程序(listdiag,已删)证实 `session/list` 第一轮 poll 得 opencode 标题「README 中文化及安装说明」✅。
+
+### 2026-06-28(fix:会话标题自动生成 —— 修「标题一直是第一句话」)【已被 2026-06-29 方案取代,保留记录】
+- 上一版用「自己调 LLM 生成标题」修。后续发现 opencode 本就生成标题、经 session/list 暴露,遂改为直接读(见上条 2026-06-29)。LLM 自生成代码已删除。
+- (原始根因诊断仍有效:opencode 实证不发 `session_info_update`;只是标题来源从「自生成 LLM」更正为「opencode 经 session/list 暴露」。)
+
 
 ### 2026-06-28(fix:侧栏标题与 macOS 红绿灯重叠 + references 改绝对路径)
 - **fix(ui)**:侧栏标题「Monkey Deck」与 macOS 红绿灯重叠。窗口用 `MacTitleBarHiddenInset`(main.go),红绿灯 overlay 在 webview 上,原 `padding-left:76px` 间隙不足。改 `frontend/src/index.css` 的 `.sidebar-header` `padding-left` 76→84px。
