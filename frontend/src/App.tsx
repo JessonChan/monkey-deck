@@ -36,7 +36,7 @@ export default function App() {
   const [permissionBySession, setPermissionBySession] = useState<Record<string, PermissionPrompt | null>>({});
   const [error, setError] = useState<string | null>(null);
   const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({});  // 前端 FIFO 队列(按 session 隔离,切走保留)
-  const [composerValue, setComposerValue] = useState("");  // composer 受控文本(支持撤回回填)
+  const [draftBySession, setDraftBySession] = useState<Record<string, string>>({});  // composer 草稿(按 session 隔离,切走保留)
   const queueBySessionRef = useRef<Record<string, QueueItem[]>>({});
   const userStoppedRef = useRef(false);                    // 用户主动停止:抑制该次 idle 的 auto-continue
 
@@ -62,10 +62,18 @@ export default function App() {
   // 把一条 SessionEvent 合并进指定 session 的 items(纯函数,防乱序)。
   const applyEventToItems = useCallback((cur: ChatItem[], ev: SessionEvent): ChatItem[] => {
     const next = [...cur];
+    // 段边界:push 新段前,清除上一个 thought/agent 的 streaming 标志(否则 spinner 永不消失)。
+    const finalizeLast = () => {
+      const l = next[next.length - 1];
+      if (l && (l.type === "thought" || l.type === "agent") && l.streaming) {
+        next[next.length - 1] = { ...l, streaming: false };
+      }
+    };
     const last = next[next.length - 1];
     switch (ev.kind) {
       case "user_message_chunk":
         if (last && last.type === "user") return next; // 已有 user,不重复
+        finalizeLast();
         next.push({ type: "user", id: `u-${Date.now()}`, text: ev.text || "", ts: Date.now() });
         return next;
       case "agent_message_chunk":
@@ -75,6 +83,7 @@ export default function App() {
             next[next.length - 1] = { ...last, text: ev.text || "", seq: ev.seq };
           }
         } else {
+          finalizeLast();
           next.push({ type: "agent", id: `a-${ev.seq ?? Date.now()}`, text: ev.text || "", streaming: true, seq: ev.seq, ts: Date.now() });
         }
         return next;
@@ -84,11 +93,13 @@ export default function App() {
             next[next.length - 1] = { ...last, text: ev.text || "", seq: ev.seq };
           }
         } else {
+          finalizeLast();
           next.push({ type: "thought", id: `t-${ev.seq ?? Date.now()}`, text: ev.text || "", streaming: true, seq: ev.seq });
         }
         return next;
       case "tool_call":
       case "tool_call_update": {
+        finalizeLast();
         const id = ev.toolCallId || `tool-${Date.now()}`;
         const idx = next.findIndex((it) => it.type === "tool" && it.id === id);
         const existing = idx >= 0 ? (next[idx] as Extract<ChatItem, { type: "tool" }>) : null;
@@ -139,6 +150,12 @@ export default function App() {
   const hasMore = (selectedSessionId ? hasMoreBySession[selectedSessionId] : undefined) ?? false;
   const loadingMore = (selectedSessionId ? loadingMoreBySession[selectedSessionId] : undefined) ?? false;
   const queue = (selectedSessionId ? queueBySession[selectedSessionId] : undefined) ?? [];
+  const composerValue = (selectedSessionId ? draftBySession[selectedSessionId] : undefined) ?? "";
+  const onComposerChange = useCallback((text: string) => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    setDraftBySession((prev) => ({ ...prev, [sid]: text }));
+  }, []);
 
   // 启动:加载项目 + 订阅事件。
   useEffect(() => {
@@ -270,7 +287,7 @@ export default function App() {
     async (projectId: string) => {
       setSelectedProjectId(projectId);
       setSelectedSessionId(null);
-      setQueueBySession({}); queueBySessionRef.current = {}; setComposerValue("");
+      setQueueBySession({}); queueBySessionRef.current = {}; setDraftBySession({});
       userStoppedRef.current = false;
       await refreshSessions(projectId);
     },
@@ -286,7 +303,6 @@ export default function App() {
       setSelectedSessionId(sessionId);
       setUnreadBySession((prev) => { if (!prev[sessionId]) return prev; const n = { ...prev }; delete n[sessionId]; return n; });
       setPermissionBySession((prev) => ({ ...prev, [sessionId]: null }));
-      setComposerValue("");
       userStoppedRef.current = false;
       setError(null);
       await ChatService.OpenSession(sessionId);
@@ -412,7 +428,10 @@ export default function App() {
     if (!item) return;
     queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: q.filter((x) => x.id !== id) };
     setQueueBySession(queueBySessionRef.current);
-    setComposerValue((prev) => (prev.trim() ? prev + "\n" + item.text : item.text));
+    setDraftBySession((prev) => {
+      const cur = prev[sid] || "";
+      return { ...prev, [sid]: cur.trim() ? cur + "\n" + item.text : item.text };
+    });
   }, []);
 
   const handleComposerAction = useCallback(
@@ -439,9 +458,8 @@ export default function App() {
 
   const closeSession = useCallback(async () => {
     if (!selectedSessionId) return;
-    await ChatService.CloseSession(selectedSessionId);
-    setSelectedSessionId(null);
-    setComposerValue("");
+      await ChatService.CloseSession(selectedSessionId);
+      setSelectedSessionId(null);
   }, [selectedSessionId]);
 
   const [mergeResult, setMergeResult] = useState<string | null>(null);
@@ -608,7 +626,7 @@ export default function App() {
               onInterruptQueue={interruptQueue}
               onRevokeQueue={revokeQueue}
               composerValue={composerValue}
-              onComposerChange={setComposerValue}
+              onComposerChange={onComposerChange}
               hasMore={hasMore}
               loadingMore={loadingMore}
               onLoadMore={() => selectedSessionId && loadMoreMessages(selectedSessionId)}

@@ -7,7 +7,7 @@ import type { ChatItem, PermissionPrompt, StatusPayload, QueueItem } from "../ty
 import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
-import { X, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert } from "lucide-react";
+import { X, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight } from "lucide-react";
 
 interface Usage { used: number; size: number; cost: number; }
 
@@ -254,9 +254,10 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { type: "thought" }> }
   };
   return (
     <div className="thought-block">
-      <button className="collapse-summary thought-summary" onClick={toggle} type="button">
+      <button className={`thought-summary ${open ? "open" : ""}`} onClick={toggle} type="button">
         {item.streaming ? <span className="thought-spinner" /> : <Brain size={13} />}
-        <span>{item.streaming ? "思考中…" : "思考过程"}</span>
+        <span className="thought-summary-label">{item.streaming ? "思考中" : "思考过程"}</span>
+        <ChevronRight size={13} className="thought-chevron" />
       </button>
       <div className={`collapse-body ${open ? "open" : ""}`}>
         <div className="collapse-body-inner">
