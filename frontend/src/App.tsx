@@ -387,6 +387,33 @@ export default function App() {
     }
   }, [selectedSessionId]);
 
+  // SCM 操作:暂存 / 取消暂存 / 丢弃 / 提交。每次操作后刷新文件变更列表。
+  const stageFiles = useCallback(async (paths: string[]) => {
+    if (!selectedSessionId) return;
+    try { await ChatService.SessionStage(selectedSessionId, paths); setError(null); }
+    catch (e) { setError(String(e)); }
+    finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
+  }, [selectedSessionId]);
+  const unstageFiles = useCallback(async (paths: string[]) => {
+    if (!selectedSessionId) return;
+    try { await ChatService.SessionUnstage(selectedSessionId, paths); setError(null); }
+    catch (e) { setError(String(e)); }
+    finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
+  }, [selectedSessionId]);
+  const discardFiles = useCallback(async (paths: string[]) => {
+    if (!selectedSessionId) return;
+    try { await ChatService.SessionDiscard(selectedSessionId, paths); setError(null); }
+    catch (e) { setError(String(e)); }
+    finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
+  }, [selectedSessionId]);
+  // 提交:失败时 rethrow,让 GitPanel 保留提交信息 + 显示内联错误。
+  const commitSession = useCallback(async (message: string) => {
+    if (!selectedSessionId) throw new Error("无活动 session");
+    try { await ChatService.SessionCommit(selectedSessionId, message); setError(null); }
+    catch (e) { setError(String(e)); throw e; }
+    finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
+  }, [selectedSessionId]);
+
   const addProject = useCallback(async () => {
     try {
       const path = await ChatService.PickDirectory();
@@ -482,9 +509,12 @@ export default function App() {
         <GitPanel
           branch={activeSession.branch}
           changes={sessionChanges}
-          commitCount={0}
           mergeResult={mergeResult}
           onMerge={mergeSession}
+          onStage={stageFiles}
+          onUnstage={unstageFiles}
+          onDiscard={discardFiles}
+          onCommit={commitSession}
         />
       )}
     </div>

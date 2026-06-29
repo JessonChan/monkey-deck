@@ -74,7 +74,7 @@ input, textarea { font-family: inherit; }
   justify-content: space-between;
   height: 52px;
   padding: 0 12px 0 84px;            /* 左侧留出红绿灯空间(MacTitleBarHiddenInset 下需 ~80px+) */
-  -webkit-app-region: drag;
+  --wails-draggable: drag;
 }
 .sidebar-title {
   font-size: 13px;
@@ -87,7 +87,7 @@ input, textarea { font-family: inherit; }
   border-radius: var(--r-sm);
   display: inline-flex; align-items: center; justify-content: center;
   color: var(--text-2);
-  -webkit-app-region: no-drag;
+  --wails-draggable: no-drag;
   transition: background 0.12s, color 0.12s;
 }
 .icon-btn:hover { background: var(--hover); color: var(--text); }
@@ -158,10 +158,10 @@ input, textarea { font-family: inherit; }
   height: 52px; padding: 0 16px;
   border-bottom: 1px solid var(--sep);
   background: var(--bg);
-  -webkit-app-region: drag;
+  --wails-draggable: drag;
 }
 .chat-header-info { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.chat-header-actions { display: flex; align-items: center; gap: 6px; -webkit-app-region: no-drag; }
+.chat-header-actions { display: flex; align-items: center; gap: 6px; --wails-draggable: no-drag; }
 .chat-project { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-sep { color: var(--text-3); }
 .chat-session-title { color: var(--text-2); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -182,7 +182,7 @@ input, textarea { font-family: inherit; }
   background: var(--sel-accent); padding: 4px 10px; border-radius: 6px;
   border: 1px solid rgba(10, 132, 255, 0.3);
   transition: background 0.12s, filter 0.12s;
-  -webkit-app-region: no-drag;
+  --wails-draggable: no-drag;
 }
 .merge-btn:hover { background: rgba(10, 132, 255, 0.3); filter: brightness(1.1); }
 
@@ -488,7 +488,7 @@ input, textarea { font-family: inherit; }
 /* 空状态 */
 .empty-state {
   flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  color: var(--text-2); gap: 6px; -webkit-app-region: drag;
+  color: var(--text-2); gap: 6px; --wails-draggable: drag;
 }
 .empty-logo {
   width: 64px; height: 64px; border-radius: 16px; margin-bottom: 6px;
@@ -558,7 +558,7 @@ input, textarea { font-family: inherit; }
 .git-commit-count { font-size: 10px; color: var(--text-3); font-weight: 400; }
 .git-file-row {
   display: flex; align-items: center; gap: 8px;
-  padding: 4px 6px; border-radius: 4px; cursor: pointer;
+  padding: 4px 6px; border-radius: 4px;
   transition: background 0.1s;
 }
 .git-file-row:hover { background: var(--hover); }
@@ -573,4 +573,41 @@ input, textarea { font-family: inherit; }
 .st-untracked { color: var(--green); }
 .st-renamed { color: var(--accent-2); }
 .git-file-name { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.git-file-dir { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-left: auto; padding-left: 6px; }
+.git-file-dir { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 6px; }
+/* 行操作按钮(暂存 / 取消暂存 / 丢弃)+ SCM 提交区 */
+.git-file-actions { margin-left: auto; display: inline-flex; gap: 2px; flex-shrink: 0; }
+.git-row-act {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 4px; border: none;
+  background: transparent; color: var(--text-3); cursor: pointer; transition: background 0.1s, color 0.1s;
+}
+.git-row-act:hover { background: var(--hover); color: var(--text); }
+.git-row-discard:hover { color: var(--red); }
+.git-scm-branch { display: flex; align-items: center; gap: 6px; color: var(--text-3); }
+.git-commit-msg {
+  font-family: var(--mono); font-size: 12px; color: var(--text); line-height: 1.5;
+  background: var(--bg); border: 1px solid var(--sep); border-radius: 6px;
+  padding: 7px 9px; resize: vertical; min-height: 44px; outline: none;
+}
+.git-commit-msg:focus { border-color: rgba(10, 132, 255, 0.5); }
+.git-commit-msg::placeholder { color: var(--text-3); font-family: inherit; }
+.git-commit-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;
+  font-size: 12.5px; font-weight: 600; color: #fff; background: var(--accent);
+  padding: 7px 12px; border-radius: 6px; border: none; cursor: pointer; transition: filter 0.12s, opacity 0.12s;
+}
+.git-commit-btn:hover:not(:disabled) { filter: brightness(1.1); }
+.git-commit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.git-commit-err {
+  font-size: 11px; line-height: 1.5; color: var(--red);
+  background: rgba(255, 69, 58, 0.1); border: 1px solid rgba(255, 69, 58, 0.25);
+  border-radius: 6px; padding: 6px 8px; white-space: pre-wrap; word-break: break-word;
+}
+.git-group-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: none; border: none; cursor: pointer; color: inherit; font: inherit; padding: 0;
+}
+.git-group-count {
+  font-size: 10px; color: var(--text-3); font-weight: 400;
+  background: var(--elev, var(--hover)); border-radius: 8px; padding: 0 6px;
+}
