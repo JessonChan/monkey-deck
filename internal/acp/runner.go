@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -179,17 +180,64 @@ func (r *Runner) spawnAndInit(ctx context.Context, workDir string, handler *Hand
 	return cmd, conn, initResp, nil
 }
 
+// activityTracker 跟踪一个 prompt turn 的活动状态:最后活动时间 + in_progress tool 计数。
+//
+// 静默超时判定时,只要还有 tool 处于 in_progress(ToolCallStatus,协议级「正在工作」信号)
+// 就不算超时 —— 长 tool 期间即便无 chunk 流入也不误判卡死(AGENTS.md §3.3)。
+// 纯静默(无 chunk 且无 in_progress tool)仍按 timeout 兜底,避免 agent 真卡死时永久挂起。
+type activityTracker struct {
+	lastActivity atomic.Int64
+	inProgress   atomic.Int64 // 当前 in_progress 的 tool 数
+	mu           sync.Mutex
+	toolStatus   map[string]string // callID -> 上次 status(用于正确增减计数)
+}
+
+func newActivityTracker() *activityTracker {
+	return &activityTracker{toolStatus: map[string]string{}}
+}
+
+// observe 收到一条 SessionEvent:刷新活动时间,并维护 in_progress tool 计数。
+func (a *activityTracker) observe(e SessionEvent) {
+	a.lastActivity.Store(time.Now().UnixNano())
+	if (e.Kind != "tool_call" && e.Kind != "tool_call_update") || e.ToolCallID == "" || e.ToolStatus == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	prev := a.toolStatus[e.ToolCallID]
+	if prev == e.ToolStatus {
+		return
+	}
+	if prev == "in_progress" {
+		a.inProgress.Add(-1)
+	}
+	if e.ToolStatus == "in_progress" {
+		a.inProgress.Add(1)
+	}
+	a.toolStatus[e.ToolCallID] = e.ToolStatus
+}
+
+// timedOut 判定是否静默超时:静默超过 timeout 且无 in_progress tool。
+// 有 tool 在 in_progress 时永不超时(协议级「正在工作」信号)。
+func (a *activityTracker) timedOut(timeout time.Duration) bool {
+	if a.inProgress.Load() > 0 {
+		return false
+	}
+	return time.Since(time.Unix(0, a.lastActivity.Load())) > timeout
+}
+
 // Prompt 在已有 session 上发送消息并等待回复(同步返回,期间 SessionUpdate 并发流入)。
 // timeout 是「静默超时」(从最后一次活动算)——只要 opencode 还在输出就不超时(§3.3)。
-// 返回 StopReason 与可能的错误。崩溃表现为含 "peer disconnected" 的错误(§5.4 #2)。
+// 有 tool 处于 in_progress 时豁免静默超时(协议级「正在工作」信号,见 activityTracker),
+// 避免「长 tool 期间无 chunk」被误判为卡死。返回 StopReason 与可能的错误。
+// 崩溃表现为含 "peer disconnected" 的错误(§5.4 #2)。
 func (cs *ChatSession) Prompt(ctx context.Context, message string, timeout time.Duration) (acp.StopReason, error) {
-	// 用静默超时:每次 OnEvent 回调更新 lastActivity,watchdog 检测静默。
-	var lastActivity atomic.Int64
-	lastActivity.Store(time.Now().UnixNano())
+	act := newActivityTracker()
+	act.lastActivity.Store(time.Now().UnixNano())
 
 	wrapped := cs.Handler.OnEvent
 	cs.Handler.OnEvent = func(e SessionEvent) {
-		lastActivity.Store(time.Now().UnixNano())
+		act.observe(e)
 		if wrapped != nil {
 			wrapped(e)
 		}
@@ -208,12 +256,16 @@ func (cs *ChatSession) Prompt(ctx context.Context, message string, timeout time.
 				case <-promptCtx.Done():
 					return
 				case <-ticker.C:
-					idle := time.Since(time.Unix(0, lastActivity.Load()))
-					if idle > timeout {
-						slog.Warn("chat idle timeout", "silence", idle)
-						cancel()
-						return
-					}
+				}
+				if act.timedOut(timeout) {
+					slog.Warn("chat idle timeout", "silence", time.Since(time.Unix(0, act.lastActivity.Load())))
+					cancel()
+					return
+				}
+				// 诊断:已静默超阈值却未超时,通常是 in_progress tool 豁免。
+				// debug 级便于验证 opencode 是否真发 in_progress(方案 A 有效性)。
+				if d := time.Since(time.Unix(0, act.lastActivity.Load())); d > timeout && act.inProgress.Load() > 0 {
+					slog.Debug("chat idle exempt by in_progress tool", "silence", d, "inProgress", act.inProgress.Load())
 				}
 			}
 		}()
