@@ -45,10 +45,11 @@
 
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
-- **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理 SCM 化(含审查 5 项修复)+ 会话标题修复 + 右侧文件管理面板(tab:文件/源代码管理)均已完成;继续对话体验打磨
-- **最后更新**:2026-06-29
-- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、会话标题(opencode 经 session/list 权威标题 + 瞬时 fallback)、源码管理 SCM(提交/暂存/丢弃/单文件 diff/并发守卫)、三栏可拖拽分隔线、**右侧文件浏览/管理(树+预览+增删改)**。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
+- **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理 SCM 化(含审查 5 项修复)+ 会话标题修复 + 右侧文件管理面板(tab:文件/源代码管理)+ **AI 提交/AI 合并(SCM 结合 AI)** 均已完成;继续对话体验打磨
+- **最后更新**:2026-06-29(AI 提交 / AI 合并)
+- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、会话标题(opencode 经 session/list 权威标题 + 瞬时 fallback)、源代码管理 SCM(提交/暂存/丢弃/单文件 diff/并发守卫/**AI 提交/AI 合并**)、三栏可拖拽分隔线、**右侧文件浏览/管理(树+预览+增删改)**。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
 - **近期改动汇总**:
+  - **AI 提交 / AI 合并(SCM 结合 AI)**(2026-06-29):协议调研确认 ACP 无 sub-agent/委派原语(单连接单 agent,但可并发多 session);sub agent 是客户端层概念。用户拍板:**AI 提交 = 架构 A(复用当前 session 发 prompt,上下文最完整、最 ACP 纯)**;**AI 合并 = 确定性 merge + AI 生成合并 message(用 opencode 会话标题作 merge message subject)**。后端:`SessionAICommit`(复用 SendMessage)+ `mergeCommitMessage`(纯函数)+ `MergeBranch` 加 message(`--no-ff -m`);前端 GitPanel 加「✨ AI 提交」按钮。详见 §G / §E。
   - **源码管理逻辑审查 5 项修复**(2026-06-29):① merge 不再 AutoCommit(SCM 面板成提交唯一真相)② StatusFiles 修重命名 `->`/引号 ③ 单文件 diff(FileDiff+点击展开)④ turn 进行中禁用 SCM 写操作(前后端 busy 守卫)。详见 §G。
   - **右侧文件管理面板**(2026-06-29):新增 `internal/fsview`(受限工作目录浏览/管理,git 仓库尊重 .gitignore)+ chat 7 个绑定 + SidePanel(tab:文件/源代码管理)+ FilePanel(懒加载树、git 状态徽标、文件预览、新建/重命名/删除)。详见 §G。
   - **会话标题修复**(2026-06-29):经 session/list 取 opencode 权威标题(三层:本地 fallback + session/list 轮询 + session_info_update 预留)+ 能力守卫 `CanListSessions`(协议 MUST);撤销 LLM 自生成方案。详见 §G。
@@ -112,6 +113,7 @@
 - **2026-06-28** — ACP 协议无 queue,「turn 中途发新消息」用 **cancel-then-reprompt**(`session/cancel` → 等 cancelled → 新 prompt),不造协议层 queue。理由:`session/prompt` 同步请求-响应,baseline 只保证 new/prompt/cancel/update,无排队语义(见 SDK schema + prompt-turn 文档)。排队缓冲做在前端(FIFO,turn 结束自动续发),打断走干净 `session/cancel`(InterruptAndSend 原子化)。见 AGENTS.md §5.4 #13。
 - **2026-06-29** — 三栏可拖拽分隔线用 `react-resizable-panels`(v4)而非手写。理由:§5.3 成熟库优先;v4 是重写版(Group/Panel/Separator,非旧 PanelGroup/PanelResizeHandle),尺寸用字符串百分比、`orientation`、`useDefaultLayout` 持久化。wesight 的 col-resize 是手写,仅作形态参考不照搬。
 - **2026-06-29** — 会话标题取 opencode 经 `session/list` 的权威标题,不在客户端调 LLM 自生成。理由:opencode 已生成标题并存自身库,客户端再调 LLM 是重复且更慢(第一版 LLM 方案已撤销,-320 行)。opencode 实证不发 `session_info_update`(协议首选实时路径,属 opencode 实现缺口),故退化到 `session/list` 轮询(turn 结束后取),并加 `CanListSessions` 能力守卫(协议 MUST:未声明 `sessionCapabilities.list` 不调用)。三层策略:本地 `FallbackTitle` 瞬时兜底 + `session/list` 轮询 + `session_info_update` 分支预留。见 AGENTS.md §5.4 #14。
+- **2026-06-29** — SCM 的「AI 提交」用**架构 A(复用当前 session 发 prompt)**,不造 sub-agent session。理由(协议调研证实):ACP 协议层**无 sub-agent / 任务委派原语**(全仓 grep 零命中;`session/new` 无 `agent` 选择器,单连接单 agent);所谓「sub agent」是客户端层概念(= 再开一个独立连接/session)。对「为本次改动写 commit」这类**重上下文、轻隔离**的任务,sub agent 反而丢上下文(新 session 默认无当前对话历史),而复用当前 session 上下文最完整且免费、最 ACP 纯、代码量最小(一个 prompt 模板 + 按钮)。sub agent 真正适合**重隔离**任务(PR 描述 / self-review / changelog),后续再引入。「AI 合并」用**确定性 `git merge --no-ff -m` + AI 生成合并 message**——message 直接取 opencode 已生成的会话标题(本就是 AI 对本次工作的总结),即时、无需新 LLM 调用、不另起 turn;不把 merge 交给 agent(merge-into-main 需在主仓库操作,agent 在 worktree 内,路径不通)。
 
 ---
 
@@ -127,6 +129,24 @@
 ---
 
 ## G. 工作日志(追加,最新在上)
+
+### 2026-06-29(feat:AI 提交 / AI 合并 —— 源码管理结合 AI,基于协议调研定架构)
+- **起因**:用户认为 SCM 功能设计不够友好、未充分结合 AI,提议右侧操作里加「AI 自动提交」「AI 自动合并到主分支」,并问能否「基于当前 session 创建 sub agent」完成。要求**先讨论再操作**。
+- **协议调研(对 `references/agent-client-protocol` 实证)**:
+  - ACP 协议层**无 sub-agent / 任务委派原语**:全仓 grep `subagent`/`delegate`/`child session` 零命中。
+  - 一个连接 = 一个 agent 身份:`session/new` 参数仅 `cwd`/`mcpServers`/`sessionState`/`additionalDirectories`,**无 `agent` 选择器**(`session-setup.mdx`)。
+  - 但一个连接可并发多个 session(`architecture.mdx:20` "Each connection can support several concurrent sessions")。
+  - 结论:**「sub agent」是客户端层概念**(= 客户端再开一个独立连接/session 塞 prompt),协议无父子关系;agent 内部自起子 agent 对 ACP 不可见。
+  - sub agent 致命软肋:**新建 session 默认无当前 session 对话上下文**,需自己合成搬运 → 对「为本次改动写 commit」(重上下文、轻隔离)是亏的。
+- **用户拍板架构**:`commit_arch=A`(复用当前 session 发 prompt);`merge_arch=确定性 merge + AI 生成合并 message`。
+- **实现**:
+  - **后端 `internal/worktree/worktree.go`**:`MergeBranch(repoPath, branch, message)` 加 message 参数,改 `git merge --no-ff -m <message>`(--no-ff 强制 merge commit 使 message 生效 + 保留分支历史)。
+  - **后端 `internal/chat/chat.go`**:① 纯函数 `mergeCommitMessage(branch, title)`(优先用 opencode 会话标题作主题,空降级);② 纯函数 `aiCommitPrompt()`(Conventional Commits 中文指令 + 禁 push);③ `MergeSession` 调用改传 `mergeCommitMessage(se.Branch, se.Title)`;④ 新增绑定 `SessionAICommit(sessionID)`(= `SendMessage(sessionID, aiCommitPrompt())`,复用 turn 生命周期/权限 UI/流式渲染,提交作为一轮对话可审计)。
+  - **前端**:GitPanel 加「✨ AI 提交」按钮(`onAICommit` prop,busy/无改动禁用);SidePanel 转发;App 加 `aiCommit` callback。CSS `.git-ai-btn`(描边风,与实心提交按钮区分)。
+- **改了哪些文件**:`internal/worktree/{worktree.go, worktree_test.go}`、`internal/chat/{chat.go, scm_test.go}`、`frontend/bindings/*(regen,+SessionAICommit)`、`frontend/src/{components/{GitPanel.tsx, SidePanel.tsx}, App.tsx, index.css}`、`PROCESS.md`。
+- **验证**:`go build .` ✅;`go test ./internal/...`(6 packages ok)✅,新增 `TestMergeCommitMessage`/`TestAICommitPrompt`/`TestCreateMergeRemove`(断言 merge commit message=`--no-ff -m` 传入值)✅;`go vet` 干净;`bunx tsc --noEmit` ✅;`bun run build:dev`(329 modules)✅。
+- **未提交**:见 git status,建议按「后端」「bindings」「前端」拆原子 commit。
+- **设计说明**:① agent 经自己的 bash 工具提交,不经过我们的 SCM 绑定——busy 守卫本防的是「用户面板操作 vs agent 写文件」竞争,agent 自提交无冲突。② AI 合并 message 取 opencode 会话标题(已是 AI 总结),即时、不另起 turn;不把 merge 交给 agent(agent 在 worktree,merge-into-main 需操作主仓库,路径不通)。③ turn 结束(idle)已有 effect 自动刷新 sessionChanges,AI 提交后无需手动刷新。
 
 ### 2026-06-29(fix:源码管理逻辑审查 5 项修复 —— merge 语义 / 路径解析 / diff 预览 / 并发守卫)
 - **起因**:对源码管理(worktree + GitPanel + chat SCM 绑定)做一轮逻辑审查,找到 5 处不合理:
