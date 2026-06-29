@@ -46,9 +46,10 @@
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
 - **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理 SCM 化(含审查 5 项修复)+ 会话标题修复 + 右侧文件管理面板(tab:文件/源代码管理)+ **AI 提交/AI 合并(SCM 结合 AI)** 均已完成;继续对话体验打磨(**输入框上下键翻历史 + @ 提及文件/文件夹(经 ACP ResourceLink 发送)**)
-- **最后更新**:2026-06-29(输入框:上下键翻历史 + @ 提及)
-- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、会话标题(opencode 经 session/list 权威标题 + 瞬时 fallback)、源代码管理 SCM(提交/暂存/丢弃/单文件 diff/并发守卫/**AI 提交/AI 合并**)、三栏可拖拽分隔线、**右侧文件浏览/管理(树+预览+增删改)**、**窗口尺寸/位置/最大化记忆(ui_state.json)**。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
+- **最后更新**:2026-06-29(应用自更新:auto-update 改造 —— GitHub Releases 源 + 内置更新窗口 + 发布版后台静默检查 + 版本注入/发布工具链)
+- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、会话标题(opencode 经 session/list 权威标题 + 瞬时 fallback)、源代码管理 SCM(提交/暂存/丢弃/单文件 diff/并发守卫/**AI 提交/AI 合并**)、三栏可拖拽分隔线、**右侧文件浏览/管理(树+预览+增删改)**、**窗口尺寸/位置/最大化记忆(ui_state.json)**、**应用自更新(菜单「检查更新…」+ 发布版后台静默检查 + `release:darwin` 打包工具链)**。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
 - **近期改动汇总**:
+  - **应用自更新(auto-update 改造)**(2026-06-29):新增 `internal/update`(GitHub Releases 源 + `app.Updater.Init` + 后台静默检查 `StartBackgroundChecks` + 纯函数 `ShouldAutoCheck`);`main.go` 加 `currentVersion`(ldflags 注入)+ App 菜单「检查更新…」(保留默认编辑菜单)+ 发布版后台静默检查;`build/darwin/Taskfile.yml` 加 `VERSION`(git describe,去前导 v)注入 production ldflags;根 `Taskfile.yml` 加 `release:darwin`(打包 .app→zip→SHA256SUMS→打印 gh 发布命令)。详见 §G / §E。
   - **输入框:上下键翻历史 + @ 提及文件/文件夹**(2026-06-29):① 上下键翻当前 session 全部已发消息(无长度限制;按发送键即记进历史,含排队/被拒的;seed 自 DB `ListUserMessages` + 本会话发送追加;仅光标在首/末行且无菜单时触发);② `@` 触发当前 cwd 文件/文件夹选择器(复用 `SessionListDir`,支持 `/` 进子目录、键入过滤、↑↓ 选择);选中插入 `@相对路径` 文本 + 记录;发送时每个提及经 **ACP `ContentBlock::ResourceLink`(`file://` URI)** 发给 agent(协议 baseline,所有 agent 必须支持),文本照常作 `TextBlock` 发出。后端:`internal/acp` 加 `Attachment{Path,Name}` + `ChatSession.Prompt` 改签名加 `[]Attachment` + `buildPromptBlocks/fileURI`;`chatConn` 接口 + `SendMessage/InterruptAndSend/SendAndWaitSync/startTurn/runPrompt` 透传;store 加 `ListUserMessages`;`QueueItem` 携带 `mentions`。前端:Composer 重写(history 导航 + @autocomplete + mention chips),App `historyBySession` + `sendMessage(text,mentions)`。详见 §G。
   - **AI 提交 / AI 合并(SCM 结合 AI)**(2026-06-29):协议调研确认 ACP 无 sub-agent/委派原语(单连接单 agent,但可并发多 session);sub agent 是客户端层概念。用户拍板:**AI 提交 = 架构 A(复用当前 session 发 prompt,上下文最完整、最 ACP 纯)**;**AI 合并 = 确定性 merge + AI 生成合并 message(用 opencode 会话标题作 merge message subject)**。后端:`SessionAICommit`(复用 SendMessage)+ `mergeCommitMessage`(纯函数)+ `MergeBranch` 加 message(`--no-ff -m`);前端 GitPanel 加「✨ AI 提交」按钮。详见 §G / §E。
   - **源码管理逻辑审查 5 项修复**(2026-06-29):① merge 不再 AutoCommit(SCM 面板成提交唯一真相)② StatusFiles 修重命名 `->`/引号 ③ 单文件 diff(FileDiff+点击展开)④ turn 进行中禁用 SCM 写操作(前后端 busy 守卫)。详见 §G。
@@ -116,6 +117,7 @@
 - **2026-06-29** — 会话标题取 opencode 经 `session/list` 的权威标题,不在客户端调 LLM 自生成。理由:opencode 已生成标题并存自身库,客户端再调 LLM 是重复且更慢(第一版 LLM 方案已撤销,-320 行)。opencode 实证不发 `session_info_update`(协议首选实时路径,属 opencode 实现缺口),故退化到 `session/list` 轮询(turn 结束后取),并加 `CanListSessions` 能力守卫(协议 MUST:未声明 `sessionCapabilities.list` 不调用)。三层策略:本地 `FallbackTitle` 瞬时兜底 + `session/list` 轮询 + `session_info_update` 分支预留。见 AGENTS.md §5.4 #14。
 - **2026-06-29** — 窗口状态记忆用 **`ui_state.json`(本地 JSON)**,不进 SQLite。理由:SQLite 是**业务数据**(session/message/usage)的唯一真相(§1.5);窗口几何是 **UI 运行时状态**(自动记住,非业务数据),混进 DB 模糊职责边界,且数据极小不值得走迁移+CRUD。落 `<DataDir>/ui_state.json`,命名留 UI state 扩展空间(不放 harness/model/provider 那类结构性配置,它们走 SQLite 配置表)。
 - **2026-06-29** — SCM 的「AI 提交」用**架构 A(复用当前 session 发 prompt)**,不造 sub-agent session。理由(协议调研证实):ACP 协议层**无 sub-agent / 任务委派原语**(全仓 grep 零命中;`session/new` 无 `agent` 选择器,单连接单 agent);所谓「sub agent」是客户端层概念(= 再开一个独立连接/session)。对「为本次改动写 commit」这类**重上下文、轻隔离**的任务,sub agent 反而丢上下文(新 session 默认无当前对话历史),而复用当前 session 上下文最完整且免费、最 ACP 纯、代码量最小(一个 prompt 模板 + 按钮)。sub agent 真正适合**重隔离**任务(PR 描述 / self-review / changelog),后续再引入。「AI 合并」用**确定性 `git merge --no-ff -m` + AI 生成合并 message**——message 直接取 opencode 已生成的会话标题(本就是 AI 对本次工作的总结),即时、无需新 LLM 调用、不另起 turn;不把 merge 交给 agent(merge-into-main 需在主仓库操作,agent 在 worktree 内,路径不通)。
+- **2026-06-29** — 应用自更新用 Wails3 内置 `app.Updater` + GitHub Releases 源,不自己造更新通道。理由:§5.3 成熟库优先 —— Wails3 alpha2.106 已内置完整自更新(检查/下载/SHA256 校验/helper-mode 二进制热替换/重启),`pkg/updater` + `providers/github` 开箱即用,自造是重复造轮子。源选 GitHub Releases(免费、零基础设施,与 go.mod module 仓库 `jessonchan/monkey-deck` 一致)。版本走 `-ldflags -X main.currentVersion`(git describe 去前导 v);开发构建(`dev`)禁用后台检查 —— semver 视 `dev` 为低于任何正式版,否则会把首个 release 误判为「有更新」反复弹窗。后台检查**自写静默循环**(不直接用 `Config.CheckInterval`):`CheckAndInstall` 即使「已是最新」也开窗停留,框架自带周期检查会每 6h 弹一次「已是最新」打扰用户;自写循环先静默 `Check()`,**仅发现新版本才** `CheckAndInstall` 开窗。菜单用 `DefaultApplicationMenu()` 找 `AppMenu` 子菜单插入,**保留默认编辑菜单**(剪切/复制/粘贴 —— webview 文本输入必需),不全量替换。
 
 ---
 
@@ -127,10 +129,30 @@
 - 🚧 **身份占位待改**:`Taskfile.yml` APP_NAME 仍为 `testapp`、`build/config.yml` productName 等占位值,需统一改 monkey-deck(功能不受影响)。
 - ✅ 数据目录默认路径已定:`~/Library/Application Support/monkey-deck/`(xdg);opencode 探测用 `opencode acp` + `exec.LookPath`。
 - [ ] 数据目录默认路径、opencode 探测(§D 遗留)
+- [ ] **应用自更新的发布前置**:仓库当前无 git remote、无 tag。自更新真正生效需先创建并 push GitHub 仓库 `jessonchan/monkey-deck`,再按 `release:darwin` 输出的流程发首个 release(zip + SHA256SUMS)。代码侧已就绪(§G 2026-06-29 auto-update)。
 
 ---
 
 ## G. 工作日志(追加,最新在上)
+
+### 2026-06-29(feat:应用自更新 auto-update 改造 —— GitHub Releases + 内置更新窗口 + 版本注入/发布工具链)
+- **起因**:用户要求按 Wails3 自更新教程(https://v3.wails.io/pt/tutorials/04-self-update-a-wails-app/)为项目加自动化升级。
+- **库调研(对 wails v3.0.0-alpha2.106 模块源码实证)**:
+  - `app.Updater`(`*updater.Updater`)在 `application.New` 时已构造,只需 `Init`;`Check/CheckAndInstall/DownloadAndInstall/Restart` 全实现。
+  - **`updater.Config.Window` 文档注释「Not yet wired in v1」已过时**:`window.go`/`window_lifecycle.go` + `CheckAndInstall`(updater.go:350)证明内置更新窗口**完全可用**(开窗→Check→下载→SHA256 校验→StateReady→点「重启并应用」→helper-mode 热替换二进制并重启)。
+  - GitHub provider:`semver.IsNewer(tag,current)` 用 x/mod/semver;**无效 semver(如 "dev")被视作低于任何正式版** → 开发构建会把首个 release 误判为「有更新」。
+  - 菜单:`DefaultApplicationMenu()`(darwin)= AppMenu/FileMenu/EditMenu/ViewMenu/WindowMenu/HelpMenu 角色;`FindByRole(AppMenu).GetSubmenu()` 可往 App 子菜单插项而**不丢编辑菜单**。
+- **改动**:
+  - **新增 `internal/update/update.go`**:① 常量 `GitHubRepository="jessonchan/monkey-deck"`/`ChecksumAsset="SHA256SUMS"`/`BackgroundInterval=6h`;② `Init(app,version)` 建 github provider + `app.Updater.Init`;③ 纯函数 `ShouldAutoCheck(version)`(`!="" && !="dev"`,可单测);④ `StartBackgroundChecks` —— 自写静默循环:启动后等 30s,每 6h 静默 `Check()`,**仅发现新版本才** `CheckAndInstall()` 开窗(避免「已是最新」弹窗打扰);`silentCheck` 带 recover 防御后台异常拖垮主进程。
+  - **`main.go`**:① `var currentVersion = "dev"`(发布由 ldflags 注入);② `application.New` 后 `update.Init` + `StartBackgroundChecks`(仅发布版);③ App 菜单:基于 `DefaultApplicationMenu()`,`FindByRole(AppMenu).GetSubmenu()` 插「检查更新…」(`OnClick` → goroutine 跑 `CheckAndInstall`),`SetApplicationMenu`;非 macOS 无 AppMenu 角色则跳过。
+  - **`build/darwin/Taskfile.yml`**:加 `VERSION`(`git describe --tags --always --dirty | sed 's/^v//'`,无 tag/非仓库回退 `dev`);production `BUILD_FLAGS` 的 `-ldflags` 加 `-X main.currentVersion={{.VERSION}}`(DEV 分支不注入 → 开发构建恒为 `dev`)。
+  - **根 `Taskfile.yml`**:加 `release:darwin`(`darwin:package` → zip `.app`(-y 保符号链接)→ `shasum -a 256` 生成 `SHA256SUMS` → 打印 `gh release create` 命令;资源名 `monkey-deck-darwin-<arch>.zip` 命中默认 asset 匹配)。
+  - **`internal/update/update_test.go`**:`TestShouldAutoCheck`(dev/空/正式版/dirty/commit-hash 表驱动)、`TestNewProviderSucceeds`、`TestConstantsWellFormed`。
+  - `go.mod`/`go.sum`:`go mod tidy`(updater/github provider 入间接依赖)。
+- **改了哪些文件**:`internal/update/{update.go(新), update_test.go(新)}`、`main.go`、`build/darwin/Taskfile.yml`、`Taskfile.yml`、`go.mod`/`go.sum`、PROCESS.md(本节 + §B + §E + §F)。
+- **验证**:① **ldflags 注入实证**:`go build -ldflags="-X main.currentVersion=INJECTED-MARKER-0.1.0" -o /tmp/md-ver-test .` 后 `strings /tmp/md-ver-test | grep -c INJECTED-MARKER-0.1.0` = 3(注入成功;exit 0,ld warning 为 macOS SDK 版本警告无关);② `VERSION` 命令实证:`git describe ... | sed` 当前返回 commit-hash-dirty(无 tag,符合预期,tag 后得正式版本);③ `go test ./internal/...` ✅(8 packages ok,含新增 `internal/update` 3 用例);④ `go vet ./internal/update/ .` ✅;`gofmt -l` 干净;⑤ 两份 Taskfile YAML 合法(pyyaml + ruby 双验)。**未做端到端实证**(需真实 GitHub repo + release + 实机):首次发布流程、下载/校验/热替换重启、菜单点击体验。
+- **发布前置(OPEN,见 §F)**:仓库当前无 git remote、无 tag;自更新要真正生效需:① 创建并 push GitHub 仓库 `jessonchan/monkey-deck`;② 首次发布 `git tag v0.0.1 && task release:darwin && gh release create ...`(上传 zip + SHA256SUMS);③ 旧版本启动后后台静默检查到新 release → 弹内置窗口 → 下载/校验/重启。
+- **后续可改进**:① 把「检查更新/当前版本」接进未来设置 UI(现走菜单;加 binding 即可);② macOS 分发需 Developer ID 签名 + 公证(Gatekeeper 要求,updater 不重签,原样替换字节);③ Ed25519 签名(超越 SHA256 完整性,做真实性校验);④ universal binary release(arm64+amd64);⑤ 前端订阅 `updater:EventUpdateAvailable` 自定义提示。
 
 ### 2026-06-29(fix:合并冲突自动 git merge --abort —— 主仓库不再卡死)
 - **起因**:本轮「合并 md/f7940d3b 进主分支」实证发现「合并进主仓库」功能致命缺陷:`MergeBranch` 撞冲突只返回 error、不 `git merge --abort`,主仓库留在半合并状态(MERGE_HEAD + 冲突标记 + unmerged index)。后果:合并按钮陷入「You have not concluded your merge」错误循环,应用内无冲突解决 UI 也无 abort,只能终端/外部 agent 救场(本次即如此);主仓库是项目所有 session 的共享根,卡死波及后续 worktree 创建 / diff / 同项目其它 session 合并。
