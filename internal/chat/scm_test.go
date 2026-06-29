@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jessonchan/monkey-deck/internal/config"
@@ -147,6 +148,69 @@ func TestSCMNoWorktree(t *testing.T) {
 		if err := fn(); err == nil {
 			t.Fatalf("%s on no-worktree session should error", name)
 		}
+	}
+}
+
+// A:MergeSession 不再 auto-commit —— 已提交的内容被合并,未提交的改动不进主仓库且结果给出提示。
+func TestMergeSessionNoAutoCommit(t *testing.T) {
+	svc, sid, wt := newSCMService(t)
+	ctx := context.Background()
+	ses, _ := svc.st.GetSession(ctx, sid)
+	proj, _ := svc.st.GetProject(ctx, ses.ProjectID)
+	root := proj.Path
+
+	// 在 worktree 改 a.txt 并提交(这部分应被合并)
+	mustWrite(t, filepath.Join(wt, "a.txt"), "committed-change")
+	mustRunGit(t, wt, "add", ".")
+	mustRunGit(t, wt, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "real commit")
+	// 再制造一个未提交改动(不应被合并)
+	mustWrite(t, filepath.Join(wt, "uncommitted.txt"), "left-out")
+
+	result, err := svc.MergeSession(sid)
+	if err != nil {
+		t.Fatalf("MergeSession: %v", err)
+	}
+	// 已提交的 a.txt 进了主仓库
+	if b, _ := os.ReadFile(filepath.Join(root, "a.txt")); string(b) != "committed-change" {
+		t.Fatalf("committed change not merged: %q", b)
+	}
+	// 未提交的文件没进主仓库
+	if _, err := os.Stat(filepath.Join(root, "uncommitted.txt")); !os.IsNotExist(err) {
+		t.Fatalf("uncommitted file should NOT be merged")
+	}
+	// 结果含未提交提示
+	if !strings.Contains(result, "未提交") {
+		t.Fatalf("result should warn about uncommitted: %q", result)
+	}
+}
+
+// E:turn 进行中(busy)时,源代码管理写操作应被拒绝;读操作(SessionChanges)不受影响。
+func TestSCMBusyGuard(t *testing.T) {
+	svc, sid, _ := newSCMService(t)
+
+	// 注入一个 busy 的 liveSession(模拟一轮 Prompt 进行中)
+	ls := &liveSession{}
+	ls.mu.Lock()
+	ls.busy = true
+	ls.mu.Unlock()
+	svc.mu.Lock()
+	svc.active[sid] = ls
+	svc.mu.Unlock()
+
+	for name, fn := range map[string]func() error{
+		"Stage":   func() error { return svc.SessionStage(sid, nil) },
+		"Unstage": func() error { return svc.SessionUnstage(sid, nil) },
+		"Discard": func() error { return svc.SessionDiscard(sid, []string{"x"}) },
+		"Commit":  func() error { return svc.SessionCommit(sid, "m") },
+		"Merge":   func() error { _, e := svc.MergeSession(sid); return e },
+	} {
+		if err := fn(); err == nil {
+			t.Fatalf("%s should be rejected while busy", name)
+		}
+	}
+	// 读操作不被拒(随时可刷新状态)
+	if _, err := svc.SessionChanges(sid); err != nil {
+		t.Fatalf("SessionChanges should work while busy: %v", err)
 	}
 }
 

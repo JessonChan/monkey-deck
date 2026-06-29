@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -176,4 +177,63 @@ func hasStaged(got []FileChange) bool {
 		}
 	}
 	return false
+}
+
+// 验证 StatusFiles 正确解析重命名(R -> new)、含空格路径(去引号),以及 FileDiff 三场景。
+func TestStatusRenameSpacesAndDiff(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := t.TempDir()
+	must(t, runGit(repo, "init", "-q", repo))
+	must(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("a"), 0o644))
+	must(t, os.WriteFile(filepath.Join(repo, "b.txt"), []byte("b"), 0o644))
+	must(t, runGit(repo, "add", "."))
+	must(t, runGit(repo, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init"))
+
+	// 重命名 a.txt -> renamed.txt(git mv 暂存为 R)
+	must(t, runGit(repo, "mv", "a.txt", "renamed.txt"))
+	// 含空格路径的新文件(未跟踪)
+	must(t, os.WriteFile(filepath.Join(repo, "my file.txt"), []byte("new"), 0o644))
+	// 另一个独立的未跟踪文件(专供 untracked diff 测试,不会被 stage)
+	must(t, os.WriteFile(filepath.Join(repo, "brand-new.txt"), []byte("fresh"), 0o644))
+	// 已跟踪 b.txt 改动(工作区,供 diff)
+	must(t, os.WriteFile(filepath.Join(repo, "b.txt"), []byte("b-mod"), 0o644))
+
+	got, err := StatusFiles(repo)
+	must(t, err)
+	// 重命名:解析出新名 + R + 暂存(核心 B:旧实现会把 "a.txt -> renamed.txt" 整串当 path)
+	if !hasChange(got, "renamed.txt", "R", true) {
+		t.Fatalf("rename not parsed (expected renamed.txt R staged): %+v", got)
+	}
+	// 含空格路径:引号去掉(核心 C:旧实现会保留 \"my file.txt\" 带引号)
+	if !hasChange(got, "my file.txt", "U", false) {
+		t.Fatalf("spaces path not parsed: %+v", got)
+	}
+	// 去引号后的路径必须可被 Stage 命中(端到端验证 C)
+	must(t, Stage(repo, "my file.txt"))
+	got, _ = StatusFiles(repo)
+	if !hasChange(got, "my file.txt", "A", true) {
+		t.Fatalf("spaces path not staged (add failed?): %+v", got)
+	}
+
+	// FileDiff:工作区已跟踪改动
+	d, err := FileDiff(repo, "b.txt", false)
+	must(t, err)
+	if !strings.Contains(d, "+b-mod") {
+		t.Fatalf("FileDiff unstaged wrong:\n%s", d)
+	}
+	// FileDiff:未跟踪文件展示为纯新增(用独立的 brand-new.txt,确保未被 stage)
+	d2, err := FileDiff(repo, "brand-new.txt", false)
+	must(t, err)
+	if !strings.Contains(d2, "+fresh") {
+		t.Fatalf("FileDiff untracked wrong:\n%s", d2)
+	}
+	// FileDiff:暂存后 staged=true 取 index 相对 HEAD
+	must(t, Stage(repo, "b.txt"))
+	d3, err := FileDiff(repo, "b.txt", true)
+	must(t, err)
+	if !strings.Contains(d3, "+b-mod") {
+		t.Fatalf("FileDiff staged wrong:\n%s", d3)
+	}
 }

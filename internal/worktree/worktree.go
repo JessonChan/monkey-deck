@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -45,6 +46,24 @@ func gitRaw(repoPath string, args ...string) (string, error) {
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
+			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
+		}
+		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return string(out), nil
+}
+
+// gitDiff 跑 git diff 并返回输出。git diff 的退出码语义特殊:1 = 有差异(正常结果),
+// 仅其它非零才报错。故不走 git()(它把任意非零当 error)。
+func gitDiff(repoPath string, args ...string) (string, error) {
+	full := append([]string{"-C", repoPath}, args...)
+	out, err := exec.Command("git", full...).Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			if ee.ExitCode() == 1 { // diff 有差异:正常,取 stdout
+				return string(out), nil
+			}
 			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
 		}
 		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
@@ -172,6 +191,12 @@ func StatusFiles(worktreePath string) ([]FileChange, error) {
 		if path == "" {
 			continue
 		}
+		// porcelain 对重命名(R)/复制(C)输出 "old -> new",后续操作作用于新路径。
+		if i := strings.Index(path, " -> "); i >= 0 {
+			path = path[i+4:]
+		}
+		// 含空格/特殊字符的路径被双引号包裹,去掉外层引号(否则 git add/checkout 命中不了)。
+		path = strings.Trim(path, `"`)
 		if x == '?' && y == '?' { // 未跟踪:只进工作区组
 			files = append(files, FileChange{Path: path, Status: "U", Staged: false})
 			continue
@@ -206,21 +231,6 @@ func statusLetter(c byte) string {
 func HasChanges(worktreePath string) bool {
 	out, err := git(worktreePath, "status", "--porcelain")
 	return err == nil && strings.TrimSpace(out) != ""
-}
-
-// AutoCommit 在 worktreePath 里 git add . + git commit(若有改动)。无改动则跳过。
-// message 为提交信息。用 -c 设置身份(不依赖全局 git config)。
-func AutoCommit(worktreePath, message string) error {
-	if !HasChanges(worktreePath) {
-		return nil
-	}
-	if _, err := git(worktreePath, "add", "."); err != nil {
-		return err
-	}
-	if _, err := git(worktreePath, "-c", "user.email=monkey-deck@local", "-c", "user.name=Monkey Deck", "commit", "-qm", message); err != nil {
-		return err
-	}
-	return nil
 }
 
 // Stage 把 paths 加入暂存区。paths 为空表示暂存全部(git add -A)。
@@ -283,6 +293,25 @@ func Discard(worktreePath string, paths ...string) error {
 func Commit(worktreePath, message string) error {
 	_, err := git(worktreePath, "-c", "user.email=monkey-deck@local", "-c", "user.name=Monkey Deck", "commit", "-qm", message)
 	return err
+}
+
+// FileDiff 返回单个文件的 unified diff,供源代码管理面板点击文件查看改动(VSCode SCM 风格)。
+//   - staged=true:index 相对 HEAD(git diff --cached)。
+//   - staged=false:已跟踪文件取工作区相对 index(git diff);未跟踪文件无 index/HEAD 版本,
+//     用 --no-index 对照 /dev/null 展示为纯新增。
+func FileDiff(worktreePath, path string, staged bool) (string, error) {
+	if staged {
+		d, _ := gitDiff(worktreePath, "diff", "--cached", "--", path)
+		return strings.TrimSpace(d), nil
+	}
+	// 未跟踪文件(ls-files 命中为空)用 --no-index 对照空内容。
+	if out, _ := git(worktreePath, "ls-files", "--", path); strings.TrimSpace(out) == "" {
+		abs := filepath.Join(worktreePath, path)
+		d, err := gitDiff(worktreePath, "diff", "--no-index", "/dev/null", abs)
+		return strings.TrimSpace(d), err
+	}
+	d, err := gitDiff(worktreePath, "diff", "--", path)
+	return strings.TrimSpace(d), err
 }
 
 // BranchExists 报告 branch 是否存在于 repoPath。

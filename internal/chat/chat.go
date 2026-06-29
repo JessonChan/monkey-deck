@@ -9,6 +9,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -340,9 +341,14 @@ func (s *ChatService) DeleteSession(sessionID string) error {
 	return s.st.DeleteSession(s.ctx, sessionID)
 }
 
-// MergeSession 自动提交 session worktree 改动 + 把分支合并进项目主仓库。
-// agent 改了文件但没 commit 也行——AutoCommit 先提交,再 git merge。一键完成,不需命令行。
+// MergeSession 把 session 分支已提交的内容合并进项目主仓库。
+// 只 merge 已 commit 的内容(git merge 本就只合并 commit);未提交的改动不会进 merge ——
+// 由源代码管理面板负责提交(精细 stage/commit 是 SCM 面板的职责,merge 不再越权 git add .)。
+// 若 worktree 仍有未提交改动,结果里给出提示,让用户知道还有东西没合并。
 func (s *ChatService) MergeSession(sessionID string) (string, error) {
+	if s.isBusy(sessionID) {
+		return "", errSCMBusy
+	}
 	se, err := s.st.GetSession(s.ctx, sessionID)
 	if err != nil {
 		return "", err
@@ -357,25 +363,27 @@ func (s *ChatService) MergeSession(sessionID string) (string, error) {
 	if proj == nil {
 		return "", fmt.Errorf("project not found")
 	}
-	// 1. 自动提交 worktree 里 agent 的未提交改动(如果有)
-	if se.WorktreePath != "" {
-		msg := se.Title
-		if msg == "" {
-			msg = "monkey-deck session " + se.ID[:8]
-		}
-		if err := worktree.AutoCommit(se.WorktreePath, msg); err != nil {
-			return "", fmt.Errorf("提交 session 改动失败: %w", err)
-		}
-	}
-	// 2. 合并 + 返回结果摘要
 	mergeOut, err := worktree.MergeBranch(proj.Path, se.Branch)
 	if err != nil {
 		return "", err
 	}
+	var sb strings.Builder
 	if strings.TrimSpace(mergeOut) == "" {
-		return "✅ 合并完成(无新变更)", nil
+		sb.WriteString("✅ 合并完成(无新变更)")
+	} else {
+		sb.WriteString("✅ 合并成功\n" + mergeOut)
 	}
-	return "✅ 合并成功\n" + mergeOut, nil
+	// 未提交改动不会进 merge:统计后提示用户去源代码管理面板提交。
+	if se.WorktreePath != "" {
+		if files, _ := worktree.StatusFiles(se.WorktreePath); len(files) > 0 {
+			seen := map[string]bool{}
+			for _, f := range files {
+				seen[f.Path] = true
+			}
+			sb.WriteString(fmt.Sprintf("\n\n⚠️ worktree 中还有 %d 个未提交改动未合并,请在源代码管理面板提交后再合并。", len(seen)))
+		}
+	}
+	return sb.String(), nil
 }
 
 // SessionDiff 返回该 session 分支相对主仓库的变更摘要(diff --stat + commit log)。
@@ -440,7 +448,11 @@ func (s *ChatService) worktreeOf(sessionID string) (string, error) {
 }
 
 // SessionStage 暂存文件;paths 为空暂存全部(供源码管理面板,参考 VS Code SCM)。
+// turn 进行中拒绝,避免与 opencode 写文件竞争 git index(§E 并发守卫)。
 func (s *ChatService) SessionStage(sessionID string, paths []string) error {
+	if s.isBusy(sessionID) {
+		return errSCMBusy
+	}
 	wt, err := s.worktreeOf(sessionID)
 	if err != nil {
 		return err
@@ -450,6 +462,9 @@ func (s *ChatService) SessionStage(sessionID string, paths []string) error {
 
 // SessionUnstage 取消暂存文件;paths 为空取消全部。
 func (s *ChatService) SessionUnstage(sessionID string, paths []string) error {
+	if s.isBusy(sessionID) {
+		return errSCMBusy
+	}
 	wt, err := s.worktreeOf(sessionID)
 	if err != nil {
 		return err
@@ -459,6 +474,9 @@ func (s *ChatService) SessionUnstage(sessionID string, paths []string) error {
 
 // SessionDiscard 丢弃工作区改动(已跟踪还原 / 未跟踪删除)。只作用于工作区,不动暂存区。
 func (s *ChatService) SessionDiscard(sessionID string, paths []string) error {
+	if s.isBusy(sessionID) {
+		return errSCMBusy
+	}
 	wt, err := s.worktreeOf(sessionID)
 	if err != nil {
 		return err
@@ -467,13 +485,26 @@ func (s *ChatService) SessionDiscard(sessionID string, paths []string) error {
 }
 
 // SessionCommit 提交已暂存的改动(只 commit index,不自动 add)。
-// 提交信息由前端传入,区别于 MergeSession 用 session 标题自动提交。
+// 提交是源代码管理面板的职责;MergeSession 只合并已提交内容,不再越权提交。
 func (s *ChatService) SessionCommit(sessionID, message string) error {
+	if s.isBusy(sessionID) {
+		return errSCMBusy
+	}
 	wt, err := s.worktreeOf(sessionID)
 	if err != nil {
 		return err
 	}
 	return worktree.Commit(wt, message)
+}
+
+// SessionFileDiff 返回单个文件的 unified diff(staged=true:已暂存相对 HEAD;否则工作区相对 index,
+// 未跟踪文件展示为纯新增)。供源代码管理面板点击文件查看改动(VSCode SCM 风格)。
+func (s *ChatService) SessionFileDiff(sessionID, path string, staged bool) (string, error) {
+	wt, err := s.worktreeOf(sessionID)
+	if err != nil {
+		return "", err
+	}
+	return worktree.FileDiff(wt, path, staged)
 }
 
 // OpenSession 打开已有 session:有 acp_session_id 则 LoadSession 恢复,否则新建 ACP session(§1.4)。
@@ -916,6 +947,23 @@ func (s *ChatService) isActive(sessionID string) bool {
 	_, ok := s.active[sessionID]
 	return ok
 }
+
+// isBusy 报告 session 是否正处在一轮 Prompt 中(未活跃的 session 视为非 busy)。
+// 源代码管理的写操作在 turn 进行中应拒绝,避免与 opencode 写文件竞争 git index。
+func (s *ChatService) isBusy(sessionID string) bool {
+	s.mu.RLock()
+	ls := s.active[sessionID]
+	s.mu.RUnlock()
+	if ls == nil {
+		return false
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	return ls.busy
+}
+
+// errSCMBusy turn 进行中操作源代码管理时返回。
+var errSCMBusy = errors.New("对话进行中,请等回合结束再操作源代码管理")
 
 // --- 配置查询(前端设置页用)---
 
