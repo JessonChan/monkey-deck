@@ -59,6 +59,44 @@ func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]Message, 
 	return out, rows.Err()
 }
 
+// ListMessagesBefore 游标分页:取 seq < beforeSeq 的最新 limit+1 条(beforeSeq<=0 取最新一页)。
+// 多取 1 条用于判断 hasMore;返回按 seq 升序(与 ListMessages 一致)。前端据此 slice + 判断。
+func (s *Store) ListMessagesBefore(ctx context.Context, sessionID string, beforeSeq int64, limit int) ([]Message, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	query := `SELECT id,session_id,role,kind,content,tool_call_id,seq,created_at FROM messages WHERE session_id=?`
+	args := []any{sessionID}
+	if beforeSeq > 0 {
+		query += ` AND seq < ?`
+		args = append(args, beforeSeq)
+	}
+	query += ` ORDER BY seq DESC LIMIT ?`
+	args = append(args, limit+1) // +1: 多取一条探测 hasMore
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list messages before: %w", err)
+	}
+	defer rows.Close()
+	var desc []Message
+	for rows.Next() {
+		var m Message
+		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Kind, &m.Content, &m.ToolCallID, &m.Seq, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		desc = append(desc, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// 反转为升序(查询是 DESC)。
+	for i, j := 0, len(desc)-1; i < j; i, j = i+1, j-1 {
+		desc[i], desc[j] = desc[j], desc[i]
+	}
+	return desc, nil
+}
+
 // --- Settings ---
 
 // GetSetting 取配置值;无则返回空串。

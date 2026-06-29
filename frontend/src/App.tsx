@@ -15,6 +15,9 @@ import type { FileChange } from "../bindings/github.com/jessonchan/monkey-deck/i
 type Usage = { used: number; size: number; cost: number };
 const EMPTY_USAGE: Usage = { used: 0, size: 0, cost: 0 };
 
+// 分页:首次打开只加载最近 PAGE_SIZE 条,滚到顶部点「加载更多」继续往前翻(游标 = 最旧 seq)。
+const PAGE_SIZE = 30;
+
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -22,6 +25,9 @@ export default function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   const [itemsBySession, setItemsBySession] = useState<Record<string, ChatItem[]>>({});
+  const [hasMoreBySession, setHasMoreBySession] = useState<Record<string, boolean>>({});
+  const [loadingMoreBySession, setLoadingMoreBySession] = useState<Record<string, boolean>>({});
+  const oldestSeqRef = useRef<Record<string, number>>({});
   const [usageBySession, setUsageBySession] = useState<Record<string, Usage>>({});
   const [statusBySession, setStatusBySession] = useState<Record<string, StatusPayload["status"] | "empty">>({});
   const [statusDetailBySession, setStatusDetailBySession] = useState<Record<string, string>>({});
@@ -125,6 +131,8 @@ export default function App() {
   const status = (selectedSessionId ? statusBySession[selectedSessionId] : undefined) ?? "empty";
   const statusDetail = (selectedSessionId ? statusDetailBySession[selectedSessionId] : undefined) ?? "";
   const permission = (selectedSessionId ? permissionBySession[selectedSessionId] : undefined) ?? null;
+  const hasMore = (selectedSessionId ? hasMoreBySession[selectedSessionId] : undefined) ?? false;
+  const loadingMore = (selectedSessionId ? loadingMoreBySession[selectedSessionId] : undefined) ?? false;
 
   // 启动:加载项目 + 订阅事件。
   useEffect(() => {
@@ -253,8 +261,12 @@ export default function App() {
       });
       if (!loadedSessionsRef.current.has(sessionId)) {
         loadedSessionsRef.current.add(sessionId);
-        const msgs = await ChatService.LoadMessages(sessionId);
-        setItemsBySession((prev) => ({ ...prev, [sessionId]: messagesToItems(msgs || []) }));
+        const msgs = await ChatService.LoadMessagesPage(sessionId, 0, PAGE_SIZE);
+        const hasMorePage = (msgs?.length || 0) > PAGE_SIZE;
+        const page = hasMorePage ? msgs!.slice(1) : (msgs || []);
+        if (page.length > 0) oldestSeqRef.current[sessionId] = page[0].seq;
+        setItemsBySession((prev) => ({ ...prev, [sessionId]: messagesToItems(page) }));
+        setHasMoreBySession((prev) => ({ ...prev, [sessionId]: hasMorePage }));
       }
       try {
         const diff = await ChatService.SessionDiff(sessionId);
@@ -268,6 +280,26 @@ export default function App() {
     },
     [messagesToItems, sessions]
   );
+
+  // 加载更早的历史(分页翻页):取游标 seq 之前的 PAGE_SIZE 条,prepend 到现有 items 前面。
+  const loadMoreMessages = useCallback(async (sessionId: string) => {
+    if (loadingMoreBySession[sessionId] || !hasMoreBySession[sessionId]) return;
+    setLoadingMoreBySession((prev) => ({ ...prev, [sessionId]: true }));
+    try {
+      const beforeSeq = oldestSeqRef.current[sessionId] || 0;
+      const msgs = await ChatService.LoadMessagesPage(sessionId, beforeSeq, PAGE_SIZE);
+      const hasMorePage = (msgs?.length || 0) > PAGE_SIZE;
+      const page = hasMorePage ? msgs!.slice(1) : (msgs || []);
+      if (page.length > 0) oldestSeqRef.current[sessionId] = page[0].seq;
+      setItemsBySession((prev) => ({
+        ...prev,
+        [sessionId]: [...messagesToItems(page), ...(prev[sessionId] || [])],
+      }));
+      setHasMoreBySession((prev) => ({ ...prev, [sessionId]: hasMorePage }));
+    } finally {
+      setLoadingMoreBySession((prev) => ({ ...prev, [sessionId]: false }));
+    }
+  }, [loadingMoreBySession, hasMoreBySession, messagesToItems]);
 
   // 新建 session。
   const createSession = useCallback(async () => {
@@ -531,6 +563,9 @@ export default function App() {
               onRevokeQueue={revokeQueue}
               composerValue={composerValue}
               onComposerChange={setComposerValue}
+              hasMore={hasMore}
+              loadingMore={loadingMore}
+              onLoadMore={() => selectedSessionId && loadMoreMessages(selectedSessionId)}
             />
           ) : (
             <EmptyState />
