@@ -321,12 +321,21 @@ func (cs *ChatSession) Close() {
 }
 
 // IsPeerDisconnected 判断错误是否为 harness 进程崩溃/断开(§5.4 #2)。
+//
+// 两类等价信号,根因相同(harness 进程已不在,须拆连接、下次 LoadSession 重连):
+//   - "peer disconnected":SDK 在 peer 消失时返回(§5.4 #2/#9/#11)。
+//   - "broken pipe":本地写已关闭的 harness stdin 管道失败的 OS 错误;SDK 经 toReqErr
+//     包成 *RequestError{-32603,"Internal error",data:{error:"write |1: broken pipe"}}
+//     (见 acp-go-sdk errors.go),message 里只有 "Internal error",信号埋在 data,
+//     旧实现只查 re.Message 故漏判 → 死 harness 不拆、session 卡死、裸 JSON 推前端。
+//
+// err.Error() 已把 Message+Data marshal 成完整 JSON 字符串(RequestError.Error,同 SDK),
+// 故一次大小写不敏感的子串匹配即可同时命中两类,不必拆字段。
 func IsPeerDisconnected(err error) bool {
 	if err == nil {
 		return false
 	}
-	if re, ok := err.(*acp.RequestError); ok {
-		return strings.Contains(re.Message, "peer disconnected")
-	}
-	return strings.Contains(err.Error(), "peer disconnected")
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "peer disconnected") ||
+		strings.Contains(s, "broken pipe")
 }
