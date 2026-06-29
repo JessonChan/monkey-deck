@@ -15,6 +15,9 @@ import type { FileChange } from "../bindings/github.com/jessonchan/monkey-deck/i
 type Usage = { used: number; size: number; cost: number };
 const EMPTY_USAGE: Usage = { used: 0, size: 0, cost: 0 };
 
+// 分页:首次打开只加载最近 PAGE_SIZE 条,滚到顶部点「加载更多」继续往前翻(游标 = 最旧 seq)。
+const PAGE_SIZE = 30;
+
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -22,15 +25,18 @@ export default function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   const [itemsBySession, setItemsBySession] = useState<Record<string, ChatItem[]>>({});
+  const [hasMoreBySession, setHasMoreBySession] = useState<Record<string, boolean>>({});
+  const [loadingMoreBySession, setLoadingMoreBySession] = useState<Record<string, boolean>>({});
+  const oldestSeqRef = useRef<Record<string, number>>({});
   const [usageBySession, setUsageBySession] = useState<Record<string, Usage>>({});
   const [statusBySession, setStatusBySession] = useState<Record<string, StatusPayload["status"] | "empty">>({});
   const [statusDetailBySession, setStatusDetailBySession] = useState<Record<string, string>>({});
   const [activityBySession, setActivityBySession] = useState<Record<string, "thinking" | "executing" | "replying">>({});
   const [permissionBySession, setPermissionBySession] = useState<Record<string, PermissionPrompt | null>>({});
   const [error, setError] = useState<string | null>(null);
-  const [queue, setQueue] = useState<QueueItem[]>([]);     // 前端 FIFO 队列(turn 中发的消息)
+  const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({});  // 前端 FIFO 队列(按 session 隔离,切走保留)
   const [composerValue, setComposerValue] = useState("");  // composer 受控文本(支持撤回回填)
-  const queueRef = useRef<QueueItem[]>([]);
+  const queueBySessionRef = useRef<Record<string, QueueItem[]>>({});
   const userStoppedRef = useRef(false);                    // 用户主动停止:抑制该次 idle 的 auto-continue
 
   // 标记哪些 session 已从 DB 加载进缓存;有缓存(含进行中的流式)就不再重读 DB,避免切回丢内容。
@@ -126,6 +132,9 @@ export default function App() {
   const status = (selectedSessionId ? statusBySession[selectedSessionId] : undefined) ?? "empty";
   const statusDetail = (selectedSessionId ? statusDetailBySession[selectedSessionId] : undefined) ?? "";
   const permission = (selectedSessionId ? permissionBySession[selectedSessionId] : undefined) ?? null;
+  const hasMore = (selectedSessionId ? hasMoreBySession[selectedSessionId] : undefined) ?? false;
+  const loadingMore = (selectedSessionId ? loadingMoreBySession[selectedSessionId] : undefined) ?? false;
+  const queue = (selectedSessionId ? queueBySession[selectedSessionId] : undefined) ?? [];
 
   // 启动:加载项目 + 订阅事件。
   useEffect(() => {
@@ -187,13 +196,13 @@ export default function App() {
   // auto-continue:status 转 idle 时,若非用户主动停止且队列非空,自动发下一条(FIFO)。
   // 每条排队消息 = 一个独立 turn,按序逐个发(协议无 queue,一次只一个 Prompt)。
   const drainQueue = useCallback(async () => {
-    const q = queueRef.current;
-    if (q.length === 0) return;
-    const next = q[0];
-    queueRef.current = q.slice(1);
-    setQueue(queueRef.current);
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
+    const q = queueBySessionRef.current[sid] || [];
+    if (q.length === 0) return;
+    const next = q[0];
+    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: q.slice(1) };
+    setQueueBySession(queueBySessionRef.current);
     setError(null);
     setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
     try {
@@ -239,7 +248,7 @@ export default function App() {
     async (projectId: string) => {
       setSelectedProjectId(projectId);
       setSelectedSessionId(null);
-      setQueue([]); queueRef.current = []; setComposerValue("");
+      setQueueBySession({}); queueBySessionRef.current = {}; setComposerValue("");
       userStoppedRef.current = false;
       await refreshSessions(projectId);
     },
@@ -252,7 +261,7 @@ export default function App() {
     async (sessionId: string) => {
       setSelectedSessionId(sessionId);
       setPermissionBySession((prev) => ({ ...prev, [sessionId]: null }));
-      setQueue([]); queueRef.current = []; setComposerValue("");
+      setComposerValue("");
       userStoppedRef.current = false;
       setError(null);
       await ChatService.OpenSession(sessionId);
@@ -264,8 +273,12 @@ export default function App() {
       });
       if (!loadedSessionsRef.current.has(sessionId)) {
         loadedSessionsRef.current.add(sessionId);
-        const msgs = await ChatService.LoadMessages(sessionId);
-        setItemsBySession((prev) => ({ ...prev, [sessionId]: messagesToItems(msgs || []) }));
+        const msgs = await ChatService.LoadMessagesPage(sessionId, 0, PAGE_SIZE);
+        const hasMorePage = (msgs?.length || 0) > PAGE_SIZE;
+        const page = hasMorePage ? msgs!.slice(1) : (msgs || []);
+        if (page.length > 0) oldestSeqRef.current[sessionId] = page[0].seq;
+        setItemsBySession((prev) => ({ ...prev, [sessionId]: messagesToItems(page) }));
+        setHasMoreBySession((prev) => ({ ...prev, [sessionId]: hasMorePage }));
       }
       try {
         const diff = await ChatService.SessionDiff(sessionId);
@@ -279,6 +292,26 @@ export default function App() {
     },
     [messagesToItems, sessions]
   );
+
+  // 加载更早的历史(分页翻页):取游标 seq 之前的 PAGE_SIZE 条,prepend 到现有 items 前面。
+  const loadMoreMessages = useCallback(async (sessionId: string) => {
+    if (loadingMoreBySession[sessionId] || !hasMoreBySession[sessionId]) return;
+    setLoadingMoreBySession((prev) => ({ ...prev, [sessionId]: true }));
+    try {
+      const beforeSeq = oldestSeqRef.current[sessionId] || 0;
+      const msgs = await ChatService.LoadMessagesPage(sessionId, beforeSeq, PAGE_SIZE);
+      const hasMorePage = (msgs?.length || 0) > PAGE_SIZE;
+      const page = hasMorePage ? msgs!.slice(1) : (msgs || []);
+      if (page.length > 0) oldestSeqRef.current[sessionId] = page[0].seq;
+      setItemsBySession((prev) => ({
+        ...prev,
+        [sessionId]: [...messagesToItems(page), ...(prev[sessionId] || [])],
+      }));
+      setHasMoreBySession((prev) => ({ ...prev, [sessionId]: hasMorePage }));
+    } finally {
+      setLoadingMoreBySession((prev) => ({ ...prev, [sessionId]: false }));
+    }
+  }, [loadingMoreBySession, hasMoreBySession, messagesToItems]);
 
   // 新建 session。projectId 为空时用当前选中项目(每个项目项有自己的新对话按钮)。
   const createSession = useCallback(async (projectId?: string) => {
@@ -302,8 +335,9 @@ export default function App() {
       if (!selectedSessionId || !text.trim()) return;
       if (status === "prompting") {
         const item: QueueItem = { id: "q" + Date.now() + Math.random().toString(36).slice(2, 6), text };
-        queueRef.current = [...queueRef.current, item];
-        setQueue(queueRef.current);
+        const prev = queueBySessionRef.current[selectedSessionId] || [];
+        queueBySessionRef.current = { ...queueBySessionRef.current, [selectedSessionId]: [...prev, item] };
+        setQueueBySession(queueBySessionRef.current);
         return;
       }
       setError(null);
@@ -327,12 +361,13 @@ export default function App() {
   // 立即发送:打断当前 turn,这条插队先发(其余保留排队)。后端 InterruptAndSend 原子完成
   // (cancel + 等落定 + 发新);被取消的轮不发 idle,故 status 保持 prompting,不会误触发 auto-continue。
   const interruptQueue = useCallback(async (id: string) => {
-    const item = queueRef.current.find((q) => q.id === id);
-    if (!item) return;
-    queueRef.current = queueRef.current.filter((q) => q.id !== id);
-    setQueue(queueRef.current);
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
+    const q = queueBySessionRef.current[sid] || [];
+    const item = q.find((x) => x.id === id);
+    if (!item) return;
+    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: q.filter((x) => x.id !== id) };
+    setQueueBySession(queueBySessionRef.current);
     setError(null);
     userStoppedRef.current = false;
     setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
@@ -345,10 +380,13 @@ export default function App() {
 
   // 撤回编辑:移出队列,文本回填 composer。
   const revokeQueue = useCallback((id: string) => {
-    const item = queueRef.current.find((q) => q.id === id);
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    const q = queueBySessionRef.current[sid] || [];
+    const item = q.find((x) => x.id === id);
     if (!item) return;
-    queueRef.current = queueRef.current.filter((q) => q.id !== id);
-    setQueue(queueRef.current);
+    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: q.filter((x) => x.id !== id) };
+    setQueueBySession(queueBySessionRef.current);
     setComposerValue((prev) => (prev.trim() ? prev + "\n" + item.text : item.text));
   }, []);
 
@@ -378,7 +416,7 @@ export default function App() {
     if (!selectedSessionId) return;
     await ChatService.CloseSession(selectedSessionId);
     setSelectedSessionId(null);
-    setQueue([]); queueRef.current = []; setComposerValue("");
+    setComposerValue("");
   }, [selectedSessionId]);
 
   const [mergeResult, setMergeResult] = useState<string | null>(null);
@@ -545,6 +583,9 @@ export default function App() {
               onRevokeQueue={revokeQueue}
               composerValue={composerValue}
               onComposerChange={setComposerValue}
+              hasMore={hasMore}
+              loadingMore={loadingMore}
+              onLoadMore={() => selectedSessionId && loadMoreMessages(selectedSessionId)}
             />
           ) : (
             <EmptyState />

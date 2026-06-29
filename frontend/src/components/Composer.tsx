@@ -33,6 +33,9 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
+  // IME 合成追踪:compositionStart/End 手动记录,配合 isComposing + keyCode===229 三重保险,
+  // 彻底防中文输入法选词确认的 Enter 被误判为发送(部分 macOS IME 下 isComposing 不可靠)。
+  const composingRef = useRef(false);
 
   const slashQuery = useMemo(() => {
     if (!value.startsWith("/")) return null;
@@ -77,8 +80,8 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // 中文输入法(IME)composing 中:Enter 用于选词,不提交/不触发命令。
-    // isComposing 已覆盖 IME 场景,不再依赖已废弃的 keyCode===229。
-    if (e.nativeEvent.isComposing) return;
+    // 三重检查:手动 ref 追踪(最可靠)+ isComposing(标准)+ keyCode 229(已废弃但兜底)。
+    if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (slashOpen) {
       if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx((i) => Math.min(i + 1, filtered.length - 1)); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); setSlashIdx((i) => Math.max(i - 1, 0)); return; }
@@ -130,6 +133,8 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
           placeholder={prompting ? "排队下一条…(Enter 入队 · 本轮结束后自动发)" : "给 monkey-deck 发消息…   (Enter 发送 · Shift+Enter 换行 · 输入 / 看命令)"}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKeyDown}
+          onCompositionStart={() => { composingRef.current = true; }}
+          onCompositionEnd={() => { composingRef.current = false; }}
           rows={2}
         />
 
@@ -150,7 +155,6 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
           <div className="compose-right">
             {model && <span className="composer-model" title="当前 model">{model}</span>}
             {attachments.length > 0 && <span className="composer-count">{attachments.length} 附件</span>}
-            {value.length > 0 && <span className="composer-count">{value.length} 字</span>}
             {prompting && (
               <button className="send-btn stop" data-testid="stop-btn" onClick={onStop} title="停止当前生成(不清理队列)">
                 <Square size={15} />
