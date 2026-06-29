@@ -502,6 +502,7 @@ export default function App() {
           onAddProject={addProject}
           onAddProjectByPath={addProjectByPath}
           onRemoveProject={removeProject}
+          statusBySession={statusBySession}
         />
       </Panel>
       <Separator className="resize-handle" />
