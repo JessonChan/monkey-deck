@@ -59,5 +59,42 @@ func SaveWindow(path string, s WindowState) error {
 	if err := os.WriteFile(tmp, b, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp) // rename 失败也清掉残留 .tmp,避免累积
+		return err
+	}
+	return nil
+}
+
+// MinVisible 是恢复位置时窗口必须与屏幕工作区重叠的最小尺寸(DIP)。
+const MinVisible = 100
+
+// Bounds 是一个轴对齐矩形(屏幕工作区或窗口几何),纯值,不耦合 GUI 库,便于单测。
+type Bounds struct {
+	X, Y, Width, Height int
+}
+
+// intersect 返回与 o 的交集矩形;不相交返回零值。
+func (b Bounds) intersect(o Bounds) Bounds {
+	maxL := max(b.X, o.X)
+	maxT := max(b.Y, o.Y)
+	minR := min(b.X+b.Width, o.X+o.Width)
+	minB := min(b.Y+b.Height, o.Y+o.Height)
+	if minR > maxL && minB > maxT {
+		return Bounds{X: maxL, Y: maxT, Width: minR - maxL, Height: minB - maxT}
+	}
+	return Bounds{}
+}
+
+// VisibleOn 报告窗口 b 是否与某个工作区有至少 MinVisible×MinVisible 的重叠。
+// 用于跳过「恢复到屏幕外」的位置(如保存时的外接显示器已拔除),
+// 否则窗口会落到可视区域之外,看起来像应用没启动。
+func VisibleOn(workAreas []Bounds, b Bounds) bool {
+	for _, wa := range workAreas {
+		ix := b.intersect(wa)
+		if ix.Width >= MinVisible && ix.Height >= MinVisible {
+			return true
+		}
+	}
+	return false
 }

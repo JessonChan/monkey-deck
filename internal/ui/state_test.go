@@ -63,3 +63,25 @@ func TestWindowStateExportsForJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestVisibleOn(t *testing.T) {
+	// 单屏 1920x1080,工作区从 (0,30) 起(顶部 30px 菜单栏)。
+	primary := Bounds{X: 0, Y: 30, Width: 1920, Height: 1050}
+	cases := []struct {
+		name     string
+		workArea []Bounds
+		win      Bounds
+		want     bool
+	}{
+		{"窗口在屏幕内", []Bounds{primary}, Bounds{X: 100, Y: 100, Width: 1280, Height: 840}, true},
+		{"部分可见且 ≥100x100", []Bounds{primary}, Bounds{X: 1800, Y: 900, Width: 800, Height: 600}, true}, // 与屏幕重叠 120x180
+		{"完全在屏幕外(外接显示器已拔除)", []Bounds{primary}, Bounds{X: 3000, Y: 200, Width: 1280, Height: 840}, false},
+		{"重叠不足 100px(仅缝隙)", []Bounds{primary}, Bounds{X: 1919, Y: 100, Width: 800, Height: 600}, false},
+		{"无屏幕数据(降级:不恢复)", nil, Bounds{X: 100, Y: 100, Width: 1280, Height: 840}, false},
+	}
+	for _, c := range cases {
+		if got := VisibleOn(c.workArea, c.win); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+}

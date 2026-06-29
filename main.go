@@ -59,9 +59,17 @@ func main() {
 		URL:              "/",
 	}
 	// 有记录且非最大化:恢复到上次位置;首次启动(无记录)由系统居中。
+	// 校验位置仍在某块屏幕内,否则跳过恢复(防止外接显示器拔除后窗口落到屏幕外)。
 	if saved.Width >= ui.MinWidth && saved.Height >= ui.MinHeight && !saved.Maximized {
-		opts.InitialPosition = application.WindowXY
-		opts.X, opts.Y = saved.X, saved.Y
+		rect := ui.Bounds{X: saved.X, Y: saved.Y, Width: saved.Width, Height: saved.Height}
+		var workAreas []ui.Bounds
+		for _, s := range app.Screen.GetAll() {
+			workAreas = append(workAreas, ui.Bounds{X: s.WorkArea.X, Y: s.WorkArea.Y, Width: s.WorkArea.Width, Height: s.WorkArea.Height})
+		}
+		if ui.VisibleOn(workAreas, rect) {
+			opts.InitialPosition = application.WindowXY
+			opts.X, opts.Y = saved.X, saved.Y
+		}
 	}
 	// 上次最大化:最大化打开(最大化时让系统居中逻辑接管,避免 maximise 后再 setPosition 干扰)。
 	if saved.Maximized {
@@ -90,6 +98,9 @@ func main() {
 	})
 	win.OnWindowEvent(events.Common.WindowUnMaximise, func(event *application.WindowEvent) {
 		cur.Maximized = false
+		// 显式捕获还原后的几何,不依赖「UnMaximise 之后必跟 WindowDidResize」的顺序。
+		cur.Width, cur.Height = win.Size()
+		cur.X, cur.Y = win.Position()
 	})
 	win.OnWindowEvent(events.Common.WindowClosing, func(event *application.WindowEvent) {
 		if err := ui.SaveWindow(statePath, cur); err != nil {

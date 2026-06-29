@@ -131,6 +131,16 @@
 
 ## G. 工作日志(追加,最新在上)
 
+### 2026-06-29(fix:OCR 代码审查修复 3 项 —— tmp 残留 / 离屏校验 / UnMaximise 几何)
+- **起因**:用 `ocr review -c <窗口状态 commit>` 对窗口状态功能做 AI 代码审查,得 5 条意见,用户拍板改其中 3 条。
+- **改的 3 条**:
+  1. **`internal/ui/state.go` SaveWindow**:`os.Rename` 失败后残留 `.tmp` 无清理 → 失败路径补 `os.Remove(tmp)`。
+  2. **`main.go` 恢复位置离屏校验**:直接用 saved X/Y 恢复,若上次保存在外接显示器、现已拔除,窗口落到屏幕外像「应用没启动」。新增纯函数 `ui.VisibleOn(workAreas, rect)`(窗口与某屏幕工作区重叠 ≥100×100 DIP 才恢复,否则降级为系统居中);main.go 取 `app.Screen.GetAll()` 的 WorkArea 调用之。**做成纯函数 + 单测**(放 ui 包,避开 main 包 embed 依赖导致不可测的问题)。
+  3. **`main.go` UnMaximise handler**:原只置 `Maximized=false`,依赖「UnMaximise 之后必跟 WindowDidResize」的事件顺序更新几何(平台相关不可靠)→ 在 UnMaximise 里显式读 `Size()/Position()` 捕获还原后几何。
+- **不改的 2 条(已评估)**:④「未 fsync、原子写入措辞」——UI 状态文件加 fsync 属过度设计(只建议改注释措辞,本轮未动);⑤「`cur` 跨 handler 无锁」——Wails3 窗口事件在 macOS 是 NSWindow 回调全在主线程,实际无竞争,KISS 不加。
+- **改了哪些文件**:`internal/ui/{state.go(SaveWindow 清理 + Bounds/VisibleOn), state_test.go(TestVisibleOn)}`、`main.go`、`PROCESS.md`(本节)。
+- **验证**:`go test ./internal/ui/` ✅(5 用例,含 `TestVisibleOn` 离屏/缝隙/部分可见/无屏幕数据);`go test ./internal/...` ✅(7 packages);`go vet ./internal/...` 干净;`gofmt -l` 干净;`go build ./...` ✅(临时占位 dist 验证 main 编译)。
+
 ### 2026-06-29(feat:窗口尺寸/位置/最大化记忆 —— ui_state.json)
 - **起因**:用户要求「打开时记住上一次的窗口状态——上次默认窗口就用默认尺寸,上次最大化就最大化打开」。讨论落盘方式后定:用本地 JSON 文件(不进 SQLite,因窗口几何是 UI 运行时状态非业务数据),文件名经讨论定为 `ui_state.json`(留 UI state 扩展空间,不放结构性配置)。
 - **设计**:
