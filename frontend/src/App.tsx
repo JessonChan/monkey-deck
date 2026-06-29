@@ -251,12 +251,23 @@ export default function App() {
     });
   }, []);
 
-  // 选项目 → 加载 sessions。
+  // 选项目 → 加载 sessions。切项目时清空所有 per-session 缓存,防止旧项目的
+  // streaming/items 等残留泄漏到新项目(尤其 loadedSessionsRef 不清会导致跳过 DB 重载)。
   const selectProject = useCallback(
     async (projectId: string) => {
       setSelectedProjectId(projectId);
       setSelectedSessionId(null);
-      setQueueBySession({}); queueBySessionRef.current = {}; setDraftBySession({});
+      setQueueBySession({}); queueBySessionRef.current = {};
+      setDraftBySession({});
+      setItemsBySession({});
+      setStatusBySession({});
+      setStatusDetailBySession({});
+      setPermissionBySession({});
+      setUsageBySession({});
+      setHasMoreBySession({});
+      setLoadingMoreBySession({});
+      loadedSessionsRef.current = new Set();
+      oldestSeqRef.current = {};
       userStoppedRef.current = false;
       await refreshSessions(projectId);
     },
@@ -320,12 +331,15 @@ export default function App() {
     }
   }, [loadingMoreBySession, hasMoreBySession, messagesToItems]);
 
-  // 新建 session。
+  // 新建 session:预初始化空状态(防止 openSession 异步加载窗口期读到残留)。
   const createSession = useCallback(async () => {
     if (!selectedProjectId) return;
     try {
       const se = await ChatService.CreateSession(selectedProjectId, "");
       if (se) {
+        setItemsBySession((prev) => ({ ...prev, [se.id]: [] }));
+        setStatusBySession((prev) => ({ ...prev, [se.id]: "empty" }));
+        loadedSessionsRef.current.add(se.id);
         await refreshSessions(selectedProjectId);
         await openSession(se.id);
       }
