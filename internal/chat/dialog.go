@@ -1,6 +1,9 @@
 package chat
 
 import (
+	"os/exec"
+	"runtime"
+
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -39,4 +42,16 @@ func (s *ChatService) PickFiles() ([]string, error) {
 		return nil, err
 	}
 	return selection, nil
+}
+
+// RevealPath 在系统文件管理器中打开指定路径(macOS Finder / Windows 资源管理器 / Linux xdg)。
+func (s *ChatService) RevealPath(path string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", path).Start()
+	case "windows":
+		return exec.Command("explorer", path).Start()
+	default:
+		return exec.Command("xdg-open", path).Start()
+	}
 }

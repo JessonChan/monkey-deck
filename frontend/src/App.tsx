@@ -269,19 +269,21 @@ export default function App() {
     [messagesToItems, sessions]
   );
 
-  // 新建 session。
-  const createSession = useCallback(async () => {
-    if (!selectedProjectId) return;
+  // 新建 session。projectId 为空时用当前选中项目(每个项目项有自己的新对话按钮)。
+  const createSession = useCallback(async (projectId?: string) => {
+    const pid = projectId ?? selectedProjectId;
+    if (!pid) return;
     try {
-      const se = await ChatService.CreateSession(selectedProjectId, "");
+      if (pid !== selectedProjectId) await selectProject(pid);
+      const se = await ChatService.CreateSession(pid, "");
       if (se) {
-        await refreshSessions(selectedProjectId);
+        await refreshSessions(pid);
         await openSession(se.id);
       }
     } catch (e) {
       setError(String(e));
     }
-  }, [selectedProjectId, refreshSessions, openSession]);
+  }, [selectedProjectId, refreshSessions, openSession, selectProject]);
 
   // 发送消息:idle 直发;prompting(一轮进行中)入前端队列,回合结束自动续发(§5.4 协议无 queue)。
   const sendMessage = useCallback(
