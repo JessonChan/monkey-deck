@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import { Plus, ChevronDown, Folder, X } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2 } from "lucide-react";
 
 interface Props {
   projects: Project[];
@@ -10,17 +10,20 @@ interface Props {
   selectedSessionId: string | null;
   onSelectProject: (id: string) => void;
   onSelectSession: (id: string) => void;
-  onCreateSession: () => void;
+  onCreateSession: (projectId: string) => void;
   onAddProject: () => void;
   onAddProjectByPath: (path: string) => void;
   onRemoveProject: (id: string) => void;
   statusBySession: Record<string, string>;
+  activityBySession: Record<string, "thinking" | "executing" | "replying">;
 }
 
 export default function Sidebar(props: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
   const [pathInput, setPathInput] = useState("");
+  const [ctx, setCtx] = useState<{ x: number; y: number; project: Project } | null>(null);
+  const [confirm, setConfirm] = useState<Project | null>(null);
 
   const toggle = (id: string) =>
     setExpanded((prev) => {
@@ -51,6 +54,23 @@ export default function Sidebar(props: Props) {
     if ((e.target as HTMLElement).closest("button, input, a")) return;
     void ChatService.ToggleMaximise();
   };
+
+  // 右键菜单:外部点击/调整窗口关闭;Esc 关闭菜单与确认框(§4.2)。
+  useEffect(() => {
+    if (!ctx && !confirm) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setCtx(null); setConfirm(null); } };
+    const closeCtx = () => setCtx(null);
+    window.addEventListener("keydown", onKey);
+    if (ctx) {
+      window.addEventListener("mousedown", closeCtx);
+      window.addEventListener("resize", closeCtx);
+    }
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", closeCtx);
+      window.removeEventListener("resize", closeCtx);
+    };
+  }, [ctx, confirm]);
 
   return (
     <aside className="sidebar" data-testid="sidebar">
@@ -87,7 +107,10 @@ export default function Sidebar(props: Props) {
           const isOpen = expanded.has(p.id) || props.selectedProjectId === p.id;
           return (
             <div key={p.id} className="project-item-wrap">
-              <div className={`project-item ${props.selectedProjectId === p.id ? "active" : ""}`}>
+              <div
+                className={`project-item ${props.selectedProjectId === p.id ? "active" : ""}`}
+                onContextMenu={(e) => { e.preventDefault(); setCtx({ x: e.clientX, y: e.clientY, project: p }); }}
+              >
                 <button className={`caret ${isOpen ? "open" : ""}`} onClick={() => toggle(p.id)}>
                   <ChevronDown size={13} style={{ transform: isOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }} />
                 </button>
@@ -95,15 +118,20 @@ export default function Sidebar(props: Props) {
                   <Folder size={15} />
                   <span className="project-name" title={p.path}>{p.name}</span>
                 </button>
-                <button className="icon-btn small" onClick={() => props.onRemoveProject(p.id)} title="移除项目">
-                  <X size={13} />
+                <button className="icon-btn small" onClick={() => props.onCreateSession(p.id)} title="新对话" data-testid={`new-session-${p.id}`}>
+                  <Plus size={13} />
                 </button>
               </div>
               {isOpen && props.selectedProjectId === p.id && (
                 <div className="session-list">
                   {props.sessions.map((s) => {
                     const st = props.statusBySession[s.id];
-                    const cls = st === "prompting" || st === "started" ? "running" : st === "error" ? "error" : "";
+                    const active = st === "prompting" || st === "started";
+                    const act = props.activityBySession[s.id];
+                    const cls = st === "error" ? "error" : active ? act ?? "running" : "";
+                    const label = st === "error" ? "出错"
+                      : active ? ({ thinking: "思考中", executing: "执行中", replying: "回复中" } as Record<string, string>)[act ?? ""] ?? "运行中"
+                      : "";
                     return (
                       <button
                         key={s.id}
@@ -111,21 +139,45 @@ export default function Sidebar(props: Props) {
                         data-testid={`session-${s.id}`}
                         onClick={() => props.onSelectSession(s.id)}
                       >
-                        <span className={`session-dot ${cls}`} />
+                        <span className={`session-dot ${cls}`} title={label} />
                         <span className="session-label">{s.title || "新对话"}</span>
                       </button>
                     );
                   })}
-                  <button className="session-item new" onClick={props.onCreateSession} data-testid="new-session">
-                    <Plus size={13} />
-                    <span className="session-label">新对话</span>
-                  </button>
                 </div>
               )}
             </div>
           );
         })}
       </div>
+
+      {ctx && (
+        <div className="ctx-menu" style={{ left: ctx.x, top: ctx.y }} onMouseDown={(e) => e.stopPropagation()}>
+          <button className="ctx-item" onClick={() => { void navigator.clipboard?.writeText(ctx.project.path); setCtx(null); }}>
+            <Copy size={13} /> 复制工作目录
+          </button>
+          <button className="ctx-item" onClick={() => { void ChatService.RevealPath(ctx.project.path); setCtx(null); }}>
+            <FolderOpen size={13} /> 在 Finder 打开
+          </button>
+          <div className="ctx-sep" />
+          <button className="ctx-item danger" onClick={() => { setConfirm(ctx.project); setCtx(null); }}>
+            <Trash2 size={13} /> 移除项目
+          </button>
+        </div>
+      )}
+
+      {confirm && (
+        <div className="modal-overlay" onClick={() => setConfirm(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">移除项目?</div>
+            <div className="modal-del-target" title={confirm.path}>{confirm.name} · {confirm.path}</div>
+            <div className="modal-actions">
+              <button className="modal-btn ghost" onClick={() => setConfirm(null)}>取消</button>
+              <button className="modal-btn danger" onClick={() => { props.onRemoveProject(confirm.id); setConfirm(null); }}>移除</button>
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }

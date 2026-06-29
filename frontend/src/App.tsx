@@ -31,6 +31,7 @@ export default function App() {
   const [usageBySession, setUsageBySession] = useState<Record<string, Usage>>({});
   const [statusBySession, setStatusBySession] = useState<Record<string, StatusPayload["status"] | "empty">>({});
   const [statusDetailBySession, setStatusDetailBySession] = useState<Record<string, string>>({});
+  const [activityBySession, setActivityBySession] = useState<Record<string, "thinking" | "executing" | "replying">>({});
   const [permissionBySession, setPermissionBySession] = useState<Record<string, PermissionPrompt | null>>({});
   const [error, setError] = useState<string | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);     // 前端 FIFO 队列(turn 中发的消息)
@@ -138,7 +139,16 @@ export default function App() {
   useEffect(() => {
     void refreshProjects();
     const offUpdate = Events.On("chat:event", (e: { data: SessionEvent }) => {
-      if (e.data) applyEvent(e.data);
+      if (!e.data) return;
+      applyEvent(e.data);
+      // 细粒度活动相位(供侧栏状态点区分思考/执行/回复):取最近事件 kind。
+      const k = e.data.kind;
+      const sid = e.data.sessionId;
+      let act: "thinking" | "executing" | "replying" | null = null;
+      if (k === "agent_thought_chunk") act = "thinking";
+      else if (k === "tool_call" || k === "tool_call_update") act = e.data.toolStatus === "completed" || e.data.toolStatus === "failed" ? "thinking" : "executing";
+      else if (k === "agent_message_chunk") act = "replying";
+      if (act) setActivityBySession((p) => (p[sid] === act ? p : { ...p, [sid]: act }));
     });
     const offPerm = Events.On("chat:permission", (e: { data: PermissionPrompt }) => {
       // 权限请求也按 session 缓存;切走再切回仍在。
@@ -161,6 +171,7 @@ export default function App() {
             [s.sessionId]: cur.map((it) => (it.type === "agent" || it.type === "thought" ? { ...it, streaming: false } : it)),
           };
         });
+        setActivityBySession((p) => { if (!p[s.sessionId]) return p; const n = { ...p }; delete n[s.sessionId]; return n; });
       }
       // 回合结束后刷新 Git 面板的 diff(agent 可能改了文件)
       if (s.status === "idle") {
@@ -301,19 +312,21 @@ export default function App() {
     }
   }, [loadingMoreBySession, hasMoreBySession, messagesToItems]);
 
-  // 新建 session。
-  const createSession = useCallback(async () => {
-    if (!selectedProjectId) return;
+  // 新建 session。projectId 为空时用当前选中项目(每个项目项有自己的新对话按钮)。
+  const createSession = useCallback(async (projectId?: string) => {
+    const pid = projectId ?? selectedProjectId;
+    if (!pid) return;
     try {
-      const se = await ChatService.CreateSession(selectedProjectId, "");
+      if (pid !== selectedProjectId) await selectProject(pid);
+      const se = await ChatService.CreateSession(pid, "");
       if (se) {
-        await refreshSessions(selectedProjectId);
+        await refreshSessions(pid);
         await openSession(se.id);
       }
     } catch (e) {
       setError(String(e));
     }
-  }, [selectedProjectId, refreshSessions, openSession]);
+  }, [selectedProjectId, refreshSessions, openSession, selectProject]);
 
   // 发送消息:idle 直发;prompting(一轮进行中)入前端队列,回合结束自动续发(§5.4 协议无 queue)。
   const sendMessage = useCallback(
@@ -535,6 +548,7 @@ export default function App() {
           onAddProjectByPath={addProjectByPath}
           onRemoveProject={removeProject}
           statusBySession={statusBySession}
+          activityBySession={activityBySession}
         />
       </Panel>
       <Separator className="resize-handle" />
