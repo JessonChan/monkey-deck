@@ -130,3 +130,56 @@ func TestSessionUsagePersist(t *testing.T) {
 		t.Fatalf("usage not persisted via ListSessions: %+v", list)
 	}
 }
+
+// TestListMessagesBefore 校验游标分页:beforeSeq<=0 取最新一页 + hasMore 探测;翻页取更早的。
+func TestListMessagesBefore(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	p, err := s.CreateProject(ctx, "demo", "/tmp/pg", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := s.CreateSession(ctx, p.ID, "", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 插入 5 条消息(seq 1..5)。
+	for i := 0; i < 5; i++ {
+		if _, err := s.AppendMessage(ctx, sess.ID, "user", "", "msg", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 第一页 limit=2:应返回 3 条(limit+1),前端据此判断 hasMore。
+	page1, err := s.ListMessagesBefore(ctx, sess.ID, 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page1) != 3 {
+		t.Fatalf("page1 should return limit+1=3, got %d", len(page1))
+	}
+	if page1[0].Seq != 3 || page1[2].Seq != 5 {
+		t.Fatalf("page1 seq order wrong: %d,%d,%d", page1[0].Seq, page1[1].Seq, page1[2].Seq)
+	}
+
+	// 第二页:取 seq<3 的,limit=2 → 应返回 2 条(seq 1,2),hasMore=false。
+	page2, err := s.ListMessagesBefore(ctx, sess.ID, 3, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page2) != 2 {
+		t.Fatalf("page2 should return 2, got %d", len(page2))
+	}
+	if page2[0].Seq != 1 || page2[1].Seq != 2 {
+		t.Fatalf("page2 seq order wrong: %d,%d", page2[0].Seq, page2[1].Seq)
+	}
+
+	// 空页:seq<1 → 0 条。
+	empty, err := s.ListMessagesBefore(ctx, sess.ID, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("expected 0 messages before seq=1, got %d", len(empty))
+	}
+}

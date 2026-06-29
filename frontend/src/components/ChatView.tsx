@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useRef, useState, type ComponentPropsWithoutRef } from "react";
+import { Fragment, memo, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
@@ -33,6 +33,9 @@ interface Props {
   onRevokeQueue: (id: string) => void;
   composerValue: string;
   onComposerChange: (v: string) => void;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
 }
 
 const STATUS_MAP: Record<string, { label: string; cls: string }> = {
@@ -56,19 +59,54 @@ export default function ChatView(props: Props) {
   // 用户是否贴底:记最近一次滚动的「贴底」状态。新消息到来时只在贴底才自动滚,
   // 用户向上翻阅历史时不打断(避免每条新消息强制拽回底部)。
   const stickToBottomRef = useRef(true);
+  // 按 session 记忆滚动位置:切走时存 {top, stick},切回时恢复——用户读到哪里就从哪里继续。
+  const scrollStateRef = useRef<Map<string, { top: number; stick: boolean }>>(new Map());
+  const prevSessionIdRef = useRef<string>("");
+  // prepend(加载更多)检测:记录上一轮的首条 id + 容器高度,比较后算高度差补偿 scrollTop。
+  const prevFirstIdRef = useRef<string>("");
+  const prevHeightRef = useRef(0);
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
     // 距底 ≤ 80px 视为贴底(留出阅读余量,避免最后一行差几像素被判为「不在底部」)。
     stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 80;
+    // 持续记忆当前位置,切走时已是最新的。
+    scrollStateRef.current.set(props.session?.id || "", { top: el.scrollTop, stick: stickToBottomRef.current });
   };
-  // 性能:仅渲染最近 MAX_RENDER 条,封顶 DOM 节点数与内存(长对话不卡)。
-  const MAX_RENDER = 200;
-  const visible = items.length > MAX_RENDER ? items.slice(-MAX_RENDER) : items;
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [items, props.permission]);
+    if (!el) return;
+    const sessionId = props.session?.id || "";
+    // 切 session:瞬间定位(不动画,避免「乱滚」)。有记忆且不在底部 → 恢复原位;否则贴底(看最新)。
+    if (prevSessionIdRef.current !== sessionId) {
+      prevSessionIdRef.current = sessionId;
+      const saved = scrollStateRef.current.get(sessionId);
+      if (saved && !saved.stick) {
+        stickToBottomRef.current = false;
+        el.scrollTop = saved.top;
+      } else {
+        stickToBottomRef.current = true;
+        el.scrollTop = el.scrollHeight;
+      }
+      prevFirstIdRef.current = items.length > 0 ? items[0].id : "";
+      prevHeightRef.current = el.scrollHeight;
+      return; // 切换瞬间一次性定位,不走下面的逻辑。
+    }
+    // 加载更多(prepend):首条 id 变了 → 补偿高度差,保持用户视觉位置不动。
+    const firstId = items.length > 0 ? items[0].id : "";
+    if (firstId !== prevFirstIdRef.current && prevFirstIdRef.current !== "" && firstId) {
+      const delta = el.scrollHeight - prevHeightRef.current;
+      el.scrollTop += delta;
+      stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 80;
+      prevFirstIdRef.current = firstId;
+      prevHeightRef.current = el.scrollHeight;
+      return;
+    }
+    // 同一 session 内 items 变化(流式输出 / 历史加载完成):仅在贴底时跟随。
+    if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+    prevFirstIdRef.current = firstId;
+    prevHeightRef.current = el.scrollHeight;
+  }, [items, props.session?.id, props.permission]);
 
   const pct = props.usage.size > 0 ? Math.min(100, Math.round((props.usage.used / props.usage.size) * 100)) : 0;
   // 分级配色:上下文越满越警示(绿 → 琥珀 → 红),让占比一眼可读。
@@ -100,8 +138,12 @@ export default function ChatView(props: Props) {
 
       <div className="chat-body" ref={scrollRef} onScroll={onScroll} data-testid="chat-body">
         {items.length === 0 && <div className="chat-placeholder">发一条消息开始对话…</div>}
-        {items.length > visible.length && <div className="cap-hint">仅显示最近 {visible.length} 条(共 {items.length})</div>}
-        {visible.map((item, i) => (
+        {props.hasMore && (
+          <button className="load-more-btn" onClick={props.onLoadMore} disabled={props.loadingMore} data-testid="load-more">
+            {props.loadingMore ? "加载中…" : "加载更多"}
+          </button>
+        )}
+        {items.map((item, i) => (
           <Fragment key={item.id}>
             {/* 回合分隔:每条用户消息(首条除外)前插一条带时间的分隔线,让多轮对话边界清晰。 */}
             {item.type === "user" && i > 0 && <TurnDivider ts={item.ts} />}

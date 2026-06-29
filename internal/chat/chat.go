@@ -739,6 +739,12 @@ func (s *ChatService) LoadMessages(sessionID string) ([]store.Message, error) {
 	return s.st.ListMessages(s.ctx, sessionID)
 }
 
+// LoadMessagesPage 分页取历史消息(beforeSeq<=0 取最新一页)。返回 limit+1 条:
+// 前端用 len > limit 判断 hasMore,多出的那条 slice 掉。首次打开 session 用此方法做懒加载。
+func (s *ChatService) LoadMessagesPage(sessionID string, beforeSeq int64, limit int) ([]store.Message, error) {
+	return s.st.ListMessagesBefore(s.ctx, sessionID, beforeSeq, limit)
+}
+
 // --- Messaging ---
 
 // SendMessage 发送用户消息并驱动 opencode 回复(Prompt,§1.3)。
