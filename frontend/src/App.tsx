@@ -32,6 +32,7 @@ export default function App() {
   const [statusBySession, setStatusBySession] = useState<Record<string, StatusPayload["status"] | "empty">>({});
   const [statusDetailBySession, setStatusDetailBySession] = useState<Record<string, string>>({});
   const [activityBySession, setActivityBySession] = useState<Record<string, "thinking" | "executing" | "replying">>({});
+  const [unreadBySession, setUnreadBySession] = useState<Record<string, boolean>>({});
   const [permissionBySession, setPermissionBySession] = useState<Record<string, PermissionPrompt | null>>({});
   const [error, setError] = useState<string | null>(null);
   const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({});  // 前端 FIFO 队列(按 session 隔离,切走保留)
@@ -176,6 +177,8 @@ export default function App() {
       }
       // 回合结束后刷新 Git 面板的 diff(agent 可能改了文件)
       if (s.status === "idle") {
+        // 未读:回合结束但用户没在看的 session → 标记未读(供侧栏尾部小圆点提示)。
+        if (s.sessionId !== selectedSessionIdRef.current) setUnreadBySession((p) => ({ ...p, [s.sessionId]: true }));
         const sid = selectedSessionIdRef.current;
         if (sid) { ChatService.SessionDiff(sid).then(d => setSessionDiff(d || "")).catch(() => {}); ChatService.SessionChanges(sid).then(setSessionChanges).catch(() => {}); }
       }
@@ -260,6 +263,7 @@ export default function App() {
   const openSession = useCallback(
     async (sessionId: string) => {
       setSelectedSessionId(sessionId);
+      setUnreadBySession((prev) => { if (!prev[sessionId]) return prev; const n = { ...prev }; delete n[sessionId]; return n; });
       setPermissionBySession((prev) => ({ ...prev, [sessionId]: null }));
       setComposerValue("");
       userStoppedRef.current = false;
@@ -555,6 +559,7 @@ export default function App() {
           onRemoveProject={removeProject}
           statusBySession={statusBySession}
           activityBySession={activityBySession}
+          unreadBySession={unreadBySession}
         />
       </Panel>
       <Separator className="resize-handle" />

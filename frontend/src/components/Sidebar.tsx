@@ -16,6 +16,7 @@ interface Props {
   onRemoveProject: (id: string) => void;
   statusBySession: Record<string, string>;
   activityBySession: Record<string, "thinking" | "executing" | "replying">;
+  unreadBySession: Record<string, boolean>;
 }
 
 export default function Sidebar(props: Props) {
@@ -132,15 +133,21 @@ export default function Sidebar(props: Props) {
                     const label = st === "error" ? "出错"
                       : active ? ({ thinking: "思考中", executing: "执行中", replying: "回复中" } as Record<string, string>)[act ?? ""] ?? "运行中"
                       : "";
+                    const unread = !active && props.unreadBySession[s.id];
                     return (
                       <button
                         key={s.id}
-                        className={`session-item ${props.selectedSessionId === s.id ? "active" : ""}`}
+                        className={`session-item ${props.selectedSessionId === s.id ? "active" : ""} ${active ? "loading" : ""}`}
                         data-testid={`session-${s.id}`}
                         onClick={() => props.onSelectSession(s.id)}
                       >
                         <span className={`session-dot ${cls}`} title={label} />
                         <span className="session-label">{s.title || "新对话"}</span>
+                        {active ? (
+                          <span className="tail-spinner" title="生成中" />
+                        ) : unread ? (
+                          <span className="unread-dot" title="有未读回复" />
+                        ) : null}
                       </button>
                     );
                   })}
