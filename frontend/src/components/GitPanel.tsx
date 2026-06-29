@@ -25,6 +25,8 @@ interface Props {
   onDiff: (path: string, staged: boolean) => Promise<string>;
   // 一轮对话进行中:禁用写操作,避免与 opencode 写文件竞争 git index。
   busy: boolean;
+  // embedded=true 时隐藏顶部标题行(由 SidePanel 的 tab 接管标题)。
+  embedded?: boolean;
 }
 
 // 状态字母 → 文案 + 配色(VS Code 风格)。
@@ -48,6 +50,7 @@ export default function GitPanel({
   onCommit,
   onDiff,
   busy,
+  embedded,
 }: Props) {
   const [message, setMessage] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -142,11 +145,13 @@ export default function GitPanel({
 
   return (
     <aside className={"git-panel" + (busy ? " git-panel-busy" : "")} data-testid="git-panel">
-      <div className="git-panel-head">
-        <Folder size={13} />
-        <span className="git-panel-title">源代码管理</span>
-        {busy && <span className="git-panel-busy-tag">对话中</span>}
-      </div>
+      {!embedded && (
+        <div className="git-panel-head">
+          <Folder size={13} />
+          <span className="git-panel-title">源代码管理</span>
+          {busy && <span className="git-panel-busy-tag">对话中</span>}
+        </div>
+      )}
 
       <div className="git-scm-branch" title={branch}>
         <GitBranch size={12} />

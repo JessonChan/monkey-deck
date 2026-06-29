@@ -45,11 +45,12 @@
 
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
-- **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理面板 SCM 化 + 会话标题修复已完成;源码管理逻辑审查 5 项修复完成;继续对话体验打磨
+- **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理 SCM 化(含审查 5 项修复)+ 会话标题修复 + 右侧文件管理面板(tab:文件/源代码管理)均已完成;继续对话体验打磨
 - **最后更新**:2026-06-29
-- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、会话标题(opencode 经 session/list 权威标题 + 瞬时 fallback)、源码管理 SCM(提交/暂存/丢弃/单文件 diff/并发守卫)、三栏可拖拽分隔线。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
+- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、会话标题(opencode 经 session/list 权威标题 + 瞬时 fallback)、源码管理 SCM(提交/暂存/丢弃/单文件 diff/并发守卫)、三栏可拖拽分隔线、**右侧文件浏览/管理(树+预览+增删改)**。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
 - **近期改动汇总**:
-  - **源码管理逻辑审查 5 项修复**(2026-06-29):① merge 不再 AutoCommit(只合并已提交内容,SCM 面板成提交唯一真相)② StatusFiles 修重命名 `->`/空格引号 ③ 单文件 diff(FileDiff+点击展开)④ turn 进行中禁用 SCM 写操作(前后端 busy 守卫)。详见 §G。
+  - **源码管理逻辑审查 5 项修复**(2026-06-29):① merge 不再 AutoCommit(SCM 面板成提交唯一真相)② StatusFiles 修重命名 `->`/引号 ③ 单文件 diff(FileDiff+点击展开)④ turn 进行中禁用 SCM 写操作(前后端 busy 守卫)。详见 §G。
+  - **右侧文件管理面板**(2026-06-29):新增 `internal/fsview`(受限工作目录浏览/管理,git 仓库尊重 .gitignore)+ chat 7 个绑定 + SidePanel(tab:文件/源代码管理)+ FilePanel(懒加载树、git 状态徽标、文件预览、新建/重命名/删除)。详见 §G。
   - **会话标题修复**(2026-06-29):经 session/list 取 opencode 权威标题(三层:本地 fallback + session/list 轮询 + session_info_update 预留)+ 能力守卫 `CanListSessions`(协议 MUST);撤销 LLM 自生成方案。详见 §G。
   - **三栏可拖拽分隔线**(2026-06-29):react-resizable-panels v4(Group/Panel/Separator),尺寸持久化 localStorage。详见 §G。
   - **源码管理面板 SCM 化**(2026-06-28):后端 worktree `FileChange.Staged` + `Stage/Unstage/Discard/Commit` 原语 + `StatusFiles` 拆暂存/工作区;chat 加 4 个 SCM 绑定;前端 GitPanel 重建成 VSCode SCM(提交框 + 暂存/工作区两组 + 逐文件操作);修 WKWebView confirm 静默失效(discard 改显式点击)。
@@ -146,6 +147,27 @@
   - `frontend/bindings/*(regen,新增 SessionFileDiff)`
 - **验证**:`go test ./internal/...` 全过(含 `TestStatusRenameSpacesAndDiff` rename/空格/FileDiff 三场景、`TestMergeSessionNoAutoCommit` 已提交合并+未提交不合并+提示、`TestSCMBusyGuard` 5 写操作 busy 拒绝+读操作放行);`go vet ./internal/...` 干净;`go build ./...` 通过;前端 `bunx tsc --noEmit` + `bun run build:dev`(321 modules)通过。
 - **未提交**:改动跨多文件、属同一逻辑主题(源码管理审查),建议按 A/B+C/D/E 拆原子 commit 或作为一组「源码管理审查修复」提交。
+### 2026-06-29(feat:右侧「文件」管理面板 —— 仿 VSCode 侧栏,文件树 + 预览 + 增删改)
+- **起因**:用户要求「右侧增加一个本地文件管理,参照其他项目认真思考」。现状右侧只有 GitPanel(SCM),仅 git 分支 session 显示。需求 = 一个能浏览 session 工作目录文件、并做基本管理的面板。
+- **调研**(§5.3 references 优先):VSCode Explorer(`references/vscode/.../files/browser/`)—— `ExplorerItem` 节点模型、`FileSorter`(目录优先+字母序)、`ExplorerDecorationsProvider`(git 状态徽标)、`ExplorerDataSource`(`IAsyncDataSource` 懒加载)。照其数据模型与行为做轻量版,不搬其复杂度。
+- **设计**:右侧由「仅 SCM」升级为「tab:文件 / 源代码管理」(仿 VSCode 侧栏 ViewContainer)。任意 session 都显示右侧面板(非 git session 只有「文件」tab,git session 两个 tab)。
+- **后端 `internal/fsview/fsview.go`**(新增):
+  - `FileNode{Name,Path(IsDir),Size}` —— 一层子项(懒加载,目录优先+字母序)。
+  - `ListDir(root, rel)`:git 仓库用 `git ls-files --cached --others --exclude-standard --full-name` 取可见集合(尊重 .gitignore),构造直接子项;非 git 降级 `os.ReadDir`(隐藏 `.git`)。
+  - `ReadFile`:文本正常返回、二进制(含 NUL)/过大(>2MB)给提示、目录报错。
+  - `CreateFile/CreateDir/DeletePath/RenamePath`:基本管理原语。
+  - **安全 `safeJoin`**:路径钉 root,`filepath.Join` 清洗 `../` + `resolveExisting`(逐级 EvalSymlinks 到最近存在祖先)+ `filepath.Rel` 越界判定,防 `../` 与符号链接逃逸。**坑**:macOS `/var → /private/var` 符号链接会让已解析的 root 与未解析的不存在目标基准不一致 → `Rel` 误判越界;`resolveExisting` 对 root 与目标都解析到同基准修之。
+  - 禁删根(`target == root` 拒绝)。
+- **后端 `internal/chat/chat.go`**:新增 `cwdOf`(worktree 优先,否则项目目录,任意 session 有值;区别于 `worktreeOf` 非 git 报错)+ 7 个绑定:`SessionListDir/ReadFile/CreateFile/CreateDir/DeletePath/RenamePath`。
+- **前端**:
+  - `SidePanel.tsx`(新):tab 容器,「文件 / 源代码管理」切换;非分支 session 自动回到「文件」tab。
+  - `FilePanel.tsx`(新):懒加载树(`childrenByDir` + `expanded` Set,展开时按需 `SessionListDir`)、git 状态徽标(从 `changes` 建 `statusByPath`,文件行字母徽标 + 目录含变更高亮)、文件点击预览(全屏 modal,代码 pre + 复制 + Esc 关闭)、工具栏(新建文件/文件夹/刷新)、行内操作(重命名/删除,hover 显)、turn 结束(status→idle)自动刷新已展开目录让 agent 改动显现。
+  - `GitPanel.tsx`:加 `embedded` prop,内嵌时隐藏与 tab 重复的标题行。
+  - `App.tsx`:GitPanel → SidePanel;右侧 Panel 从「仅分支 session」改为「任意 session」(id `git`→`side`)。
+  - 弹窗用自建 modal(不依赖 WKWebView 不保证桥接的 `window.prompt/confirm`,呼应 §G 2026-06-28 discard 的坑)。
+- **改了哪些文件**:`internal/fsview/{fsview.go, fsview_test.go}`(新)、`internal/chat/chat.go`、`frontend/src/{App.tsx, components/{SidePanel(新), FilePanel(新), GitPanel}.tsx, index.css}`、`frontend/bindings/*`(regen,新增 `fsview/{models.js,index.js}` + chat 7 方法)、PROCESS.md(本节+§B)。
+- **验证**:`go test ./internal/fsview/` ✅(5 用例:越界/符号链接逃逸/git 列举+gitignore/读文件/增删改/非 git 列举);`go test ./internal/...` ✅(7 packages);`go build ./...` ✅;`bunx tsc --noEmit` ✅;`bun run build:dev` ✅(329 modules)。**未做实机验证**(待 `wails3 dev`):拖拽树展开、agent 改文件后刷新、预览大文件。
+- **下一步**:实机验证;可选 —— 文件树搜索/过滤、双击文件在主区打开编辑、拖拽排序。
 
 ### 2026-06-29(fix:会话标题取 opencode 权威标题(session/list)—— 能力守卫 + 撤销 LLM 自生成)
 - **背景**:上一版(2026-06-28)用「自己调 LLM 生成标题」修「标题一直是第一句话」。用户指出 opencode 每个 session 本就有标题,应直接取。复核发现上一版是「错路的正确实现」。

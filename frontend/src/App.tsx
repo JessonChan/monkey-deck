@@ -6,7 +6,7 @@ import type { ChatItem, PermissionPrompt, SessionEvent, StatusPayload, QueueItem
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import { Sparkles } from "lucide-react";
-import GitPanel from "./components/GitPanel";
+import SidePanel from "./components/SidePanel";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import type { FileChange } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 
@@ -529,13 +529,16 @@ export default function App() {
           )}
         </main>
       </Panel>
-      {activeSession?.branch && (
+      {selectedSessionId && activeSession && (
         <>
           <Separator className="resize-handle" />
-          <Panel id="git" defaultSize="18%" minSize="13%" maxSize="32%">
-            <GitPanel
-              branch={activeSession.branch}
+          <Panel id="side" defaultSize="20%" minSize="14%" maxSize="34%">
+            <SidePanel
+              sessionId={selectedSessionId}
+              rootName={selectedProject?.name || ""}
               changes={sessionChanges}
+              status={status}
+              branch={activeSession.branch || ""}
               mergeResult={mergeResult}
               onMerge={mergeSession}
               onStage={stageFiles}

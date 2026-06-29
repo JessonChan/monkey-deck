@@ -36,4 +36,5 @@ build/android/
 .vscode/
 *.swp
 
-# 注:Wails 生成的 bindings 走 `wails3 gen bindings` 重新生成,是否入库到脚手架时再定。
+# Wails 生成的 bindings(`wails3 gen bindings` 重新生成,属中间产物,不入库)
+frontend/bindings/
