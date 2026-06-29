@@ -171,11 +171,14 @@ input, textarea { font-family: inherit; }
 .session-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--text-3); }
 .session-dot.running { background: var(--green); animation: dot-pulse 1.4s infinite; }
+.session-dot.thinking { background: #ffd60a; animation: dot-pulse 1.4s infinite; }
+.session-dot.executing { background: var(--accent-2); animation: dot-pulse 1.4s infinite; }
+.session-dot.replying { background: var(--green); animation: dot-pulse 1.4s infinite; }
 .session-dot.error { background: var(--red); }
 @keyframes dot-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.5); }
-  70% { box-shadow: 0 0 0 4px rgba(48, 209, 88, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(48, 209, 88, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.5); }
+  70% { box-shadow: 0 0 0 4px rgba(255, 255, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
 }
 /* ─── 右键菜单 ─── */
 .ctx-menu {

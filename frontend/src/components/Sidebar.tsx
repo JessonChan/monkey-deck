@@ -15,6 +15,7 @@ interface Props {
   onAddProjectByPath: (path: string) => void;
   onRemoveProject: (id: string) => void;
   statusBySession: Record<string, string>;
+  activityBySession: Record<string, "thinking" | "executing" | "replying">;
 }
 
 export default function Sidebar(props: Props) {
@@ -125,7 +126,12 @@ export default function Sidebar(props: Props) {
                 <div className="session-list">
                   {props.sessions.map((s) => {
                     const st = props.statusBySession[s.id];
-                    const cls = st === "prompting" || st === "started" ? "running" : st === "error" ? "error" : "";
+                    const active = st === "prompting" || st === "started";
+                    const act = props.activityBySession[s.id];
+                    const cls = st === "error" ? "error" : active ? act ?? "running" : "";
+                    const label = st === "error" ? "出错"
+                      : active ? ({ thinking: "思考中", executing: "执行中", replying: "回复中" } as Record<string, string>)[act ?? ""] ?? "运行中"
+                      : "";
                     return (
                       <button
                         key={s.id}
@@ -133,7 +139,7 @@ export default function Sidebar(props: Props) {
                         data-testid={`session-${s.id}`}
                         onClick={() => props.onSelectSession(s.id)}
                       >
-                        <span className={`session-dot ${cls}`} />
+                        <span className={`session-dot ${cls}`} title={label} />
                         <span className="session-label">{s.title || "新对话"}</span>
                       </button>
                     );
