@@ -28,6 +28,7 @@ type fakeChat struct {
 	cancelled int
 	block     chan struct{} // 关闭则所有阻塞 Prompt 返回 end_turn
 	started   chan struct{} // 每次 Prompt 进入时发信号(buffered,防丢)
+	title     string        // SessionTitle 返回值(模拟 opencode 经 session/list 给的标题)
 }
 
 func newFakeChat() *fakeChat {
@@ -58,6 +59,7 @@ func (f *fakeChat) Prompt(ctx context.Context, msg string, _ time.Duration) (acp
 
 func (f *fakeChat) Close() {}
 func (f *fakeChat) RespondPermission(_, _ string) bool { return true }
+func (f *fakeChat) SessionTitle(_ context.Context) (string, error) { return f.title, nil }
 
 // release 放行所有阻塞的 Prompt(幂等),供 t.Cleanup 防止 goroutine 泄漏。
 func (f *fakeChat) release() {

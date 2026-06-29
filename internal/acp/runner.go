@@ -71,6 +71,10 @@ type ChatSession struct {
 	SessionID acp.SessionId
 	WorkDir   string
 	Model     string
+	// CanListSessions:agent 是否声明了 session/list 能力(Initialize 响应的
+	// capabilities.session.list)。协议硬约束:未声明时禁止调用 session/list
+	// (session-list.mdx:Clients MUST verify this capability before calling)。
+	CanListSessions bool
 }
 
 // NewChatSession 创建持久对话 session:spawn harness → initialize → newSession(cwd=workDir)。
@@ -93,6 +97,7 @@ func (r *Runner) NewChatSession(ctx context.Context, workDir string, onEvent fun
 	slog.Info("chat session created", "sessionId", sess.SessionId, "cwd", workDir, "agent", initResp.AgentInfo.Name)
 	cs := &ChatSession{
 		Runner: r, Cmd: cmd, Conn: conn, Handler: handler, SessionID: sess.SessionId, WorkDir: workDir, Model: r.Model,
+		CanListSessions: initResp.AgentCapabilities.SessionCapabilities.List != nil,
 	}
 	if cmd.Process != nil {
 		registerHarness(cmd.Process.Pid) // §3.2:注册活跃,reaper 保护其逃逸子进程
@@ -104,7 +109,7 @@ func (r *Runner) NewChatSession(ctx context.Context, workDir string, onEvent fun
 // 用于应用重启后恢复对话上下文(Cwd 必须匹配原 session)。
 func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string, onEvent func(SessionEvent), onPermission func(PermissionPrompt)) (*ChatSession, error) {
 	handler := NewHandler(workDir, onEvent, onPermission, 0)
-	cmd, conn, _, err := r.spawnAndInit(ctx, workDir, handler)
+	cmd, conn, initResp, err := r.spawnAndInit(ctx, workDir, handler)
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +130,7 @@ func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string,
 	slog.Info("chat session loaded", "sessionId", sessionID, "cwd", workDir)
 	cs := &ChatSession{
 		Runner: r, Cmd: cmd, Conn: conn, Handler: handler, SessionID: acp.SessionId(sessionID), WorkDir: workDir, Model: r.Model,
+		CanListSessions: initResp.AgentCapabilities.SessionCapabilities.List != nil,
 	}
 	if cmd.Process != nil {
 		registerHarness(cmd.Process.Pid)
@@ -226,6 +232,26 @@ func (cs *ChatSession) Prompt(ctx context.Context, message string, timeout time.
 // RespondPermission 透传给 handler(前端用户裁决权限请求,§3.4)。
 func (cs *ChatSession) RespondPermission(id, optionID string) bool {
 	return cs.Handler.RespondPermission(id, optionID)
+}
+
+// SessionTitle 通过 session/list 取 opencode 为本 session 生成的权威标题(§5.4 #14)。
+// opencode 实证不发 session_info_update 通知,但会把它生成的标题写进自身库并通过
+// session/list 的 SessionInfo.Title 暴露。返回空串 = 暂无标题或 session/list 不可用。
+func (cs *ChatSession) SessionTitle(ctx context.Context) (string, error) {
+	if !cs.CanListSessions {
+		// 协议硬约束:agent 未声明 session/list 能力时禁止调用(session-list.mdx)。
+		return "", nil
+	}
+	lr, err := cs.Conn.ListSessions(ctx, acp.ListSessionsRequest{})
+	if err != nil {
+		return "", err
+	}
+	for _, s := range lr.Sessions {
+		if s.SessionId == cs.SessionID && s.Title != nil {
+			return *s.Title, nil
+		}
+	}
+	return "", nil
 }
 
 // Close 销毁 session:kill 整个 harness 进程组 + 注销活跃(§3.2)。

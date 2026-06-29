@@ -45,10 +45,11 @@
 
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
-- **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理面板 SCM 化 + 对话体验打磨(切会话不丢进行中输出、token 占比持久化与展示)
-- **最后更新**:2026-06-29(三栏可拖拽分隔线 — react-resizable-panels v4)
-- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、源码管理 SCM。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
+- **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理面板 SCM 化 + 会话标题修复已完成;继续对话体验打磨
+- **最后更新**:2026-06-29
+- **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、会话标题(opencode 经 session/list 权威标题 + 瞬时 fallback)、源码管理 SCM、三栏可拖拽分隔线。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
 - **近期改动汇总**:
+  - **会话标题修复**(2026-06-29):经 session/list 取 opencode 权威标题(三层:本地 fallback + session/list 轮询 + session_info_update 预留)+ 能力守卫 `CanListSessions`(协议 MUST);撤销 LLM 自生成方案。详见 §G。
   - **三栏可拖拽分隔线**(2026-06-29):react-resizable-panels v4(Group/Panel/Separator),尺寸持久化 localStorage。详见 §G。
   - **源码管理面板 SCM 化**(2026-06-28):后端 worktree `FileChange.Staged` + `Stage/Unstage/Discard/Commit` 原语 + `StatusFiles` 拆暂存/工作区;chat 加 4 个 SCM 绑定;前端 GitPanel 重建成 VSCode SCM(提交框 + 暂存/工作区两组 + 逐文件操作);修 WKWebView confirm 静默失效(discard 改显式点击)。
   - **代码审查 5 项修复**(2026-06-28):persistTurn 顺序、startTurn 写失败感知、KillAll 限定本应用 pgid、ChatView 贴底滚屏、Composer keyCode。详见 §G。
@@ -108,6 +109,7 @@
 - **2026-06-26** — harness 懒启动(lazy spawn):CreateSession 只建 DB 记录,首条消息时才 spawn opencode。理由:opencode stdio ACP 空闲即断连(AGENTS.md §5.4 #9),懒启动避免 idle disconnect + 省资源。
 - **2026-06-28** — ACP 协议无 queue,「turn 中途发新消息」用 **cancel-then-reprompt**(`session/cancel` → 等 cancelled → 新 prompt),不造协议层 queue。理由:`session/prompt` 同步请求-响应,baseline 只保证 new/prompt/cancel/update,无排队语义(见 SDK schema + prompt-turn 文档)。排队缓冲做在前端(FIFO,turn 结束自动续发),打断走干净 `session/cancel`(InterruptAndSend 原子化)。见 AGENTS.md §5.4 #13。
 - **2026-06-29** — 三栏可拖拽分隔线用 `react-resizable-panels`(v4)而非手写。理由:§5.3 成熟库优先;v4 是重写版(Group/Panel/Separator,非旧 PanelGroup/PanelResizeHandle),尺寸用字符串百分比、`orientation`、`useDefaultLayout` 持久化。wesight 的 col-resize 是手写,仅作形态参考不照搬。
+- **2026-06-29** — 会话标题取 opencode 经 `session/list` 的权威标题,不在客户端调 LLM 自生成。理由:opencode 已生成标题并存自身库,客户端再调 LLM 是重复且更慢(第一版 LLM 方案已撤销,-320 行)。opencode 实证不发 `session_info_update`(协议首选实时路径,属 opencode 实现缺口),故退化到 `session/list` 轮询(turn 结束后取),并加 `CanListSessions` 能力守卫(协议 MUST:未声明 `sessionCapabilities.list` 不调用)。三层策略:本地 `FallbackTitle` 瞬时兜底 + `session/list` 轮询 + `session_info_update` 分支预留。见 AGENTS.md §5.4 #14。
 
 ---
 
@@ -123,6 +125,20 @@
 ---
 
 ## G. 工作日志(追加,最新在上)
+
+### 2026-06-29(fix:会话标题取 opencode 权威标题(session/list)—— 能力守卫 + 撤销 LLM 自生成)
+- **背景**:上一版(2026-06-28)用「自己调 LLM 生成标题」修「标题一直是第一句话」。用户指出 opencode 每个 session 本就有标题,应直接取。复核发现上一版是「错路的正确实现」。
+- **深入诊断(实证)**:
+  - opencode 1.17.10 **生成**标题并存自身库 `~/.local/share/opencode/opencode.db` 的 `session.title`(如 `ses_...` →「README 中文化及安装说明」)。
+  - 它**不发** ACP `session_info_update` 通知(上一版已证实),但**经 ACP `session/list` 的 `SessionInfo.Title` 暴露**:诊断程序 turn 结束后 `conn.ListSessions` 第一轮 poll(0 延迟)即返回该标题。
+  - → 真正的修法是协议级读 opencode 标题,不是自己再调一次 LLM(重复、更慢)。
+- **协议事实核查**(对 `references/agent-client-protocol` 官方 repo):`session_info_update`(经 session/update 推送)与 `session/list` 的 `SessionInfo.title` 均于 2026-03-09 稳定。前者是首选实时路径("without polling"),opencode 不发 = opencode 实现缺口(非协议无能力);后者是能力门控发现路径——`session-list.mdx`:Clients **MUST** 先查 `initialize` 响应的 `sessionCapabilities.list`,未声明 **MUST NOT** 调。
+- **修法**(三层):
+  1. `internal/acp/runner.go`:新增 `ChatSession.SessionTitle(ctx)`(调 `conn.ListSessions` 过滤本 session 取 `Title`),**加 `CanListSessions` 能力守卫**(协议 MUST:agent 未声明 `sessionCapabilities.list` 不调用;`NewChatSession`/`LoadChatSession` 从 `initResp.AgentCapabilities.SessionCapabilities.List` 捕获)。
+  2. `internal/chat/chat.go`:`chatConn` 接口加 `SessionTitle`;新增 `syncSessionTitle`(runPrompt/SendAndWaitSync 成功后调,标题不同则覆盖 DB + 推 `chat:session-meta`);`maybeAutoTitle` 用 `titlegen.FallbackTitle`(纯本地)作瞬时兜底;`handleEvent` 保留 `session_info_update` 分支(opencode 补发时自动生效)。**删除** `refineTitleAsync` 与 LLM 自生成路径。
+  3. `internal/titlegen`:精简为只保留 `FallbackTitle/Normalize/BuildContext`(瞬时兜底),删除 `Generate`/provider 解析/HTTP/thinking 重试等 ~150 行(冗余)。保留 wesight MIT 署名。
+- **改了哪些文件**:`internal/acp/{runner.go(SessionTitle+CanListSessions), runner_test.go(能力守卫回归,新)}`、`internal/chat/{chat.go(chatConn/syncSessionTitle/handleEvent/runPrompt/SendAndWaitSync/startTurn/maybeAutoTitle,删 refineTitleAsync), queue_test.go(fakeChat.SessionTitle+title 字段), title_test.go(新增 3 回归测试)}`、`internal/titlegen/{titlegen.go(精简),titlegen_test.go(精简),删 live_test.go}`、`AGENTS.md`(§5.4 #14 重写 + 协议核查⑤)、`PROCESS.md`(本节 + §B/§E)。
+- **验证**:`go test ./internal/...` 通过;`TestSyncSessionTitle{Overrides,EmptyNoClobber,SameNoRewrite}` ✅;`TestSessionTitleCapabilityGuard`(能力缺失不调 Conn)✅;诊断程序(listdiag,已删)证实 `session/list` 第一轮 poll 得 opencode 标题「README 中文化及安装说明」✅。
 
 ### 2026-06-29(feat:三栏布局可拖拽分隔线 — react-resizable-panels v4)
 - **起因**:用户要求左中右三栏分隔线可拖拽改变区域大小(原固定 256px / flex:1 / 240px,纯静态 border 发丝线)。
@@ -161,6 +177,10 @@
 - **改了哪些文件**:`internal/chat/chat.go`、`internal/acp/proc.go`、`internal/acp/proc_pgidfile_test.go`(新)、`frontend/src/components/ChatView.tsx`、`frontend/src/components/Composer.tsx`、`PROCESS.md`(本节 + §B)。
 - **验证**:`go build ./...` ✅;`go test ./internal/...` ✅(4 packages ok,含新增 3 用例);前端 `bunx tsc --noEmit` ✅。
 - **下一步**:可拆 3 个原子 commit(① chat #2#1 ② acp #21+test ③ 前端 #15#16)提交。
+
+### 2026-06-28(fix:会话标题自动生成 —— 修「标题一直是第一句话」)【已被 2026-06-29 方案取代,保留记录】
+- 上一版用「自己调 LLM 生成标题」修。后续发现 opencode 本就生成标题、经 session/list 暴露,遂改为直接读(见上条 2026-06-29)。LLM 自生成代码已删除。
+- (原始根因诊断仍有效:opencode 实证不发 `session_info_update`;只是标题来源从「自生成 LLM」更正为「opencode 经 session/list 暴露」。)
 
 ### 2026-06-28(fix:侧栏标题与 macOS 红绿灯重叠 + references 改绝对路径)
 - **fix(ui)**:侧栏标题「Monkey Deck」与 macOS 红绿灯重叠。窗口用 `MacTitleBarHiddenInset`(main.go),红绿灯 overlay 在 webview 上,原 `padding-left:76px` 间隙不足。改 `frontend/src/index.css` 的 `.sidebar-header` `padding-left` 76→84px。
