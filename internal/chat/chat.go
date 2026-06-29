@@ -415,6 +415,55 @@ func (s *ChatService) SessionChanges(sessionID string) ([]worktree.FileChange, e
 	return worktree.StatusFiles(se.WorktreePath)
 }
 
+// worktreeOf 返回 session 的 worktree 路径;无 worktree(非 git / 未建)返回错误。
+func (s *ChatService) worktreeOf(sessionID string) (string, error) {
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if se == nil || se.WorktreePath == "" {
+		return "", fmt.Errorf("session 无独立 worktree(非 git 项目或未建)")
+	}
+	return se.WorktreePath, nil
+}
+
+// SessionStage 暂存文件;paths 为空暂存全部(供源码管理面板,参考 VS Code SCM)。
+func (s *ChatService) SessionStage(sessionID string, paths []string) error {
+	wt, err := s.worktreeOf(sessionID)
+	if err != nil {
+		return err
+	}
+	return worktree.Stage(wt, paths...)
+}
+
+// SessionUnstage 取消暂存文件;paths 为空取消全部。
+func (s *ChatService) SessionUnstage(sessionID string, paths []string) error {
+	wt, err := s.worktreeOf(sessionID)
+	if err != nil {
+		return err
+	}
+	return worktree.Unstage(wt, paths...)
+}
+
+// SessionDiscard 丢弃工作区改动(已跟踪还原 / 未跟踪删除)。只作用于工作区,不动暂存区。
+func (s *ChatService) SessionDiscard(sessionID string, paths []string) error {
+	wt, err := s.worktreeOf(sessionID)
+	if err != nil {
+		return err
+	}
+	return worktree.Discard(wt, paths...)
+}
+
+// SessionCommit 提交已暂存的改动(只 commit index,不自动 add)。
+// 提交信息由前端传入,区别于 MergeSession 用 session 标题自动提交。
+func (s *ChatService) SessionCommit(sessionID, message string) error {
+	wt, err := s.worktreeOf(sessionID)
+	if err != nil {
+		return err
+	}
+	return worktree.Commit(wt, message)
+}
+
 // OpenSession 打开已有 session:有 acp_session_id 则 LoadSession 恢复,否则新建 ACP session(§1.4)。
 func (s *ChatService) OpenSession(sessionID string) error {
 	if s.isActive(sessionID) {
