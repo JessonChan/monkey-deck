@@ -8,6 +8,7 @@ import ChatView from "./components/ChatView";
 import { Sparkles } from "lucide-react";
 import SidePanel from "./components/SidePanel";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
+import { Tooltip } from "react-tooltip";
 import type { FileChange } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 
 // 按 session 隔离的状态:切走再切回时,进行中的流式输出 / 用量 / 状态 / 权限都保留在各自缓存里,
@@ -597,6 +598,7 @@ export default function App() {
 
 
   return (
+    <>
     <Group
       orientation="horizontal"
       className="app"
@@ -681,6 +683,8 @@ export default function App() {
         </>
       )}
     </Group>
+    <Tooltip id="md-tip" delayShow={400} />
+    </>
   );
 }
 
