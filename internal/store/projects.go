@@ -32,7 +32,7 @@ func (s *Store) CreateProject(ctx context.Context, name, path, model string) (*P
 // ListProjects 列出全部项目(按更新时间倒序)。
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id,name,path,model,created_at,updated_at FROM projects ORDER BY updated_at DESC`)
+		`SELECT id,name,path,model,created_at,updated_at,allow_external_dir FROM projects ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
@@ -40,7 +40,7 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	var out []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.CreatedAt, &p.UpdatedAt, &p.AllowExternal); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -52,8 +52,8 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 func (s *Store) GetProject(ctx context.Context, id string) (*Project, error) {
 	var p Project
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id,name,path,model,created_at,updated_at FROM projects WHERE id=?`, id).
-		Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.CreatedAt, &p.UpdatedAt)
+		`SELECT id,name,path,model,created_at,updated_at,allow_external_dir FROM projects WHERE id=?`, id).
+		Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.CreatedAt, &p.UpdatedAt, &p.AllowExternal)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -67,8 +67,8 @@ func (s *Store) GetProject(ctx context.Context, id string) (*Project, error) {
 func (s *Store) GetProjectByPath(ctx context.Context, path string) (*Project, error) {
 	var p Project
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id,name,path,model,created_at,updated_at FROM projects WHERE path=?`, path).
-		Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.CreatedAt, &p.UpdatedAt)
+		`SELECT id,name,path,model,created_at,updated_at,allow_external_dir FROM projects WHERE path=?`, path).
+		Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.CreatedAt, &p.UpdatedAt, &p.AllowExternal)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -83,6 +83,17 @@ func (s *Store) UpdateProject(ctx context.Context, id, name, model string) error
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE projects SET name=?, model=?, updated_at=? WHERE id=?`,
 		name, model, now(), id)
+	return err
+}
+
+// SetProjectAllowExternal 设置项目级「允许访问外部目录」(用户在权限弹窗选「本项目允许」时写)。
+// session 启动时由 service 读出加载进 handler(Handler.SetProjectAllowExternal)。
+func (s *Store) SetProjectAllowExternal(ctx context.Context, id string, allow bool) error {
+	v := 0
+	if allow {
+		v = 1
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE projects SET allow_external_dir=?, updated_at=? WHERE id=?`, v, now(), id)
 	return err
 }
 

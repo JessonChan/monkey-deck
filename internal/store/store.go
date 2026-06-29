@@ -33,12 +33,13 @@ type Message struct {
 
 // Project 一个项目(= 磁盘目录)。
 type Project struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Path      string `json:"path"`
-	Model     string `json:"model"`
-	CreatedAt int64  `json:"createdAt"`
-	UpdatedAt int64  `json:"updatedAt"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Path          string `json:"path"`
+	Model         string `json:"model"`
+	AllowExternal bool   `json:"allowExternalDir"` // 项目级「允许访问外部目录」(权限记忆,§3.4)
+	CreatedAt     int64  `json:"createdAt"`
+	UpdatedAt     int64  `json:"updatedAt"`
 }
 
 // Session 一个 ACP session(钉在 project 上)。

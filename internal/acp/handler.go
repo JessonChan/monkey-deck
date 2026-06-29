@@ -12,7 +12,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/acp-go-sdk"
@@ -70,6 +72,11 @@ type Handler struct {
 	pending   map[string]*pendingPermission // id → 待裁决
 	permSeq   int
 	permTTL   time.Duration // 权限裁决超时(超时后按默认动作放行/拒绝)
+	// 权限裁决记忆(§3.4):外部目录访问的「本会话/本项目允许」。命中时 RequestPermission
+	// 当场自动放行,不弹窗。sessionAllowExternal 内存(随 session 生灭);
+	// projectAllowExternal 由 service 从 DB 加载(startLive)+ 用户选「本项目」时更新。
+	sessionAllowExternal atomic.Bool
+	projectAllowExternal atomic.Bool
 }
 
 type pendingPermission struct {
@@ -117,6 +124,17 @@ func (h *Handler) RequestPermission(ctx context.Context, req acp.RequestPermissi
 	if req.ToolCall.Title != nil {
 		title = *req.ToolCall.Title
 	}
+	external := isExternalAccess(h.WorkDir, req.ToolCall.Locations)
+	slog.Debug("permission request", "title", title, "external", external, "locations", len(req.ToolCall.Locations), "sessionAllow", h.sessionAllowExternal.Load(), "projectAllow", h.projectAllowExternal.Load())
+
+	// 命中记忆(本会话/本项目曾选「允许」)→ 当场自动放行,不弹窗、不等(§3.4)。
+	// 同时消除「没人点 → 等 5 分钟超时」的卡顿。
+	if external && (h.sessionAllowExternal.Load() || h.projectAllowExternal.Load()) {
+		return acp.RequestPermissionResponse{
+			Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: pickAllowOption(req.Options)}},
+		}, nil
+	}
+
 	h.mu.Lock()
 	h.permSeq++
 	id := fmt.Sprintf("perm-%d-%d", time.Now().UnixNano(), h.permSeq)
@@ -126,7 +144,7 @@ func (h *Handler) RequestPermission(ctx context.Context, req acp.RequestPermissi
 	}
 	p := &pendingPermission{
 		prompt: PermissionPrompt{
-		ID: id, SessionID: string(req.SessionId), ToolName: toolKindStr(req.ToolCall.Kind), Title: title, Options: opts,
+			ID: id, SessionID: string(req.SessionId), ToolName: toolKindStr(req.ToolCall.Kind), Title: title, Options: opts,
 		},
 		response: make(chan string, 1),
 	}
@@ -142,11 +160,10 @@ func (h *Handler) RequestPermission(ctx context.Context, req acp.RequestPermissi
 	timer := time.NewTimer(h.permTTL)
 	defer timer.Stop()
 	select {
-	case selected := <-p.response:
+	case level := <-p.response:
+		opt := h.applyDecision(level, req.Options)
 		return acp.RequestPermissionResponse{
-			Outcome: acp.RequestPermissionOutcome{
-			Selected: &acp.RequestPermissionOutcomeSelected{OptionId: acp.PermissionOptionId(selected)},
-			},
+			Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: opt}},
 		}, nil
 	case <-timer.C:
 		// 超时:默认动作 —— 取第一个 allow 选项放行(桌面有人但走开了,宁可放行让对话继续)。
@@ -156,9 +173,7 @@ func (h *Handler) RequestPermission(ctx context.Context, req acp.RequestPermissi
 		def := defaultOption(req.Options)
 		slog.Warn("permission request timed out, using default", "title", title, "default", def)
 		return acp.RequestPermissionResponse{
-			Outcome: acp.RequestPermissionOutcome{
-				Selected: &acp.RequestPermissionOutcomeSelected{OptionId: def},
-			},
+			Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: def}},
 		}, nil
 	case <-ctx.Done():
 		h.mu.Lock()
@@ -168,6 +183,76 @@ func (h *Handler) RequestPermission(ctx context.Context, req acp.RequestPermissi
 			Outcome: acp.RequestPermissionOutcome{Cancelled: &acp.RequestPermissionOutcomeCancelled{}},
 		}, ctx.Err()
 	}
+}
+
+// applyDecision 把前端传来的裁决档位(once/session/project/deny)映射成 ACP 选项,
+// 并按档位设置记忆:session/project 档令后续「外部目录读取」自动放行(不弹)。deny 只本次不记。
+func (h *Handler) applyDecision(level string, opts []acp.PermissionOption) acp.PermissionOptionId {
+	switch level {
+	case "deny":
+		if id := pickRejectOption(opts); id != "" {
+			return id
+		}
+	case "session":
+		h.sessionAllowExternal.Store(true)
+	case "project":
+		h.sessionAllowExternal.Store(true)
+		h.projectAllowExternal.Store(true)
+	default: // "once":允许本次,不记忆
+	}
+	return pickAllowOption(opts)
+}
+
+// SetProjectAllowExternal 由 service 在 session 启动时调用,把项目级记忆(DB)加载进 handler,
+// 使「本项目曾允许外部目录」的 session 命中即自动放行。
+func (h *Handler) SetProjectAllowExternal(allow bool) {
+	h.projectAllowExternal.Store(allow)
+}
+
+// isExternalAccess 判断请求是否访问 cwd 之外的路径(= 外部目录读取)。
+// opencode 写盘不触发 request_permission(RAK §16.5),弹的基本都是外部目录读取。
+func isExternalAccess(workDir string, locs []acp.ToolCallLocation) bool {
+	if workDir == "" {
+		return false
+	}
+	wd, err := filepath.Abs(workDir)
+	if err != nil {
+		wd = workDir
+	}
+	sep := string(os.PathSeparator)
+	for _, l := range locs {
+		if l.Path == "" {
+			continue
+		}
+		p, err := filepath.Abs(l.Path)
+		if err != nil {
+			p = l.Path
+		}
+		if p != wd && !strings.HasPrefix(p, wd+sep) {
+			return true
+		}
+	}
+	return false
+}
+
+// pickAllowOption 找一个 allow 选项;没有则退回 defaultOption(首个)。
+func pickAllowOption(opts []acp.PermissionOption) acp.PermissionOptionId {
+	for _, o := range opts {
+		if o.Kind == acp.PermissionOptionKindAllowOnce || o.Kind == acp.PermissionOptionKindAllowAlways {
+			return o.OptionId
+		}
+	}
+	return defaultOption(opts)
+}
+
+// pickRejectOption 找一个 reject 选项;没有返回空串。
+func pickRejectOption(opts []acp.PermissionOption) acp.PermissionOptionId {
+	for _, o := range opts {
+		if o.Kind == acp.PermissionOptionKindRejectOnce || o.Kind == acp.PermissionOptionKindRejectAlways {
+			return o.OptionId
+		}
+	}
+	return ""
 }
 
 // defaultOption 找一个 allow 选项作超时默认;没有则取第一个;再没有则 cancel。

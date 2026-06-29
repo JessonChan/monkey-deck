@@ -725,6 +725,8 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 		return fmt.Errorf("start acp session: %w", err)
 	}
 	ls.chat = chat // chatConn 接口(chat *acp.ChatSession 满足)
+	// 加载项目级「允许访问外部目录」记忆到 handler:命中即对后续外部目录请求自动放行(§3.4)。
+	chat.Handler.SetProjectAllowExternal(proj.AllowExternal)
 
 	s.mu.Lock()
 	s.active[se.ID] = ls
@@ -1094,14 +1096,21 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 }
 
 // RespondPermission 用户在前端对某权限请求做出裁决(§3.4)。
-func (s *ChatService) RespondPermission(sessionID, reqID, optionID string) error {
+// level: once(允许本次)/ session(本会话允许)/ project(本项目允许)/ deny(本次拒绝)。
+// session/project 档令该 handler 后续的「外部目录读取」自动放行;project 档另写库(跨 session 持久)。
+func (s *ChatService) RespondPermission(sessionID, reqID, level string) error {
 	s.mu.RLock()
 	ls, ok := s.active[sessionID]
 	s.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("session not active")
 	}
-	if !ls.chat.RespondPermission(reqID, optionID) {
+	if level == "project" && ls.proj != nil {
+		if err := s.st.SetProjectAllowExternal(s.ctx, ls.proj.ID, true); err != nil {
+			slog.Warn("persist project allow-external", "err", err)
+		}
+	}
+	if !ls.chat.RespondPermission(reqID, level) {
 		return fmt.Errorf("no pending permission: %s", reqID)
 	}
 	return nil
