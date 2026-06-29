@@ -17,6 +17,7 @@ interface Props {
   statusBySession: Record<string, string>;
   activityBySession: Record<string, "thinking" | "executing" | "replying">;
   unreadBySession: Record<string, boolean>;
+  permPendingBySession: Record<string, boolean>;
 }
 
 export default function Sidebar(props: Props) {
@@ -145,7 +146,9 @@ export default function Sidebar(props: Props) {
                       >
                         <span className={`session-dot ${cls}`} data-tooltip-id="md-tip" data-tooltip-content={dotTip} />
                         <span className="session-label">{s.title || "新对话"}</span>
-                        {active ? (
+                        {props.permPendingBySession[s.id] ? (
+                          <span className="perm-dot" data-tooltip-id="md-tip" data-tooltip-content="等待授权 · 点击进入裁决" data-testid={`perm-dot-${s.id}`} />
+                        ) : active ? (
                           <span className="tail-spinner" data-tooltip-id="md-tip" data-tooltip-content="正在生成…" />
                         ) : unread ? (
                           <span className="unread-dot" data-tooltip-id="md-tip" data-tooltip-content="有未读回复，点击查看" />

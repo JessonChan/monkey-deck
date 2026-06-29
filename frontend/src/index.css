@@ -181,6 +181,8 @@ input, textarea { font-family: inherit; }
   border-radius: 50%; animation: spin 1.2s linear infinite;
 }
 .unread-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--accent); }
+.perm-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: #ffd60a; box-shadow: 0 0 0 2px rgba(255,214,10,0.2); animation: perm-pulse 1.4s ease-in-out infinite; }
+@keyframes perm-pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.78); } }
 .session-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--text-3); }
 .session-dot.running { background: var(--green); }
 .session-dot.thinking { background: #ffd60a; }
