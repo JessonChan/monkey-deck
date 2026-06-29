@@ -22,8 +22,9 @@
 1. **本文件** —— 搞清楚规矩。
 2. **PROCESS.md** —— 搞清楚现在做到哪、下一步干什么(进度追踪,见 §0.3)。
 3. **ACP 协议怎么用**:看 `/Users/jessonchan/temp/monkey-deck/references/real-agent-kanban/internal/acp/`（`runner.go` 的完整生命周期、`handler.go` 的回调实现）——这是 ACP client 用法的权威范例,**直接照搬其生命周期与回调模式**。
-4. **UI / 产品形态参考**:`/Users/jessonchan/temp/monkey-deck/references/wesight`（[github.com/freestylefly/wesight](https://github.com/freestylefly/wesight)）——桌面 agent 工作区、统一 agent 管理、model 路由、运行时监控、菜单栏 HUD 等概念可作 UI 灵感。**仅参考形态,不照搬其工作原理**（wesight 多为 CLI 子进程管理,我们是纯 ACP）。
-5. 按需查阅 ACP 协议规范本身与 `coder/acp-go-sdk`。
+4. **UI / 产品形态参考(首选)**:`/Users/jessonchan/temp/monkey-deck/references/openwork`([github.com/different-ai/openwork](https://github.com/different-ai/openwork))——**与本项目最接近的同类产品**:opencode-first 的桌面 agent 客户端(Electron/Tauri + React),覆盖工作区/项目管理、session 管理、SSE 流式对话、执行计划(todos 时间线)、权限审批弹窗、model-select、各类 tool 卡片(apply-patch / bash / edit / file / glob / grep / lsp …)、markdown 渲染等**全套前端形态**。**这是最值得借鉴的 UI / 交互蓝本**。⚠️ **仅参考形态**——openwork 走 HTTP+SSE(`opencode serve` + `@opencode-ai/sdk`),**不是 ACP**;我们是纯 ACP,工作原理 / 数据通道一律不照搬。
+5. **UI / 产品形态参考(补充)**:`/Users/jessonchan/temp/monkey-deck/references/wesight`([github.com/freestylefly/wesight](https://github.com/freestylefly/wesight))——统一 agent 管理、model 路由、运行时监控、菜单栏 HUD 等概念可作 UI 灵感。**仅参考形态,不照搬其工作原理**(wesight 多为 CLI 子进程管理,我们是纯 ACP)。
+6. 按需查阅 ACP 协议规范本身与 `coder/acp-go-sdk`。
 
 **禁止跳过阅读直接写代码。** ACP 生命周期搞错（比如把 client 当 server、漏掉 SessionUpdate 回调、Prompt 当成纯异步）是一切偏离的源头。
 
@@ -31,9 +32,9 @@
 
 > **绝对路径(给 git worktree 用)**:`references/` 不入库、不在各 worktree 里。它的真实位置在**主源码树**:
 > `/Users/jessonchan/temp/monkey-deck/references`
-> （含 `real-agent-kanban/`、`wesight/`、`orca/`、`DeepSeek-Reasonix/`）。下文凡写 `references/xxx` 的,均指此绝对路径下的对应子目录——在任意 worktree 里直接按这个绝对路径读即可。
+> （含 `real-agent-kanban/`、`wesight/`、`orca/`、`openwork/`、`DeepSeek-Reasonix/`）。下文凡写 `references/xxx` 的,均指此绝对路径下的对应子目录——在任意 worktree 里直接按这个绝对路径读即可。
 
-- `references/`（`real-agent-kanban/`、`wesight/`）是**参考资料,只读**。
+- `references/` 下所有子项目(`real-agent-kanban/`、`wesight/`、`orca/`、`openwork/`、`DeepSeek-Reasonix/` 等)都是**参考资料,只读**。
 - **严禁创建、修改、删除 `references/` 下的任何文件或内容**,严禁往里面写测试产物 / 构建产物 / 临时文件。要验证想法就在本项目自己的代码里验证。
 - 只允许 `read` / `search` / `find` 它们来获取知识。
 
@@ -56,12 +57,13 @@
 - **收工前不更新 PROCESS.md = 不算完成**(下一个接手的 agent 会断片)。代码 commit 与 PROCESS.md 更新应同步。
 - 状态标记统一:`todo` / `in-progress` / `done` / `blocked`(注明卡因)/ `skip`。
 
-### 0.4 借用代码的协议署名(wesight 为 MIT)
+### 0.4 借用代码的协议署名(wesight / openwork 为 MIT)
 
 - `/Users/jessonchan/temp/monkey-deck/references/wesight` 是 **MIT 协议**。**凡是从 wesight 借用 / 改写的代码,必须保留 MIT 协议署名:**
   - **文件级**:被借用代码的文件顶部保留 MIT 版权声明与许可文本(原作者 copyright 行 + "Permission is hereby granted..." 全文)。
   - **项目级**:在 `THIRD_PARTY_LICENSES.md`(或 `NOTICE.md`)登记一条「来源 = wesight (MIT) / 借用了哪些文件 / 原版权声明」。
 - 从 `/Users/jessonchan/temp/monkey-deck/references/real-agent-kanban` 借用代码同理,**先确认其 LICENSE 文件,按对应协议署名**。
+- `/Users/jessonchan/temp/monkey-deck/references/openwork` 整体是 **MIT 协议**(`LICENSE`),但 **`ee/` 目录是 Fair Source License,非 MIT**——**借用代码时避开 `ee/`,只从 MIT 部分(`apps/`、`packages/` 等)借**;同样须保留版权声明 + 登记到 `THIRD_PARTY_LICENSES.md`(来源 = openwork (MIT),原版权 `Copyright (c) 2026 Different AI`)。
 - **禁止**把借用代码当成原创、抹掉版权声明。借一行也算;只参考思路(不抄代码)不受此约束。
 
 ---
@@ -145,7 +147,7 @@ spawn harness 子进程（独立进程组,见 §3.2）
 monkey-deck/
 ├── AGENTS.md                  # 本文件(规矩)
 ├── PROCESS.md                 # 开发追踪(进度/决策/下一步),见 §0.3
-├── references/                # 只读参考(real-agent-kanban / wesight),严禁改动;不入库,实际在主源码树 /Users/jessonchan/temp/monkey-deck/references(见 §0.2)
+├── references/                # 只读参考(real-agent-kanban / wesight / openwork / orca 等),严禁改动;不入库,实际在主源码树 /Users/jessonchan/temp/monkey-deck/references(见 §0.2)
 ├── go.mod                     # 单一 Go module
 ├── main.go                    # Wails3 application.New() 入口
 ├── internal/
@@ -211,8 +213,8 @@ monkey-deck/
 
 ## 4. 前端与 UI 纪律
 
-### 4.1 UI 参考 wesight,但数据源是纯 ACP
-- 视觉/交互形态（统一 agent 工作区、对话流、工具调用展示、model 选择、用量面板）可参考 wesight。
+### 4.1 UI 参考 openwork(首选)/ wesight(补充),但数据源是纯 ACP
+- 视觉/交互形态（工作区/项目管理、对话流、执行计划时间线、工具调用卡片、权限审批弹窗、model 选择、用量面板）**优先参考 openwork**（形态最完整、opencode-first、与本项目同类），wesight 作补充灵感。
 - **但前端永远只通过 Wails3 binding/event 拿数据,数据源是 ACP 的 `SessionUpdate`,不准去抓 agent 的输出文件或跑额外 CLI。**
 
 ### 4.2 测试友好
@@ -240,7 +242,7 @@ monkey-deck/
 - store 测试用 `t.TempDir()` 下的临时 db,跑完即弃。**禁止**测试读写用户的真实应用数据目录。
 
 ### 5.3 KISS + 成熟库优先 + references 优先参考 + Less is More
-- **references/ 优先参考(硬约束)**:任何功能的实现——无论 UI 还是功能设计——**先看 `references/` 下的项目(orca / wesight / real-agent-kanban)有没有对应实现**,参考其做法再动手。能用 read/search/find 从参考项目里学到方案就不凭空设计。**先参考后动手。**
+- **references/ 优先参考(硬约束)**:任何功能的实现——无论 UI 还是功能设计——**先看 `references/` 下的项目(orca / wesight / real-agent-kanban / openwork)有没有对应实现**,参考其做法再动手。能用 read/search/find 从参考项目里学到方案就不凭空设计。**先参考后动手。**
 - **成熟库优先(硬约束)**:任何功能,**先搜索有没有成熟的代码库 / 库可以满足需要**,而不是自己动手写。能用成熟库解决的就不自己造轮子。自研只在「没有成熟方案 / 方案太重 / 有特殊定制」时考虑,且在 commit 里说明理由。**先搜后写,不搜不写。**
 - **KISS**:用最简单直白的方式实现,重复 3 次再抽象。
 - **Less is More**:相同的功能,**越少的代码越是好代码**——更少 bug、更低维护成本。能用 10 行解决的不用 50 行。**删掉后功能不变的代码就该删。**
@@ -266,6 +268,7 @@ monkey-deck/
 13. **ACP 协议无 queue;turn 中途发新消息用 cancel-then-reprompt;Stop/打断必须取消 turn ctx 而非 harness ctx**(本项目实证 + 协议调研):① 协议层 `session/prompt` 是**同步请求-响应**,baseline 只保证 `session/new`/`session/prompt`/`session/cancel`/`session/update`,**无排队语义**;turn 未结束不能发下一个 prompt。② turn 中途发新消息的唯一正确做法 = 发 `session/cancel` notification → agent 停 LLM/中止 tool → 回 `StopReason::cancelled` → 再发新 prompt。SDK 在 Prompt 的 ctx 取消时会自动补发 `session/cancel`(`client_gen.go` Prompt + 测试 `TestPromptCancellationSendsCancelAndAllowsNewSession`),且**连接保持可用**。③ **坑**:`StopSession` 原本取消 `ls.cancel`(startLive 的 harness ctx,`exec.CommandContext` 绑的)→ **直接杀 opencode 进程**,而非干净 `session/cancel`;Stop 按钮实为「干掉 agent」,下条消息得重 spawn。**修法**:`liveSession` 存 per-turn `turnCancel`,Stop/InterruptAndSend 取消它(干净 session/cancel,harness 存活);`runPrompt` 用 `turnCtx.Err()!=nil` 区分取消(干净 idle)/peer-disconnected(重连)/其它(error)。④ 排队缓冲做**前端**(FIFO,turn 结束自动续发);打断(`InterruptAndSend`)置 `suppressIdle` 防被取消的轮发 idle 误触发 auto-continue。**验证**:`internal/chat/queue_test.go`(mock chatConn)busy 守卫/打断/干净停止 ✅(2026-06-28)。
 （本项目自己踩到的坑,持续往这里补,写清「现象 + 根因 + 修法 + 验证」。）
 14. **opencode stdio ACP 不发 session_info_update 通知;标题经 session/list 读取(实证)**(本项目实证 + 协议调研):① ACP 协议**有**标题机制——SDK `SessionUpdate.SessionInfoUpdate`(`SessionSessionInfoUpdate.Title *string`,discriminator `session_info_update`,见 `types_gen.go` + schema.json),且 `session/list` 返回的 `SessionInfo.Title *string` 也是标题来源;`session/new` 的 `NewSessionResponse` **无** title 字段。② **opencode 1.17.10 实证不发 `session_info_update` 通知**:独立诊断程序抓取一轮完整 turn(+end_turn 后 70s)的全部 `SessionUpdate`,只有 `available_commands_update`/`agent_thought_chunk`/`tool_call`/`tool_call_update`/`agent_message_chunk`,**从不出现 `session_info_update`**。→ 原先 `handleEvent` 监听 `session_info` 想覆盖「首条消息截断标题」的分支**永不触发**,标题永远停在 `maybeAutoTitle` 的 24 字截断。**这是「标题一直用第一句话」的根因。** ③ **但 opencode 确实生成标题**——它写进自身库(`~/.local/share/opencode/opencode.db` 的 `session.title`,如 `ses_...` →「README 中文化及安装说明」),并通过 **ACP `session/list`** 的 `SessionInfo.Title` 暴露(诊断证明:turn 结束后 `conn.ListSessions` 第一轮 poll 立即返回该标题)。④ **修法**(协议级,读 opencode 权威标题,不自己再调 LLM):新增 `ChatSession.SessionTitle`(`runner.go`,调 `conn.ListSessions` 过滤本 session 取 `Title`),**受 `CanListSessions` 能力守卫**(见 ⑤);`chat.go` 新增 `syncSessionTitle`,在 `runPrompt` 成功后调用,标题不同则覆盖 DB + 推 `chat:session-meta`;`maybeAutoTitle` 改用 `titlegen.FallbackTitle`(纯本地归一化,移植自 wesight MIT)作**瞬时兜底**(opencode 标题到达前显示)。**关键**:opencode 已生成标题,客户端再调一次 LLM 是浪费、更慢 —— 直接 session/list 取最准最快。⑤ **协议事实核查**(对 `references/agent-client-protocol` 官方 repo 实证):① `session_info_update` 与 `session/list` 的 `SessionInfo.title` **均于 2026-03-09 稳定**(`docs/updates.mdx`)。② `session_info_update`(经 `session/update` 推送)是协议**首选的实时路径**——`session-list.mdx:8` "keeping session titles and metadata in sync without polling";`session-list.mdx:216-217` "Agents typically send this notification after the first meaningful exchange to auto-generate a title"。**opencode 不发此通知 = opencode 的实现缺口**(非协议无此能力)。③ `session/list` 是**能力门控的发现/轮询路径**——`session-list.mdx:37,54`:Clients **MUST** 先查 `initialize` 响应的 `capabilities.session.list`,未声明时 **MUST NOT** 调 `session/list`。④ **本项目据此加了能力守卫**:`ChatSession.CanListSessions`(`= initResp.AgentCapabilities.SessionCapabilities.List != nil`),`SessionTitle` 在 `!CanListSessions` 时早返 `("", nil)` 不调 `ListSessions`(SDK 字段:`AgentCapabilities.SessionCapabilities.List *SessionListCapabilities`)。**验证**:诊断程序 `ListSessions` 第一轮即得「README 中文化及安装说明」✅;`TestSyncSessionTitle{Overrides,EmptyNoClobber,SameNoRewrite}` ✅;`TestSessionTitleCapabilityGuard`(能力缺失不调 Conn)✅(2026-06-29)。
+15. **IsPeerDisconnected 漏判 broken pipe;死 harness 不拆、session 卡死、裸 JSON 推前端(实证)**(本项目实证 + SDK 源码核查):① harness 退出(空闲断连 §5.4 #9 / model 不稳 #11 / 崩溃)后,下条消息 `Prompt` 往其已关闭的 stdin 管道写 → OS 错 `write |1: broken pipe`(`|1`=管道写端);SDK `toReqErr`(`acp-go-sdk/errors.go:71`)把**任何**非 `*RequestError` 错误统一包成 `NewInternalError({error: err.Error()})`,即用户看到的 `{"code":-32603,"message":"Internal error","data":{"error":"write |1: broken pipe"}}`;`RequestError.Error()`(`errors.go:17`)再把 Message+Data marshal 成那段 JSON 字符串。② **坑**:`IsPeerDisconnected` 旧实现只查 `re.Message`(="Internal error")与 `"peer disconnected"`,**不查 data 里的 broken pipe** → 返回 false → `runPrompt`/`SendAndWaitSync` 的拆连接分支(`delete s.active` + `Close` + `reapIfIdle`)全跳过 → (a) 死 harness 留在 `active`,下条 `ensureLive` 以为还活、再写又 broken pipe,**session 卡死、非 reload 不可恢复**,§5.4 #9 设计的 LoadSession 重连路径根本没被触发;(b) `detail := err.Error()` 把裸 JSON-RPC blob 推前端(§4.4 违规)。③ **修法**:`IsPeerDisconnected` 对 `err.Error()`(`RequestError.Error` 已含 data)做一次大小写不敏感子串匹配,把 `"broken pipe"` 与 `"peer disconnected"` 等同处理——二者根因相同(harness 没了,都该拆连接 + 下条 LoadSession 重连);cancelled 路径在 `runPrompt` 里先于本判定(turnCtx.Err()!=nil),无冲突。④ **验证**:`internal/acp/runner_test.go` 新增 `TestIsPeerDisconnectedBrokenPipe`(复现 `-32603 + broken pipe` 必识别为 peer disconnected)+ `TestIsPeerDisconnectedDoesNotOvermatch`(无关 Internal error 不误判、旧 peer disconnected 路径无回归、nil 安全);`go build .` + `go test ./internal/...` 全绿(2026-06-29)。
 
 ---
 
@@ -320,7 +323,7 @@ monkey-deck/
 - [ ] model 是 `provider/model` 格式?(§3.5)
 - [ ] 没把结构化/技术格式(JSON、原始 cwd / 工具 I/O 对象)裸露给用户?(§4.4)
 - [ ] 没碰 `references/` 下任何文件?(§0.2)
-- [ ] 代码若借用自 wesight,已按 MIT 协议署名(版权声明 + 许可文本 + THIRD_PARTY_LICENSES 登记)?(§0.4)
+- [ ] 代码若借用自 wesight / openwork(避开 ee/),已按 MIT 协议署名(版权声明 + 许可文本 + THIRD_PARTY_LICENSES 登记)?(§0.4)
 - [ ] ACP 相关单测用 mock,没启真 harness?(§5.1)
 - [ ] 没踩 §5.4 列出的已知坑?
 - [ ] `go test ./...` 通过?
