@@ -288,7 +288,7 @@ func (s *ChatService) CreateSession(projectID, title string) (*store.Session, er
 			short = short[:8]
 		}
 		branch := "md/" + short
-		wtPath := filepath.Join(s.cfg.DataDir, "worktrees", se.ID)
+		wtPath := filepath.Join(s.cfg.DataDir, "worktrees", proj.ID, se.ID)
 		if err := worktree.Create(proj.Path, branch, wtPath, ""); err != nil {
 			slog.Warn("create session worktree failed, fallback to project dir", "err", err)
 		} else if err := s.st.SetSessionWorktree(s.ctx, se.ID, wtPath, branch); err != nil {
