@@ -243,7 +243,7 @@ input, textarea { font-family: inherit; }
 .chat-placeholder { text-align: center; color: var(--text-3); padding: 64px 0; font-size: 13px; }
 
 /* 对话行 */
-.row { max-width: 760px; margin: 0 auto; padding: 5px 28px; width: 100%; display: flex; gap: 11px; }
+.row { max-width: 1080px; margin: 0 auto; padding: 5px 28px; width: 100%; display: flex; gap: 11px; }
 .row-user { justify-content: flex-end; }
 .bubble-user {
   background: var(--sel-accent);
@@ -279,7 +279,7 @@ input, textarea { font-family: inherit; }
 
 /* 回合分隔:每一轮用户消息前的时间锚点,让多轮边界一目了然。 */
 .turn-divider {
-  max-width: 760px; margin: 14px auto 8px; padding: 0 28px; width: 100%;
+  max-width: 1080px; margin: 14px auto 8px; padding: 0 28px; width: 100%;
   display: flex; align-items: center; gap: 10px;
 }
 .turn-divider-line { flex: 1; height: 1px; background: var(--sep); }
@@ -312,7 +312,7 @@ input, textarea { font-family: inherit; }
 .tool-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 
 /* 思考块 */
-.thought-block { max-width: 760px; margin: 4px auto; padding: 0 28px; width: 100%; }
+.thought-block { max-width: 1080px; margin: 4px auto; padding: 0 28px; width: 100%; }
 .thought-summary {
   cursor: pointer; font-size: 12px; color: var(--text-3);
   padding: 5px 0; user-select: none; display: flex; align-items: center; gap: 6px;
@@ -328,7 +328,7 @@ input, textarea { font-family: inherit; }
 }
 
 /* 工具卡 */
-.tool-card { max-width: 760px; margin: 4px auto; padding: 0 28px; width: 100%; }
+.tool-card { max-width: 1080px; margin: 4px auto; padding: 0 28px; width: 100%; }
 .tool-summary {
   cursor: pointer; display: flex; align-items: center; gap: 8px;
   padding: 7px 11px; background: var(--elev);
@@ -361,7 +361,7 @@ input, textarea { font-family: inherit; }
 
 /* 权限 */
 .permission-card {
-  max-width: 760px; margin: 8px auto; padding: 13px 15px; width: 100%;
+  max-width: 1080px; margin: 8px auto; padding: 13px 15px; width: 100%;
   background: rgba(255, 214, 10, 0.06);
   border: 1px solid rgba(255, 214, 10, 0.3);
   border-radius: var(--r-md);
@@ -379,7 +379,7 @@ input, textarea { font-family: inherit; }
 .perm-allow { background: var(--green); color: #042b12; }
 .perm-deny { background: var(--elev); color: var(--red); border-color: var(--sep); }
 
-.typing-indicator { max-width: 760px; margin: 0 auto; padding: 4px 67px; display: flex; gap: 4px; }
+.typing-indicator { max-width: 1080px; margin: 0 auto; padding: 4px 67px; display: flex; gap: 4px; }
 .typing-indicator span {
   width: 6px; height: 6px; background: var(--accent); border-radius: 50%;
   animation: blink 1.2s infinite ease-in-out;
@@ -390,10 +390,10 @@ input, textarea { font-family: inherit; }
 
 .error-bar {
   background: rgba(255, 69, 58, 0.12); color: var(--red);
-  font-size: 12px; padding: 7px 24px; max-width: 760px; margin: 0 auto; width: 100%;
+  font-size: 12px; padding: 7px 24px; max-width: 1080px; margin: 0 auto; width: 100%;
 }
 .merge-result {
-  max-width: 760px; margin: 0 auto; width: 100%;
+  max-width: 1080px; margin: 0 auto; width: 100%;
   font-size: 12px; padding: 8px 20px; white-space: pre-wrap; line-height: 1.5;
   border-radius: 8px; animation: slideDown 0.2s ease;
 }
@@ -402,7 +402,7 @@ input, textarea { font-family: inherit; }
 @keyframes slideDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 
 .chat-footer { border-top: 1px solid var(--sep); padding: 9px 0 13px; background: var(--bg); }
-.usage-bar { max-width: 760px; margin: 0 auto 7px; padding: 0 28px; display: flex; align-items: center; gap: 9px; }
+.usage-bar { max-width: 1080px; margin: 0 auto 7px; padding: 0 28px; display: flex; align-items: center; gap: 9px; }
 .usage-track { flex: 1; height: 5px; background: var(--elev); border-radius: 3px; overflow: hidden; }
 .usage-fill { height: 100%; border-radius: 3px; transition: width 0.3s, background 0.3s; }
 .usage-text { font-size: 10.5px; color: var(--text-3); font-family: var(--mono); white-space: nowrap; }
@@ -416,7 +416,7 @@ input, textarea { font-family: inherit; }
 .usage-crit .usage-text { color: var(--red); }
 
 /* ─── Composer(原生精致) ─── */
-.composer { max-width: 800px; margin: 0 auto; padding: 0 28px 4px; position: relative; }
+.composer { max-width: 1080px; margin: 0 auto; padding: 0 28px 4px; position: relative; }
 .slash-popover {
   position: absolute; left: 28px; right: 28px; bottom: 100%; margin-bottom: 6px;
   background: var(--elev-2); border: 1px solid var(--sep-strong);
@@ -497,7 +497,7 @@ input, textarea { font-family: inherit; }
 
 /* ─── QueuePanel(排队消息) ─── */
 .queue-panel {
-  max-width: 800px; margin: 0 auto 6px; padding: 0 28px; width: 100%;
+  max-width: 1080px; margin: 0 auto 6px; padding: 0 28px; width: 100%;
   display: flex; flex-direction: column; gap: 5px;
 }
 .queue-header {
