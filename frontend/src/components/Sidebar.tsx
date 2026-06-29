@@ -77,7 +77,7 @@ export default function Sidebar(props: Props) {
     <aside className="sidebar" data-testid="sidebar">
       <div className="sidebar-header" onDoubleClick={onTitleDoubleClick}>
         <span className="sidebar-title">Monkey Deck</span>
-        <button className="icon-btn" data-testid="add-project" onClick={startAdd} title="添加项目目录">
+        <button className="icon-btn" data-testid="add-project" onClick={startAdd} data-tooltip-id="md-tip" data-tooltip-content="添加项目目录" data-tooltip-place="bottom">
           <Plus size={17} />
         </button>
       </div>
@@ -118,9 +118,9 @@ export default function Sidebar(props: Props) {
                 </button>
                 <button className="project-main" data-testid={`project-${p.id}`} onClick={() => handleProject(p)}>
                   <Folder size={15} />
-                  <span className="project-name" title={p.path}>{p.name}</span>
+                  <span className="project-name" data-tooltip-id="md-tip" data-tooltip-content={p.path}>{p.name}</span>
                 </button>
-                <button className="icon-btn small" onClick={() => props.onCreateSession(p.id)} title="新对话" data-testid={`new-session-${p.id}`}>
+                <button className="icon-btn small" onClick={() => props.onCreateSession(p.id)} data-tooltip-id="md-tip" data-tooltip-content="新对话" data-testid={`new-session-${p.id}`}>
                   <Plus size={13} />
                 </button>
               </div>
@@ -131,9 +131,10 @@ export default function Sidebar(props: Props) {
                     const active = st === "prompting" || st === "started";
                     const act = props.activityBySession[s.id];
                     const cls = st === "error" ? "error" : active ? act ?? "running" : "";
-                    const label = st === "error" ? "出错"
-                      : active ? ({ thinking: "思考中", executing: "执行中", replying: "回复中" } as Record<string, string>)[act ?? ""] ?? "运行中"
-                      : "";
+                    // 色点悬停提示(原生 title,悬停片刻浮现):空闲→灰、思考→琥珀、执行→蓝、回复→绿、出错→红。
+                    const dotTip = st === "error" ? "出错"
+                      : active ? ({ thinking: "思考中", executing: "执行中", replying: "回复中" } as Record<string, string>)[act ?? ""] ?? "生成中"
+                      : "空闲";
                     const unread = !active && props.unreadBySession[s.id];
                     return (
                       <button
@@ -142,12 +143,12 @@ export default function Sidebar(props: Props) {
                         data-testid={`session-${s.id}`}
                         onClick={() => props.onSelectSession(s.id, p.id)}
                       >
-                        <span className={`session-dot ${cls}`} title={label} />
+                        <span className={`session-dot ${cls}`} data-tooltip-id="md-tip" data-tooltip-content={dotTip} />
                         <span className="session-label">{s.title || "新对话"}</span>
                         {active ? (
-                          <span className="tail-spinner" title="生成中" />
+                          <span className="tail-spinner" data-tooltip-id="md-tip" data-tooltip-content="正在生成…" />
                         ) : unread ? (
-                          <span className="unread-dot" title="有未读回复" />
+                          <span className="unread-dot" data-tooltip-id="md-tip" data-tooltip-content="有未读回复，点击查看" />
                         ) : null}
                       </button>
                     );
@@ -178,7 +179,7 @@ export default function Sidebar(props: Props) {
         <div className="modal-overlay" onClick={() => setConfirm(null)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-title">移除项目?</div>
-            <div className="modal-del-target" title={confirm.path}>{confirm.name} · {confirm.path}</div>
+            <div className="modal-del-target" data-tooltip-id="md-tip" data-tooltip-content={confirm.path}>{confirm.name} · {confirm.path}</div>
             <div className="modal-actions">
               <button className="modal-btn ghost" onClick={() => setConfirm(null)}>取消</button>
               <button className="modal-btn danger" onClick={() => { props.onRemoveProject(confirm.id); setConfirm(null); }}>移除</button>
