@@ -68,16 +68,24 @@ type chatConn interface {
 	SessionTitle(ctx context.Context) (string, error)
 }
 
+// segEntry 一段已完成的 thinking / agent message(多 tool call 交替时一轮有多个段)。
+type segEntry struct {
+	role    string // "thought" | "agent"
+	content string
+}
+
 // liveSession 一个活跃的 ACP 对话(内存态,钉在某个 db session 上)。
 type liveSession struct {
 	chat chatConn
 	proj *store.Project
 
-	mu       sync.Mutex
-	agentBuf strings.Builder // 累积本轮 agent_message_chunk 文本
-	thought  strings.Builder // 累积本轮 agent_thought_chunk 文本
-	tools    map[string]*toolAccum
-	seq      int64 // 单调序号,流式事件防乱序(§4.3)
+	mu           sync.Mutex
+	agentBuf     strings.Builder // 累积当前段的 agent_message_chunk 文本
+	thought      strings.Builder // 累积当前段的 agent_thought_chunk 文本
+	tools        map[string]*toolAccum
+	seq          int64 // 单调序号,流式事件防乱序(§4.3)
+	segments     []segEntry  // 已完成的段(类型切换时 flush,持久化时逐段写库)
+	lastChunkKind string     // 上一个 chunk 类型:"thought"/"agent"/"" — 检测段边界
 
 	// 单 turn 生命周期:ACP 协议无 queue,一个 session 同时只允许一个 Prompt
 	// (session/prompt 是同步请求-响应,turn 未结束前不能发下一个,见 §5.4 调研结论)。
@@ -96,6 +104,25 @@ func (ls *liveSession) resetBuffers() {
 	ls.agentBuf.Reset()
 	ls.thought.Reset()
 	ls.tools = map[string]*toolAccum{}
+	ls.segments = nil
+	ls.lastChunkKind = ""
+}
+
+// flushCurrentSegment 把上一个段类型的 buffer 内容存入 segments 并重置。
+// 段边界(thought→message / message→thought / any→tool)时调用,确保各段独立。
+func (ls *liveSession) flushCurrentSegment() {
+	switch ls.lastChunkKind {
+	case "thought":
+		if ls.thought.Len() > 0 {
+			ls.segments = append(ls.segments, segEntry{"thought", ls.thought.String()})
+		}
+		ls.thought.Reset()
+	case "agent":
+		if ls.agentBuf.Len() > 0 {
+			ls.segments = append(ls.segments, segEntry{"agent", ls.agentBuf.String()})
+		}
+		ls.agentBuf.Reset()
+	}
 }
 
 // ChatService 暴露给前端的主服务。
@@ -856,14 +883,25 @@ func (s *ChatService) SendAndWaitSync(sessionID, text string) (string, error) {
 	defer cancel()
 	stopReason, err := ls.chat.Prompt(ctx, text, 300*time.Second)
 	ls.mu.Lock()
-	agentText := ls.agentBuf.String()
-	thoughtText := ls.thought.String()
+	if ls.thought.Len() > 0 {
+		ls.segments = append(ls.segments, segEntry{"thought", ls.thought.String()})
+	}
+	if ls.agentBuf.Len() > 0 {
+		ls.segments = append(ls.segments, segEntry{"agent", ls.agentBuf.String()})
+	}
+	segments := ls.segments
 	tools := make([]*toolAccum, 0, len(ls.tools))
 	for _, t := range ls.tools {
 		tools = append(tools, t)
 	}
 	ls.mu.Unlock()
-	s.persistTurn(sessionID, agentText, thoughtText, tools)
+	s.persistTurn(sessionID, segments, tools)
+	agentText := ""
+	for _, seg := range segments {
+		if seg.role == "agent" {
+			agentText = seg.content
+		}
+	}
 	if err != nil {
 		if acp.IsPeerDisconnected(err) {
 			s.mu.Lock()
@@ -903,8 +941,14 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string) {
 	stopReason, err := ls.chat.Prompt(turnCtx, text, 300*time.Second)
 
 	ls.mu.Lock()
-	agentText := ls.agentBuf.String()
-	thoughtText := ls.thought.String()
+	// flush 当前段残留到 segments(thought / agent 分别 flush,顺序保持时序)。
+	if ls.thought.Len() > 0 {
+		ls.segments = append(ls.segments, segEntry{"thought", ls.thought.String()})
+	}
+	if ls.agentBuf.Len() > 0 {
+		ls.segments = append(ls.segments, segEntry{"agent", ls.agentBuf.String()})
+	}
+	segments := ls.segments
 	tools := make([]*toolAccum, 0, len(ls.tools))
 	for _, t := range ls.tools {
 		tools = append(tools, t)
@@ -919,7 +963,7 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string) {
 
 	cancelled := err != nil && turnCtx.Err() != nil
 	// 持久化已收到的部分回复(取消/失败也不丢)。
-	s.persistTurn(sessionID, agentText, thoughtText, tools)
+	s.persistTurn(sessionID, segments, tools)
 
 	if suppressed {
 		return // 打断:不发 status,新轮 startTurn 会发 prompting
@@ -948,18 +992,20 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string) {
 	s.emitStatus(sessionID, "idle", "stopReason="+string(stopReason))
 }
 
-// persistTurn 把本轮累积的 agent 回复 + 工具调用写库。
-// 顺序:thought → agent → tools。匹配实时流式渲染的心智模型(agent 边回复边调用工具,
-// 历史 agent 文本在前、tool 卡片在后),避免历史恢复时 tool 卡片出现在 agent 回复之前。
-func (s *ChatService) persistTurn(sessionID, agentText, thoughtText string, tools []*toolAccum) {
-	if thoughtText != "" {
-		if _, err := s.st.AppendMessage(s.ctx, sessionID, "thought", "agent_thought_chunk", thoughtText, ""); err != nil {
-			slog.Warn("persist thought", "err", err)
+// persistTurn 把本轮各段(thinking/agent message,时序) + 工具调用写库。
+// 多 tool call 交替时一轮有多个 thought/agent 段,逐段独立写入(而非合并),
+// 历史 reload 时段与实时流式一一对应。
+func (s *ChatService) persistTurn(sessionID string, segments []segEntry, tools []*toolAccum) {
+	for _, seg := range segments {
+		if strings.TrimSpace(seg.content) == "" {
+			continue
 		}
-	}
-	if strings.TrimSpace(agentText) != "" {
-		if _, err := s.st.AppendMessage(s.ctx, sessionID, "agent", "agent_message_chunk", agentText, ""); err != nil {
-			slog.Warn("persist agent", "err", err)
+		kind := "agent_message_chunk"
+		if seg.role == "thought" {
+			kind = "agent_thought_chunk"
+		}
+		if _, err := s.st.AppendMessage(s.ctx, sessionID, seg.role, kind, seg.content, ""); err != nil {
+			slog.Warn("persist "+seg.role, "err", err)
 		}
 	}
 	for _, t := range tools {
@@ -979,12 +1025,23 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 	e.Seq = ls.seq
 	switch e.Kind {
 	case "agent_message_chunk":
+		// 段边界:上一个 chunk 类型不是 agent message → flush 上一段的 buffer(thought/tool)。
+		if ls.lastChunkKind != "agent" {
+			ls.flushCurrentSegment()
+		}
+		ls.lastChunkKind = "agent"
 		ls.agentBuf.WriteString(e.Text)
-		e.Text = ls.agentBuf.String() // 累积全文
+		e.Text = ls.agentBuf.String()
 	case "agent_thought_chunk":
+		if ls.lastChunkKind != "thought" {
+			ls.flushCurrentSegment()
+		}
+		ls.lastChunkKind = "thought"
 		ls.thought.WriteString(e.Text)
 		e.Text = ls.thought.String()
 	case "tool_call":
+		ls.flushCurrentSegment() // tool 是硬边界:flush 当前 thinking/message 段
+		ls.lastChunkKind = "tool"
 		ls.tools[e.ToolCallID] = &toolAccum{ID: e.ToolCallID, Title: e.ToolTitle, Status: e.ToolStatus, Kind: e.ToolKind, RawInput: e.RawInput}
 	case "tool_call_update":
 		if t, ok := ls.tools[e.ToolCallID]; ok {
