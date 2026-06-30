@@ -46,6 +46,8 @@ export default function App() {
 
   // 标记哪些 session 已从 DB 加载进缓存;有缓存(含进行中的流式)就不再重读 DB,避免切回丢内容。
   const loadedSessionsRef = useRef<Set<string>>(new Set());
+  // 输入框历史 seed 标记:避免 openSession 读 historyBySession(state)产生 stale closure,重开 session 误覆盖内存追加。
+  const historySeededRef = useRef<Set<string>>(new Set());
   // 选中 session 的 ref:仅用于 status 事件的「错误只弹当前查看会话」过滤,不进 effect 依赖(避免每次切换都重订阅)。
   const selectedSessionIdRef = useRef<string | null>(null);
   selectedSessionIdRef.current = selectedSessionId;
@@ -324,8 +326,9 @@ export default function App() {
         setHasMoreBySession((prev) => ({ ...prev, [sessionId]: hasMorePage }));
       }
       // 输入框历史 seed:从 DB 取全部用户消息(无长度限制),供上下键翻历史。
-      // 仅首次打开 seed(后续本会话的发送由 sendMessage 追加,不覆盖)。
-      if (!(sessionId in historyBySession)) {
+      // 仅首次打开 seed(后续本会话的发送由 sendMessage 追加,不覆盖)。用 ref 守卫避免 stale closure。
+      if (!historySeededRef.current.has(sessionId)) {
+        historySeededRef.current.add(sessionId);
         try {
           const hist = await ChatService.ListUserMessages(sessionId);
           setHistoryBySession((prev) => ({ ...prev, [sessionId]: hist || [] }));
