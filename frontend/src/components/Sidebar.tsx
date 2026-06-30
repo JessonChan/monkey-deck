@@ -186,7 +186,7 @@ export default function Sidebar(props: Props) {
                             <span className="unread-dot" data-tooltip-id="md-tip" data-tooltip-content="有未读回复，点击查看" />
                           ) : null}
                         </button>
-                        <button className="session-menu-btn" onClick={(e) => openSessionMenu(e, s)} data-tooltip-id="md-tip" data-tooltip-content="操作">
+                        <button className="session-menu-btn" onClick={(e) => openSessionMenu(e, s)}>
                           <MoreVertical size={13} />
                         </button>
                       </div>
