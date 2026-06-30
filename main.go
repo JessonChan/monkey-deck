@@ -4,6 +4,8 @@ import (
 	"context"
 	"embed"
 	"log"
+	"log/slog"
+	"os"
 	"path/filepath"
 
 	"github.com/jessonchan/monkey-deck/internal/chat"
@@ -26,6 +28,17 @@ var assets embed.FS
 func main() {
 	cfg := config.Default()
 	_ = cfg.EnsureDir()
+
+	// 诊断日志落盘:GUI 应用 stderr 默认 → /dev/null,曾导致 session 卡死等关键 slog
+	// (chat idle/absolute timeout、prompt failed、session live、harness started)全部丢失、
+	// 无法事后诊断(§5.4 #16)。重定向 slog 与标准 log 到 DataDir 下的 monkey-deck.log(append);
+	// 打开失败则退回默认(stderr)。LevelInfo 足以覆盖 Warn/Error/Info 级关键诊断。
+	if logFile, logErr := os.OpenFile(filepath.Join(cfg.DataDir, "monkey-deck.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); logErr == nil {
+		slog.SetDefault(slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		log.SetOutput(logFile)
+	} else {
+		slog.Warn("open log file failed; logs go to stderr", "err", logErr)
+	}
 
 	// 单一 Go 进程:webview 宿主 + harness 子进程父 + ACP 连接持有 + SQLite 读写(§2.2)。
 	chatSvc := chat.NewChatService(cfg)
