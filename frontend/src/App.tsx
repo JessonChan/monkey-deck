@@ -60,6 +60,10 @@ export default function App() {
   // 选中 session 的 ref:仅用于 status 事件的「错误只弹当前查看会话」过滤,不进 effect 依赖(避免每次切换都重订阅)。
   const selectedSessionIdRef = useRef<string | null>(null);
   selectedSessionIdRef.current = selectedSessionId;
+  // sessionsByProject 的 ref:status 事件 handler 里查「session 属于哪个 project」用,
+  // 不进 effect 依赖(避免每次 sessionsByProject 变化都重订阅事件)。
+  const sessionsByProjectRef = useRef(sessionsByProject);
+  sessionsByProjectRef.current = sessionsByProject;
 
   const refreshProjects = useCallback(async () => {
     const list = await ChatService.ListProjects();
@@ -228,6 +232,17 @@ export default function App() {
       if (!s) return;
       setStatusBySession((prev) => ({ ...prev, [s.sessionId]: s.status }));
       setStatusDetailBySession((prev) => ({ ...prev, [s.sessionId]: s.detail || "" }));
+      // 用户发消息(prompting)→ 即时刷新侧栏顺序。后端 startTurn 已把 prompted_at 刷为
+      // now(主排序键),这里重拉让该 session 跳到顶部。后台活动(usage_update/标题同步)不
+      // 走 status 事件,故侧栏不会被后台 session 抖动。
+      if (s.status === "prompting") {
+        for (const pid of Object.keys(sessionsByProjectRef.current)) {
+          if (sessionsByProjectRef.current[pid].some((x) => x.id === s.sessionId)) {
+            void refreshSessions(pid);
+            break;
+          }
+        }
+      }
       // 错误提示只对当前查看的 session 弹(切走时不在意别的 session 的错误条)。
       if (s.status === "error" && s.sessionId === selectedSessionIdRef.current) setError(s.detail || "出错");
       // 回合结束:清掉该 session 最后 agent/thought 的 streaming 标志(去光标 + 显复制按钮)。
@@ -268,7 +283,7 @@ export default function App() {
       offStatus();
       offMeta();
     };
-  }, [refreshProjects, applyEvent]);
+  }, [refreshProjects, applyEvent, refreshSessions]);
 
   // 多项目同时展开:项目列表就绪后,把每个项目的 sessions 都加载进 map(本地 SQLite,快)。
   useEffect(() => {
