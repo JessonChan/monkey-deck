@@ -46,9 +46,10 @@
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
 - **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理 SCM 化(含审查 5 项修复)+ 会话标题修复 + 右侧文件管理面板(tab:文件/源代码管理)+ **AI 提交/AI 合并(SCM 结合 AI)** 均已完成;继续对话体验打磨(**输入框上下键翻历史 + @ 提及文件/文件夹(经 ACP ResourceLink 发送)**)
-- **最后更新**:2026-06-30(fix:跨 session 状态隔离 —— 思考块展开偏好 / 滚动位置 / composer 附件按 session 隔离;详见 §G)
+- **最后更新**:2026-06-30(fix:「立即发送」插队覆盖竞态 → session 假死报 busy;+ 跨 session 状态隔离;详见 §G)
 - **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、会话标题(opencode 经 session/list 权威标题 + 瞬时 fallback)、源代码管理 SCM(提交/暂存/丢弃/单文件 diff/并发守卫/**AI 提交/AI 合并**)、三栏可拖拽分隔线、**右侧文件浏览/管理(树+预览+增删改)**、**窗口尺寸/位置/最大化记忆(ui_state.json)**、**应用自更新(菜单「检查更新…」+ 发布版后台静默检查 + `release:darwin` 打包工具链)**。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
 - **近期改动汇总**:
+  - **「立即发送」覆盖竞态修复**(2026-06-30):用「立即发送」插队后 session 假死报 busy(后端 busy=true、前端却显示空闲)——根因 `runPrompt` 收尾「先清 busy 后 emit」且不持 `sendMu`,与 `startTurn` 不互斥;`InterruptAndSend` 误判无 turn 直接发,旧 turn 的延迟 emit 覆盖新 prompting。修:`runPrompt` 收尾段持 `sendMu`(清 busy→emit 原子)+ `InterruptAndSend` busy 分支释放锁后等 `turnDone`(防死锁)。新增确定性复现测试(`persistHook` 卡窗口 + `emitHook` 捕获 status 序列)。详见 §G / AGENTS.md §5.4 #17。
   - **session 永久卡死修复**(2026-06-30):定位到**代码级、非 model** 根因 —— `runner.go` 静默超时对 in_progress tool 永久豁免,harness 死于 in_progress tool 中途时 turn 永久挂死、死 harness 变僵尸;且超时/断连错误不被 `IsPeerDisconnected` 识别 → 不拆连接;monkey-deck stderr→/dev/null 致无法诊断。修:① 绝对 turn 上限 `maxTurnAbsolute=15min`(纯函数 `shouldCancelTurn`);② `teardownLive` —— `runPrompt`/`SendAndWaitSync` 任何非用户取消的失败都拆连接;③ slog 重定向到 `<DataDir>/monkey-deck.log`。新增 4 个 `shouldCancelTurn` 用例;`go test ./internal/...` 全绿。详见 §G。
   - **跨 session 状态隔离**(2026-06-30):修三个「本该 per-session 却挂在共享处」的泄漏 —— ① 思考块展开偏好(全局 localStorage `md:thought-open`)→ 按 session 存(`md:thought-open:<sid>`);② `chat-body` 未按 session 加 key → 滚动容器复用、scrollTop 停在上一 session(加 `key={sessionId}`;`scrollStateRef` 在 ChatView 内存活→位置记忆仍保留);③ Composer 附件/提及为内部 state → 提到 App 按 session 存(`attachmentsBySession`/`mentionsBySession`)。仅前端,`tsc` 通过。详见 §G。
   - **应用自更新(auto-update 改造)**(2026-06-29):新增 `internal/update`(GitHub Releases 源 + `app.Updater.Init` + 后台静默检查 `StartBackgroundChecks` + 纯函数 `ShouldAutoCheck`);`main.go` 加 `currentVersion`(ldflags 注入)+ App 菜单「检查更新…」(保留默认编辑菜单)+ 发布版后台静默检查;`build/darwin/Taskfile.yml` 加 `VERSION`(git describe,去前导 v)注入 production ldflags;根 `Taskfile.yml` 加 `release:darwin`(打包 .app→zip→SHA256SUMS→打印 gh 发布命令)。详见 §G / §E。
@@ -136,6 +137,17 @@
 ---
 
 ## G. 工作日志(追加,最新在上)
+
+### 2026-06-30(fix:「立即发送」插队触发 runPrompt 收尾覆盖竞态 → session 假死报 busy)
+- **起因**:用户报「session 表面处于空闲状态,但提交新信息提示 session busy: 一轮对话进行中,请等待或打断」。确认触发场景:用了队列面板「立即发送」插队(`InterruptAndSend`)。
+- **根因(并发竞态,非协议)**:`runPrompt` 收尾段「先清 `ls.busy=false`、后 `emitStatus`」,且不持 `sendMu` —— 与 `startTurn` 无互斥。`InterruptAndSend` 用 `ls.busy` 判断是否有在跑 turn,若恰在「busy 已清、旧 emit 未发」窗口(= `persistTurn` 持续期)被调用,会读到 busy=false → 误判无 turn → 直接 `startTurn`(置 busy=true、emit 新 prompting);随后旧 turn 的延迟 emit(idle/error)把前端 status 从「新 prompting」覆盖成「idle」→ **后端 busy=true、前端显示空闲** → 下次普通发送(前端见 status≠prompting 走直发)撞 busy 守卫。作者原注释「emit 前清 busy 防 drain 撞 stale busy」只防了反向竞态,引入了正向竞态。详见 AGENTS.md §5.4 #17。
+- **改法**(锁互斥,非调 busy 时机):
+  - `runPrompt`(`internal/chat/chat.go`):收尾段(清 busy→persist→emit)持 `sendMu`,`defer Unlock` 早于 `close(turnDone)`(LIFO)执行 —— 保证 `InterruptAndSend` 等 turnDone 时 sendMu 已释放,不死锁。
+  - `InterruptAndSend`:busy 分支改为**释放 sendMu 后再等 turnDone**(否则与收尾段持同一把锁死锁),落定后重拿 sendMu 发新消息;旧 turn 失败已 teardown 时 re-`ensureLive` 重连拿新 ls。!busy 分支直接发(sendMu 已保证旧 emit 落定:runPrompt 在 sendMu 内清 busy ⇒ 拿到 sendMu 且 busy=false ⇒ 收尾已结束)。
+  - 测试基建:`ChatService` 加 `emitHook`(捕获事件序列)+ `persistHook`(收尾入口阻塞)两个 nil-guarded 钩子,仅单测注入,生产 nil 直通原路径。
+- **改了哪些文件**:`internal/chat/{chat.go, finalize_race_test.go(新)}`、`AGENTS.md`(§5.4 #17)、`PROCESS.md`(本节 + §B)。
+- **验证**:`go test ./internal/chat/ -race` ✅(17 例);新增 `TestInterruptNoRaceWithRunPromptFinalize` 确定性复现 —— 修复前 status 序列 `[prompting, prompting, idle]`(覆盖,statuses[1]=="prompting",测试红),修复后 `[prompting, idle, prompting]`(绿);`go build ./internal/... .` ✅;`go vet ./internal/chat/` ✅。**未做实机验证**(待 `wails3 dev`):插队后连续多轮对话不再卡 busy。
+- **下一步**:实机验证;`SendAndWaitSync`(驱动/测试路径)不走 busy 状态机,若驱动与 GUI 并发可能另有问题,后续观察。
 
 ### 2026-06-30(fix:跨 session 状态隔离 —— 思考块偏好 / 滚动位置 / composer 附件)
 - **起因**:用户报两个「藏得很深」的跨 session bug:① 思考过程串到别的 session(「新窗口居然还有思考过程选项」);② 切 session 时滚动位置串(「A 停在 B 的位置,没在 A 上」)。分析中又发现第三个同类:Composer 附件/提及也跨 session 串。
