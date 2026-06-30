@@ -9,31 +9,35 @@ import (
 )
 
 // sessionColumns / scanSession:统一 session 的列与扫描,避免多处 SELECT/Scan 漂移(§1.5)。
-const sessionColumns = `id,project_id,acp_session_id,title,model,worktree_path,branch,used_tokens,size_tokens,cost,created_at,updated_at`
+const sessionColumns = `id,project_id,acp_session_id,title,model,harness,worktree_path,branch,used_tokens,size_tokens,cost,created_at,updated_at`
 
 func scanSession(r interface {
 	Scan(dest ...any) error
 }, se *Session) error {
-	return r.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model,
+	return r.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model, &se.Harness,
 		&se.WorktreePath, &se.Branch,
 		&se.UsedTokens, &se.SizeTokens, &se.Cost, &se.CreatedAt, &se.UpdatedAt)
 }
 
 // --- Sessions ---
 
-// CreateSession 新建 session(钉在 project 上)。model 为空用项目默认。
-func (s *Store) CreateSession(ctx context.Context, projectID, title, model string) (*Session, error) {
+// CreateSession 新建 session(钉在 project 上)。model 为空用项目默认;harness 为空用 opencode。
+func (s *Store) CreateSession(ctx context.Context, projectID, title, model, harnessv string) (*Session, error) {
+	if harnessv == "" {
+		harnessv = "opencode"
+	}
 	sess := &Session{
 		ID:        uuid.NewString(),
 		ProjectID: projectID,
 		Title:     title,
 		Model:     model,
+		Harness:   harnessv,
 		CreatedAt: now(),
 		UpdatedAt: now(),
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions(id,project_id,acp_session_id,title,model,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`,
-		sess.ID, sess.ProjectID, sess.ACPSession, sess.Title, sess.Model, sess.CreatedAt, sess.UpdatedAt)
+		`INSERT INTO sessions(id,project_id,acp_session_id,title,model,harness,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
+		sess.ID, sess.ProjectID, sess.ACPSession, sess.Title, sess.Model, sess.Harness, sess.CreatedAt, sess.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}

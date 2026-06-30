@@ -45,10 +45,11 @@
 
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
-- **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理 SCM 化(含审查 5 项修复)+ 会话标题修复 + 右侧文件管理面板(tab:文件/源代码管理)+ **AI 提交/AI 合并(SCM 结合 AI)** 均已完成;继续对话体验打磨(**输入框上下键翻历史 + @ 提及文件/文件夹(经 ACP ResourceLink 发送)**)
-- **最后更新**:2026-06-30(fix:session 永久卡死 —— in_progress tool 豁免静默超时 + 错误不拆连接 + slog 进 /dev/null;详见 §G / AGENTS.md §5.4 #16)
+- **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理 SCM 化(含审查 5 项修复)+ 会话标题修复 + 右侧文件管理面板(tab:文件/源代码管理)+ **AI 提交/AI 合并(SCM 结合 AI)** 均已完成;继续对话体验打磨(**输入框上下键翻历史 + @ 提及文件/文件夹(经 ACP ResourceLink 发送)**);**新建会话支持选择 harness(opencode/mino/omp)+ 是否新建 worktree 分支**
+- **最后更新**:2026-06-30(feat:新建会话选择 harness + worktree 开关 —— harness 注册表 + per-session harness + 弹窗;详见 §G)
 - **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、会话标题(opencode 经 session/list 权威标题 + 瞬时 fallback)、源代码管理 SCM(提交/暂存/丢弃/单文件 diff/并发守卫/**AI 提交/AI 合并**)、三栏可拖拽分隔线、**右侧文件浏览/管理(树+预览+增删改)**、**窗口尺寸/位置/最大化记忆(ui_state.json)**、**应用自更新(菜单「检查更新…」+ 发布版后台静默检查 + `release:darwin` 打包工具链)**。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
 - **近期改动汇总**:
+  - **新建会话选择 harness + worktree 开关**(2026-06-30):用户要求新建会话时选 ① harness(opencode/mino/omp)② 是否新建 worktree 分支。新增 `internal/harness`(注册表:opencode=`opencode acp`/mino=`mino acp`/omp=`omp acp`)+ migration 0005(sessions 加 `harness` 列,旧数据默认 opencode)+ store.Session.Harness + `CreateSession(harness,useWorktree)`;`startLive` 按 session.Harness 解析 spawn 命令(替代全局 cfg.HarnessCmd);新增 `ListHarnesses`/`IsGitProject` 绑定;前端 `NewSessionModal`(harness 单选卡片 + worktree 复选,非 git 项目禁用并提示)替代直接创建。model 注入仅 opencode 写 opencode.json(§3.5),mino/omp 暂用自身全局配置(适配待补)。详见 §G。
   - **session 永久卡死修复**(2026-06-30):定位到**代码级、非 model** 根因 —— `runner.go` 静默超时对 in_progress tool 永久豁免,harness 死于 in_progress tool 中途时 turn 永久挂死、死 harness 变僵尸;且超时/断连错误不被 `IsPeerDisconnected` 识别 → 不拆连接;monkey-deck stderr→/dev/null 致无法诊断。修:① 绝对 turn 上限 `maxTurnAbsolute=15min`(纯函数 `shouldCancelTurn`);② `teardownLive` —— `runPrompt`/`SendAndWaitSync` 任何非用户取消的失败都拆连接;③ slog 重定向到 `<DataDir>/monkey-deck.log`。新增 4 个 `shouldCancelTurn` 用例;`go test ./internal/...` 全绿。详见 §G。
   - **应用自更新(auto-update 改造)**(2026-06-29):新增 `internal/update`(GitHub Releases 源 + `app.Updater.Init` + 后台静默检查 `StartBackgroundChecks` + 纯函数 `ShouldAutoCheck`);`main.go` 加 `currentVersion`(ldflags 注入)+ App 菜单「检查更新…」(保留默认编辑菜单)+ 发布版后台静默检查;`build/darwin/Taskfile.yml` 加 `VERSION`(git describe,去前导 v)注入 production ldflags;根 `Taskfile.yml` 加 `release:darwin`(打包 .app→zip→SHA256SUMS→打印 gh 发布命令)。详见 §G / §E。
   - **输入框:上下键翻历史 + @ 提及文件/文件夹**(2026-06-29):① 上下键翻当前 session 全部已发消息(无长度限制;按发送键即记进历史,含排队/被拒的;seed 自 DB `ListUserMessages` + 本会话发送追加;仅光标在首/末行且无菜单时触发);② `@` 触发当前 cwd 文件/文件夹选择器(复用 `SessionListDir`,支持 `/` 进子目录、键入过滤、↑↓ 选择);选中插入 `@相对路径` 文本 + 记录;发送时每个提及经 **ACP `ContentBlock::ResourceLink`(`file://` URI)** 发给 agent(协议 baseline,所有 agent 必须支持),文本照常作 `TextBlock` 发出。后端:`internal/acp` 加 `Attachment{Path,Name}` + `ChatSession.Prompt` 改签名加 `[]Attachment` + `buildPromptBlocks/fileURI`;`chatConn` 接口 + `SendMessage/InterruptAndSend/SendAndWaitSync/startTurn/runPrompt` 透传;store 加 `ListUserMessages`;`QueueItem` 携带 `mentions`。前端:Composer 重写(history 导航 + @autocomplete + mention chips),App `historyBySession` + `sendMessage(text,mentions)`。详见 §G。
@@ -119,6 +120,7 @@
 - **2026-06-29** — 窗口状态记忆用 **`ui_state.json`(本地 JSON)**,不进 SQLite。理由:SQLite 是**业务数据**(session/message/usage)的唯一真相(§1.5);窗口几何是 **UI 运行时状态**(自动记住,非业务数据),混进 DB 模糊职责边界,且数据极小不值得走迁移+CRUD。落 `<DataDir>/ui_state.json`,命名留 UI state 扩展空间(不放 harness/model/provider 那类结构性配置,它们走 SQLite 配置表)。
 - **2026-06-29** — SCM 的「AI 提交」用**架构 A(复用当前 session 发 prompt)**,不造 sub-agent session。理由(协议调研证实):ACP 协议层**无 sub-agent / 任务委派原语**(全仓 grep 零命中;`session/new` 无 `agent` 选择器,单连接单 agent);所谓「sub agent」是客户端层概念(= 再开一个独立连接/session)。对「为本次改动写 commit」这类**重上下文、轻隔离**的任务,sub agent 反而丢上下文(新 session 默认无当前对话历史),而复用当前 session 上下文最完整且免费、最 ACP 纯、代码量最小(一个 prompt 模板 + 按钮)。sub agent 真正适合**重隔离**任务(PR 描述 / self-review / changelog),后续再引入。「AI 合并」用**确定性 `git merge --no-ff -m` + AI 生成合并 message**——message 直接取 opencode 已生成的会话标题(本就是 AI 对本次工作的总结),即时、无需新 LLM 调用、不另起 turn;不把 merge 交给 agent(merge-into-main 需在主仓库操作,agent 在 worktree 内,路径不通)。
 - **2026-06-29** — 应用自更新用 Wails3 内置 `app.Updater` + GitHub Releases 源,不自己造更新通道。理由:§5.3 成熟库优先 —— Wails3 alpha2.106 已内置完整自更新(检查/下载/SHA256 校验/helper-mode 二进制热替换/重启),`pkg/updater` + `providers/github` 开箱即用,自造是重复造轮子。源选 GitHub Releases(免费、零基础设施,与 go.mod module 仓库 `jessonchan/monkey-deck` 一致)。版本走 `-ldflags -X main.currentVersion`(git describe 去前导 v);开发构建(`dev`)禁用后台检查 —— semver 视 `dev` 为低于任何正式版,否则会把首个 release 误判为「有更新」反复弹窗。后台检查**自写静默循环**(不直接用 `Config.CheckInterval`):`CheckAndInstall` 即使「已是最新」也开窗停留,框架自带周期检查会每 6h 弹一次「已是最新」打扰用户;自写循环先静默 `Check()`,**仅发现新版本才** `CheckAndInstall` 开窗。菜单用 `DefaultApplicationMenu()` 找 `AppMenu` 子菜单插入,**保留默认编辑菜单**(剪切/复制/粘贴 —— webview 文本输入必需),不全量替换。
+- **2026-06-30** — harness 是 **per-session** 选择(存在 sessions.harness),非 per-project / 全局。理由:用户明确「新建会话时选择」;同一项目目录下不同会话可能用不同 agent 探索,per-session 最灵活。旧全局 `cfg.HarnessCmd` 退化为 fallback/兼容(旧 session 无 harness 列,迁移默认 opencode)。harness 注册表放独立包 `internal/harness`(§2.1 harness 适配层),`acp.Runner` 保持 harness 无关(spawn 命令由 chat 层注入,不反向依赖 harness 包,避免下层依赖上下的环)。model 注入仅 opencode 写 opencode.json(§3.5 已知机制);mino/omp 的 model 注入方式各自不同且未实证,暂留空让其用自身全局配置 —— 作为后续 harness 适配项,不阻塞本次 harness 选择功能。
 
 ---
 
@@ -135,6 +137,20 @@
 ---
 
 ## G. 工作日志(追加,最新在上)
+
+### 2026-06-30(feat:新建会话选择 harness + worktree 开关 —— harness 注册表 + per-session harness + 弹窗)
+- **起因**:用户要求「新建会话时让用户选择 ① harness 工具(当前支持 opencode/mino/omp)② 是否新建分支(worktree)」。此前 harness 硬编码全局 `cfg.HarnessCmd="opencode acp"`,worktree 在 git 项目自动建(无开关)。
+- **环境核查**(本机实证):`which` —— opencode=`opencode acp`、omp=`omp acp`(均 `~/.bun/bin`)已装;mino 未装(命令按同构约定 `mino acp`)。
+- **改动**:
+  - **`internal/harness/harness.go`(新)**:ACP harness 注册表(§2.1 适配层)。`Supported = [{opencode,"OpenCode","opencode acp"},{mino,"Mino","mino acp"},{omp,"Oh My Pi","omp acp"}]`;`Normalize`(空/未知→opencode)、`Command`(id→启动命令,未知回退)、`IsOpenCode`(决定 model 注入是否走 opencode.json,§3.5)。`harness_test.go`(新)覆盖注册表不变量 + Normalize/Command/IsOpenCode。
+  - **`internal/store/migrations/0005_session_harness.sql`(新)**:`ALTER TABLE sessions ADD COLUMN harness TEXT NOT NULL DEFAULT 'opencode'`(旧 session 向后兼容)。
+  - **`internal/store/`**:`Session.Harness` 字段;`sessionColumns`/`scanSession` 加 harness;`CreateSession(ctx,projectID,title,model,harness)` 多一参 + INSERT harness。
+  - **`internal/chat/chat.go`**:`CreateSession(projectID,title,harnessID,useWorktree)` —— worktree 改由 `useWorktree && IsRepo` 门控(原 IsRepo 即自动建);`startLive` 按 `se.Harness` 经 `harness.Command()` 解析 spawn 命令(替代 `cfg.HarnessCmd`),非 opencode 时 model 置空(`WriteModelConfig` 跳过,各 harness 用自身全局配置,适配待补);新增绑定 `ListHarnesses()`/`IsGitProject(projectID)`。
+  - **前端**:`NewSessionModal.tsx`(新)—— harness 单选卡片(Name + command mono 标签,active 高亮)+ worktree 复选(非 git 禁用并提示「当前项目不是 Git 仓库」),Esc 关闭/遮罩点击取消;`App.tsx` `createSession` 改为先 `IsGitProject` 探测再开弹窗,`confirmNewSession` 调 `CreateSession(pid,"",harness,useWorktree)`;启动时 `ListHarnesses()` 载入。`index.css` 加 `.ns-*` 样式。
+  - 同步改测试调用点:`store_test.go`(4 处)、`queue_test.go`、`scm_test.go`(2 处)、`integration_test.go`、`study_test.go`(integration tag 不影响默认)。
+- **改了哪些文件**:`internal/harness/{harness.go(新),harness_test.go(新)}`、`internal/store/migrations/0005_session_harness.sql(新)`、`internal/store/{store.go,sessions.go,store_test.go}`、`internal/chat/{chat.go,queue_test.go,scm_test.go,integration_test.go,study_test.go}`、`frontend/src/{App.tsx,components/NewSessionModal.tsx(新),index.css}`、`frontend/bindings/*(regen,+ListHarnesses/IsGitProject/harness.Harness)`、PROCESS.md(本节+§B+§E)。
+- **验证**:`go build .` ✅;`go test ./internal/...` ✅(9 packages,含新增 harness 3 用例);`go vet`/`gofmt` 干净;`bunx tsc --noEmit` ✅;`bun run build:dev` ✅(337 modules)。**未做实机验证**(待 `wails3 dev`):弹窗交互、选 mino/omp 后真起 agent 对话、worktree 不勾时 cwd=项目目录。
+- **后续可改进**:① mino/omp 的 model 注入(各自 config 机制,需实证);② 弹窗记住上次选择(默认 harness/默认 worktree 勾选);③ harness 可用性探测(exec.LookPath,未装时禁用/提示);④ 把 harness 选择也接到会话标题/侧栏显示(标识该会话用的 agent)。
 
 ### 2026-06-30(fix:session 永久卡死 —— in_progress tool 豁免静默超时 + 错误不拆连接 + slog 进 /dev/null)
 - **起因**:用户复盘「md/96d8364a、md/13e08a19 两个 session 为什么停了」。前两轮误判为 glm-5.1 不稳;用户否定后重查,定位到**代码级、非 model** 的根因(详见 AGENTS.md §5.4 #16)。

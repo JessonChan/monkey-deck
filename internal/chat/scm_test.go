@@ -50,7 +50,7 @@ func newSCMService(t *testing.T) (svc *ChatService, sessionID, wtPath string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	se, err := st.CreateSession(svc.ctx, proj.ID, "scm", "")
+	se, err := st.CreateSession(svc.ctx, proj.ID, "scm", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestSCMNoWorktree(t *testing.T) {
 	svc.ctx = context.Background()
 	svc.st = st
 	proj, _ := st.CreateProject(svc.ctx, "p", t.TempDir(), "")
-	se, _ := st.CreateSession(svc.ctx, proj.ID, "", "")
+	se, _ := st.CreateSession(svc.ctx, proj.ID, "", "", "")
 	for name, fn := range map[string]func() error{
 		"Stage":   func() error { return svc.SessionStage(se.ID, nil) },
 		"Unstage": func() error { return svc.SessionUnstage(se.ID, nil) },
