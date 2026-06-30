@@ -196,7 +196,7 @@ export default function App() {
   // 启动:加载项目 + 订阅事件。
   useEffect(() => {
     void refreshProjects();
-    ChatService.ListHarnesses().then(setHarnesses).catch(() => {});
+    ChatService.ListHarnesses().then((h) => setHarnesses(h ?? [])).catch(() => {});
     const offUpdate = Events.On("chat:event", (e: { data: SessionEvent }) => {
       if (!e.data) return;
       applyEvent(e.data);
