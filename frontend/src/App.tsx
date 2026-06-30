@@ -659,6 +659,41 @@ export default function App() {
     [refreshProjects, selectedProjectId]
   );
 
+  // 删除 session:后端关 harness + 清 worktree + 删 DB;前端清掉该 session 的所有 per-session 缓存 + 从侧栏列表移除,
+  // 若是当前选中则清空选中态。删除是硬删除(DB 记录也没了),不可恢复。
+  const removeSession = useCallback(
+    async (sessionId: string) => {
+      await ChatService.DeleteSession(sessionId);
+      const drop = <T,>(prev: Record<string, T>) => { if (!(sessionId in prev)) return prev; const n = { ...prev }; delete n[sessionId]; return n; };
+      setSessionsByProject((prev) => {
+        const next: Record<string, Session[]> = {};
+        for (const [pid, list] of Object.entries(prev)) next[pid] = list.filter((s) => s.id !== sessionId);
+        return next;
+      });
+      setItemsBySession(drop);
+      setHasMoreBySession(drop);
+      setUsageBySession(drop);
+      setStatusBySession(drop);
+      setStatusDetailBySession(drop);
+      setActivityBySession(drop);
+      setUnreadBySession(drop);
+      setPermissionBySession(drop);
+      setQueueBySession(drop);
+      setDraftBySession(drop);
+      setHistoryBySession(drop);
+      setAttachmentsBySession(drop);
+      setMentionsBySession(drop);
+      setConfigOptionsBySession(drop);
+      queueBySessionRef.current = drop(queueBySessionRef.current);
+      delete oldestSeqRef.current[sessionId];
+      loadedSessionsRef.current.delete(sessionId);
+      historySeededRef.current.delete(sessionId);
+      if (selectedSessionId === sessionId) setSelectedSessionId(null);
+    },
+    [selectedSessionId]
+  );
+
+
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) || null,
     [projects, selectedProjectId]
@@ -698,6 +733,7 @@ export default function App() {
           onAddProject={addProject}
           onAddProjectByPath={addProjectByPath}
           onRemoveProject={removeProject}
+          onRemoveSession={removeSession}
           statusBySession={statusBySession}
           activityBySession={activityBySession}
           unreadBySession={unreadBySession}
