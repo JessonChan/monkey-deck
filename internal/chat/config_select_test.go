@@ -74,12 +74,35 @@ func TestBuildSessionConfigModelOnly(t *testing.T) {
 	}
 }
 
-// 缓存未就绪(首次、探测未完成或失败)时返回 nil —— 调用方不发空事件。
+// 缓存冷 + session.Model 非空 → 兜底为单选项(后端构造伪 ConfigOption,前端据此展示灰色只读输入框),
+// 而非返回 nil。session.Model 是 DB 真相来源,冷启动时不等 ACP warm 即可在 UI 显示。
 func TestBuildSessionConfigColdCacheNil(t *testing.T) {
 	svc, se := newConfigService(t)
-	// 不填 cfgCache(冷缓存)
+	// newConfigService 已设 se.Model = "zai/glm-4.6";不填 cfgCache(冷缓存)
+	got := svc.buildSessionConfig(se)
+	if len(got) != 1 {
+		t.Fatalf("cold cache with DB model should return 1 fallback option, got %d: %+v", len(got), got)
+	}
+	if got[0].Category != "model" {
+		t.Fatalf("fallback category should be model, got %q", got[0].Category)
+	}
+	if got[0].CurrentValue != "zai/glm-4.6" {
+		t.Fatalf("fallback currentValue should equal session.Model, got %q", got[0].CurrentValue)
+	}
+	if len(got[0].Options) != 1 {
+		t.Fatalf("fallback should have exactly 1 option, got %d", len(got[0].Options))
+	}
+	if got[0].Options[0].Value != "zai/glm-4.6" {
+		t.Fatalf("fallback option value should equal session.Model, got %q", got[0].Options[0].Value)
+	}
+}
+
+// 缓存冷 + session.Model 空 → nil(没有任何已知 model,不构造占位避免误导)。
+func TestBuildSessionConfigColdCacheEmptyModel(t *testing.T) {
+	svc, se := newConfigService(t)
+	se.Model = ""
 	if got := svc.buildSessionConfig(se); got != nil {
-		t.Fatalf("cold cache should return nil, got %+v", got)
+		t.Fatalf("cold cache + empty model should return nil, got %+v", got)
 	}
 }
 

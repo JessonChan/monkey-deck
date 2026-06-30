@@ -1301,14 +1301,17 @@ func configCacheKey(harnessID, projectID string) string {
 // buildSessionConfig 为「未活跃 session」构造 config options:从缓存取 model 选项,
 // currentValue 设为 session 的 model(DB 真相,首条消息 NewSession 时钉死)。
 // 只返回 model 项 —— mode/effort 是运行时热切项,首条消息前不展示(避免「改了不生效」的假交互);
-// session 活跃后由 startLive 推送完整 live configOptions 覆盖。缓存未就绪返回 nil。
+// session 活跃后由 startLive 推送完整 live configOptions 覆盖。
+//
+// 两层兜底(真相来源 = DB 的 session.Model):
+//   - 缓存热 → 用 agent 自报完整 model 列表,currentValue 覆盖为 se.Model(用户之前选的);
+//   - 缓存冷 + se.Model 非空 → 构造单选项静态占位(currentValue = se.Model,DB 值),
+//     ModelSelect 展示为灰色只读输入框(不可选,仅作信息展示)。maybeWarmSession 预热完成后
+//     emitCachedConfigForProject 会用完整列表替换,前端切为标准下拉。
 func (s *ChatService) buildSessionConfig(se *store.Session) []acp.ConfigOption {
 	s.mu.RLock()
 	cached := s.cfgCache[configCacheKey(se.Harness, se.ProjectID)]
 	s.mu.RUnlock()
-	if len(cached) == 0 {
-		return nil
-	}
 	for _, o := range cached {
 		if o.Category == "model" {
 			out := o // 拷贝结构体(Options 切片只读不改,共享底层数组无妨)
@@ -1316,7 +1319,21 @@ func (s *ChatService) buildSessionConfig(se *store.Session) []acp.ConfigOption {
 			return []acp.ConfigOption{out}
 		}
 	}
-	return nil
+	if se.Model == "" {
+		return nil // 没有任何已知 model,不构造占位(避免误导)
+	}
+	// 缓存冷:DB 值为唯一真相,推单选项静态占位。前端据此展示灰色只读输入框,
+	// 表明「model 已知,完整列表待 warm 完成」。
+	return []acp.ConfigOption{{
+		ID:           "model",
+		Name:         "Model",
+		Category:     "model",
+		CurrentValue: se.Model,
+		Options: []acp.ConfigOptionEntry{{
+			Value: se.Model,
+			Name:  se.Model,
+		}},
+	}}
 }
 
 // emitSessionConfig 给某 session 推 config_option(缓存就绪时)。活跃 session 跳过 ——
