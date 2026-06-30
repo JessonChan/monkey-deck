@@ -46,10 +46,11 @@
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
 - **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理 SCM 化(含审查 5 项修复)+ 会话标题修复 + 右侧文件管理面板(tab:文件/源代码管理)+ **AI 提交/AI 合并(SCM 结合 AI)** 均已完成;继续对话体验打磨(**输入框上下键翻历史 + @ 提及文件/文件夹(经 ACP ResourceLink 发送)**)
-- **最后更新**:2026-06-30(fix:session 永久卡死 —— in_progress tool 豁免静默超时 + 错误不拆连接 + slog 进 /dev/null;详见 §G / AGENTS.md §5.4 #16)
+- **最后更新**:2026-06-30(fix:跨 session 状态隔离 —— 思考块展开偏好 / 滚动位置 / composer 附件按 session 隔离;详见 §G)
 - **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、会话标题(opencode 经 session/list 权威标题 + 瞬时 fallback)、源代码管理 SCM(提交/暂存/丢弃/单文件 diff/并发守卫/**AI 提交/AI 合并**)、三栏可拖拽分隔线、**右侧文件浏览/管理(树+预览+增删改)**、**窗口尺寸/位置/最大化记忆(ui_state.json)**、**应用自更新(菜单「检查更新…」+ 发布版后台静默检查 + `release:darwin` 打包工具链)**。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
 - **近期改动汇总**:
   - **session 永久卡死修复**(2026-06-30):定位到**代码级、非 model** 根因 —— `runner.go` 静默超时对 in_progress tool 永久豁免,harness 死于 in_progress tool 中途时 turn 永久挂死、死 harness 变僵尸;且超时/断连错误不被 `IsPeerDisconnected` 识别 → 不拆连接;monkey-deck stderr→/dev/null 致无法诊断。修:① 绝对 turn 上限 `maxTurnAbsolute=15min`(纯函数 `shouldCancelTurn`);② `teardownLive` —— `runPrompt`/`SendAndWaitSync` 任何非用户取消的失败都拆连接;③ slog 重定向到 `<DataDir>/monkey-deck.log`。新增 4 个 `shouldCancelTurn` 用例;`go test ./internal/...` 全绿。详见 §G。
+  - **跨 session 状态隔离**(2026-06-30):修三个「本该 per-session 却挂在共享处」的泄漏 —— ① 思考块展开偏好(全局 localStorage `md:thought-open`)→ 按 session 存(`md:thought-open:<sid>`);② `chat-body` 未按 session 加 key → 滚动容器复用、scrollTop 停在上一 session(加 `key={sessionId}`;`scrollStateRef` 在 ChatView 内存活→位置记忆仍保留);③ Composer 附件/提及为内部 state → 提到 App 按 session 存(`attachmentsBySession`/`mentionsBySession`)。仅前端,`tsc` 通过。详见 §G。
   - **应用自更新(auto-update 改造)**(2026-06-29):新增 `internal/update`(GitHub Releases 源 + `app.Updater.Init` + 后台静默检查 `StartBackgroundChecks` + 纯函数 `ShouldAutoCheck`);`main.go` 加 `currentVersion`(ldflags 注入)+ App 菜单「检查更新…」(保留默认编辑菜单)+ 发布版后台静默检查;`build/darwin/Taskfile.yml` 加 `VERSION`(git describe,去前导 v)注入 production ldflags;根 `Taskfile.yml` 加 `release:darwin`(打包 .app→zip→SHA256SUMS→打印 gh 发布命令)。详见 §G / §E。
   - **输入框:上下键翻历史 + @ 提及文件/文件夹**(2026-06-29):① 上下键翻当前 session 全部已发消息(无长度限制;按发送键即记进历史,含排队/被拒的;seed 自 DB `ListUserMessages` + 本会话发送追加;仅光标在首/末行且无菜单时触发);② `@` 触发当前 cwd 文件/文件夹选择器(复用 `SessionListDir`,支持 `/` 进子目录、键入过滤、↑↓ 选择);选中插入 `@相对路径` 文本 + 记录;发送时每个提及经 **ACP `ContentBlock::ResourceLink`(`file://` URI)** 发给 agent(协议 baseline,所有 agent 必须支持),文本照常作 `TextBlock` 发出。后端:`internal/acp` 加 `Attachment{Path,Name}` + `ChatSession.Prompt` 改签名加 `[]Attachment` + `buildPromptBlocks/fileURI`;`chatConn` 接口 + `SendMessage/InterruptAndSend/SendAndWaitSync/startTurn/runPrompt` 透传;store 加 `ListUserMessages`;`QueueItem` 携带 `mentions`。前端:Composer 重写(history 导航 + @autocomplete + mention chips),App `historyBySession` + `sendMessage(text,mentions)`。详见 §G。
   - **AI 提交 / AI 合并(SCM 结合 AI)**(2026-06-29):协议调研确认 ACP 无 sub-agent/委派原语(单连接单 agent,但可并发多 session);sub agent 是客户端层概念。用户拍板:**AI 提交 = 架构 A(复用当前 session 发 prompt,上下文最完整、最 ACP 纯)**;**AI 合并 = 确定性 merge + AI 生成合并 message(用 opencode 会话标题作 merge message subject)**。后端:`SessionAICommit`(复用 SendMessage)+ `mergeCommitMessage`(纯函数)+ `MergeBranch` 加 message(`--no-ff -m`);前端 GitPanel 加「✨ AI 提交」按钮。详见 §G / §E。
@@ -135,6 +136,17 @@
 ---
 
 ## G. 工作日志(追加,最新在上)
+
+### 2026-06-30(fix:跨 session 状态隔离 —— 思考块偏好 / 滚动位置 / composer 附件)
+- **起因**:用户报两个「藏得很深」的跨 session bug:① 思考过程串到别的 session(「新窗口居然还有思考过程选项」);② 切 session 时滚动位置串(「A 停在 B 的位置,没在 A 上」)。分析中又发现第三个同类:Composer 附件/提及也跨 session 串。
+- **根因(均为「本该 per-session 的状态挂在了共享处」)**:
+  1. **思考块偏好**:`ThoughtBlock`(ChatView.tsx)把展开偏好写进**全局** localStorage 键 `md:thought-open`(不分 session)。A 展开→全局置 true→任何 session(含新窗口)思考块默认展开。内容本身按 sessionId 隔离(前端 `itemsBySession` 分桶、后端 `handleEvent` `e.SessionID = sessionID`),**串的是展开偏好**,不是内容。
+  2. **滚动位置**:`App.tsx` 渲染 `<ChatView>` 未按 session 加 key → 所有 session 复用同一个 `chat-body` 滚动容器 DOM 节点;切 session 时 `scrollTop` 不被浏览器重置、停在上一 session 像素位置,`useLayoutEffect` 靠 `prevSessionIdRef` 事后补偿恢复,内容刚换、高度未稳时落空。
+  3. **Composer 附件/提及**:`attachments`/`mentions` 是 Composer 内部 useState,ChatView 复用→跨 session 串(A 里 @ 的文件切到 B 还挂着 chip)。
+- **改法**:① localStorage 键改 `md:thought-open:<sid>`,`sessionId` 经 `ChatRow` 传入 `ThoughtBlock`;② `<div className="chat-body" key={props.sessionId}>` 隔离滚动容器(`scrollStateRef` 在 ChatView 内存活→切回仍恢复各自位置;Composer 在 footer、不受影响;消息行本就按 `item.id` 全量重挂→加 key 零额外开销);③ `attachments`/`mentions` 提到 App 的 `attachmentsBySession`/`mentionsBySession`(仿 `draftBySession` 模式),Composer 改受控;`selectProject` 一并清空。
+- **改了哪些文件**:`frontend/src/{App.tsx,components/{ChatView.tsx,Composer.tsx}}`。未碰后端(用户正并行改 `internal/chat/chat.go`,刻意不夹带)。
+- **验证**:`bunx tsc --noEmit` ✅。三项均为 UI 行为,**未做实机验证**(待 `wails3 dev`):① A 展开思考→新 session 思考块应默认折叠;② A 滚到中段→切 B→切回 A 应回到 A 中段而非 B 位置;③ A @ 文件→切 B,B composer 不应带 A 的 chip。
+- **下一步**:实机验证上述三项。
 
 ### 2026-06-30(fix:session 永久卡死 —— in_progress tool 豁免静默超时 + 错误不拆连接 + slog 进 /dev/null)
 - **起因**:用户复盘「md/96d8364a、md/13e08a19 两个 session 为什么停了」。前两轮误判为 glm-5.1 不稳;用户否定后重查,定位到**代码级、非 model** 的根因(详见 AGENTS.md §5.4 #16)。
