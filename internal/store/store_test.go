@@ -222,3 +222,64 @@ func TestListUserMessages(t *testing.T) {
 		t.Fatalf("expected empty for nonexistent session, got %v", got2)
 	}
 }
+
+// TestSessionPromptedAtSort 校验侧栏排序键:prompted_at DESC → updated_at DESC(§1.4 排序策略)。
+// 核心断言:用户发消息(TouchPrompted)让 session 跳顶,后台活动(UpdateSessionUsage/UpdateSessionTitle)
+// 不动 prompted_at、只动 updated_at,后台 session 不会盖掉最近被用户 prompt 过的 session。
+func TestSessionPromptedAtSort(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	p, err := s.CreateProject(ctx, "demo", "/tmp/sort", "m/m")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a, _ := s.CreateSession(ctx, p.ID, "A", "m/m", "opencode")
+	b, _ := s.CreateSession(ctx, p.ID, "B", "m/m", "opencode")
+	c, _ := s.CreateSession(ctx, p.ID, "C", "m/m", "opencode")
+
+	// 初始顺序:三者都刚 CreateSession(prompted_at=now),按 created_at 细分应是 C,B,A;
+	// 但同一毫秒内不稳定,故只断言数量,不做顺序断言。
+	list, _ := s.ListSessions(ctx, p.ID)
+	if len(list) != 3 {
+		t.Fatalf("expected 3 sessions, got %d", len(list))
+	}
+
+	// 模拟「A 是较早被用户发消息的」:显式把 A 的 prompted_at 压低(老会话)。
+	if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET prompted_at=? WHERE id=?`, 1000, a.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 模拟后台活动:b 收到 usage_update / 标题同步 → 只动 updated_at,不动 prompted_at。
+	// 这里把 b 的 updated_at 抬到非常大,但 prompted_at 保持 CreateSession 时的值。
+	if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET updated_at=? WHERE id=?`, 9_999_999, b.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 模拟「C 是最近被用户 prompt 的」:TouchPrompted 把 C 的 prompted_at 抬到 now(最大)。
+	if err := s.TouchPrompted(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	list, _ = s.ListSessions(ctx, p.ID)
+	// 期望:C(最近 prompted) > b(prompted_at 仍是 CreateSession 值,但 updated_at 大) > A(prompted_at 压到 1000)。
+	if list[0].ID != c.ID {
+		t.Fatalf("expected C on top (most recently prompted), got %s; order=%v", list[0].ID, sessionIDs(list))
+	}
+	if list[len(list)-1].ID != a.ID {
+		t.Fatalf("expected A at bottom (oldest prompted_at), got %s; order=%v", list[len(list)-1].ID, sessionIDs(list))
+	}
+	// 关键:b 的 updated_at 虽然是 9_999_999,但 C 的 prompted_at 更大,排序优先 → C 在 b 之上。
+	// 这证明后台活动(updated_at)不能盖过用户 prompt(prompted_at)。
+	if list[1].ID != b.ID {
+		t.Fatalf("expected B in middle, got %s; order=%v", list[1].ID, sessionIDs(list))
+	}
+}
+
+func sessionIDs(ss []Session) []string {
+	out := make([]string, len(ss))
+	for i, x := range ss {
+		out[i] = x.ID
+	}
+	return out
+}

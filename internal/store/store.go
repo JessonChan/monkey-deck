@@ -59,6 +59,7 @@ type Session struct {
 	Cost       float64 `json:"cost"`
 	CreatedAt  int64   `json:"createdAt"`
 	UpdatedAt  int64   `json:"updatedAt"`
+	PromptedAt int64   `json:"promptedAt"` // 用户最后一次发消息的时刻,专用于侧栏排序(后台活动不刷新它)
 }
 
 // New 打开(或创建)SQLite 并跑迁移。dbPath 为空时用内存库(测试用)。

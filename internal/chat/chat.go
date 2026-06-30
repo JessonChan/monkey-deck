@@ -1029,6 +1029,11 @@ func (s *ChatService) startTurn(ls *liveSession, sessionID, text string, attachm
 		s.emitStatus(sessionID, "error", detail)
 		return fmt.Errorf("%s", detail)
 	}
+	// 用户发消息的瞬间刷新 prompted_at(侧栏主排序键),配合前端 prompting 时 refresh,
+	// 让该 session 即时跳顶;后台活动(usage_update/工具返回)不动它(§1.4 排序策略)。
+	if err := s.st.TouchPrompted(s.ctx, sessionID); err != nil {
+		slog.Warn("touch prompted_at", "err", err)
+	}
 	s.maybeAutoTitle(sessionID, text)
 	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "user_message_chunk", Text: text})
 	s.emitStatus(sessionID, "prompting", "")

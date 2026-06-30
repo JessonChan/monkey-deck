@@ -9,14 +9,14 @@ import (
 )
 
 // sessionColumns / scanSession:统一 session 的列与扫描,避免多处 SELECT/Scan 漂移(§1.5)。
-const sessionColumns = `id,project_id,acp_session_id,title,model,harness,worktree_path,branch,used_tokens,size_tokens,cost,created_at,updated_at`
+const sessionColumns = `id,project_id,acp_session_id,title,model,harness,worktree_path,branch,used_tokens,size_tokens,cost,created_at,updated_at,prompted_at`
 
 func scanSession(r interface {
 	Scan(dest ...any) error
 }, se *Session) error {
 	return r.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model, &se.Harness,
 		&se.WorktreePath, &se.Branch,
-		&se.UsedTokens, &se.SizeTokens, &se.Cost, &se.CreatedAt, &se.UpdatedAt)
+		&se.UsedTokens, &se.SizeTokens, &se.Cost, &se.CreatedAt, &se.UpdatedAt, &se.PromptedAt)
 }
 
 // --- Sessions ---
@@ -27,17 +27,18 @@ func (s *Store) CreateSession(ctx context.Context, projectID, title, model, harn
 		harnessv = "omp"
 	}
 	sess := &Session{
-		ID:        uuid.NewString(),
-		ProjectID: projectID,
-		Title:     title,
-		Model:     model,
-		Harness:   harnessv,
-		CreatedAt: now(),
-		UpdatedAt: now(),
+		ID:         uuid.NewString(),
+		ProjectID:  projectID,
+		Title:      title,
+		Model:      model,
+		Harness:    harnessv,
+		CreatedAt:  now(),
+		UpdatedAt:  now(),
+		PromptedAt: now(), // 新会话置顶:出现在侧栏最上方,用户视线内
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions(id,project_id,acp_session_id,title,model,harness,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
-		sess.ID, sess.ProjectID, sess.ACPSession, sess.Title, sess.Model, sess.Harness, sess.CreatedAt, sess.UpdatedAt)
+		`INSERT INTO sessions(id,project_id,acp_session_id,title,model,harness,created_at,updated_at,prompted_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+		sess.ID, sess.ProjectID, sess.ACPSession, sess.Title, sess.Model, sess.Harness, sess.CreatedAt, sess.UpdatedAt, sess.PromptedAt)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
@@ -79,10 +80,18 @@ func (s *Store) TouchSession(ctx context.Context, id string) error {
 	return err
 }
 
-// ListSessions 列出某项目的全部 session(按更新时间倒序)。
+// TouchPrompted 刷新 prompted_at(用户发消息时调)。它是侧栏主排序键,后台活动不刷新它,
+// 保证侧栏顺序由用户意图掌控。
+func (s *Store) TouchPrompted(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET prompted_at=? WHERE id=?`, now(), id)
+	return err
+}
+
+// ListSessions 列出某项目的全部 session。
+// 排序:prompted_at DESC(用户最后发消息时间,主键)→ updated_at DESC(最后修改时间,二级兜底)。
 func (s *Store) ListSessions(ctx context.Context, projectID string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+sessionColumns+` FROM sessions WHERE project_id=? ORDER BY updated_at DESC`,
+		`SELECT `+sessionColumns+` FROM sessions WHERE project_id=? ORDER BY prompted_at DESC, updated_at DESC`,
 		projectID)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
