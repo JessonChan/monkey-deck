@@ -312,6 +312,7 @@ monkey-deck/
 | IM / agent-team / 多 agent 协作流 | 阶段 3+ | wesight 有,我们晚做 |
 | 云端同步 / 账号系统 | 视情况 | 本地优先 |
 | 运行时监控仪表盘 / 菜单栏 HUD | 阶段 3+ | wesight 有,我们晚做 |
+| 导入 opencode/OMP 历史聊天记录 | **不做** | ACP `session/list`+`session/load` 技术上可批量重放导入,但太重(每个 session 都要 spawn harness 重放)+ 协议字段贫瘠(`SessionInfo` 无 usage/cost/model,load 重放只带协议标准字段)。用户判定永不。详见 `docs/worklog/2026-07-01-decline-import-historical-chats.md` |
 
 ---
 
