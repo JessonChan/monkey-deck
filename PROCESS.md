@@ -132,6 +132,19 @@
 
 ## G. 工作日志(追加,最新在上)
 
+### 2026-06-30(fix:ocr review 6 项修复 —— 输入框历史/提及健壮性)
+- **起因**:用 `ocr`(OpenCodeReview,z-ai/glm-5.2)对 commit `9adfb0b`(上下键翻历史 + @ 提及)做代码审查,抓出 6 项,逐一核实后全部成立(含 1 个我引入的确定 bug)。
+- **修复**:
+  1. **`Composer.tsx navigateHistory` 方向反了(确定 bug)**:`next = navRef.current - dir` 在 `dir=-1`(↑向旧)时算成 `+1`(向新)→ ↑ 只能到最新一条、再按就恢复草稿,永远翻不到更旧。改 `+ dir`。根因:符号写反。
+  2. **删 mention chip 没清 `@path` 文本**:点 chip 的 X 只 `setMentions` 过滤掉,state 没了但 `@path` 文本留在 textarea → submit 时 `inline` 过滤排除它 → `@path` 当纯文本发出、无对应 ResourceLink。修:X 的 onClick 同时把 textarea 里首个 `@path`(含尾随空格)删掉。
+  3. **`includes` 子串误匹配**:`t.includes("@" + m.path)` 会让 `@src/foo` 命中 `@src/foobar`。改:indexOf + 词边界(尾随须是空格或串尾)。
+  4. **mention 检测不随光标移动重算**:`useMemo(() => detectMention(value, cursorRef.current), [value])` —— cursorRef 是 ref 不在 deps,光标纯移动(点击/方向键,无 value 变化)时 memo 不重算 → @ 面板该关不关/该开不开。修:加 `cursorPos` 状态作 memo 重算触发器(`cursorRef` 仍是命令式读写的权威值),`handleChange`/`handleSelect` 里同步 `setCursorPos`。最坏情况(onSelect 拖选高频触发)对小组件无影响。
+  5. **`SessionListDir` 无防抖**:每次按键(`value` 变化即 effect)都打后端 IPC。加 150ms `setTimeout` + cleanup `clearTimeout`,快打字时只发最后一次。
+  6. **`App.tsx openSession` stale closure**:`historyBySession`(state)在 `openSession` 里被读但不在 deps(`[messagesToItems, selectedProjectId, sessionsByProject]`)→ stale 闭包,重开已 seed 过的 session 会误判 `!(sessionId in historyBySession)` 为 true 再 seed → 覆盖内存追加(排队/被拒的未持久化历史)+ 重复 IPC。改:镜像已有 `loadedSessionsRef` 模式,加 `historySeededRef.current.has(sessionId)` 守卫。
+- **改了哪些文件**:`frontend/src/components/Composer.tsx`(1–5)、`frontend/src/App.tsx`(6)、PROCESS.md。
+- **验证**:`bunx tsc --noEmit` ✅;`bunx vite build` ✅(329 modules)。**未做实机验证**(待 `wails3 dev`):上下键多步翻旧、删 chip 清文本、@ 面板光标离开自动关闭。
+- **教训**:`ocr review` 抓得准,尤其 React stale-closure / ref-vs-state 类问题值得采纳;符号写反(`- dir` vs `+ dir`)这类 bug 自己 review 看不出,LLM review 能抓。
+
 ### 2026-06-29(feat:输入框上下键翻历史 + @ 提及文件/文件夹 —— 经 ACP ResourceLink 发送)
 - **起因**:用户要求两个输入框增强。① 上下键翻当前 session 对话历史(发过的消息按 ↑ 向旧、↓ 向新翻,无长度限制;按过发送键即算,含未达后端/被拒的)。② `@` 提及某文件/文件夹;用户明确要「结合 ACP 协议发送」。
 - **协议调研(对 acp-go-sdk v0.13.5 实证)**:`session/prompt` 的 `Prompt` 字段是 `[]ContentBlock`,baseline 要求 agent **MUST** 支持 `ContentBlock::Text` 与 `ContentBlock::ResourceLink`;`ResourceLink{type:"resource_link",uri,name}` 用 `file://` URI 让 agent 访问文件。`Resource`(内嵌内容)需 agent 声明 `promptCapabilities.embeddedContext`(可选),故选 **ResourceLink(baseline,稳)**。→ 「结合 ACP」= 把 @ 提及作为 `ResourceLink` block 发,不是塞 `@path` 文本让 agent 自己解析。
