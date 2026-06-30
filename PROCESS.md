@@ -130,6 +130,24 @@
 
 ## G. 工作日志(追加,最新在上)
 
+### 2026-06-30(feat:model / 思考等级(effort)/ 会话模式选择 —— ACP Session Config Options)
+- **起因**:原 model 仅由 opencode.json 写死(§3.5),用户无法在 UI 切换 model / 思考等级 / 会话模式。用户要求「实现 model 和 think level 选择」,并定 UI 放 Composer 发送按钮左侧、不做独立 provider 下拉(provider 已嵌在 model value `provider/model` 里)。
+- **协议调研(实证)**:ACP `session/new` 与 `session/load` 响应有 `configOptions`(SDK `SessionConfigOptions` 承载)——agent 自报可用 config option 列表(每项 category/id/options/name/currentValue),`session/set_config_option` 通知(经 `session/update`)热切当前值,无需重建 session。opencode 1.17.11 经诊断程序证实暴露:① model selector(category=model,46 model ×6 provider);② mode selector(build/plan);③ effort/thought_level(category=thought_level,id=effort)——**条件出现**,仅当前 model 有 variants 时(GLM-4.6/5.1 硬编码空 variants 不发;GLM-5.2/Claude/GPT-5/Gemini/Grok 发)。
+- **后端**:
+  - `internal/acp/handler.go`:新增 `ConfigOption`/`ConfigOptionEntry` 类型;`FlattenConfigOptions()` 拍平 SDK SessionConfigOptions;`flattenUpdate` 加 `config_option` case;`SessionEvent` 加 `configOptions` 字段。
+  - `internal/acp/runner.go`:`ChatSession.ConfigOptions` 字段(NewChatSession/LoadChatSession 从响应捕获);`FlatConfigOptions()`/`SetConfigOption(ctx, configId, value)` 方法(后者调 conn.SetConfigOption)。
+  - `internal/chat/chat.go`:`chatConn` 接口加 `FlatConfigOptions`/`SetConfigOption`;`startLive` 初始推 configOption event;新增绑定 `GetSessionConfigOptions`/`SetSessionConfigOption`(后者 ensureLive,可能触发懒启动);`queue_test.go` fakeChat 同步。
+- **前端**:
+  - `types.ts`:新增 `ConfigOption`/`ConfigOptionEntry`;`SessionEvent` kind 加 `"config_option"` + `configOptions` 字段。
+  - `App.tsx`:`configOptionsBySession` state;`applyEvent` 处理 config_option;派生当前 session 的 configOptions;`setSessionConfig` callback(调 ChatService.SetSessionConfigOption,成功后 backend 推 config_option event 回更);透传 ChatView。
+  - `ChatView.tsx`:Props 加 configOptions/onSetConfig,透传 Composer(替换原静态 `model` prop)。
+  - `Composer.tsx`:新增内联 `ModelSelect` 组件——model `<select>` 按 provider 前缀 `<optgroup>` 分组、mode `<select>`、effort `<select>`(条件,thought_level 存在才显);未 active(configOptions 空)不渲染(session.Model 仍在 header 静态显示)。
+  - `index.css`:`.cfg-group`/`.cfg-select`(小型 mono 下拉,替换原 `.composer-model` 静态 span)。
+- **决策**:纯 ACP 路径(§1.1)——model 列表由 agent 自报,客户端不维护自有 model 清单;provider 非独立下拉(嵌在 value);harness 选择不在本次范围(项目级,另议)。opencode.json 的 `WriteModelConfig` 保留为「写初始 currentValue」。
+- **改了哪些文件**:`internal/acp/{handler.go, runner.go}`、`internal/chat/{chat.go, queue_test.go}`、`frontend/src/{types.ts, App.tsx, components/{ChatView.tsx, Composer.tsx}, index.css}`、`frontend/bindings/*(regen,+GetSessionConfigOptions/SetSessionConfigOption)`、PROCESS.md(本节)。
+- **验证**:`go test ./internal/...` ✅(5 packages ok);前端 `bun run build:dev`(tsc + vite build,329 modules)✅。**未做实机验证**(待 `wails3 dev`):下拉渲染、切 model 热生效、effort 随 model 出现/消失。
+- **下一步**:实机验证;可选——确认 mode(build/plan)下拉的 opencode 行为。
+
 ### 2026-06-29(feat:AI 提交 / AI 合并 —— 源码管理结合 AI,基于协议调研定架构)
 - **起因**:用户认为 SCM 功能设计不够友好、未充分结合 AI,提议右侧操作里加「AI 自动提交」「AI 自动合并到主分支」,并问能否「基于当前 session 创建 sub agent」完成。要求**先讨论再操作**。
 - **协议调研(对 `references/agent-client-protocol` 实证)**:

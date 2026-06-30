@@ -66,6 +66,10 @@ type chatConn interface {
 	RespondPermission(id, optionID string) bool
 	// SessionTitle 经 ACP session/list 取 opencode 生成的权威标题(§5.4 #14)。
 	SessionTitle(ctx context.Context) (string, error)
+	// FlatConfigOptions 返回扁平化的 config options(给前端渲染下拉)。
+	FlatConfigOptions() []acp.ConfigOption
+	// SetConfigOption 切换 config option(model/mode/effort),热切同 session 即时生效。
+	SetConfigOption(ctx context.Context, configId, value string) error
 }
 
 // segEntry 一段已完成的 thinking / agent message(多 tool call 交替时一轮有多个段)。
@@ -730,6 +734,10 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 		_ = s.st.UpdateSessionACP(s.ctx, se.ID, string(chat.SessionID), se.Title)
 	}
 	s.emitStatus(se.ID, "started", "")
+	// 推送 agent 自报的 config options(model/mode/effort),前端据此渲染下拉。
+	if opts := chat.FlatConfigOptions(); len(opts) > 0 {
+		s.emit(EventUpdate, acp.SessionEvent{SessionID: se.ID, Kind: "config_option", ConfigOptions: opts})
+	}
 	slog.Info("session live", "id", se.ID, "resume", resume, "cwd", proj.Path, "model", se.Model)
 	return nil
 }
@@ -1113,6 +1121,37 @@ func (s *ChatService) StopSession(sessionID string) error {
 		// 无在跑 turn(竞态/重复点):直接推 idle 兜底,避免前端卡在 prompting。
 		s.emitStatus(sessionID, "idle", "")
 	}
+	return nil
+}
+
+// GetSessionConfigOptions 返回当前 session 的 config options(给前端渲染下拉:model/mode/effort)。
+// 仅 harness 已启动(active)时有值;未启动返回 nil(前端用 session.Model 兜底静态显示)。
+func (s *ChatService) GetSessionConfigOptions(sessionID string) ([]acp.ConfigOption, error) {
+	s.mu.RLock()
+	ls, ok := s.active[sessionID]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, nil
+	}
+	return ls.chat.FlatConfigOptions(), nil
+}
+
+// SetSessionConfigOption 切换 session 的某个 config option(model/mode/effort),热切、同 session 即时生效。
+// 成功后把最新 config options 推前端。未活跃会先 ensureLive(spawn harness)。
+func (s *ChatService) SetSessionConfigOption(sessionID, configId, value string) error {
+	if err := s.ensureLive(sessionID); err != nil {
+		return err
+	}
+	s.mu.RLock()
+	ls, ok := s.active[sessionID]
+	s.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("session not active: %s", sessionID)
+	}
+	if err := ls.chat.SetConfigOption(s.ctx, configId, value); err != nil {
+		return err
+	}
+	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "config_option", ConfigOptions: ls.chat.FlatConfigOptions()})
 	return nil
 }
 

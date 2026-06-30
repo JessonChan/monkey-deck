@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import type { ConfigOption } from "../types";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import { Paperclip, X, Slash, Square, ArrowUp } from "lucide-react";
 
@@ -7,7 +8,8 @@ interface Props {
   onChange: (v: string) => void;
   disabled: boolean;        // 无 session 时禁用全部交互
   prompting: boolean;       // 一轮进行中:显示停止键 + send 提示将排队
-  model: string;
+  configOptions: ConfigOption[];        // agent 自报的 model/mode/effort(渲染下拉)
+  onSetConfig: (configId: string, value: string) => void;  // 切换 config option(热切)
   onSend: (text: string) => void;
   onStop: () => void;
   onAction: (action: "clear" | "new" | "stop") => void;
@@ -28,7 +30,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { cmd: "/stop", desc: "停止生成", action: "stop" },
 ];
 
-export default function Composer({ value, onChange, disabled, prompting, model, onSend, onStop, onAction }: Props) {
+export default function Composer({ value, onChange, disabled, prompting, configOptions, onSetConfig, onSend, onStop, onAction }: Props) {
   const [attachments, setAttachments] = useState<string[]>([]);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
@@ -153,7 +155,7 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
             </button>
           </div>
           <div className="compose-right">
-            {model && <span className="composer-model" title="当前 model">{model}</span>}
+            <ModelSelect configOptions={configOptions} disabled={disabled} onSetConfig={onSetConfig} />
             {attachments.length > 0 && <span className="composer-count">{attachments.length} 附件</span>}
             {prompting && (
               <button className="send-btn stop" data-testid="stop-btn" onClick={onStop} title="停止当前生成(不清理队列)">
@@ -172,6 +174,75 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ModelSelect 渲染 configOptions 里的 model/effort/mode 下拉(发送按钮左侧)。
+// model 按 value 的 provider 前缀("provider/model")分组(optgroup);
+// effort(thought_level)/mode 条件出现 —— agent 没报就不显示(如 GLM-4.6/5.1 无 effort)。
+// 未 active(harness 未启)时 configOptions 为空 → 不渲染(session.Model 仍在 header 静态显示)。
+function ModelSelect({ configOptions, disabled, onSetConfig }: {
+  configOptions: ConfigOption[];
+  disabled: boolean;
+  onSetConfig: (configId: string, value: string) => void;
+}) {
+  const modelOpt = configOptions.find((c) => c.category === "model");
+  const effortOpt = configOptions.find((c) => c.category === "thought_level");
+  const modeOpt = configOptions.find((c) => c.category === "mode");
+  // model 按 provider 分组:value 形如 "zai/glm-4.6",取 "/" 前缀。
+  const groups = useMemo(() => {
+    const g: Record<string, { value: string; name: string }[]> = {};
+    for (const o of modelOpt?.options ?? []) {
+      const prov = o.value.split("/")[0] || "other";
+      (g[prov] ??= []).push(o);
+    }
+    return g;
+  }, [modelOpt]);
+  if (!modelOpt) return null;
+  return (
+    <div className="cfg-group">
+      <select
+        className="cfg-select"
+        value={modelOpt.currentValue}
+        disabled={disabled}
+        onChange={(e) => onSetConfig("model", e.target.value)}
+        title="选择模型"
+      >
+        {Object.entries(groups).map(([prov, opts]) => (
+          <optgroup key={prov} label={prov}>
+            {opts.map((o) => (
+              <option key={o.value} value={o.value}>{o.name}</option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+      {modeOpt && (
+        <select
+          className="cfg-select"
+          value={modeOpt.currentValue}
+          disabled={disabled}
+          onChange={(e) => onSetConfig("mode", e.target.value)}
+          title="会话模式"
+        >
+          {modeOpt.options.map((o) => (
+            <option key={o.value} value={o.value}>{o.name}</option>
+          ))}
+        </select>
+      )}
+      {effortOpt && (
+        <select
+          className="cfg-select"
+          value={effortOpt.currentValue}
+          disabled={disabled}
+          onChange={(e) => onSetConfig("effort", e.target.value)}
+          title="思考等级"
+        >
+          {effortOpt.options.map((o) => (
+            <option key={o.value} value={o.value}>{o.name}</option>
+          ))}
+        </select>
+      )}
     </div>
   );
 }

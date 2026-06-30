@@ -23,7 +23,7 @@ import (
 // 这里转成 JSON 友好的结构,由 service 层经 Wails3 event 推前端流式渲染。
 type SessionEvent struct {
 	SessionID string `json:"sessionId"`
-	Kind      string `json:"kind"` // agent_message_chunk | agent_thought_chunk | tool_call | tool_call_update | usage_update | plan | session_info
+	Kind      string `json:"kind"` // agent_message_chunk | agent_thought_chunk | tool_call | tool_call_update | usage_update | plan | session_info | config_option
 	Text      string `json:"text"` // chunk 文本(message/thought);agent/thought 为累积全文
 	Seq       int64  `json:"seq,omitempty"` // 单调序号(防流式乱序,§4.3)
 
@@ -37,7 +37,69 @@ type SessionEvent struct {
 	Used   int64    `json:"used,omitempty"`   // context tokens 已用
 	Size   int64    `json:"size,omitempty"`   // context window 总量
 	Cost   *float64 `json:"cost,omitempty"`   // 累积成本 USD
-	Title  string   `json:"title,omitempty"`  // session_info 标题
+	Title         string          `json:"title,omitempty"`  // session_info 标题
+	ConfigOptions []ConfigOption  `json:"configOptions,omitempty"` // config_option:model/mode/effort 等(agent 自报)
+}
+
+// ConfigOption 是给前端用的扁平化 session config option(从 acp.SessionConfigOption union 转换)。
+// agent 在 NewSession/LoadSession/set_config_option 响应、config_option_update 通知里返回 configOptions,
+// 经 FlattenConfigOptions 拍平后推前端渲染下拉(model selector / mode / thought_level)。
+type ConfigOption struct {
+	ID           string              `json:"id"`
+	Name         string              `json:"name"`
+	Category     string              `json:"category"` // model | mode | thought_level
+	CurrentValue string              `json:"currentValue"`
+	Options      []ConfigOptionEntry `json:"options"`
+}
+
+// ConfigOptionEntry 一个可选项。model 的 value 是 "provider/model" 格式(如 "zai/glm-4.6"),
+// 前端可按 value 的 provider 前缀分组显示。
+type ConfigOptionEntry struct {
+	Value       string `json:"value"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// FlattenConfigOptions 把 SDK 的 configOption union(Select/Boolean)拍平为前端友好的 []ConfigOption。
+// 只处理 Select(单值下拉,稳定);Boolean(unstable)暂忽略。Ungrouped/Grouped 都拍平成单层。
+func FlattenConfigOptions(opts []acp.SessionConfigOption) []ConfigOption {
+	out := make([]ConfigOption, 0, len(opts))
+	for _, o := range opts {
+		if o.Select == nil {
+			continue
+		}
+		co := ConfigOption{
+			ID:           string(o.Select.Id),
+			Name:         o.Select.Name,
+			CurrentValue: string(o.Select.CurrentValue),
+			Options:      []ConfigOptionEntry{},
+		}
+		if o.Select.Category != nil {
+			co.Category = string(*o.Select.Category)
+		}
+		if o.Select.Options.Ungrouped != nil {
+			for _, e := range *o.Select.Options.Ungrouped {
+				co.Options = append(co.Options, cfgEntry(e))
+			}
+		}
+		if o.Select.Options.Grouped != nil {
+			for _, g := range *o.Select.Options.Grouped {
+				for _, e := range g.Options {
+					co.Options = append(co.Options, cfgEntry(e))
+				}
+			}
+		}
+		out = append(out, co)
+	}
+	return out
+}
+
+func cfgEntry(e acp.SessionConfigSelectOption) ConfigOptionEntry {
+	d := ""
+	if e.Description != nil {
+		d = *e.Description
+	}
+	return ConfigOptionEntry{Value: string(e.Value), Name: e.Name, Description: d}
 }
 
 // PermissionPrompt 是发给前端的权限裁决请求(AGENTS.md §3.4)。
@@ -264,6 +326,10 @@ func flattenUpdate(sessionID string, u acp.SessionUpdate) (SessionEvent, bool) {
 		return e, true
 	case u.Plan != nil:
 		e.Kind = "plan"
+		return e, true
+	case u.ConfigOptionUpdate != nil:
+		e.Kind = "config_option"
+		e.ConfigOptions = FlattenConfigOptions(u.ConfigOptionUpdate.ConfigOptions)
 		return e, true
 	default:
 		return e, false
