@@ -247,6 +247,9 @@ input, textarea { font-family: inherit; }
 .st-busy { background: rgba(10, 132, 255, 0.16); color: var(--accent-2); }
 .st-error { background: rgba(255, 69, 58, 0.16); color: var(--red); }
 .st-closed { background: var(--elev); color: var(--text-3); }
+.st-thinking { background: rgba(255,214,10,0.16); color: var(--amber); }
+.st-executing { background: rgba(10,132,255,0.16); color: var(--accent-2); }
+.st-replying { background: rgba(48,209,88,0.14); color: var(--green); }
 
 .chat-body { flex: 1; overflow-y: auto; padding: 22px 0; }
 .chat-placeholder { text-align: center; color: var(--text-3); padding: 64px 0; font-size: 13px; }

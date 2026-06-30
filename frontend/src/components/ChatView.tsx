@@ -44,15 +44,25 @@ interface Props {
   hasMore: boolean;
   loadingMore: boolean;
   onLoadMore: () => void;
+  activity?: "thinking" | "executing" | "replying";
 }
-
 const STATUS_MAP: Record<string, { label: string; cls: string }> = {
   idle: { label: "空闲", cls: "st-idle" },
-  prompting: { label: "思考中", cls: "st-busy" },
   started: { label: "就绪", cls: "st-idle" },
   error: { label: "出错", cls: "st-error" },
   closed: { label: "已关闭", cls: "st-closed" },
   empty: { label: "", cls: "" },
+};
+const statusLabel = (status: string, activity?: string): { label: string; cls: string } => {
+  if (status === "prompting") {
+    switch (activity) {
+      case "executing": return { label: "执行中", cls: "st-executing" };
+      case "replying": return { label: "回复中", cls: "st-replying" };
+      case "thinking": return { label: "思考中", cls: "st-thinking" };
+      default: return { label: "生成中", cls: "st-busy" };
+    }
+  }
+  return STATUS_MAP[status] || { label: status, cls: "" };
 };
 const TOOL_STATUS_MAP: Record<string, { label: string; cls: string }> = {
   pending: { label: "等待", cls: "tc-pending" },
@@ -149,7 +159,7 @@ export default function ChatView(props: Props) {
   // 分级配色:上下文越满越警示(绿 → 琥珀 → 红),让占比一眼可读。
   const usageLevel = pct >= 85 ? "crit" : pct >= 60 ? "high" : pct >= 30 ? "mid" : "low";
   const hasUsage = props.usage.used > 0 || props.usage.size > 0 || props.usage.cost > 0;
-  const s = STATUS_MAP[props.status] || { label: props.status, cls: "" };
+  const s = statusLabel(props.status, props.activity);
 
   const onTitleDoubleClick = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("button, input, a")) return;
