@@ -450,6 +450,8 @@ function ModelSelect({ configOptions, disabled, onSetConfig }: {
           ))}
         </select>
       )}
+      {modeOpt && (
+        <select
           className="cfg-select"
           value={modeOpt.currentValue}
           disabled={disabled}
