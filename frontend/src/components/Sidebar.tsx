@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, MoreVertical, Pencil } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil } from "lucide-react";
 
 interface Props {
   projects: Project[];
@@ -78,16 +78,17 @@ export default function Sidebar(props: Props) {
     void ChatService.ToggleMaximise();
   };
 
-  // 会话 ⋮ 菜单:取 session-row 的 bounding rect,菜单右对齐于该行底部。
-  const openSessionMenu = (e: React.MouseEvent, s: Session) => {
-    e.stopPropagation();
-    const row = (e.currentTarget as HTMLElement).closest(".session-item-row") as HTMLElement | null;
-    const rect = row?.getBoundingClientRect();
-    if (rect) {
-      // 菜单右对齐:右边缘 = rect.right,top = rect.bottom;CSS 里 transform: translateX(-100%) 把菜单宽度左移对齐。
-      setCtx({ kind: "session", x: window.innerWidth - rect.right, y: rect.bottom, session: s });
-    }
+  // 右键菜单:统一用鼠标坐标作为起点(VS Code 风格),简单可靠。
+  // 视口 clamp 在 useLayoutEffect 里做(渲染后量菜单尺寸再修正)。
+  const openProjectMenu = (e: React.MouseEvent, p: Project) => {
+    e.preventDefault();
+    setCtx({ kind: "project", x: e.clientX, y: e.clientY, project: p });
   };
+  const openSessionMenu = (e: React.MouseEvent, s: Session) => {
+    e.preventDefault();
+    setCtx({ kind: "session", x: e.clientX, y: e.clientY, session: s });
+  };
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const closeCtx = () => { setCtx(null); setConfirm(null); };
 
@@ -104,6 +105,20 @@ export default function Sidebar(props: Props) {
       window.removeEventListener("resize", closeCtx);
     };
   }, [ctx, confirm]);
+  // 视口 clamp:渲染后量菜单尺寸,推入 [left,top] 防溢出。
+  useLayoutEffect(() => {
+    const el = menuRef.current;
+    if (!el || !ctx) return;
+    const pad = 8;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    let left = ctx.x;
+    let top = ctx.y;
+    if (left + w > window.innerWidth - pad) left = Math.max(pad, window.innerWidth - w - pad);
+    if (top + h > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - h - pad);
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }, [ctx]);
 
   return (
     <aside className="sidebar" data-testid="sidebar">
@@ -147,7 +162,7 @@ export default function Sidebar(props: Props) {
             <div key={p.id} className="project-item-wrap">
               <div
                 className={`project-item ${props.selectedProjectId === p.id ? "active" : ""} ${barCls}`}
-                onContextMenu={(e) => { e.preventDefault(); setCtx({ kind: "project", x: e.clientX, y: e.clientY, project: p }); }}
+                onContextMenu={(e) => openProjectMenu(e, p)}
               >
                 <button className={`caret ${isOpen ? "open" : ""}`} onClick={() => toggle(p.id)}>
                   <ChevronDown size={13} style={{ transform: isOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }} />
@@ -176,7 +191,7 @@ export default function Sidebar(props: Props) {
                         key={s.id}
                         className={`session-item-row ${props.selectedSessionId === s.id ? "active" : ""}`}
                         data-testid={`session-${s.id}`}
-                        onContextMenu={(e) => { e.preventDefault(); setCtx({ kind: "session", x: e.clientX, y: e.clientY, session: s }); }}
+                        onContextMenu={(e) => openSessionMenu(e, s)}
                       >
                         <button
                           className="session-item-main"
@@ -199,9 +214,6 @@ export default function Sidebar(props: Props) {
                             ) : null;
                           })()}
                         </button>
-                        <button className="session-menu-btn" onClick={(e) => openSessionMenu(e, s)}>
-                          <MoreVertical size={13} />
-                        </button>
                       </div>
                     );
                   })}
@@ -213,7 +225,7 @@ export default function Sidebar(props: Props) {
       </div>
 
       {ctx?.kind === "project" && (
-        <div className="ctx-menu" style={{ left: ctx.x, top: ctx.y }} onMouseDown={(e) => e.stopPropagation()}>
+        <div ref={menuRef} className="ctx-menu" style={{ left: ctx.x, top: ctx.y }} onMouseDown={(e) => e.stopPropagation()}>
           <button className="ctx-item" onClick={() => { void navigator.clipboard?.writeText(ctx.project.path); closeCtx(); }}>
             <Copy size={13} /> 复制工作目录
           </button>
@@ -228,7 +240,7 @@ export default function Sidebar(props: Props) {
       )}
 
       {ctx?.kind === "session" && (
-        <div className="ctx-menu ctx-menu--right" style={{ right: ctx.x, top: ctx.y }} onMouseDown={(e) => e.stopPropagation()}>
+        <div ref={menuRef} className="ctx-menu" style={{ left: ctx.x, top: ctx.y }} onMouseDown={(e) => e.stopPropagation()}>
           <button
             className="ctx-item"
             disabled={props.selectedSessionId === ctx.session.id}
