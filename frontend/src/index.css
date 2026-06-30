@@ -151,9 +151,8 @@ input, textarea { font-family: inherit; }
 .project-item.has-running { position: relative; }
 .project-item.has-unread::before,
 .project-item.has-running::before {
-  content: ""; position: absolute; left: 0; top: 4px; bottom: 4px;
-  width: 3px; border-radius: 0 2px 2px 0; background: var(--accent);
-  pointer-events: none;
+  content: ""; position: absolute; left: 0; top: 50%; height: 13px; transform: translateY(-50%);
+  width: 3px; border-radius: 2px; background: var(--accent); pointer-events: none;
 }
 .project-item.has-running::before { animation: proj-bar-breathe 2.5s ease-in-out infinite; }
 @keyframes proj-bar-breathe { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
