@@ -10,10 +10,12 @@ interface Props {
 
 // 新建对话弹窗:让用户选择 1) 使用的 agent harness(omp/opencode)2) 是否新建独立分支(worktree)。
 // harness 决定 spawn 哪个 ACP agent;worktree 决定是否为该会话建独立 git 工作树(并行隔离,§1.4)。
-// 默认 harness=omp(列表首项)、默认不建 worktree(直接用项目目录)。
+// git 项目下 worktree 必须显式二选一(新建分支 / 使用项目目录),无默认,未选时「新建」按钮禁用。
+// 非 git 项目不展示 worktree 选项(无法建分支)。
 export default function NewSessionModal({ harnesses, isGit, onConfirm, onCancel }: Props) {
   const [harness, setHarness] = useState(harnesses[0]?.id || "omp");
-  const [useWorktree, setUseWorktree] = useState(false);
+  // worktree 必须显式选择:null = 未选(默认),true = 新建,false = 使用项目目录。
+  const [worktree, setWorktree] = useState<boolean | null>(isGit ? null : false);
 
   // Esc 关闭(§4.2)。
   useEffect(() => {
@@ -23,6 +25,8 @@ export default function NewSessionModal({ harnesses, isGit, onConfirm, onCancel 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
+
+  const canConfirm = !isGit || worktree !== null;
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
@@ -47,30 +51,49 @@ export default function NewSessionModal({ harnesses, isGit, onConfirm, onCancel 
           </div>
         </div>
 
-        <div className="ns-field">
-          <button
-            className={`ns-worktree ${useWorktree && isGit ? "active" : ""}`}
-            disabled={!isGit}
-            onClick={() => isGit && setUseWorktree((v) => !v)}
-            data-testid="ns-worktree-toggle"
-          >
-            <span className={`ns-check ${useWorktree && isGit ? "on" : ""}`} />
-            <span className="ns-worktree-text">
-              <span className="ns-worktree-title">新建独立分支（worktree）</span>
-              <span className="ns-worktree-desc">
-                {isGit
-                  ? "为本次对话创建独立的 git 工作树与分支，多会话互不污染，可合并回主仓库"
-                  : "当前项目不是 Git 仓库，无法创建独立分支"}
-              </span>
-            </span>
-          </button>
-        </div>
+        {isGit && (
+          <div className="ns-field">
+            <div className="ns-label">
+              工作目录
+              {worktree === null && <span className="ns-required">（请选择）</span>}
+            </div>
+            <div className="ns-worktree-group">
+              <button
+                className={`ns-worktree ${worktree === true ? "active" : ""}`}
+                onClick={() => setWorktree(true)}
+                data-testid="ns-worktree-new"
+              >
+                <span className={`ns-radio ${worktree === true ? "on" : ""}`} />
+                <span className="ns-worktree-text">
+                  <span className="ns-worktree-title">新建独立分支（worktree）</span>
+                  <span className="ns-worktree-desc">
+                    为本次对话创建独立的 git 工作树与分支，多会话互不污染，可合并回主仓库
+                  </span>
+                </span>
+              </button>
+              <button
+                className={`ns-worktree ${worktree === false ? "active" : ""}`}
+                onClick={() => setWorktree(false)}
+                data-testid="ns-worktree-share"
+              >
+                <span className={`ns-radio ${worktree === false ? "on" : ""}`} />
+                <span className="ns-worktree-text">
+                  <span className="ns-worktree-title">使用项目当前目录</span>
+                  <span className="ns-worktree-desc">
+                    多个会话共享同一目录，修改彼此可见，适合在同一上下文上继续对话
+                  </span>
+                </span>
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="modal-actions">
           <button className="modal-btn ghost" onClick={onCancel}>取消</button>
           <button
             className="modal-btn primary"
-            onClick={() => onConfirm(harness, useWorktree && isGit)}
+            disabled={!canConfirm}
+            onClick={() => canConfirm && onConfirm(harness, worktree === true)}
             data-testid="ns-confirm"
           >
             新建
