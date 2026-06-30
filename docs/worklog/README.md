@@ -37,9 +37,8 @@ ls docs/worklog/ | sort -r | head      # 最新在上
 cat docs/worklog/<file>.md             # 看某条
 ```
 
-## 与 PROCESS.md 的分工
+## PROCESS.md 已停维(2026-06-30 起)
 
-- `PROCESS.md` §B(进度快照)/ §C(看板)/ §E(决策)/ §F(OPEN)照常维护 —— 这些是
-  「当前状态」,改动频率低、冲突少。
-- §B「近期改动汇总」仍可写简要 bullet(指向 worklog 文件),但**详细日志只进本目录**。
-- PROCESS.md §G 是**历史归档**,原样保留,不再往里追加。
+- **PROCESS.md 整体不再维护**:§B(进度快照)/ §C(看板)/ §E(决策)/ §F(OPEN)/ §G(旧日志)全部冻结为**历史归档,只读**。**不要再往 PROCESS.md 写任何新内容。**
+- **开发过程的唯一活载体是本目录**(`docs/worklog/`):进度、决策(为什么这么选)、OPEN / 阻塞、踩坑,都写进当次工作日志条目(一条一文件)。
+- 看进度:`ls docs/worklog/ | sort -r | head` 看最新几条。详见 AGENTS.md §0.3。

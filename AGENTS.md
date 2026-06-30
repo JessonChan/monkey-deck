@@ -20,7 +20,7 @@
 ### 0.1 阅读顺序
 
 1. **本文件** —— 搞清楚规矩。
-2. **PROCESS.md** —— 搞清楚现在做到哪、下一步干什么(进度追踪,见 §0.3)。
+2. **`docs/worklog/`** —— 搞清楚最近做到哪、下一步干什么(`ls docs/worklog/ | sort -r | head` 看最新几条)。**PROCESS.md 已停维**(历史归档,只读,见 §0.3)。
 3. **ACP 协议怎么用**:看 `/Users/jessonchan/temp/monkey-deck/references/real-agent-kanban/internal/acp/`（`runner.go` 的完整生命周期、`handler.go` 的回调实现）——这是 ACP client 用法的权威范例,**直接照搬其生命周期与回调模式**。
 4. **UI / 产品形态参考(首选)**:`/Users/jessonchan/temp/monkey-deck/references/openwork`([github.com/different-ai/openwork](https://github.com/different-ai/openwork))——**与本项目最接近的同类产品**:opencode-first 的桌面 agent 客户端(Electron/Tauri + React),覆盖工作区/项目管理、session 管理、SSE 流式对话、执行计划(todos 时间线)、权限审批弹窗、model-select、各类 tool 卡片(apply-patch / bash / edit / file / glob / grep / lsp …)、markdown 渲染等**全套前端形态**。**这是最值得借鉴的 UI / 交互蓝本**。⚠️ **仅参考形态**——openwork 走 HTTP+SSE(`opencode serve` + `@opencode-ai/sdk`),**不是 ACP**;我们是纯 ACP,工作原理 / 数据通道一律不照搬。
 5. **UI / 产品形态参考(补充)**:`/Users/jessonchan/temp/monkey-deck/references/wesight`([github.com/freestylefly/wesight](https://github.com/freestylefly/wesight))——统一 agent 管理、model 路由、运行时监控、菜单栏 HUD 等概念可作 UI 灵感。**仅参考形态,不照搬其工作原理**(wesight 多为 CLI 子进程管理,我们是纯 ACP)。
@@ -38,24 +38,21 @@
 - **严禁创建、修改、删除 `references/` 下的任何文件或内容**,严禁往里面写测试产物 / 构建产物 / 临时文件。要验证想法就在本项目自己的代码里验证。
 - 只允许 `read` / `search` / `find` 它们来获取知识。
 
-### 0.3 PROCESS.md:开发追踪与使用方法
+### 0.3 开发追踪:docs/worklog/(PROCESS.md 已停维)
 
-`PROCESS.md` 是本项目的**活文档 / 开发追踪单**,与 AGENTS.md 分工:
+**开发过程只记在 `docs/worklog/`**:`docs/worklog/YYYY-MM-DD-<slug>.md`,一条一文件(约定见 `docs/worklog/README.md`)。每条自包含:**起因 / 根因(或协议调研、设计)/ 改法 / 改了哪些文件 / 验证 / 下一步**。
 
-- **AGENTS.md(本文件)= 规矩**:稳定的工程契约,改它要说明理由(§6)。
-- **PROCESS.md = 进度**:随每次工作变化,记录「当前阶段、任务看板、决策记录、OPEN 问题」(工作日志自 2026-06-30 起改为 per-file,见 `docs/worklog/`,不再写进 PROCESS.md §G)。
+**PROCESS.md 已停维(2026-06-30 起)**:作为历史归档**只读保留**(进度快照 / 看板 / 决策 / OPEN / §G 旧日志全部冻结,不再更新)。**禁止往 PROCESS.md 写新内容**;它也不再是「开工前必读」——对齐进度只看 `docs/worklog/`。
 
-**任何 agent 参与本项目,必须走这个 4 步循环(详见 PROCESS.md §A):**
+**任何 agent 参与本项目,走这个 3 步循环:**
 
-1. **开工前对齐**:读 AGENTS.md(规矩)+ PROCESS.md(现在做到哪、下一步)。
-2. **规划写板**:要做的任务拆进 PROCESS.md §C 看板,状态置 `in-progress`;有决策先记 §E。
-3. **执行守规**:严格遵守本文件硬约束;踩坑先记(§5.4 + 新建 `docs/worklog/` 条目)再修。
-4. **收工前更新(必做)**:刷新 PROCESS.md 的进度快照 / 看板状态 / OPEN 清单 + 新增 `docs/worklog/YYYY-MM-DD-<slug>.md` 一条工作日志(一条一文件,避免多分支往 PROCESS.md §G 追加导致合并冲突;约定见 `docs/worklog/README.md`)。
+1. **开工前对齐**:读 AGENTS.md(规矩)+ `docs/worklog/` 最近几条工作日志(`ls docs/worklog/ | sort -r | head`,搞清上次做到哪、有什么坑 / OPEN)。
+2. **执行守规**:严格遵守本文件硬约束;踩到坑先记(§5.4 + 新建 `docs/worklog/` 条目)再修。
+3. **收工前记录(必做)**:在 `docs/worklog/` 新增一条工作日志(`YYYY-MM-DD-<slug>.md`),记清「做了什么 / 为什么 / 改了哪些文件 / 怎么验证的 / 下一步」。决策(为什么这么选)、OPEN / 阻塞、踩坑都写进这条即可,不再分散到别处。
 
 **硬纪律**:
-- **开工前不读 PROCESS.md = 盲干**(不知道上一次做到哪、有什么 OPEN / 阻塞)。
-- **收工前不更新 PROCESS.md = 不算完成**(下一个接手的 agent 会断片)。代码 commit 与 PROCESS.md 更新应同步。
-- 状态标记统一:`todo` / `in-progress` / `done` / `blocked`(注明卡因)/ `skip`。
+- **开工前不读 `docs/worklog/` 最近日志 = 盲干**(不知道上次做到哪、有什么 OPEN / 阻塞)。
+- **收工前不写 `docs/worklog/` 条目 = 不算完成**(下一个接手的 agent 会断片)。代码 commit 与 worklog 新增应同步。
 
 ### 0.4 借用代码的协议署名(wesight / openwork 为 MIT)
 
@@ -146,7 +143,7 @@ spawn harness 子进程（独立进程组,见 §3.2）
 ```
 monkey-deck/
 ├── AGENTS.md                  # 本文件(规矩)
-├── PROCESS.md                 # 开发追踪(进度/决策/下一步),见 §0.3
+├── PROCESS.md                 # 历史归档(只读;2026-06-30 起停维,见 §0.3)
 ├── references/                # 只读参考(real-agent-kanban / wesight / openwork / orca 等),严禁改动;不入库,实际在主源码树 /Users/jessonchan/temp/monkey-deck/references(见 §0.2)
 ├── go.mod                     # 单一 Go module
 ├── main.go                    # Wails3 application.New() 入口
@@ -160,6 +157,7 @@ monkey-deck/
 ├── frontend/                  # React 19 + TS + Vite(Wails3 前端)
 │   └── src/
 ├── migrations/                # SQLite 迁移 SQL(纯 SQL,按序号)
+├── docs/worklog/              # 工作日志(一条一文件,开发追踪的唯一活载体,见 §0.3)
 └── Makefile                   # gen/dev/build/test/migrate
 ```
 
@@ -294,7 +292,7 @@ monkey-deck/
 - **不夹带**:一个 commit 只含与该改动直接相关的文件,不趁机顺手改无关代码。
 - **不提交不该进库的东西**:`references/`(外部只读)、构建产物(`*.app`/`bin/`)、`node_modules/`、`frontend/dist/`、`.DS_Store`、本地 `.db` 等,由 `.gitignore` 排除(见 §6.3)。
 - **分支策略**:日常可直接在 `main` 原子推进;较大功能 / 不确定改动开 `feat/xxx` 或 `fix/xxx` 分支,验证通过再合并,保持 `main` 始终可运行。
-- **收工即提交**:做完一个功能点 → 跑测试 → 立刻 commit,并同步更新 PROCESS.md(§0.3)。不要留一堆未提交改动过夜。
+- **收工即提交**:做完一个功能点 → 跑测试 → 立刻 commit,并在 `docs/worklog/` 新增一条工作日志(§0.3)。不要留一堆未提交改动过夜。
 
 ### 6.3 .gitignore 与 references/
 - 仓库初始化即配 `.gitignore`(排除 `references/` 与构建产物)。
@@ -318,8 +316,8 @@ monkey-deck/
 ## 8. 自检清单（提交代码前自检）
 
 - [ ] 读过 §0（做什么/不做什么）和 §7（当前不做）,本次改动没越界?
-- [ ] 开工前读过 PROCESS.md,知道当前做到哪、下一步干什么?(§0.3)
-- [ ] 收工前已更新 PROCESS.md(进度快照 / 看板 / OPEN 清单)+ 新增 `docs/worklog/` 工作日志文件?(§0.3)
+- [ ] 开工前读过 `docs/worklog/` 最近几条,知道当前做到哪、下一步干什么?(§0.3)
+- [ ] 收工前已在 `docs/worklog/` 新增一条工作日志(做了什么 / 为什么 / 改了哪些文件 / 怎么验证)?(§0.3)
 - [ ] 本次改动是原子提交、commit message 清楚(改了什么/为什么)、没夹带无关改动、没提交 references/ 与构建产物?(§6.2)
 - [ ] 是纯 ACP,没偷偷加 CLI 后端?(§1.1)
 - [ ] 没把 client/server 方向搞反,ACP 生命周期顺序正确?(§1.2、§1.3)
