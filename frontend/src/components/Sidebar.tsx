@@ -129,7 +129,7 @@ export default function Sidebar(props: Props) {
                 <div className="session-list">
                   {projSessions.map((s) => {
                     const st = props.statusBySession[s.id];
-                    const active = st === "prompting" || st === "started";
+                    const active = st === "prompting";
                     const act = props.activityBySession[s.id];
                     const cls = st === "error" ? "error" : active ? act ?? "running" : "";
                     // 色点悬停提示(原生 title,悬停片刻浮现):空闲→灰、思考→琥珀、执行→蓝、回复→绿、出错→红。
