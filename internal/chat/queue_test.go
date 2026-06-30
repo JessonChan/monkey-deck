@@ -102,7 +102,7 @@ func newTestService(t *testing.T) (svc *ChatService, sessionID string, fc *fakeC
 	if err != nil {
 		t.Fatal(err)
 	}
-	se, err := st.CreateSession(svc.ctx, proj.ID, "", "")
+	se, err := st.CreateSession(svc.ctx, proj.ID, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

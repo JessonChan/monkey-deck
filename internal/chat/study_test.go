@@ -81,7 +81,7 @@ func TestStudyWesight(t *testing.T) {
 
 	labels := []string{"架构", "功能", "实现"}
 	for idx, label := range labels {
-		se, e := svc.CreateSession(proj.ID, label)
+		se, e := svc.CreateSession(proj.ID, label, "", false)
 		if e != nil {
 			writeLine(fmt.Sprintf("\n==== 会话%d【%s】创建失败: %v ====", idx+1, label, e))
 			continue

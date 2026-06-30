@@ -47,7 +47,7 @@ func TestIntegrationServiceConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sess, err := svc.CreateSession(proj.ID, "integration")
+	sess, err := svc.CreateSession(proj.ID, "integration", "", false)
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}

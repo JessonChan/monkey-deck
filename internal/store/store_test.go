@@ -47,7 +47,7 @@ func TestProjectSessionMessageCRUD(t *testing.T) {
 	}
 
 	// session
-	sess, err := s.CreateSession(ctx, p.ID, "first chat", "anthropic/claude-3.5-sonnet")
+	sess, err := s.CreateSession(ctx, p.ID, "first chat", "anthropic/claude-3.5-sonnet", "opencode")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestSessionUsagePersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess, err := s.CreateSession(ctx, p.ID, "", "zai/glm-4.6")
+	sess, err := s.CreateSession(ctx, p.ID, "", "zai/glm-4.6", "opencode")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestListMessagesBefore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess, err := s.CreateSession(ctx, p.ID, "", "m")
+	sess, err := s.CreateSession(ctx, p.ID, "", "m", "opencode")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestListUserMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess, err := s.CreateSession(ctx, p.ID, "", "m")
+	sess, err := s.CreateSession(ctx, p.ID, "", "m", "opencode")
 	if err != nil {
 		t.Fatal(err)
 	}

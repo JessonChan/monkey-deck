@@ -892,3 +892,42 @@ input, textarea { font-family: inherit; }
 .modal-btn.primary:disabled { opacity: 0.4; cursor: not-allowed; }
 .modal-btn.danger { background: var(--red); color: #fff; }
 .modal-btn.danger:hover { filter: brightness(1.1); }
+
+/* ─── 新建对话弹窗(harness 选择 + worktree 开关) ─── */
+.new-session-card { max-width: 360px; gap: 14px; }
+.ns-field { display: flex; flex-direction: column; gap: 7px; }
+.ns-label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.ns-harness-list { display: flex; flex-direction: column; gap: 6px; }
+.ns-harness {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 9px 11px; border-radius: 8px; cursor: pointer; text-align: left;
+  background: var(--bg); border: 1px solid var(--sep); transition: border-color 0.12s, background 0.12s;
+}
+.ns-harness:hover { background: var(--hover); }
+.ns-harness.active { border-color: var(--accent); background: rgba(10, 132, 255, 0.08); }
+.ns-radio {
+  flex-shrink: 0; width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--sep-strong); background: transparent; transition: all 0.12s;
+}
+.ns-harness.active .ns-radio { border-color: var(--accent); background: radial-gradient(var(--accent) 45%, transparent 50%); }
+.ns-harness-name { font-size: 13px; font-weight: 600; color: var(--text); min-width: 76px; }
+.ns-harness-cmd {
+  margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-2);
+  background: var(--elev); padding: 2px 7px; border-radius: 4px; border: 1px solid var(--sep);
+}
+.ns-worktree {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%;
+  padding: 10px 11px; border-radius: 8px; cursor: pointer; text-align: left;
+  background: var(--bg); border: 1px solid var(--sep); transition: border-color 0.12s, background 0.12s;
+}
+.ns-worktree:hover:not(:disabled) { background: var(--hover); }
+.ns-worktree:disabled { cursor: not-allowed; opacity: 0.55; }
+.ns-worktree.active { border-color: var(--accent); }
+.ns-check {
+  flex-shrink: 0; width: 15px; height: 15px; border-radius: 4px; margin-top: 1px;
+  border: 2px solid var(--sep-strong); background: transparent; transition: all 0.12s;
+}
+.ns-worktree.active .ns-check { border-color: var(--accent); background: var(--accent); }
+.ns-worktree-text { display: flex; flex-direction: column; gap: 3px; }
+.ns-worktree-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.ns-worktree-desc { font-size: 11.5px; color: var(--text-2); line-height: 1.4; }

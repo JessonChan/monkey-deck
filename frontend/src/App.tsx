@@ -7,6 +7,8 @@ import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import { Sparkles } from "lucide-react";
 import SidePanel from "./components/SidePanel";
+import NewSessionModal from "./components/NewSessionModal";
+import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { Tooltip } from "react-tooltip";
 import type { FileChange } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
@@ -42,6 +44,8 @@ export default function App() {
   const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, string[]>>({});  // composer 回形针附件(按 session 隔离,切走保留)
   const [mentionsBySession, setMentionsBySession] = useState<Record<string, Mention[]>>({});  // composer @提及(按 session 隔离,切走保留)
   const [configOptionsBySession, setConfigOptionsBySession] = useState<Record<string, ConfigOption[]>>({}); // model/mode/effort(agent 自报)
+  const [harnesses, setHarnesses] = useState<Harness[]>([]);
+  const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean } | null>(null);  // 新建对话弹窗
   const queueBySessionRef = useRef<Record<string, QueueItem[]>>({});
   const userStoppedRef = useRef(false);                    // 用户主动停止:抑制该次 idle 的 auto-continue
 
@@ -192,6 +196,7 @@ export default function App() {
   // 启动:加载项目 + 订阅事件。
   useEffect(() => {
     void refreshProjects();
+    ChatService.ListHarnesses().then(setHarnesses).catch(() => {});
     const offUpdate = Events.On("chat:event", (e: { data: SessionEvent }) => {
       if (!e.data) return;
       applyEvent(e.data);
@@ -407,14 +412,26 @@ export default function App() {
     }
   }, [loadingMoreBySession, hasMoreBySession, messagesToItems]);
 
-  // 新建 session:projectId 为空时用当前选中项目(每个项目项有自己的新对话按钮);
-  // 预初始化空状态,防止 openSession 异步加载窗口期读到残留。
+  // 新建 session:先弹窗让用户选 harness + 是否建 worktree;projectId 为空时用当前选中项目。
   const createSession = useCallback(async (projectId?: string) => {
     const pid = projectId ?? selectedProjectId;
     if (!pid) return;
     try {
+      const isGit = await ChatService.IsGitProject(pid);
+      setNewSession({ projectId: pid, isGit });
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [selectedProjectId]);
+
+  // 用户在弹窗确认后真正创建 session。
+  const confirmNewSession = useCallback(async (harness: string, useWorktree: boolean) => {
+    const pid = newSession?.projectId;
+    if (!pid) return;
+    setNewSession(null);
+    try {
       if (pid !== selectedProjectId) await selectProject(pid);
-      const se = await ChatService.CreateSession(pid, "");
+      const se = await ChatService.CreateSession(pid, "", harness, useWorktree);
       if (se) {
         setItemsBySession((prev) => ({ ...prev, [se.id]: [] }));
         setStatusBySession((prev) => ({ ...prev, [se.id]: "empty" }));
@@ -425,7 +442,7 @@ export default function App() {
     } catch (e) {
       setError(String(e));
     }
-  }, [selectedProjectId, refreshSessions, openSession, selectProject]);
+  }, [newSession, selectedProjectId, refreshSessions, openSession, selectProject]);
 
   // 发送消息:idle 直发;prompting(一轮进行中)入前端队列,回合结束自动续发(§5.4 协议无 queue)。
   // mentions(@提及)经 ACP ContentBlock::ResourceLink 发给 agent;入队时随 QueueItem 携带。
@@ -744,6 +761,14 @@ export default function App() {
         </>
       )}
     </Group>
+    {newSession && (
+      <NewSessionModal
+        harnesses={harnesses}
+        isGit={newSession.isGit}
+        onConfirm={confirmNewSession}
+        onCancel={() => setNewSession(null)}
+      />
+    )}
     <Tooltip id="md-tip" delayShow={400} />
     </>
   );

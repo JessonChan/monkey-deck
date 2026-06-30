@@ -21,6 +21,7 @@ import (
 	"github.com/jessonchan/monkey-deck/internal/acp"
 	"github.com/jessonchan/monkey-deck/internal/config"
 	"github.com/jessonchan/monkey-deck/internal/fsview"
+	"github.com/jessonchan/monkey-deck/internal/harness"
 	"github.com/jessonchan/monkey-deck/internal/store"
 	"github.com/jessonchan/monkey-deck/internal/titlegen"
 	"github.com/jessonchan/monkey-deck/internal/worktree"
@@ -319,8 +320,9 @@ func (s *ChatService) ListSessions(projectID string) ([]store.Session, error) {
 	return s.st.ListSessions(s.ctx, projectID)
 }
 
-// CreateSession 新建 session。git 项目自动建独立 worktree+分支(并行隔离);否则用项目目录。
-func (s *ChatService) CreateSession(projectID, title string) (*store.Session, error) {
+// CreateSession 新建 session。harness 指定使用的 agent(opencode/mino/omp,空=opencode);
+// useWorktree=true 时为 git 项目建独立 worktree+分支(并行隔离),否则直接用项目目录(§1.4)。
+func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorktree bool) (*store.Session, error) {
 	proj, err := s.st.GetProject(s.ctx, projectID)
 	if err != nil {
 		return nil, err
@@ -332,12 +334,13 @@ func (s *ChatService) CreateSession(projectID, title string) (*store.Session, er
 	if model == "" {
 		model = s.cfg.DefaultModel
 	}
-	se, err := s.st.CreateSession(s.ctx, projectID, title, model)
+	hid := harness.Normalize(harnessID)
+	se, err := s.st.CreateSession(s.ctx, projectID, title, model, hid)
 	if err != nil {
 		return nil, err
 	}
-	// git 项目:为该 session 建独立 worktree+分支(并行隔离;失败降级用项目目录)。
-	if worktree.IsRepo(proj.Path) {
+	// git 项目 + 用户选择建 worktree:为该 session 建独立 worktree+分支(并行隔离;失败降级用项目目录)。
+	if useWorktree && worktree.IsRepo(proj.Path) {
 		short := se.ID
 		if len(short) > 8 {
 			short = short[:8]
@@ -709,7 +712,15 @@ func (s *ChatService) ensureLive(sessionID string) error {
 
 // startLive 启动一个 liveSession(spawn harness + Init + NewSession/LoadSession)。
 func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessionID string, resume bool) error {
-	runner := acp.NewRunner(s.cfg.HarnessCmd, nil, se.Model)
+	// 按 session 选择的 harness 解析启动命令(§2.1 harness 适配层)。
+	cmdStr := harness.Command(se.Harness)
+	// model 注入:opencode 走 cwd 写 opencode.json(§3.5);其它 harness 的 model 注入方式
+	// 待各自适配,暂不写(留空让 NewRunner.WriteModelConfig 跳过,各 harness 用自身全局配置)。
+	model := se.Model
+	if !harness.IsOpenCode(se.Harness) {
+		model = ""
+	}
+	runner := acp.NewRunner(cmdStr, nil, model)
 	cwd := proj.Path
 	if se.WorktreePath != "" {
 		cwd = se.WorktreePath // 每个 session 独占 worktree(并行隔离)
@@ -1253,6 +1264,23 @@ func (s *ChatService) isBusy(sessionID string) bool {
 var errSCMBusy = errors.New("对话进行中,请等回合结束再操作源代码管理")
 
 // --- 配置查询(前端设置页用)---
+
+// ListHarnesses 返回受支持的 harness 列表(前端「新建会话」选择器用,§2.1)。
+func (s *ChatService) ListHarnesses() []harness.Harness {
+	return harness.Supported
+}
+
+// IsGitProject 报告某项目目录是否为 git 仓库(前端据此决定「新建分支」开关是否可用,§1.4)。
+func (s *ChatService) IsGitProject(projectID string) (bool, error) {
+	proj, err := s.st.GetProject(s.ctx, projectID)
+	if err != nil {
+		return false, err
+	}
+	if proj == nil {
+		return false, fmt.Errorf("project not found: %s", projectID)
+	}
+	return worktree.IsRepo(proj.Path), nil
+}
 
 // GetConfig 返回当前配置(harness 命令、默认 model、数据目录)。
 func (s *ChatService) GetConfig() map[string]string {
