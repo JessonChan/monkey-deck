@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, PermissionPrompt, StatusPayload, QueueItem, Mention } from "../types";
+import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem, Mention } from "../types";
 import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
@@ -39,6 +39,8 @@ interface Props {
   onMentionsChange: (next: Mention[]) => void;
   history: string[];
   sessionId: string;
+  configOptions: ConfigOption[];
+  onSetConfig: (configId: string, value: string) => void;
   hasMore: boolean;
   loadingMore: boolean;
   onLoadMore: () => void;
@@ -207,7 +209,8 @@ export default function ChatView(props: Props) {
           onMentionsChange={props.onMentionsChange}
           disabled={!props.session}
           prompting={props.status === "prompting"}
-          model={props.session?.model || ""}
+          configOptions={props.configOptions}
+          onSetConfig={props.onSetConfig}
           onSend={props.onSend}
           onStop={props.onStop}
           onAction={props.onAction}

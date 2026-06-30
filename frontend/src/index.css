@@ -513,6 +513,14 @@ input, textarea { font-family: inherit; }
   max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .composer-count { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
+.cfg-group { display: flex; align-items: center; gap: 5px; }
+.cfg-select {
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-2);
+  background: var(--elev); padding: 2px 6px; border-radius: 5px; border: 1px solid var(--sep);
+  max-width: 150px; outline: none; cursor: pointer; height: 22px;
+}
+.cfg-select:disabled { opacity: 0.5; cursor: not-allowed; }
+.cfg-select:hover:not(:disabled) { border-color: var(--text-3); }
 
 .composer-row { display: flex; gap: 8px; align-items: flex-end; }
 .composer-input {

@@ -86,6 +86,9 @@ type ChatSession struct {
 	// capabilities.session.list)。协议硬约束:未声明时禁止调用 session/list
 	// (session-list.mdx:Clients MUST verify this capability before calling)。
 	CanListSessions bool
+	// ConfigOptions:agent 在 NewSession/LoadSession 响应里自报的 session config options
+	// (model/mode/effort)。set_config_option 返回时更新为最新全量。FlatConfigOptions 扁平化给前端。
+	ConfigOptions []acp.SessionConfigOption
 }
 
 // NewChatSession 创建持久对话 session:spawn harness → initialize → newSession(cwd=workDir)。
@@ -109,6 +112,7 @@ func (r *Runner) NewChatSession(ctx context.Context, workDir string, onEvent fun
 	cs := &ChatSession{
 		Runner: r, Cmd: cmd, Conn: conn, Handler: handler, SessionID: sess.SessionId, WorkDir: workDir, Model: r.Model,
 		CanListSessions: initResp.AgentCapabilities.SessionCapabilities.List != nil,
+		ConfigOptions:   sess.ConfigOptions,
 	}
 	if cmd.Process != nil {
 		registerHarness(cmd.Process.Pid) // §3.2:注册活跃,reaper 保护其逃逸子进程
@@ -128,7 +132,7 @@ func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string,
 	// 重放会重复显示。临时把 OnEvent 换成 no-op,resume 完再恢复。
 	realOnEvent := handler.OnEvent
 	handler.OnEvent = func(SessionEvent) {}
-	_, err = conn.ResumeSession(ctx, acp.ResumeSessionRequest{
+	resumeResp, err := conn.ResumeSession(ctx, acp.ResumeSessionRequest{
 		SessionId:  acp.SessionId(sessionID),
 		Cwd:        workDir,
 		McpServers: []acp.McpServer{},
@@ -142,6 +146,7 @@ func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string,
 	cs := &ChatSession{
 		Runner: r, Cmd: cmd, Conn: conn, Handler: handler, SessionID: acp.SessionId(sessionID), WorkDir: workDir, Model: r.Model,
 		CanListSessions: initResp.AgentCapabilities.SessionCapabilities.List != nil,
+		ConfigOptions:   resumeResp.ConfigOptions,
 	}
 	if cmd.Process != nil {
 		registerHarness(cmd.Process.Pid)
@@ -375,6 +380,28 @@ func (cs *ChatSession) SessionTitle(ctx context.Context) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// FlatConfigOptions 返回扁平化的 config options(给前端渲染下拉:model/mode/effort)。
+func (cs *ChatSession) FlatConfigOptions() []ConfigOption {
+	return FlattenConfigOptions(cs.ConfigOptions)
+}
+
+// SetConfigOption 切换某个 config option(model/mode/effort),热切、同 session 即时生效。
+// 成功后更新 cs.ConfigOptions 为 agent 返回的最新全量。configId 如 "model"/"mode"/"effort"。
+func (cs *ChatSession) SetConfigOption(ctx context.Context, configId, value string) error {
+	resp, err := cs.Conn.SetSessionConfigOption(ctx, acp.SetSessionConfigOptionRequest{
+		ValueId: &acp.SetSessionConfigOptionValueId{
+			SessionId: cs.SessionID,
+			ConfigId:  acp.SessionConfigId(configId),
+			Value:     acp.SessionConfigValueId(value),
+		},
+	})
+	if err != nil {
+		return err
+	}
+	cs.ConfigOptions = resp.ConfigOptions
+	return nil
 }
 
 // Close 销毁 session:kill 整个 harness 进程组 + 注销活跃(§3.2)。

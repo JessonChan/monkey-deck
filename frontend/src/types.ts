@@ -11,7 +11,8 @@ export interface SessionEvent {
     | "tool_call_update"
     | "usage_update"
     | "plan"
-    | "session_info";
+    | "session_info"
+    | "config_option";
   text?: string; // agent/thought 为累积全文
   seq?: number; // 单调序号(防流式乱序)
   toolCallId?: string;
@@ -24,6 +25,22 @@ export interface SessionEvent {
   size?: number; // context window 总量
   cost?: number; // 累积成本 USD
   title?: string; // session_info 标题
+  configOptions?: ConfigOption[]; // config_option:model/mode/effort(agent 自报)
+}
+
+// session config option(agent 经 NewSession/config_option_update 自报,前端渲染下拉)。
+// model 的 value 是 "provider/model" 格式,前端按 provider 前缀分组显示。
+export interface ConfigOptionEntry {
+  value: string;
+  name: string;
+  description?: string;
+}
+export interface ConfigOption {
+  id: string;
+  name: string;
+  category: string; // model | mode | thought_level
+  currentValue: string;
+  options: ConfigOptionEntry[];
 }
 
 export interface PermissionOption {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Events } from "@wailsio/runtime";
 import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention } from "./types";
+import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention } from "./types";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import { Sparkles } from "lucide-react";
@@ -41,6 +41,7 @@ export default function App() {
   const [historyBySession, setHistoryBySession] = useState<Record<string, string[]>>({});  // 输入框历史(上下键翻):按 session 隔离,seed 自 DB + 每次发送追加
   const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, string[]>>({});  // composer 回形针附件(按 session 隔离,切走保留)
   const [mentionsBySession, setMentionsBySession] = useState<Record<string, Mention[]>>({});  // composer @提及(按 session 隔离,切走保留)
+  const [configOptionsBySession, setConfigOptionsBySession] = useState<Record<string, ConfigOption[]>>({}); // model/mode/effort(agent 自报)
   const queueBySessionRef = useRef<Record<string, QueueItem[]>>({});
   const userStoppedRef = useRef(false);                    // 用户主动停止:抑制该次 idle 的 auto-continue
 
@@ -138,6 +139,11 @@ export default function App() {
       });
       return;
     }
+    if (ev.kind === "config_option") {
+      // agent 自报的 config options(model/mode/effort),前端渲染下拉;切 model/effort 经 SetSessionConfigOption 回写。
+      setConfigOptionsBySession((prev) => ({ ...prev, [ev.sessionId]: ev.configOptions ?? [] }));
+      return;
+    }
     setItemsBySession((prev) => ({
       ...prev,
       [ev.sessionId]: applyEventToItems(prev[ev.sessionId] ?? [], ev),
@@ -166,6 +172,7 @@ export default function App() {
   const composerValue = (selectedSessionId ? draftBySession[selectedSessionId] : undefined) ?? "";
   const attachments = (selectedSessionId ? attachmentsBySession[selectedSessionId] : undefined) ?? [];
   const mentions = (selectedSessionId ? mentionsBySession[selectedSessionId] : undefined) ?? [];
+  const configOptions = (selectedSessionId ? configOptionsBySession[selectedSessionId] : undefined) ?? [];
   const onComposerChange = useCallback((text: string) => {
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
@@ -521,6 +528,14 @@ export default function App() {
       setSelectedSessionId(null);
   }, [selectedSessionId]);
 
+  // 切换 session 的 config option(model/mode/effort):热切,后端成功后推 config_option event 回更新。
+  const setSessionConfig = useCallback(async (configId: string, value: string) => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    try { await ChatService.SetSessionConfigOption(sid, configId, value); }
+    catch (e) { setError(String(e)); }
+  }, []);
+
   const [mergeResult, setMergeResult] = useState<string | null>(null);
   const [sessionDiff, setSessionDiff] = useState<string | null>(null);
   const [sessionChanges, setSessionChanges] = useState<FileChange[] | null>(null);
@@ -694,6 +709,8 @@ export default function App() {
               onMentionsChange={onMentionsChange}
               history={history}
               sessionId={selectedSessionId}
+              configOptions={configOptions}
+              onSetConfig={setSessionConfig}
               hasMore={hasMore}
               loadingMore={loadingMore}
               onLoadMore={() => selectedSessionId && loadMoreMessages(selectedSessionId)}
