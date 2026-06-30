@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/coder/acp-go-sdk"
@@ -416,6 +417,17 @@ func (cs *ChatSession) Close() {
 		// 多 session 并发时,reap 会误杀其他活跃 session 的逃逸 worker(RAK reaper 假设单 harness)。
 		unregisterHarness(pgid)
 	}
+}
+
+// IsAlive 报告 harness 进程是否仍存活(供「预热后空闲断连」检测:开 session 时 eager spawn
+// 保持连接等首条消息,若用户迟迟不发、opencode 空闲断连 §5.4 #9,进程已退出 → 返回 false,
+// 调用方据此拆掉死连接、下次重 spawn,避免把 broken pipe 抛给用户)。
+// 用 signal 0 探活(Unix 标准:进程在返 nil,已退出返 ESRCH)。
+func (cs *ChatSession) IsAlive() bool {
+	if cs.Cmd == nil || cs.Cmd.Process == nil {
+		return false
+	}
+	return cs.Cmd.Process.Signal(syscall.Signal(0)) == nil
 }
 
 // IsPeerDisconnected 判断错误是否为 harness 进程崩溃/断开(§5.4 #2)。

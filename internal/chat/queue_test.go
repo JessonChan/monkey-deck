@@ -57,10 +57,11 @@ func (f *fakeChat) Prompt(ctx context.Context, msg string, _ []acp.Attachment, _
 	}
 }
 
-func (f *fakeChat) Close()                                         {}
-func (f *fakeChat) RespondPermission(_, _ string) bool             { return true }
-func (f *fakeChat) SessionTitle(_ context.Context) (string, error) { return f.title, nil }
-func (f *fakeChat) FlatConfigOptions() []acp.ConfigOption            { return nil }
+func (f *fakeChat) Close()                                               {}
+func (f *fakeChat) IsAlive() bool                                        { return true }
+func (f *fakeChat) RespondPermission(_, _ string) bool                   { return true }
+func (f *fakeChat) SessionTitle(_ context.Context) (string, error)       { return f.title, nil }
+func (f *fakeChat) FlatConfigOptions() []acp.ConfigOption                { return nil }
 func (f *fakeChat) SetConfigOption(_ context.Context, _, _ string) error { return nil }
 
 // release 放行所有阻塞的 Prompt(幂等),供 t.Cleanup 防止 goroutine 泄漏。

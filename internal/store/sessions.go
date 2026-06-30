@@ -58,6 +58,13 @@ func (s *Store) UpdateSessionTitle(ctx context.Context, id, title string) error 
 	return err
 }
 
+// UpdateSessionModel 更新 session 的 model(首条消息前在 model selector 里改 model 时用:
+// model 在 NewSession 时钉死,首条消息 ensureLive 用最新 se.Model 写 opencode.json,§3.5/§5.4 #3)。
+func (s *Store) UpdateSessionModel(ctx context.Context, id, model string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET model=?, updated_at=? WHERE id=?`, model, now(), id)
+	return err
+}
+
 // UpdateSessionUsage 回写 token 用量快照(used/size/cost),使重开会话能恢复占比(§1.6)。
 func (s *Store) UpdateSessionUsage(ctx context.Context, id string, used, size int64, cost float64) error {
 	_, err := s.db.ExecContext(ctx,

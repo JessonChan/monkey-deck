@@ -64,6 +64,8 @@ type toolAccum struct {
 type chatConn interface {
 	Prompt(ctx context.Context, message string, attachments []acp.Attachment, timeout time.Duration) (acp.StopReason, error)
 	Close()
+	// IsAlive 报告 harness 进程是否存活(预热后空闲断连兜底:活跃但进程已死 → 拆掉重 spawn)。
+	IsAlive() bool
 	RespondPermission(id, optionID string) bool
 	// SessionTitle 经 ACP session/list 取 opencode 生成的权威标题(§5.4 #14)。
 	SessionTitle(ctx context.Context) (string, error)
@@ -136,8 +138,15 @@ type ChatService struct {
 	st  *store.Store
 	ctx context.Context
 
-	mu     sync.RWMutex
-	active map[string]*liveSession // db sessionID → live
+	mu      sync.RWMutex
+	active  map[string]*liveSession // db sessionID → live
+	spawnMu sync.Mutex              // 串行化 ensureLive 的 spawn 段,杜绝 warm 与首条消息并发双 spawn
+
+	// harness config 缓存:key = harness|project。首次冷缓存时预热 spawn(maybeWarmSession,
+	// keep alive)拿到 agent 自报的 model/mode/effort 列表并缓存;同项目后续会话直接用缓存
+	// 即时展示 model 下拉、免 spawn。活跃 session 的 live configOptions 是真相,覆盖缓存。
+	cfgCache   map[string][]acp.ConfigOption
+	cfgProbing map[string]bool // 预热中标记,防同 key 重复 spawn
 
 	// 测试钩子(nil = 生产路径,见 emit/persistTurn):emitHook 捕获 emit 事件序列、
 	// persistHook 在 persistTurn 入口阻塞。仅单测注入,用于确定性复现 runPrompt
@@ -148,7 +157,7 @@ type ChatService struct {
 
 // NewChatService 构造(尚未启动;ServiceStartup 时 open store)。
 func NewChatService(cfg *config.Config) *ChatService {
-	return &ChatService{cfg: cfg, active: map[string]*liveSession{}}
+	return &ChatService{cfg: cfg, active: map[string]*liveSession{}, cfgCache: map[string][]acp.ConfigOption{}, cfgProbing: map[string]bool{}}
 }
 
 // ServiceStartup Wails3 启动钩子:建数据目录 + open store。
@@ -354,6 +363,11 @@ func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorkt
 		} else {
 			se.WorktreePath, se.Branch = wtPath, branch
 		}
+	}
+	// 首条消息前即展示 model selector:缓存热 → 推 model-only 下拉、首条消息再 lazy spawn;
+	// 缓存冷 → 预热 spawn(keep alive)拿到 configOptions 后缓存 + 推送(首条消息复用连接)。
+	if !s.emitSessionConfig(se) {
+		s.maybeWarmSession(se)
 	}
 	return se, nil
 }
@@ -680,16 +694,40 @@ func (s *ChatService) OpenSession(sessionID string) error {
 	if se == nil {
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
-	return nil // harness 懒启动:首条消息时 spawn(避免 idle disconnect)
+	// 首条消息前展示 model selector:缓存热 → 推 model-only 下拉(lazy);缓存冷 → 预热 spawn
+	// (keep alive)拿到 configOptions 后缓存 + 推送。best-effort,不阻塞。
+	if !s.emitSessionConfig(se) {
+		s.maybeWarmSession(se)
+	}
+	return nil
 }
 
-// ensureLive 确保 session 的 harness 已启动(懒启动):未活跃则 spawn。
-// 在首条消息时调用,避免会话创建后 opencode 空闲断连(idle disconnect)。
+// ensureLive 确保 session 的 harness 已启动且仍存活:未活跃则 spawn;活跃但进程已死
+// (预热后空闲断连 / 崩溃)则先拆掉再 spawn(用 LoadSession resume),不把 broken pipe 抛给用户。
+// 开 session 时冷缓存会预热 spawn 保持连接等首条消息(见 maybeWarmSession)。
+//
+// spawn 段持 spawnMu 串行化:杜绝「预热 goroutine 与首条消息并发各 spawn 一个 harness」
+// (二者都不持 sendMu)——后到者拿到锁后重检 active,已活跃则直接复用。
 func (s *ChatService) ensureLive(sessionID string) error {
 	s.mu.RLock()
-	_, ok := s.active[sessionID]
+	ls, ok := s.active[sessionID]
 	s.mu.RUnlock()
 	if ok {
+		if ls.chat.IsAlive() {
+			return nil
+		}
+		// 进程已退出(预热后空闲断连 / 崩溃):拆掉死连接,下面重 spawn。
+		slog.Info("active session harness dead, respawning", "session", sessionID)
+		s.teardownLive(sessionID, ls)
+	}
+	// 串行化 spawn:与并发的 warm / 另一条消息互斥,杜绝双 spawn。
+	s.spawnMu.Lock()
+	defer s.spawnMu.Unlock()
+	// 重检:等锁期间可能已有另一路 spawn 完成。
+	s.mu.RLock()
+	ls, ok = s.active[sessionID]
+	s.mu.RUnlock()
+	if ok && ls.chat.IsAlive() {
 		return nil
 	}
 	se, err := s.st.GetSession(s.ctx, sessionID)
@@ -1208,34 +1246,153 @@ func (s *ChatService) StopSession(sessionID string) error {
 	return nil
 }
 
+// configCacheKey 是 cfgCache 的 key:harness + project。同一项目同 harness 的 model 列表
+// 只探测一次缓存(model 列表是 harness 全局属性,不随 session 变)。
+func configCacheKey(harnessID, projectID string) string {
+	return harnessID + "|" + projectID
+}
+
+// buildSessionConfig 为「未活跃 session」构造 config options:从缓存取 model 选项,
+// currentValue 设为 session 的 model(DB 真相,首条消息 NewSession 时钉死)。
+// 只返回 model 项 —— mode/effort 是运行时热切项,首条消息前不展示(避免「改了不生效」的假交互);
+// session 活跃后由 startLive 推送完整 live configOptions 覆盖。缓存未就绪返回 nil。
+func (s *ChatService) buildSessionConfig(se *store.Session) []acp.ConfigOption {
+	s.mu.RLock()
+	cached := s.cfgCache[configCacheKey(se.Harness, se.ProjectID)]
+	s.mu.RUnlock()
+	if len(cached) == 0 {
+		return nil
+	}
+	for _, o := range cached {
+		if o.Category == "model" {
+			out := o // 拷贝结构体(Options 切片只读不改,共享底层数组无妨)
+			out.CurrentValue = se.Model
+			return []acp.ConfigOption{out}
+		}
+	}
+	return nil
+}
+
+// emitSessionConfig 给某 session 推 config_option(缓存就绪时)。活跃 session 跳过 ——
+// 其 live configOptions 是真相。返回是否推送了。
+func (s *ChatService) emitSessionConfig(se *store.Session) bool {
+	if s.isActive(se.ID) {
+		return false
+	}
+	opts := s.buildSessionConfig(se)
+	if len(opts) == 0 {
+		return false
+	}
+	s.emit(EventUpdate, acp.SessionEvent{SessionID: se.ID, Kind: "config_option", ConfigOptions: opts})
+	return true
+}
+
+// maybeWarmSession 为该 session 就地预热(冷缓存时 eager spawn,keep alive 拿到 configOptions
+// 立即可见;首条消息复用连接,免再 spawn)。幂等:已缓存或预热中则跳过。best-effort:
+// 失败只告警,降级为首条消息的 ensureLive 兜底,不阻塞会话创建。
+//
+// 复用 ensureLive(spawn 段持 spawnMu,与首条消息的 spawn 互斥,杜绝双 spawn)。
+// startLive 成功后:已 emit config_option(完整 live list)+ 推 "started" + 注册 active;
+// 此处再把 model 列表缓存,供同项目后续 session 即时展示、免 spawn。
+func (s *ChatService) maybeWarmSession(se *store.Session) {
+	key := configCacheKey(se.Harness, se.ProjectID)
+	s.mu.Lock()
+	if len(s.cfgCache[key]) > 0 || s.cfgProbing[key] {
+		s.mu.Unlock()
+		return
+	}
+	s.cfgProbing[key] = true
+	s.mu.Unlock()
+	go func() {
+		defer func() {
+			s.mu.Lock()
+			delete(s.cfgProbing, key)
+			s.mu.Unlock()
+		}()
+		if err := s.ensureLive(se.ID); err != nil {
+			slog.Warn("warm session spawn failed", "session", se.ID, "err", err)
+			return
+		}
+		s.mu.RLock()
+		ls := s.active[se.ID]
+		s.mu.RUnlock()
+		if ls == nil {
+			return
+		}
+		if opts := ls.chat.FlatConfigOptions(); len(opts) > 0 {
+			s.mu.Lock()
+			s.cfgCache[key] = opts
+			s.mu.Unlock()
+			s.emitCachedConfigForProject(se.Harness, se.ProjectID)
+		}
+	}()
+}
+
+// emitCachedConfigForProject 给某项目所有同 harness 的未活跃 session 推送缓存里的 model 下拉
+// (探测完成后调用,让一批「未发首条消息」的会话都能看到 model selector)。
+func (s *ChatService) emitCachedConfigForProject(harnessID, projectID string) {
+	sessions, err := s.st.ListSessions(s.ctx, projectID)
+	if err != nil {
+		return
+	}
+	for i := range sessions {
+		se := sessions[i]
+		if se.Harness != harnessID {
+			continue
+		}
+		s.emitSessionConfig(&se)
+	}
+}
+
 // GetSessionConfigOptions 返回当前 session 的 config options(给前端渲染下拉:model/mode/effort)。
-// 仅 harness 已启动(active)时有值;未启动返回 nil(前端用 session.Model 兜底静态显示)。
+// 活跃时取 live 真相;未活跃时取缓存里的 model 项(currentValue = session.Model),让首条消息前
+// 也能展示 model selector(前端主要靠 config_option 事件,此方法为完整性保留)。
 func (s *ChatService) GetSessionConfigOptions(sessionID string) ([]acp.ConfigOption, error) {
 	s.mu.RLock()
 	ls, ok := s.active[sessionID]
 	s.mu.RUnlock()
-	if !ok {
-		return nil, nil
+	if ok {
+		return ls.chat.FlatConfigOptions(), nil
 	}
-	return ls.chat.FlatConfigOptions(), nil
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil || se == nil {
+		return nil, err
+	}
+	return s.buildSessionConfig(se), nil
 }
 
-// SetSessionConfigOption 切换 session 的某个 config option(model/mode/effort),热切、同 session 即时生效。
-// 成功后把最新 config options 推前端。未活跃会先 ensureLive(spawn harness)。
+// SetSessionConfigOption 切换 session 的某个 config option。
+//   - 活跃:harness 热切(session/set_config_option),即时生效,推送 live configOptions。
+//   - 未活跃(首条消息前):model 写 DB(创建时钉死 model,首条消息 ensureLive 用最新 se.Model
+//     写 opencode.json,§3.5/§5.4 #3),再推送缓存里的 model 项(新 currentValue)。不 spawn
+//     harness(避免空闲断连 §5.4 #9)。mode/effort 是运行时热切项,未活跃时忽略(下拉也不展示)。
 func (s *ChatService) SetSessionConfigOption(sessionID, configId, value string) error {
-	if err := s.ensureLive(sessionID); err != nil {
-		return err
-	}
 	s.mu.RLock()
-	ls, ok := s.active[sessionID]
+	ls := s.active[sessionID]
 	s.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("session not active: %s", sessionID)
+	if ls != nil {
+		if err := ls.chat.SetConfigOption(s.ctx, configId, value); err != nil {
+			return err
+		}
+		s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "config_option", ConfigOptions: ls.chat.FlatConfigOptions()})
+		return nil
 	}
-	if err := ls.chat.SetConfigOption(s.ctx, configId, value); err != nil {
+	// 未活跃:只处理 model(写 DB,首条消息生效);mode/effort 运行时项忽略。
+	if configId != "model" {
+		return nil
+	}
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil {
 		return err
 	}
-	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "config_option", ConfigOptions: ls.chat.FlatConfigOptions()})
+	if se == nil {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+	if err := s.st.UpdateSessionModel(s.ctx, sessionID, value); err != nil {
+		return err
+	}
+	se.Model = value
+	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "config_option", ConfigOptions: s.buildSessionConfig(se)})
 	return nil
 }
 
