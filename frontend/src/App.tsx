@@ -725,6 +725,7 @@ export default function App() {
               mentions={mentions}
               onMentionsChange={onMentionsChange}
               history={history}
+              activity={activityBySession[selectedSessionId]}
               sessionId={selectedSessionId}
               configOptions={configOptions}
               onSetConfig={setSessionConfig}
