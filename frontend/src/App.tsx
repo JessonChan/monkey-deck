@@ -39,6 +39,8 @@ export default function App() {
   const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({});  // 前端 FIFO 队列(按 session 隔离,切走保留)
   const [draftBySession, setDraftBySession] = useState<Record<string, string>>({});  // composer 草稿(按 session 隔离,切走保留)
   const [historyBySession, setHistoryBySession] = useState<Record<string, string[]>>({});  // 输入框历史(上下键翻):按 session 隔离,seed 自 DB + 每次发送追加
+  const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, string[]>>({});  // composer 回形针附件(按 session 隔离,切走保留)
+  const [mentionsBySession, setMentionsBySession] = useState<Record<string, Mention[]>>({});  // composer @提及(按 session 隔离,切走保留)
   const queueBySessionRef = useRef<Record<string, QueueItem[]>>({});
   const userStoppedRef = useRef(false);                    // 用户主动停止:抑制该次 idle 的 auto-continue
 
@@ -160,10 +162,22 @@ export default function App() {
   const queue = (selectedSessionId ? queueBySession[selectedSessionId] : undefined) ?? [];
   const history = (selectedSessionId ? historyBySession[selectedSessionId] : undefined) ?? [];
   const composerValue = (selectedSessionId ? draftBySession[selectedSessionId] : undefined) ?? "";
+  const attachments = (selectedSessionId ? attachmentsBySession[selectedSessionId] : undefined) ?? [];
+  const mentions = (selectedSessionId ? mentionsBySession[selectedSessionId] : undefined) ?? [];
   const onComposerChange = useCallback((text: string) => {
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
     setDraftBySession((prev) => ({ ...prev, [sid]: text }));
+  }, []);
+  const onAttachmentsChange = useCallback((next: string[]) => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    setAttachmentsBySession((prev) => ({ ...prev, [sid]: next }));
+  }, []);
+  const onMentionsChange = useCallback((next: Mention[]) => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    setMentionsBySession((prev) => ({ ...prev, [sid]: next }));
   }, []);
 
   // 启动:加载项目 + 订阅事件。
@@ -299,6 +313,8 @@ export default function App() {
       setSelectedSessionId(null);
       setQueueBySession({}); queueBySessionRef.current = {};
       setDraftBySession({});
+      setAttachmentsBySession({});
+      setMentionsBySession({});
       setItemsBySession({});
       setStatusBySession({});
       setStatusDetailBySession({});
@@ -669,6 +685,10 @@ export default function App() {
               onRevokeQueue={revokeQueue}
               composerValue={composerValue}
               onComposerChange={onComposerChange}
+              attachments={attachments}
+              onAttachmentsChange={onAttachmentsChange}
+              mentions={mentions}
+              onMentionsChange={onMentionsChange}
               history={history}
               sessionId={selectedSessionId}
               hasMore={hasMore}

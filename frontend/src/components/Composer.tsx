@@ -12,6 +12,10 @@ interface Props {
   model: string;
   history: string[];        // 输入框历史(上下键翻):该 session 全部发过的消息,无长度限制
   sessionId: string;        // @autocomplete 浏览此 session 的 cwd
+  attachments: string[];      // 回形针附件(绝对路径)— 按 session 隔离(App 持有)
+  onAttachmentsChange: (next: string[]) => void;
+  mentions: Mention[];        // @autocomplete 选中项 — 按 session 隔离(App 持有)
+  onMentionsChange: (next: Mention[]) => void;
   onSend: (text: string, mentions: Mention[]) => void;
   onStop: () => void;
   onAction: (action: "clear" | "new" | "stop") => void;
@@ -41,9 +45,7 @@ function detectMention(text: string, pos: number): { start: number; query: strin
   return { start: wordStart, query: text.slice(wordStart + 1, pos) };
 }
 
-export default function Composer({ value, onChange, disabled, prompting, model, history, sessionId, onSend, onStop, onAction }: Props) {
-  const [attachments, setAttachments] = useState<string[]>([]);      // 回形针附件(绝对路径,chip 展示)
-  const [mentions, setMentions] = useState<Mention[]>([]);          // @autocomplete 选中的文件/文件夹(相对 cwd)
+export default function Composer({ value, onChange, disabled, prompting, model, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, onSend, onStop, onAction }: Props) {
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -120,8 +122,8 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
     if (!t && all.length === 0) return;
     onSend(t, all);
     onChange("");
-    setAttachments([]);
-    setMentions([]);
+    onAttachmentsChange([]);
+    onMentionsChange([]);
     navRef.current = -1;
     setMentionOpen(false);
     setSlashOpen(false);
@@ -142,10 +144,9 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
     const token = "@" + node.path + " ";
     const next = value.slice(0, m.start) + token + value.slice(pos);
     onChange(next);
-    setMentions((prev) => {
-      if (prev.some((x) => x.path === node.path)) return prev;
-      return [...prev, { path: node.path, name: node.name }];
-    });
+    if (!mentions.some((x) => x.path === node.path)) {
+      onMentionsChange([...mentions, { path: node.path, name: node.name }]);
+    }
     setMentionOpen(false);
     requestAnimationFrame(() => {
       const el = ref.current;
@@ -232,7 +233,7 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
   const addFiles = async () => {
     try {
       const paths = await ChatService.PickFiles();
-      if (paths && paths.length) setAttachments((prev) => [...prev, ...paths]);
+      if (paths && paths.length) onAttachmentsChange([...attachments, ...paths]);
     } catch { /* 取消静默 */ }
   };
 
@@ -266,13 +267,13 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
             {attachments.map((p) => (
               <span key={p} className="att-chip" title={p}>
                 <span className="att-chip-name"><Paperclip size={11} /> {baseName(p)}</span>
-                <button className="att-chip-x" onClick={() => setAttachments((prev) => prev.filter((x) => x !== p))}><X size={11} /></button>
+                <button className="att-chip-x" onClick={() => onAttachmentsChange(attachments.filter((x) => x !== p))}><X size={11} /></button>
               </span>
             ))}
             {mentions.map((m) => (
               <span key={m.path} className="att-chip att-chip-mention" title={"@" + m.path}>
                 <span className="att-chip-name"><File size={11} /> {m.name}</span>
-                <button className="att-chip-x" onClick={() => { setMentions((prev) => prev.filter((x) => x.path !== m.path)); }}><X size={11} /></button>
+                <button className="att-chip-x" onClick={() => onMentionsChange(mentions.filter((x) => x.path !== m.path))}><X size={11} /></button>
               </span>
             ))}
           </div>

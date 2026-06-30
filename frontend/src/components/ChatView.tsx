@@ -33,6 +33,10 @@ interface Props {
   onRevokeQueue: (id: string) => void;
   composerValue: string;
   onComposerChange: (v: string) => void;
+  attachments: string[];
+  onAttachmentsChange: (next: string[]) => void;
+  mentions: Mention[];
+  onMentionsChange: (next: Mention[]) => void;
   history: string[];
   sessionId: string;
   hasMore: boolean;
@@ -138,7 +142,7 @@ export default function ChatView(props: Props) {
         </div>
       </header>
 
-      <div className="chat-body" ref={scrollRef} onScroll={onScroll} data-testid="chat-body">
+      <div className="chat-body" key={props.sessionId} ref={scrollRef} onScroll={onScroll} data-testid="chat-body">
         {items.length === 0 && <div className="chat-placeholder">发一条消息开始对话…</div>}
         {props.hasMore && (
           <button className="load-more-btn" onClick={props.onLoadMore} disabled={props.loadingMore} data-testid="load-more">
@@ -164,7 +168,7 @@ export default function ChatView(props: Props) {
             <Fragment key={item.id}>
               {/* 回合分隔:每条用户消息(首条除外)前插一条带时间的分隔线,让多轮对话边界清晰。 */}
               {item.type === "user" && i > 0 && <TurnDivider ts={item.ts} />}
-              <ChatRow item={item} />
+              <ChatRow item={item} sessionId={props.sessionId} />
             </Fragment>
           );
         })}
@@ -197,6 +201,10 @@ export default function ChatView(props: Props) {
         <Composer
           value={props.composerValue}
           onChange={props.onComposerChange}
+          attachments={props.attachments}
+          onAttachmentsChange={props.onAttachmentsChange}
+          mentions={props.mentions}
+          onMentionsChange={props.onMentionsChange}
           disabled={!props.session}
           prompting={props.status === "prompting"}
           model={props.session?.model || ""}
@@ -211,7 +219,7 @@ export default function ChatView(props: Props) {
   );
 }
 
-const ChatRow = memo(function ChatRow({ item }: { item: ChatItem }) {
+const ChatRow = memo(function ChatRow({ item, sessionId }: { item: ChatItem; sessionId: string }) {
   if (item.type === "user") {
     return (
       <div className="row row-user" data-testid="msg-user">
@@ -238,21 +246,23 @@ const ChatRow = memo(function ChatRow({ item }: { item: ChatItem }) {
     );
   }
   if (item.type === "thought") {
-    return <ThoughtBlock item={item} />;
+    return <ThoughtBlock item={item} sessionId={sessionId} />;
   }
   return <ToolCard item={item} />;
 });
 
 // ThoughtBlock:思考块默认折叠(含流式中),summary 显示转圈 spinner;用户展开后记住偏好,
 // 后续新思考块也默认展开;底部「收起」按钮方便长文本尾部直接收回(不用滚回顶部)。
-function ThoughtBlock({ item }: { item: Extract<ChatItem, { type: "thought" }> }) {
-  const [open, setOpen] = useState(() => localStorage.getItem("md:thought-open") === "true");
+function ThoughtBlock({ item, sessionId }: { item: Extract<ChatItem, { type: "thought" }>; sessionId: string }) {
+  // 展开偏好按 session 隔离(避免 A 的展开状态串到 B / 新窗口默认展开)。
+  const storageKey = `md:thought-open:${sessionId}`;
+  const [open, setOpen] = useState(() => localStorage.getItem(storageKey) === "true");
   const everOpenedRef = useRef(open);
   if (open) everOpenedRef.current = true;
   const toggle = () => {
     setOpen((prev) => {
       const next = !prev;
-      localStorage.setItem("md:thought-open", String(next));
+      localStorage.setItem(storageKey, String(next));
       return next;
     });
   };
