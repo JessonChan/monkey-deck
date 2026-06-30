@@ -768,6 +768,18 @@ func (s *ChatService) reapIfIdle() {
 	}
 }
 
+// teardownLive 拆掉一个活跃 session 的 harness:从 active 移除 + Close(杀进程组+收尸)
+// + 无其它活跃时 reap 逃逸。任何「Prompt 异常返回」(peer 断 / 静默或绝对超时 / 其它错)
+// 都应调它:harness 可能已死或不可信,下条消息 ensureLive 会用 LoadSession(resume)重连(§1.4 / §5.4 #16)。
+// 用户主动取消(StopSession/InterruptAndSend)【不】调 —— 那是干净停止,连接保持可用(§5.4 #13)。
+func (s *ChatService) teardownLive(sessionID string, ls *liveSession) {
+	s.mu.Lock()
+	delete(s.active, sessionID)
+	s.mu.Unlock()
+	ls.chat.Close()
+	s.reapIfIdle()
+}
+
 // LoadMessages 取某 session 的全部历史消息(打开 session 时渲染)。
 func (s *ChatService) LoadMessages(sessionID string) ([]store.Message, error) {
 	return s.st.ListMessages(s.ctx, sessionID)
@@ -875,7 +887,7 @@ func (s *ChatService) InterruptAndSend(sessionID, text string, attachments []acp
 }
 
 // SendAndWaitSync 同步发送并等待回复(供驱动/测试用;GUI 用异步 SendMessage)。
-// 返回 agent 文本与错误。失败(peer disconnected)时由调用方重试(下次 ensureLive 会 LoadSession 重连)。
+// 返回 agent 文本与错误。任何失败都拆连接:调用方重试时 ensureLive 会用 LoadSession(resume)重连(§5.4 #16)。
 func (s *ChatService) SendAndWaitSync(sessionID, text string, attachments []acp.Attachment) (string, error) {
 	if err := s.ensureLive(sessionID); err != nil {
 		return "", err
@@ -917,14 +929,14 @@ func (s *ChatService) SendAndWaitSync(sessionID, text string, attachments []acp.
 		}
 	}
 	if err != nil {
+		// 与 runPrompt 一致:任何失败都拆连接(§5.4 #16)。返回原 err 供调用方判断。
+		reason := "error"
 		if acp.IsPeerDisconnected(err) {
-			s.mu.Lock()
-			delete(s.active, sessionID)
-			s.mu.Unlock()
-			ls.chat.Close()
-			s.reapIfIdle()
+			reason = "peer-disconnected"
 		}
-		s.emitStatus(sessionID, "error", err.Error())
+		s.teardownLive(sessionID, ls)
+		slog.Error("prompt failed (sync)", "session", sessionID, "err", err, "reason", reason)
+		s.emitStatus(sessionID, "error", "agent 连接已重置,下条消息将自动重连")
 		return agentText, err
 	}
 	s.emitStatus(sessionID, "idle", "stopReason="+string(stopReason))
@@ -987,18 +999,16 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 			s.emitStatus(sessionID, "idle", "cancelled")
 			return
 		}
-		detail := err.Error()
+		// 非用户取消的失败(peer 断 / 静默或绝对超时 / 其它):harness 可能已死或不可信,
+		// 一律拆连接,下条消息 ensureLive 用 LoadSession(resume) 重连(§5.4 #16)。
+		reason := "error"
 		if acp.IsPeerDisconnected(err) {
-			detail = "agent 进程已断开,下条消息将自动重连"
-			// 拆掉死掉的 harness,下次 ensureLive 会用 LoadSession(resume) 重连(§1.4)。
-			s.mu.Lock()
-			delete(s.active, sessionID)
-			s.mu.Unlock()
-			ls.chat.Close()
-			s.reapIfIdle()
+			reason = "peer-disconnected"
 		}
-		slog.Error("prompt failed", "session", sessionID, "err", err)
-		s.emitStatus(sessionID, "error", detail)
+		s.teardownLive(sessionID, ls)
+		slog.Error("prompt failed", "session", sessionID, "err", err, "reason", reason)
+		// §4.4:不把裸 error(协议 JSON/OS 错)抛给用户,统一人话提示。
+		s.emitStatus(sessionID, "error", "agent 连接已重置,下条消息将自动重连")
 		return
 	}
 	// 取 opencode 生成的权威标题覆盖兜底标题(§5.4 #14)。
