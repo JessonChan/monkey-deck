@@ -37,7 +37,7 @@ type Project struct {
 	Name          string `json:"name"`
 	Path          string `json:"path"`
 	Model         string `json:"model"`
-	AllowExternal bool   `json:"allowExternalDir"` // 项目级「允许访问外部目录」(权限记忆,§3.4)
+	AllowExternal bool   `json:"allowExternalDir"` // 项目级权限记忆(§3.4):曾选「本项目允许」则该 project 所有 session(跨 harness)的 RequestPermission 自动放行
 	CreatedAt     int64  `json:"createdAt"`
 	UpdatedAt     int64  `json:"updatedAt"`
 }

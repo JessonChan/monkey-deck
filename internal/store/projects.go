@@ -86,8 +86,10 @@ func (s *Store) UpdateProject(ctx context.Context, id, name, model string) error
 	return err
 }
 
-// SetProjectAllowExternal 设置项目级「允许访问外部目录」(用户在权限弹窗选「本项目允许」时写)。
-// session 启动时由 service 读出加载进 handler(Handler.SetProjectAllowExternal)。
+// SetProjectAllowExternal 设置项目级权限记忆(用户在权限弹窗选「本项目允许」时写)。
+// 按 project 存、不分 harness → 跨 harness 共享;session 启动时由 service 读出加载进
+// handler(Handler.SetProjectAllowExternal),命中即对所有后续 RequestPermission 自动放行。
+// 列名 allow_external_dir 保留历史(曾仅管外部目录),语义已泛化为「项目已批准」。
 func (s *Store) SetProjectAllowExternal(ctx context.Context, id string, allow bool) error {
 	v := 0
 	if allow {

@@ -134,9 +134,12 @@ type Handler struct {
 	pending   map[string]*pendingPermission // id → 待裁决
 	permSeq   int
 	permTTL   time.Duration // 权限裁决超时(超时后按默认动作放行/拒绝)
-	// 权限裁决记忆(§3.4):外部目录访问的「本会话/本项目允许」。命中时 RequestPermission
-	// 当场自动放行,不弹窗。sessionAllowExternal 内存(随 session 生灭);
-	// projectAllowExternal 由 service 从 DB 加载(startLive)+ 用户选「本项目」时更新。
+	// 权限裁决记忆(§3.4):用户曾选「本会话/本项目允许」后,后续 RequestPermission 当场自动放行,
+	// 不弹窗、不等。覆盖所有请求类型(命令执行、外部目录访问等),不止外部目录——见
+	// RequestPermission 命中分支。sessionAllowExternal 内存(随 session 生灭);
+	// projectAllowExternal 由 service 从 DB(projects.allow_external_dir)加载,按 project 存、不分
+	// harness → 跨 harness 共享(startLive)+ 用户选「本项目」时更新。
+	// 字段名保留历史(曾仅管外部目录);DB 列名同理,见 store/migrations/0004。
 	sessionAllowExternal atomic.Bool
 	projectAllowExternal atomic.Bool
 }
@@ -190,8 +193,11 @@ func (h *Handler) RequestPermission(ctx context.Context, req acp.RequestPermissi
 	slog.Debug("permission request", "title", title, "external", external, "locations", len(req.ToolCall.Locations), "sessionAllow", h.sessionAllowExternal.Load(), "projectAllow", h.projectAllowExternal.Load())
 
 	// 命中记忆(本会话/本项目曾选「允许」)→ 当场自动放行,不弹窗、不等(§3.4)。
+	// 覆盖所有权限请求类型(命令执行、外部目录访问等),不止外部目录——否则 omp 这类
+	// 对 bash 也发 request_permission 的 harness,因 locations 在 cwd 内 → external=false →
+	// 永不命中记忆 → 每次弹窗(项目实证)。project 档按 project 存、跨 harness 共享。
 	// 同时消除「没人点 → 等 5 分钟超时」的卡顿。
-	if external && (h.sessionAllowExternal.Load() || h.projectAllowExternal.Load()) {
+	if h.sessionAllowExternal.Load() || h.projectAllowExternal.Load() {
 		return acp.RequestPermissionResponse{
 			Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: pickAllowOption(req.Options)}},
 		}, nil
@@ -248,7 +254,7 @@ func (h *Handler) RequestPermission(ctx context.Context, req acp.RequestPermissi
 }
 
 // applyDecision 把前端传来的裁决档位(once/session/project/deny)映射成 ACP 选项,
-// 并按档位设置记忆:session/project 档令后续「外部目录读取」自动放行(不弹)。deny 只本次不记。
+// 并按档位设置记忆:session/project 档令后续「所有 RequestPermission」自动放行(不弹,见字段注释)。deny 只本次不记。
 func (h *Handler) applyDecision(level string, opts []acp.PermissionOption) acp.PermissionOptionId {
 	switch level {
 	case "deny":
@@ -272,7 +278,7 @@ func (h *Handler) SetProjectAllowExternal(allow bool) {
 }
 
 // isExternalAccess 判断请求是否访问 cwd 之外的路径(= 外部目录读取)。
-// opencode 写盘不触发 request_permission(RAK §16.5),弹的基本都是外部目录读取。
+// 仅用于 debug 日志标注;权限记忆命中已不限请求类型。保留供将来按风险分级(高危仍人工)用。
 func isExternalAccess(workDir string, locs []acp.ToolCallLocation) bool {
 	if workDir == "" {
 		return false
