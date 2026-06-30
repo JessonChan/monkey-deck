@@ -430,6 +430,36 @@ function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupB
   const [open, setOpen] = useState(false);
   const currentName = options.find((o) => o.value === currentValue)?.name ?? currentValue ?? label;
 
+  // 最近使用(model 专用):localStorage 持久化,选中的模型前移去重,最多 5 个。
+  // 只在 groupByProvider(model 下拉)时启用;mode/effort 选项少不需要。
+  const recentKey = groupByProvider ? "md:recent-models" : null;
+  const recentModels = useMemo(() => {
+    if (!recentKey) return [];
+    try {
+      const raw = localStorage.getItem(recentKey);
+      const all = raw ? JSON.parse(raw) as string[] : [];
+      const valid = new Set(options.map((o) => o.value));
+      return all.filter((v) => valid.has(v) && v !== currentValue).slice(0, 5);
+    } catch { return []; }
+  }, [recentKey, options, currentValue]);
+  const recentOpts = useMemo(
+    () => recentModels.map((v) => options.find((o) => o.value === v)!).filter(Boolean),
+    [recentModels, options]
+  );
+
+  const handleSelect = (v: string) => {
+    if (recentKey) {
+      try {
+        const raw = localStorage.getItem(recentKey);
+        const all = raw ? JSON.parse(raw) as string[] : [];
+        const next = [v, ...all.filter((x) => x !== v)].slice(0, 5);
+        localStorage.setItem(recentKey, JSON.stringify(next));
+      } catch { /* noop */ }
+    }
+    onSelect(v);
+    setOpen(false);
+  };
+
   // provider 分组:value 形如 "zai/glm-4.6",按 "/" 前缀聚合。
   const groups = useMemo(() => {
     if (!groupByProvider) return null;
@@ -440,11 +470,6 @@ function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupB
     }
     return Object.entries(g).sort(([a], [b]) => a.localeCompare(b));
   }, [options, groupByProvider]);
-
-  const handleSelect = (v: string) => {
-    onSelect(v);
-    setOpen(false);
-  };
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
@@ -464,6 +489,22 @@ function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupB
             )}
             <Command.List className="cfg-list">
               <Command.Empty className="cfg-empty">无匹配</Command.Empty>
+              {recentOpts.length > 0 && (
+                <Command.Group key="recent" heading="最近使用" className="cfg-group-block">
+                  {recentOpts.map((o) => (
+                    <Command.Item
+                      key={o.value}
+                      value={`${o.name} ${o.value}`}
+                      onSelect={() => handleSelect(o.value)}
+                      className={`cfg-option ${o.value === currentValue ? "active" : ""}`}
+                      data-testid={`cfg-option-${o.value}`}
+                    >
+                      <span className="cfg-option-name">{o.name}</span>
+                      {o.value !== o.name && <span className="cfg-option-value">{o.value}</span>}
+                    </Command.Item>
+                  ))}
+                </Command.Group>
+              )}
               {groups ? (
                 groups.map(([prov, opts]) => (
                   <Command.Group key={prov} heading={prov} className="cfg-group-block">
