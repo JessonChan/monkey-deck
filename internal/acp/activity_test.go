@@ -84,3 +84,53 @@ func TestActivityTrackerIgnoresIrrelevantEvents(t *testing.T) {
 		t.Fatalf("无关事件不应改变 inProgress, got %d", got)
 	}
 }
+
+// TestShouldCancelTurnAbsoluteBeatsInProgress 治本核心:harness 在 in_progress tool
+// 中途死亡时,tool 永不到终态 → 旧 timedOut 因 in_progress 豁免返回 false → 永不取消 →
+// turn 永久挂起(§5.4 #16)。新 shouldCancelTurn 在绝对上限命中时返回 "absolute",
+// 压过 in_progress 豁免,保证 turn 一定能被取消、runPrompt 能返回去拆连接。
+func TestShouldCancelTurnAbsoluteBeatsInProgress(t *testing.T) {
+	a := newActivityTracker()
+	start := time.Now().Add(-16 * time.Minute) // 超过 15min 绝对上限
+	now := start.Add(16 * time.Minute)
+	a.observe(SessionEvent{Kind: "tool_call", ToolCallID: "t1", ToolStatus: "in_progress"})
+	a.lastActivity.Store(start.UnixNano()) // 长期静默
+	if got := a.shouldCancelTurn(start, now, 5*time.Minute, 15*time.Minute); got != "absolute" {
+		t.Fatalf("绝对上限应压过 in_progress 豁免:got %q, want absolute", got)
+	}
+}
+
+// TestShouldCancelTurnInProgressExemptWithinAbsolute:in_progress 且未到绝对上限时不取消
+// (长 tool 正常进行,§3.3 不误判卡死)。回归保护:绝对上限不能误杀正常长 tool。
+func TestShouldCancelTurnInProgressExemptWithinAbsolute(t *testing.T) {
+	a := newActivityTracker()
+	start := time.Now().Add(-1 * time.Minute) // 远未到绝对上限
+	now := start.Add(1 * time.Minute)
+	a.observe(SessionEvent{Kind: "tool_call", ToolCallID: "t1", ToolStatus: "in_progress"})
+	a.lastActivity.Store(start.Add(-10 * time.Minute).UnixNano()) // 静默超 idle 阈值
+	if got := a.shouldCancelTurn(start, now, 5*time.Minute, 15*time.Minute); got != "" {
+		t.Fatalf("in_progress 且未到绝对上限不应取消:got %q, want \"\"", got)
+	}
+}
+
+// TestShouldCancelTurnIdleNoTool:无 in_progress tool 且静默超 idle 阈值 → "idle"。
+func TestShouldCancelTurnIdleNoTool(t *testing.T) {
+	a := newActivityTracker()
+	start := time.Now().Add(-1 * time.Minute)
+	now := start.Add(1 * time.Minute)
+	a.lastActivity.Store(start.Add(-10 * time.Minute).UnixNano()) // 静默,无 tool
+	if got := a.shouldCancelTurn(start, now, 5*time.Minute, 15*time.Minute); got != "idle" {
+		t.Fatalf("无 tool 且静默应 idle 超时:got %q, want idle", got)
+	}
+}
+
+// TestShouldCancelTurnRecentActive:近期有活动且未到绝对上限 → 不取消。
+func TestShouldCancelTurnRecentActive(t *testing.T) {
+	a := newActivityTracker()
+	start := time.Now().Add(-30 * time.Second)
+	now := start.Add(30 * time.Second)
+	a.lastActivity.Store(now.Add(-2 * time.Second).UnixNano()) // 近期有活动
+	if got := a.shouldCancelTurn(start, now, 5*time.Minute, 15*time.Minute); got != "" {
+		t.Fatalf("近期活动且未到绝对上限不应取消:got %q, want \"\"", got)
+	}
+}

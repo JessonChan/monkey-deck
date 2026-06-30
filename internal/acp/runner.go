@@ -230,10 +230,37 @@ func (a *activityTracker) observe(e SessionEvent) {
 // timedOut 判定是否静默超时:静默超过 timeout 且无 in_progress tool。
 // 有 tool 在 in_progress 时永不超时(协议级「正在工作」信号)。
 func (a *activityTracker) timedOut(timeout time.Duration) bool {
+	return a.timedOutAt(time.Now(), timeout)
+}
+
+// timedOutAt 是 timedOut 的可注入版(now 显式传入,供 shouldCancelTurn 单测):
+// 有 in_progress tool 时不超时(§3.3)。
+func (a *activityTracker) timedOutAt(now time.Time, timeout time.Duration) bool {
 	if a.inProgress.Load() > 0 {
 		return false
 	}
-	return time.Since(time.Unix(0, a.lastActivity.Load())) > timeout
+	return now.Sub(time.Unix(0, a.lastActivity.Load())) > timeout
+}
+
+// maxTurnAbsolute 是单轮 Prompt 的绝对墙上时间上限,独立于静默超时与 in_progress 豁免。
+// 防止 harness 在某个 in_progress tool 中途死亡(tool 永不到终态)→ 静默超时被永久豁免
+// → turn 永久挂起、死 harness 永不拆(变僵尸)(§5.4 #16)。设得足够大以容纳真正长时的
+// tool(如大构建/长 bash),仅作兜底。
+const maxTurnAbsolute = 15 * time.Minute
+
+// shouldCancelTurn 统一判定静默超时 goroutine 是否应取消本轮,返回原因(""=不取消):
+//   - "absolute":elapsed > absolute,一律取消(忽略 in_progress 豁免)——治本 in_progress 挂死;
+//   - "idle":静默超时(有 in_progress tool 时不命中,§3.3)。
+//
+// 抽成纯函数(显式传 now/start)便于单测,无需真定时器。
+func (a *activityTracker) shouldCancelTurn(start, now time.Time, silence, absolute time.Duration) string {
+	if now.Sub(start) > absolute {
+		return "absolute"
+	}
+	if a.timedOutAt(now, silence) {
+		return "idle"
+	}
+	return ""
 }
 
 // Prompt 在已有 session 上发送消息并等待回复(同步返回,期间 SessionUpdate 并发流入)。
@@ -260,6 +287,7 @@ func (cs *ChatSession) Prompt(ctx context.Context, message string, attachments [
 	defer cancel()
 
 	if timeout > 0 {
+		start := time.Now()
 		go func() {
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
@@ -269,13 +297,17 @@ func (cs *ChatSession) Prompt(ctx context.Context, message string, attachments [
 					return
 				case <-ticker.C:
 				}
-				if act.timedOut(timeout) {
+				switch act.shouldCancelTurn(start, time.Now(), timeout, maxTurnAbsolute) {
+				case "absolute":
+					slog.Warn("chat absolute turn timeout", "elapsed", time.Since(start), "inProgress", act.inProgress.Load())
+					cancel()
+					return
+				case "idle":
 					slog.Warn("chat idle timeout", "silence", time.Since(time.Unix(0, act.lastActivity.Load())))
 					cancel()
 					return
 				}
-				// 诊断:已静默超阈值却未超时,通常是 in_progress tool 豁免。
-				// debug 级便于验证 opencode 是否真发 in_progress(方案 A 有效性)。
+				// 诊断:已静默超阈值却未取消,通常是 in_progress tool 豁免(尚未到绝对上限)。
 				if d := time.Since(time.Unix(0, act.lastActivity.Load())); d > timeout && act.inProgress.Load() > 0 {
 					slog.Debug("chat idle exempt by in_progress tool", "silence", d, "inProgress", act.inProgress.Load())
 				}
