@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/jessonchan/monkey-deck/internal/chat"
 	"github.com/jessonchan/monkey-deck/internal/config"
@@ -132,32 +134,75 @@ func main() {
 
 	win := app.Window.NewWithOptions(opts)
 
-	// 跟踪窗口运行时状态:仅记录「非最大化」时的正常几何,
-	// 否则最大化尺寸会被当成默认尺寸存下来。
-	cur := saved
+	// 窗口状态跟踪 + 防抖落盘。
+	// 关键:不能只靠「关闭时存盘」——macOS Cmd+Q 终止不触发 windowShouldClose
+	// (即 Common.WindowClosing),会导致状态从不落盘(实测 ui_state.json 一直不存在,
+	// 每次启动都是默认尺寸)。改为「变更即防抖写盘」:resize/move/最大化变更后 400ms
+	// 落盘,磁盘状态始终新鲜,崩溃/强退/Cmd+Q 都只丢防抖窗口期。
+	// stateMu 保护 cur(定时器回调在独立 goroutine 读快照,与主线程事件写并发)。
+	var (
+		stateMu sync.Mutex
+		cur     = saved
+		saveT   *time.Timer
+	)
+	// rescheduleSave 重排一次防抖写盘(调用方须持有 stateMu)。
+	rescheduleSave := func() {
+		snapshot := cur
+		if saveT != nil {
+			saveT.Stop()
+		}
+		saveT = time.AfterFunc(400*time.Millisecond, func() {
+			if err := ui.SaveWindow(statePath, snapshot); err != nil {
+				log.Printf("ui: save window state: %v", err)
+			}
+		})
+	}
+
+	// 仅记录「非最大化」时的正常几何,否则最大化尺寸会被当成默认尺寸存下来。
 	win.OnWindowEvent(events.Common.WindowDidResize, func(event *application.WindowEvent) {
+		stateMu.Lock()
+		defer stateMu.Unlock()
 		if cur.Maximized {
 			return
 		}
 		cur.Width, cur.Height = win.Size()
+		rescheduleSave()
 	})
 	win.OnWindowEvent(events.Common.WindowDidMove, func(event *application.WindowEvent) {
+		stateMu.Lock()
+		defer stateMu.Unlock()
 		if cur.Maximized {
 			return
 		}
 		cur.X, cur.Y = win.Position()
+		rescheduleSave()
 	})
 	win.OnWindowEvent(events.Common.WindowMaximise, func(event *application.WindowEvent) {
+		stateMu.Lock()
+		defer stateMu.Unlock()
 		cur.Maximized = true
+		rescheduleSave()
 	})
 	win.OnWindowEvent(events.Common.WindowUnMaximise, func(event *application.WindowEvent) {
+		stateMu.Lock()
+		defer stateMu.Unlock()
 		cur.Maximized = false
 		// 显式捕获还原后的几何,不依赖「UnMaximise 之后必跟 WindowDidResize」的顺序。
 		cur.Width, cur.Height = win.Size()
 		cur.X, cur.Y = win.Position()
+		rescheduleSave()
 	})
-	win.OnWindowEvent(events.Common.WindowClosing, func(event *application.WindowEvent) {
-		if err := ui.SaveWindow(statePath, cur); err != nil {
+	// 关闭即落盘:取消未触发的防抖、立即写一次。WindowWillClose 在窗口销毁时触发
+	// (比 windowShouldClose 更接近真正关闭);即便它不触发(如 Cmd+Q),防抖写盘已保底。
+	win.OnWindowEvent(events.Mac.WindowWillClose, func(event *application.WindowEvent) {
+		stateMu.Lock()
+		if saveT != nil {
+			saveT.Stop()
+			saveT = nil
+		}
+		snapshot := cur
+		stateMu.Unlock()
+		if err := ui.SaveWindow(statePath, snapshot); err != nil {
 			log.Printf("ui: save window state: %v", err)
 		}
 	})
