@@ -146,6 +146,17 @@ input, textarea { font-family: inherit; }
 }
 .project-item.active { background: var(--sel-accent); }
 .project-item:hover { background: var(--hover); }
+/* 项目行活跃信号(仅折叠态):左竖条。unread=静态,running=慢呼吸。 */
+.project-item.has-unread,
+.project-item.has-running { position: relative; }
+.project-item.has-unread::before,
+.project-item.has-running::before {
+  content: ""; position: absolute; left: 0; top: 4px; bottom: 4px;
+  width: 3px; border-radius: 0 2px 2px 0; background: var(--accent);
+  pointer-events: none;
+}
+.project-item.has-running::before { animation: proj-bar-breathe 2.5s ease-in-out infinite; }
+@keyframes proj-bar-breathe { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
 .caret { width: 18px; height: 18px; color: var(--text-3); display: inline-flex; align-items: center; justify-content: center; }
 .caret.open svg { transform: rotate(0deg); }
 .project-main {

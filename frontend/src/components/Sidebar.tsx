@@ -138,10 +138,14 @@ export default function Sidebar(props: Props) {
         {props.projects.map((p) => {
           const isOpen = expanded.has(p.id);
           const projSessions = props.sessionsByProject[p.id] ?? [];
+          // 项目行活跃信号:折叠时显示左竖条(running=慢呼吸 / unread=静态)。展开时 session 行已有 dot/spinner,无需重复。
+          const projRunning = projSessions.some((s) => props.statusBySession[s.id] === "prompting");
+          const projUnread = projSessions.some((s) => props.statusBySession[s.id] !== "prompting" && props.unreadBySession[s.id]);
+          const barCls = !isOpen && projRunning ? "has-running" : !isOpen && projUnread ? "has-unread" : "";
           return (
             <div key={p.id} className="project-item-wrap">
               <div
-                className={`project-item ${props.selectedProjectId === p.id ? "active" : ""}`}
+                className={`project-item ${props.selectedProjectId === p.id ? "active" : ""} ${barCls}`}
                 onContextMenu={(e) => { e.preventDefault(); setCtx({ kind: "project", x: e.clientX, y: e.clientY, project: p }); }}
               >
                 <button className={`caret ${isOpen ? "open" : ""}`} onClick={() => toggle(p.id)}>
