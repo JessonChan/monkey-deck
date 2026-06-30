@@ -231,7 +231,7 @@ export default function App() {
       // 错误提示只对当前查看的 session 弹(切走时不在意别的 session 的错误条)。
       if (s.status === "error" && s.sessionId === selectedSessionIdRef.current) setError(s.detail || "出错");
       // 回合结束:清掉该 session 最后 agent/thought 的 streaming 标志(去光标 + 显复制按钮)。
-      if (s.status === "idle" || s.status === "error") {
+      if (s.status === "idle" || s.status === "error" || s.status === "closed") {
         setItemsBySession((prev) => {
           const cur = prev[s.sessionId];
           if (!cur) return prev;
@@ -329,26 +329,15 @@ export default function App() {
     });
   }, []);
 
-  // 选项目 → 加载 sessions。切项目时清空所有 per-session 缓存,防止旧项目的
-  // streaming/items 等残留泄漏到新项目(尤其 loadedSessionsRef 不清会导致跳过 DB 重载)。
+  // 选项目 → 加载 sessions。per-session 缓存按 sessionId 隔离(全局唯一),切项目**不清空**:
+  // 事件处理器(chat:event / chat:status / chat:permission)均按「事件所属 sessionId」写缓存,
+  // 与当前选中无关,故旧项目的残留不会泄漏进新项目视图(selectedSessionId=null 时派生视图全空)。
+  // 侧栏可同时展开多项目,各 session 状态点都从 statusBySession 取 —— 清空会让进行中的 session
+  // 丢失 prompting 状态(后端一轮只发一次 prompting,无新事件补回),表现为「仍在输出但状态为空闲」。
   const selectProject = useCallback(
     async (projectId: string) => {
       setSelectedProjectId(projectId);
       setSelectedSessionId(null);
-      setQueueBySession({}); queueBySessionRef.current = {};
-      setDraftBySession({});
-      setAttachmentsBySession({});
-      setMentionsBySession({});
-      setItemsBySession({});
-      setStatusBySession({});
-      setStatusDetailBySession({});
-      setPermissionBySession({});
-      setUsageBySession({});
-      setHasMoreBySession({});
-      setLoadingMoreBySession({});
-      loadedSessionsRef.current = new Set();
-      oldestSeqRef.current = {};
-      userStoppedRef.current = false;
       await refreshSessions(projectId);
     },
     [refreshSessions]
