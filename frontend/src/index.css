@@ -567,7 +567,7 @@ input, textarea { font-family: inherit; }
 .cfg-search-row {
   display: flex; align-items: center; gap: 6px;
   padding: 6px 8px; border-bottom: 1px solid var(--sep);
-  background: var(--elev);
+  background: var(--elev-2);
 }
 .cfg-search-input {
   flex: 1; background: transparent; border: none; outline: none;
@@ -592,7 +592,7 @@ input, textarea { font-family: inherit; }
   font-size: 12.5px; text-align: left; color: var(--text-2); cursor: pointer;
   line-height: 1.35;
 }
-.cfg-option[data-selected] { background: var(--sel-accent); color: var(--text); }
+.cfg-option[data-selected] { background: var(--sel); color: var(--text); }
 .cfg-option.active { color: var(--accent-2); }
 .cfg-option-name { flex: 1; min-width: 0; }
 .cfg-option-value {
