@@ -73,6 +73,7 @@ export default function ChatView(props: Props) {
   // prepend(加载更多)检测:记录上一轮的首条 id + 容器高度,比较后算高度差补偿 scrollTop。
   const prevFirstIdRef = useRef<string>("");
   const prevHeightRef = useRef(0);
+  const loadMoreRef = useRef<HTMLButtonElement>(null);
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -129,6 +130,21 @@ export default function ChatView(props: Props) {
     return () => ro.disconnect();
   }, [props.sessionId]);
 
+  // IntersectionObserver:「加载更多」按钮进入容器视口时自动触发(原生 API,零依赖)。
+  // 与 prepend-scroll 补偿/useLayoutEffect 独立协作,后者负责保持视觉位置。
+  useEffect(() => {
+    const btn = loadMoreRef.current;
+    if (!btn) return;
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && props.hasMore && !props.loadingMore) props.onLoadMore();
+      },
+      { root: scrollRef.current, threshold: 0.1 }
+    );
+    io.observe(btn);
+    return () => io.disconnect();
+  }, [props.hasMore, props.loadingMore, props.onLoadMore]);
+
   const pct = props.usage.size > 0 ? Math.min(100, Math.round((props.usage.used / props.usage.size) * 100)) : 0;
   // 分级配色:上下文越满越警示(绿 → 琥珀 → 红),让占比一眼可读。
   const usageLevel = pct >= 85 ? "crit" : pct >= 60 ? "high" : pct >= 30 ? "mid" : "low";
@@ -160,7 +176,7 @@ export default function ChatView(props: Props) {
       <div className="chat-body" key={props.sessionId} ref={scrollRef} onScroll={onScroll} data-testid="chat-body">
         {items.length === 0 && <div className="chat-placeholder">发一条消息开始对话…</div>}
         {props.hasMore && (
-          <button className="load-more-btn" onClick={props.onLoadMore} disabled={props.loadingMore} data-testid="load-more">
+          <button ref={loadMoreRef} className="load-more-btn" onClick={props.onLoadMore} disabled={props.loadingMore} data-testid="load-more">
             {props.loadingMore ? "加载中…" : "加载更多"}
           </button>
         )}
