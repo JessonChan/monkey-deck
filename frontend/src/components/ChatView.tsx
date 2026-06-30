@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from "react";
+import { forwardRef, Fragment, memo, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
@@ -7,7 +7,7 @@ import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem
 import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
-import { X, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight } from "lucide-react";
+import { X, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ArrowDown } from "lucide-react";
 
 interface Usage { used: number; size: number; cost: number; }
 
@@ -70,8 +70,13 @@ const TOOL_STATUS_MAP: Record<string, { label: string; cls: string }> = {
   completed: { label: "完成", cls: "tc-done" },
   failed: { label: "失败", cls: "tc-fail" },
 };
+export interface ChatViewHandle {
+  scrollToBottom: () => void;
+}
 
-export default function ChatView(props: Props) {
+
+
+export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props, ref) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const { items } = props;
   // 用户是否贴底:记最近一次滚动的「贴底」状态。新消息到来时只在贴底才自动滚,
@@ -84,12 +89,24 @@ export default function ChatView(props: Props) {
   const prevFirstIdRef = useRef<string>("");
   const prevHeightRef = useRef(0);
   const loadMoreRef = useRef<HTMLButtonElement>(null);
+  // Floating scroll-to-bottom button visibility: true = show FAB (user is reading history).
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+  // Expose imperative scrollToBottom to parent (used right after user sends a message).
+  useImperativeHandle(ref, () => ({
+    scrollToBottom: () => {
+      const el = scrollRef.current;
+      if (!el) return;
+      el.scrollTop = el.scrollHeight;
+      stickToBottomRef.current = true;
+      setShowScrollBtn(false);
+    },
+  }), []);
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
     // 距底 ≤ 80px 视为贴底(留出阅读余量,避免最后一行差几像素被判为「不在底部」)。
     stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 80;
-    // 持续记忆当前位置,切走时已是最新的。
+    setShowScrollBtn(!stickToBottomRef.current);
     scrollStateRef.current.set(props.session?.id || "", { top: el.scrollTop, stick: stickToBottomRef.current });
   };
   useLayoutEffect(() => {
@@ -102,9 +119,11 @@ export default function ChatView(props: Props) {
       const saved = scrollStateRef.current.get(sessionId);
       if (saved && !saved.stick) {
         stickToBottomRef.current = false;
+        setShowScrollBtn(true);
         el.scrollTop = saved.top;
       } else {
         stickToBottomRef.current = true;
+        setShowScrollBtn(false);
         el.scrollTop = el.scrollHeight;
       }
       prevFirstIdRef.current = items.length > 0 ? items[0].id : "";
@@ -117,6 +136,7 @@ export default function ChatView(props: Props) {
       const delta = el.scrollHeight - prevHeightRef.current;
       el.scrollTop += delta;
       stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 80;
+      setShowScrollBtn(!stickToBottomRef.current);
       prevFirstIdRef.current = firstId;
       prevHeightRef.current = el.scrollHeight;
       return;
@@ -219,9 +239,26 @@ export default function ChatView(props: Props) {
         )}
       </div>
 
+      {/* Floating scroll-to-bottom FAB: 放在 chat-view 层,不随 chat-body 内容滚动,始终固定在可视区右下角。 */}
+      {showScrollBtn && (
+        <button
+          className="scroll-bottom-btn"
+          onClick={() => {
+            const el = scrollRef.current;
+            if (!el) return;
+            el.scrollTop = el.scrollHeight;
+            stickToBottomRef.current = true;
+            setShowScrollBtn(false);
+          }}
+          data-tooltip-id="md-tip"
+          data-tooltip-content="滚到最新消息"
+          data-testid="scroll-bottom-btn"
+        >
+          <ArrowDown size={16} />
+        </button>
+      )}
       {props.error && <div className="error-bar">⚠ {props.error}</div>}
       {props.mergeResult && <div className={`merge-result ${props.mergeResult.startsWith("✅") ? "ok" : "fail"}`}>{props.mergeResult}</div>}
-
       <footer className="chat-footer">
         {hasUsage && (
           <div className={`usage-bar usage-${usageLevel}`} title="上下文用量" data-testid="usage-bar">
@@ -259,7 +296,7 @@ export default function ChatView(props: Props) {
       </footer>
     </div>
   );
-}
+});
 
 const ChatRow = memo(function ChatRow({ item, sessionId }: { item: ChatItem; sessionId: string }) {
   if (item.type === "user") {

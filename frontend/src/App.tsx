@@ -4,7 +4,7 @@ import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/inte
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention } from "./types";
 import Sidebar from "./components/Sidebar";
-import ChatView from "./components/ChatView";
+import ChatView, { type ChatViewHandle } from "./components/ChatView";
 import { Sparkles } from "lucide-react";
 import SidePanel from "./components/SidePanel";
 import NewSessionModal from "./components/NewSessionModal";
@@ -59,6 +59,7 @@ export default function App() {
   const historySeededRef = useRef<Set<string>>(new Set());
   // 选中 session 的 ref:仅用于 status 事件的「错误只弹当前查看会话」过滤,不进 effect 依赖(避免每次切换都重订阅)。
   const selectedSessionIdRef = useRef<string | null>(null);
+  const chatViewRef = useRef<ChatViewHandle>(null);
   selectedSessionIdRef.current = selectedSessionId;
   // sessionsByProject 的 ref:status 事件 handler 里查「session 属于哪个 project」用,
   // 不进 effect 依赖(避免每次 sessionsByProject 变化都重订阅事件)。
@@ -464,6 +465,8 @@ export default function App() {
   const sendMessage = useCallback(
     async (text: string, mentions: Mention[]) => {
       if (!selectedSessionId || !text.trim()) return;
+      // 立即滚到底让用户看到自己发的消息(即使是排队消息也要滚,用户需要看当前对话末尾)。
+      chatViewRef.current?.scrollToBottom();
       // 记进历史(按发送键即记录,含排队/被拒的 —— 用户要求)
       setHistoryBySession((prev) => {
         const cur = prev[selectedSessionId] || [];
@@ -472,11 +475,6 @@ export default function App() {
       });
       const attachments = mentions.map((m) => ({ path: m.path, name: m.name }));
       if (status === "prompting") {
-        const item: QueueItem = { id: "q" + Date.now() + Math.random().toString(36).slice(2, 6), text, mentions };
-        const prev = queueBySessionRef.current[selectedSessionId] || [];
-        queueBySessionRef.current = { ...queueBySessionRef.current, [selectedSessionId]: [...prev, item] };
-        setQueueBySession(queueBySessionRef.current);
-        return;
       }
       setError(null);
       setStatusBySession((prev) => ({ ...prev, [selectedSessionId]: "prompting" }));
@@ -638,17 +636,6 @@ export default function App() {
     }
   }, [refreshProjects]);
 
-  const addProjectByPath = useCallback(
-    async (path: string) => {
-      try {
-        await ChatService.AddProject("", path, "");
-        await refreshProjects();
-      } catch (e) {
-        setError(String(e));
-      }
-    },
-    [refreshProjects]
-  );
 
   const removeProject = useCallback(
     async (projectId: string) => {
@@ -735,13 +722,13 @@ export default function App() {
           onSelectSession={openSession}
           onCreateSession={createSession}
           onAddProject={addProject}
-          onAddProjectByPath={addProjectByPath}
+          permPendingBySession={permPendingBySession}
+          draftBySession={draftBySession}
           onRemoveProject={removeProject}
           onRemoveSession={removeSession}
           statusBySession={statusBySession}
           activityBySession={activityBySession}
           unreadBySession={unreadBySession}
-          permPendingBySession={permPendingBySession}
         />
       </Panel>
       <Separator className="resize-handle" />
@@ -749,6 +736,7 @@ export default function App() {
         <main className="main">
           {selectedSessionId ? (
             <ChatView
+              ref={chatViewRef}
               project={selectedProject}
               session={sessions.find((s) => s.id === selectedSessionId) || null}
               items={items}

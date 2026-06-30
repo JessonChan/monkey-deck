@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, MoreVertical } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, MoreVertical, Pencil } from "lucide-react";
 
 interface Props {
   projects: Project[];
@@ -12,13 +12,14 @@ interface Props {
   onSelectSession: (sessionId: string, projectId: string) => void;
   onCreateSession: (projectId: string) => void;
   onAddProject: () => void;
-  onAddProjectByPath: (path: string) => void;
+  onAddProjectByPath?: (path: string) => void;
   onRemoveProject: (id: string) => void;
   onRemoveSession: (sessionId: string) => void;
   statusBySession: Record<string, string>;
   activityBySession: Record<string, "thinking" | "executing" | "replying">;
   unreadBySession: Record<string, boolean>;
   permPendingBySession: Record<string, boolean>;
+  draftBySession?: Record<string, string>;
 }
 
 type Ctx =
@@ -69,7 +70,7 @@ export default function Sidebar(props: Props) {
     const p = pathInput.trim();
     setAdding(false);
     setPathInput("");
-    if (p) props.onAddProjectByPath(p);
+    if (p) props.onAddProjectByPath?.(p);
   };
 
   const onTitleDoubleClick = (e: React.MouseEvent) => {
@@ -189,7 +190,14 @@ export default function Sidebar(props: Props) {
                             <span className="tail-spinner" data-tooltip-id="md-tip" data-tooltip-content="正在生成…" />
                           ) : unread ? (
                             <span className="unread-dot" data-tooltip-id="md-tip" data-tooltip-content="有未读回复，点击查看" />
-                          ) : null}
+                          ) : (() => {
+                            const dh = props.draftBySession?.[s.id];
+                            return dh && dh.trim() ? (
+                              <span className="draft-indicator" data-tooltip-id="md-tip" data-tooltip-content={`草稿: ${dh.slice(0, 40)}${dh.length > 40 ? "…" : ""}`} data-testid={`draft-${s.id}`}>
+                                <Pencil size={6} />
+                              </span>
+                            ) : null;
+                          })()}
                         </button>
                         <button className="session-menu-btn" onClick={(e) => openSessionMenu(e, s)}>
                           <MoreVertical size={13} />

@@ -214,6 +214,9 @@ input, textarea { font-family: inherit; }
 .session-dot.thinking { background: #ffd60a; }
 .session-dot.executing { background: var(--accent-2); }
 .session-dot.replying { background: var(--green); }
+/* 草稿指示(空闲 session 有未发文本时显示铅笔图标,与 perm-dot 同尺寸) */
+.draft-indicator { display: inline-flex; align-items: center; justify-content: center; width: 8px; height: 8px; border-radius: 50%; color: var(--accent-2); background: rgba(100, 210, 255, 0.16); }
+.draft-indicator svg { width: 5px; height: 5px; display: block; }
 .session-dot.error { background: var(--red); }
 /* ─── 右键菜单 ─── */
 .ctx-menu {
@@ -234,8 +237,14 @@ input, textarea { font-family: inherit; }
 .ctx-item:disabled:hover { background: none; color: var(--text-2); }
 
 /* ─── Main / Chat ─── */
-.main { width: 100%; height: 100%; min-width: 0; display: flex; background: var(--bg); }
-.chat-view { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.chat-view { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+
+/* Floating scroll-to-bottom FAB: 圆形按钮,粘附在 chat-view 右下角,仅当不在底部时可见。 */
+.scroll-bottom-btn { position: absolute; right: 28px; bottom: 16px; z-index: 14; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--sep-strong); background: var(--elev-2); color: var(--accent-2); box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4); cursor: pointer; transition: transform 0.15s ease, opacity 0.2s ease, background 0.15s; animation: fab-in 0.2s ease; }
+.scroll-bottom-btn:hover { background: var(--accent); color: #fff; transform: translateY(-1px); }
+.scroll-bottom-btn:active { transform: scale(0.94); }
+.scroll-bottom-btn svg { display: block; }
+@keyframes fab-in { from { opacity: 0; transform: translateY(8px) scale(0.9); } to { opacity: 1; transform: none; } }
 
 .chat-header {
   display: flex; align-items: center; justify-content: space-between;
