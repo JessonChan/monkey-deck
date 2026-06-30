@@ -237,26 +237,27 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         {props.status === "prompting" && items.length > 0 && (
           <div className="typing-indicator"><span /> <span /> <span /></div>
         )}
+        {/* Floating scroll-to-bottom FAB: sticky 粘在 chat-body 底部,不破坏 flex/overflow 滚动布局。 */}
+        {showScrollBtn && (
+          <div className="scroll-bottom-wrap">
+            <button
+              className="scroll-bottom-btn"
+              onClick={() => {
+                const el = scrollRef.current;
+                if (!el) return;
+                el.scrollTop = el.scrollHeight;
+                stickToBottomRef.current = true;
+                setShowScrollBtn(false);
+              }}
+              data-tooltip-id="md-tip"
+              data-tooltip-content="滚到最新消息"
+              data-testid="scroll-bottom-btn"
+            >
+              <ArrowDown size={16} />
+            </button>
+          </div>
+        )}
       </div>
-
-      {/* Floating scroll-to-bottom FAB: 放在 chat-view 层,不随 chat-body 内容滚动,始终固定在可视区右下角。 */}
-      {showScrollBtn && (
-        <button
-          className="scroll-bottom-btn"
-          onClick={() => {
-            const el = scrollRef.current;
-            if (!el) return;
-            el.scrollTop = el.scrollHeight;
-            stickToBottomRef.current = true;
-            setShowScrollBtn(false);
-          }}
-          data-tooltip-id="md-tip"
-          data-tooltip-content="滚到最新消息"
-          data-testid="scroll-bottom-btn"
-        >
-          <ArrowDown size={16} />
-        </button>
-      )}
       {props.error && <div className="error-bar">⚠ {props.error}</div>}
       {props.mergeResult && <div className={`merge-result ${props.mergeResult.startsWith("✅") ? "ok" : "fail"}`}>{props.mergeResult}</div>}
       <footer className="chat-footer">

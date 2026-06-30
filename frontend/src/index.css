@@ -237,10 +237,11 @@ input, textarea { font-family: inherit; }
 .ctx-item:disabled:hover { background: none; color: var(--text-2); }
 
 /* ─── Main / Chat ─── */
-.chat-view { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+.chat-view { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
-/* Floating scroll-to-bottom FAB: 圆形按钮,粘附在 chat-view 右下角,仅当不在底部时可见。 */
-.scroll-bottom-btn { position: absolute; right: 28px; bottom: 16px; z-index: 14; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--sep-strong); background: var(--elev-2); color: var(--accent-2); box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4); cursor: pointer; transition: transform 0.15s ease, opacity 0.2s ease, background 0.15s; animation: fab-in 0.2s ease; }
+/* Floating scroll-to-bottom FAB: sticky 粘在 chat-body 滚动容器底部,不破坏 flex/overflow 布局。 */
+.scroll-bottom-wrap { position: sticky; bottom: 16px; z-index: 14; display: flex; justify-content: flex-end; padding: 0 28px; pointer-events: none; }
+.scroll-bottom-btn { pointer-events: auto; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--sep-strong); background: var(--elev-2); color: var(--accent-2); box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4); cursor: pointer; transition: transform 0.15s ease, opacity 0.2s ease, background 0.15s; animation: fab-in 0.2s ease; }
 .scroll-bottom-btn:hover { background: var(--accent); color: #fff; transform: translateY(-1px); }
 .scroll-bottom-btn:active { transform: scale(0.94); }
 .scroll-bottom-btn svg { display: block; }
