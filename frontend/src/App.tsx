@@ -49,6 +49,9 @@ export default function App() {
   const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean } | null>(null);  // 新建对话弹窗
   const queueBySessionRef = useRef<Record<string, QueueItem[]>>({});
   const userStoppedRef = useRef(false);                    // 用户主动停止:抑制该次 idle 的 auto-continue
+  // status 派生值的 ref:sendMessage 闭包锁 status 导致「prompting 时仍直发 → 后端报 busy」,
+  // 用 ref 绕过 stale closure,读取最新的派生 status。
+  const statusRef = useRef<string>("empty");
 
   // 选中项目的 sessions(派生);sessionsByProject 是全量按项目分组,供侧栏多项目同时展开。
   const sessions = (selectedProjectId ? sessionsByProject[selectedProjectId] : undefined) ?? [];
@@ -176,6 +179,7 @@ export default function App() {
   );
   const usage = (selectedSessionId ? usageBySession[selectedSessionId] : undefined) ?? EMPTY_USAGE;
   const status = (selectedSessionId ? statusBySession[selectedSessionId] : undefined) ?? "empty";
+  useEffect(() => { statusRef.current = status; }, [status]);
   const statusDetail = (selectedSessionId ? statusDetailBySession[selectedSessionId] : undefined) ?? "";
   const permission = (selectedSessionId ? permissionBySession[selectedSessionId] : undefined) ?? null;
   // 侧栏状态指示用:哪些 session 正有待决权限。openSession 不再清权限(原 316 行会清掉 →
@@ -474,8 +478,18 @@ export default function App() {
         return { ...prev, [selectedSessionId]: [...cur, text] };
       });
       const attachments = mentions.map((m) => ({ path: m.path, name: m.name }));
-      if (status === "prompting") {
+      // 回合进行中(statusRef 防 stale closure):入队而非直发,避免后端 busy 报错。
+      // statusRef.current 始终反映最新 status,闭包锁的 status 可能在 re-render 前仍为旧值。
+      if (statusRef.current === "prompting") {
+        const item: QueueItem = { id: `q-${Date.now()}-${selectedSessionId}`, text, mentions };
+        queueBySessionRef.current = {
+          ...queueBySessionRef.current,
+          [selectedSessionId]: [...(queueBySessionRef.current[selectedSessionId] || []), item],
+        };
+        setQueueBySession(queueBySessionRef.current);
+        return;
       }
+      // idle 直发
       setError(null);
       setStatusBySession((prev) => ({ ...prev, [selectedSessionId]: "prompting" }));
       try {
@@ -485,9 +499,10 @@ export default function App() {
         setStatusBySession((prev) => ({ ...prev, [selectedSessionId]: "idle" }));
       }
     },
-    [selectedSessionId, status]
+    [selectedSessionId]
   );
 
+  // 回合结束 drainQueue 自动续发(见下方 effect);idle 直发,status 由 chat:status 事件驱动。
   const stopSession = useCallback(async () => {
     if (!selectedSessionId) return;
     userStoppedRef.current = true; // 抑制本次 idle 的 auto-continue(用户主动停,不自动续发;队列保留)
