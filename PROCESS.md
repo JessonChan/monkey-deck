@@ -46,9 +46,10 @@
 > 每次收工时刷新这一节,让人一眼看到「现在能跑吗、卡在哪、下一步是什么」。
 - **当前阶段**:阶段 1(多项目/多 session/历史恢复/用量)—— 基本完成,迭代打磨中
 - **当前焦点**:布局可调(三栏可拖拽分隔线)+ 源码管理 SCM 化(含审查 5 项修复)+ 会话标题修复 + 右侧文件管理面板(tab:文件/源代码管理)+ **AI 提交/AI 合并(SCM 结合 AI)** 均已完成;继续对话体验打磨(**输入框上下键翻历史 + @ 提及文件/文件夹(经 ACP ResourceLink 发送)**)
-- **最后更新**:2026-06-29(应用自更新:auto-update 改造 —— GitHub Releases 源 + 内置更新窗口 + 发布版后台静默检查 + 版本注入/发布工具链)
+- **最后更新**:2026-06-30(fix:session 永久卡死 —— in_progress tool 豁免静默超时 + 错误不拆连接 + slog 进 /dev/null;详见 §G / AGENTS.md §5.4 #16)
 - **可运行状态**:✅ 端到端可跑 —— Wails3 单进程 + opencode ACP 多 session 对话、历史恢复(LoadSession)、权限 UI、SQLite 本地落盘、token 用量统计、会话标题(opencode 经 session/list 权威标题 + 瞬时 fallback)、源代码管理 SCM(提交/暂存/丢弃/单文件 diff/并发守卫/**AI 提交/AI 合并**)、三栏可拖拽分隔线、**右侧文件浏览/管理(树+预览+增删改)**、**窗口尺寸/位置/最大化记忆(ui_state.json)**、**应用自更新(菜单「检查更新…」+ 发布版后台静默检查 + `release:darwin` 打包工具链)**。`go test ./internal/...` 通过、前端 `tsc` + `vite build` 通过。
 - **近期改动汇总**:
+  - **session 永久卡死修复**(2026-06-30):定位到**代码级、非 model** 根因 —— `runner.go` 静默超时对 in_progress tool 永久豁免,harness 死于 in_progress tool 中途时 turn 永久挂死、死 harness 变僵尸;且超时/断连错误不被 `IsPeerDisconnected` 识别 → 不拆连接;monkey-deck stderr→/dev/null 致无法诊断。修:① 绝对 turn 上限 `maxTurnAbsolute=15min`(纯函数 `shouldCancelTurn`);② `teardownLive` —— `runPrompt`/`SendAndWaitSync` 任何非用户取消的失败都拆连接;③ slog 重定向到 `<DataDir>/monkey-deck.log`。新增 4 个 `shouldCancelTurn` 用例;`go test ./internal/...` 全绿。详见 §G。
   - **应用自更新(auto-update 改造)**(2026-06-29):新增 `internal/update`(GitHub Releases 源 + `app.Updater.Init` + 后台静默检查 `StartBackgroundChecks` + 纯函数 `ShouldAutoCheck`);`main.go` 加 `currentVersion`(ldflags 注入)+ App 菜单「检查更新…」(保留默认编辑菜单)+ 发布版后台静默检查;`build/darwin/Taskfile.yml` 加 `VERSION`(git describe,去前导 v)注入 production ldflags;根 `Taskfile.yml` 加 `release:darwin`(打包 .app→zip→SHA256SUMS→打印 gh 发布命令)。详见 §G / §E。
   - **输入框:上下键翻历史 + @ 提及文件/文件夹**(2026-06-29):① 上下键翻当前 session 全部已发消息(无长度限制;按发送键即记进历史,含排队/被拒的;seed 自 DB `ListUserMessages` + 本会话发送追加;仅光标在首/末行且无菜单时触发);② `@` 触发当前 cwd 文件/文件夹选择器(复用 `SessionListDir`,支持 `/` 进子目录、键入过滤、↑↓ 选择);选中插入 `@相对路径` 文本 + 记录;发送时每个提及经 **ACP `ContentBlock::ResourceLink`(`file://` URI)** 发给 agent(协议 baseline,所有 agent 必须支持),文本照常作 `TextBlock` 发出。后端:`internal/acp` 加 `Attachment{Path,Name}` + `ChatSession.Prompt` 改签名加 `[]Attachment` + `buildPromptBlocks/fileURI`;`chatConn` 接口 + `SendMessage/InterruptAndSend/SendAndWaitSync/startTurn/runPrompt` 透传;store 加 `ListUserMessages`;`QueueItem` 携带 `mentions`。前端:Composer 重写(history 导航 + @autocomplete + mention chips),App `historyBySession` + `sendMessage(text,mentions)`。详见 §G。
   - **AI 提交 / AI 合并(SCM 结合 AI)**(2026-06-29):协议调研确认 ACP 无 sub-agent/委派原语(单连接单 agent,但可并发多 session);sub agent 是客户端层概念。用户拍板:**AI 提交 = 架构 A(复用当前 session 发 prompt,上下文最完整、最 ACP 纯)**;**AI 合并 = 确定性 merge + AI 生成合并 message(用 opencode 会话标题作 merge message subject)**。后端:`SessionAICommit`(复用 SendMessage)+ `mergeCommitMessage`(纯函数)+ `MergeBranch` 加 message(`--no-ff -m`);前端 GitPanel 加「✨ AI 提交」按钮。详见 §G / §E。
@@ -134,6 +135,17 @@
 ---
 
 ## G. 工作日志(追加,最新在上)
+
+### 2026-06-30(fix:session 永久卡死 —— in_progress tool 豁免静默超时 + 错误不拆连接 + slog 进 /dev/null)
+- **起因**:用户复盘「md/96d8364a、md/13e08a19 两个 session 为什么停了」。前两轮误判为 glm-5.1 不稳;用户否定后重查,定位到**代码级、非 model** 的根因(详见 AGENTS.md §5.4 #16)。
+- **根因(三条叠加)**:① `runner.go` 静默超时对 in_progress tool **永久豁免**;harness 死于某个 in_progress tool 中途时(tool 永不到终态),`Prompt` 永久阻塞 → `runPrompt` 清理段永不到 → session 永久 busy + 死 harness 变僵尸(实证:13e08a19 最后一条 DB 记录就是无终态的 tool_call;62875/68784 两个子 harness 双双 `<defunct>`)。② 即便超时真触发,SDK 把 `context.Canceled` 包成 `RequestError{code:-32800,"Request cancelled"}`,`IsPeerDisconnected` 只认 peer disconnected/broken pipe,匹配不上 → 旧逻辑不拆连接。③ monkey-deck stderr→/dev/null,关键 slog 全丢,导致无法事后诊断。
+- **改法**:
+  - `internal/acp/runner.go`:加绝对 turn 上限 `maxTurnAbsolute=15min`;抽纯函数 `shouldCancelTurn(start,now,silence,absolute)`——elapsed>absolute 一律取消(压过 in_progress 豁免);`timedOut` 拆出可注入版 `timedOutAt`;静默超时 goroutine 改用 `shouldCancelTurn`(区分 "absolute"/"idle")。
+  - `internal/chat/chat.go`:抽 `teardownLive(sessionID,ls)`(delete active + Close + reapIfIdle);`runPrompt`/`SendAndWaitSync` 的 error 分支**任何非用户取消的失败都拆连接**(不再只认 IsPeerDisconnected);用户取消(`turnCtx.Err()!=nil`)仍走干净 idle 不拆(§5.4 #13);错误提示统一人话「agent 连接已重置,下条消息将自动重连」(§4.4,不再抛裸 error);IsPeerDisconnected 保留只作 slog reason 标注。
+  - `main.go`:slog + 标准 log 重定向到 `<DataDir>/monkey-deck.log`(append,LevelInfo),告别 /dev/null。
+- **改了哪些文件**:`internal/acp/{runner.go, activity_test.go(+4 用例)}`、`internal/chat/chat.go`、`main.go`、`AGENTS.md`(§5.4 #16)、`PROCESS.md`(本节 + §B)。
+- **验证**:`go build .` + `go build ./internal/...` ✅;`go test ./internal/...`(8 packages)✅;`go vet ./internal/acp/ ./internal/chat/ .` ✅;gofmt 干净。新增 `TestShouldCancelTurnAbsoluteBeatsInProgress`(in_progress+超 absolute→"absolute",治本核心)/`...ExemptWithinAbsolute`(in_progress+未到 absolute→不取消,回归保护长 tool)/`...IdleNoTool`/`...RecentActive`。**未做实机验证**:待 `wails3 dev` 复现「harness 死于 in_progress tool 中途」→ 15min 后自动恢复 + `<DataDir>/monkey-deck.log` 落 `chat absolute turn timeout`。
+- **下一步/可改进**:① 实机验证;② 绝对上限 15min 对「真死 harness」偏长,可加进程退出监听(`cmd.Wait()` goroutine→立即 cancel turn)做即时检测;③ 历史 2 个卡死 session 需重启 monkey-deck 让新的 KillAllOpencode 清僵尸(或手动 `kill` 62875/68784 的残留)。
 
 ### 2026-06-29(feat:应用自更新 auto-update 改造 —— GitHub Releases + 内置更新窗口 + 版本注入/发布工具链)
 - **起因**:用户要求按 Wails3 自更新教程(https://v3.wails.io/pt/tutorials/04-self-update-a-wails-app/)为项目加自动化升级。
