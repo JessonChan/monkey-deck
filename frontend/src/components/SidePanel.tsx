@@ -9,7 +9,9 @@ interface Props {
   rootName: string;
   changes: FileChange[] | null;
   status: string;
-  // SCM(GitPanel)
+  // SCM(GitPanel):isGitProject=项目是否 git repo(对齐 orca / VS Code repo-kind 判定,跟 session 是否有独立 worktree 解耦);
+  // branch=当前分支名(供 GitPanel 展示用, GitPanel 不用于判定 SCM 可见性)。
+  isGitProject: boolean;
   branch: string;
   mergeResult: string | null;
   onMerge: () => void;
@@ -26,9 +28,9 @@ interface Props {
 type Tab = "files" | "scm";
 
 // 右侧面板:仿 VSCode 侧栏「文件 / 源代码管理」两个视图切换。
-// 非分支 session(git 项目未建 worktree / 非 git 项目)只显示「文件」。
+// isGitProject=true 时显示「源代码管理」tab,否则只有「文件」。
 export default function SidePanel(props: Props) {
-  const hasSCM = !!props.branch;
+  const hasSCM = props.isGitProject;
   const [tab, setTab] = useState<Tab>("files");
 
   // 切到无 SCM 的 session 时,若当前停在 scm tab 则回到 files。

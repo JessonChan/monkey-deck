@@ -23,6 +23,7 @@ const PAGE_SIZE = 30;
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [gitByProject, setGitByProject] = useState<Record<string, boolean>>({});
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [sessionsByProject, setSessionsByProject] = useState<Record<string, Session[]>>({});
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -63,6 +64,15 @@ export default function App() {
   const refreshProjects = useCallback(async () => {
     const list = await ChatService.ListProjects();
     setProjects(list || []);
+    // 加载项目级 isGit 信息供 SCM 可见性判定(对齐 orca / VS Code repo-kind 判定,
+    // 跟 session 是否有独立 worktree 解耦).每个项目探测一次,缓存到 gitByProject。
+    if (list && list.length > 0) {
+      const entries = await Promise.all(list.map(async (p) => {
+        try { return [p.id, await ChatService.IsGitProject(p.id)] as [string, boolean]; }
+        catch { return [p.id, false] as [string, boolean]; }
+      }));
+      setGitByProject(Object.fromEntries(entries));
+    }
   }, []);
 
   const refreshSessions = useCallback(async (projectId: string) => {
@@ -745,6 +755,7 @@ export default function App() {
             <SidePanel
               sessionId={selectedSessionId}
               rootName={selectedProject?.name || ""}
+              isGitProject={gitByProject[selectedProject?.id ?? ""] ?? false}
               changes={sessionChanges}
               status={status}
               branch={activeSession.branch || ""}
