@@ -8,11 +8,12 @@ interface Props {
   onCancel: () => void;
 }
 
-// 新建对话弹窗:让用户选择 1) 使用的 agent harness(opencode/mino/omp)2) 是否新建独立分支(worktree)。
+// 新建对话弹窗:让用户选择 1) 使用的 agent harness(omp/opencode)2) 是否新建独立分支(worktree)。
 // harness 决定 spawn 哪个 ACP agent;worktree 决定是否为该会话建独立 git 工作树(并行隔离,§1.4)。
+// 默认 harness=omp(列表首项)、默认不建 worktree(直接用项目目录)。
 export default function NewSessionModal({ harnesses, isGit, onConfirm, onCancel }: Props) {
-  const [harness, setHarness] = useState(harnesses[0]?.id || "opencode");
-  const [useWorktree, setUseWorktree] = useState(true);
+  const [harness, setHarness] = useState(harnesses[0]?.id || "omp");
+  const [useWorktree, setUseWorktree] = useState(false);
 
   // Esc 关闭(§4.2)。
   useEffect(() => {

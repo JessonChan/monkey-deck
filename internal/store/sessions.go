@@ -21,10 +21,10 @@ func scanSession(r interface {
 
 // --- Sessions ---
 
-// CreateSession 新建 session(钉在 project 上)。model 为空用项目默认;harness 为空用 opencode。
+// CreateSession 新建 session(钉在 project 上)。model 为空用项目默认;harness 为空用默认 harness(omp)。
 func (s *Store) CreateSession(ctx context.Context, projectID, title, model, harnessv string) (*Session, error) {
 	if harnessv == "" {
-		harnessv = "opencode"
+		harnessv = "omp"
 	}
 	sess := &Session{
 		ID:        uuid.NewString(),

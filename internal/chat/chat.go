@@ -320,7 +320,7 @@ func (s *ChatService) ListSessions(projectID string) ([]store.Session, error) {
 	return s.st.ListSessions(s.ctx, projectID)
 }
 
-// CreateSession 新建 session。harness 指定使用的 agent(opencode/mino/omp,空=opencode);
+// CreateSession 新建 session。harness 指定使用的 agent(omp/opencode,空=omp 默认);
 // useWorktree=true 时为 git 项目建独立 worktree+分支(并行隔离),否则直接用项目目录(§1.4)。
 func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorktree bool) (*store.Session, error) {
 	proj, err := s.st.GetProject(s.ctx, projectID)

@@ -49,7 +49,7 @@ type Session struct {
 	ACPSession string `json:"acpSession"`
 	Title      string `json:"title"`
 	Model      string `json:"model"`
-	Harness    string `json:"harness"` // 使用的 harness(opencode/mino/omp),新建会话时选择
+	Harness    string `json:"harness"` // 使用的 harness(omp/opencode),新建会话时选择
 	// session 的 git worktree(并行隔离用,§1.4)。空 = 非 git 项目或未建,直接用项目目录。
 	WorktreePath string `json:"worktreePath"`
 	Branch       string `json:"branch"`
