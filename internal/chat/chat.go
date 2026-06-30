@@ -133,6 +133,12 @@ type ChatService struct {
 
 	mu     sync.RWMutex
 	active map[string]*liveSession // db sessionID → live
+
+	// 测试钩子(nil = 生产路径,见 emit/persistTurn):emitHook 捕获 emit 事件序列、
+	// persistHook 在 persistTurn 入口阻塞。仅单测注入,用于确定性复现 runPrompt
+	// 收尾与并发 send 的竞态(§5.4 覆盖竞态)。
+	emitHook    func(name string, data any)
+	persistHook func()
 }
 
 // NewChatService 构造(尚未启动;ServiceStartup 时 open store)。
@@ -189,6 +195,10 @@ func (s *ChatService) ToggleMaximise() {
 
 // emit 经 Wails3 event 推前端(§4.3)。
 func (s *ChatService) emit(name string, data any) {
+	if s.emitHook != nil {
+		s.emitHook(name, data) // 测试钩子:捕获事件序列(生产 nil,走 Wails3 event)
+		return
+	}
 	app := application.Get()
 	if app == nil {
 		return
@@ -868,19 +878,43 @@ func (s *ChatService) InterruptAndSend(sessionID, text string, attachments []acp
 	if ls == nil {
 		return fmt.Errorf("session not active: %s", sessionID)
 	}
+	// busy 时需 cancel 旧 turn 并等其完全落定(含 emit)再发新消息。等待期间必须释放
+	// sendMu —— 旧 turn 收尾段也持 sendMu(见 runPrompt),持锁死等 turnDone 会死锁。
+	// 故:释放→cancel→等落定→重拿 sendMu 发新消息。!busy 时直接发(sendMu 已保证旧
+	// emit 落定:runPrompt 在 sendMu 内清 busy,故拿到 sendMu 且 busy=false ⇒ 收尾已结束、
+	// emit 已发,不会与新 prompting 竞态)。
+	ls.sendMu.Lock()
+	if !ls.busy {
+		defer ls.sendMu.Unlock()
+		return s.startTurn(ls, sessionID, text, attachments)
+	}
+	ls.mu.Lock()
+	ls.suppressIdle = true
+	tc := ls.turnCancel
+	done := ls.turnDone
+	ls.mu.Unlock()
+	ls.sendMu.Unlock()
+
+	if tc != nil {
+		tc()
+	}
+	if done != nil {
+		<-done
+	}
+
+	// 重新拿 sendMu 发新消息:旧 turn 已落定。若旧 turn 失败已 teardown(active 无此
+	// session),重连拿新 ls(§5.4 #16,LoadSession resume)。
 	ls.sendMu.Lock()
 	defer ls.sendMu.Unlock()
-	if ls.busy {
-		ls.mu.Lock()
-		ls.suppressIdle = true
-		tc := ls.turnCancel
-		done := ls.turnDone
-		ls.mu.Unlock()
-		if tc != nil {
-			tc()
+	if !s.isActive(sessionID) {
+		if err := s.ensureLive(sessionID); err != nil {
+			return err
 		}
-		if done != nil {
-			<-done
+		s.mu.RLock()
+		ls = s.active[sessionID]
+		s.mu.RUnlock()
+		if ls == nil {
+			return fmt.Errorf("session not active: %s", sessionID)
 		}
 	}
 	return s.startTurn(ls, sessionID, text, attachments)
@@ -966,6 +1000,11 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 
 	stopReason, err := ls.chat.Prompt(turnCtx, text, attachments, 300*time.Second)
 
+	// 收尾段持 sendMu:与 startTurn/SendMessage 互斥,杜绝「busy 已清、emit 未发」窗口被
+	// 并发 send 抢占 → 旧 emit 延迟覆盖新 prompting(§5.4 覆盖竞态)。defer 早于 close(done)
+	// (LIFO)执行 —— InterruptAndSend 等 turnDone 时 sendMu 已释放,不会死锁。
+	ls.sendMu.Lock()
+	defer ls.sendMu.Unlock()
 	ls.mu.Lock()
 	// flush 当前段残留到 segments(thought / agent 分别 flush,顺序保持时序)。
 	if ls.thought.Len() > 0 {
@@ -1020,6 +1059,9 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 // 多 tool call 交替时一轮有多个 thought/agent 段,逐段独立写入(而非合并),
 // 历史 reload 时段与实时流式一一对应。
 func (s *ChatService) persistTurn(sessionID string, segments []segEntry, tools []*toolAccum) {
+	if s.persistHook != nil {
+		s.persistHook() // 测试钩子:在此阻塞放大收尾窗口(生产 nil,直通)
+	}
 	for _, seg := range segments {
 		if strings.TrimSpace(seg.content) == "" {
 			continue
