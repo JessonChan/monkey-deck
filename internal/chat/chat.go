@@ -100,6 +100,7 @@ type liveSession struct {
 	// busy 在 sendMu 保护下同步置位,杜绝两轮 Prompt 重叠(治本并发隐患)。
 	sendMu       sync.Mutex
 	busy         bool               // 本轮 Prompt 进行中
+	lastActivity int64              // 最后活动时间(unix milli);startLive 初始化、turn 结束时更新。idle reaper 据此判定关闭。
 	turnCancel   context.CancelFunc // 取消本轮 Prompt(干净 session/cancel,非杀进程)
 	turnDone     chan struct{}      // 本轮 runPrompt 返回时关闭(供 InterruptAndSend 等待其落定)
 	suppressIdle bool               // InterruptAndSend 置位:本轮结束不发 idle(打断后由新轮发 prompting,避免触发前端 auto-continue 误续发)
@@ -142,11 +143,11 @@ type ChatService struct {
 	active  map[string]*liveSession // db sessionID → live
 	spawnMu sync.Mutex              // 串行化 ensureLive 的 spawn 段,杜绝 warm 与首条消息并发双 spawn
 
-	// harness config 缓存:key = harness|project。首次冷缓存时预热 spawn(maybeWarmSession,
-	// keep alive)拿到 agent 自报的 model/mode/effort 列表并缓存;同项目后续会话直接用缓存
-	// 即时展示 model 下拉、免 spawn。活跃 session 的 live configOptions 是真相,覆盖缓存。
-	cfgCache   map[string][]acp.ConfigOption
-	cfgProbing map[string]bool // 预热中标记,防同 key 重复 spawn
+	// idle reaper:超 idleTimeout 未活动且非 busy 的 session 自动 CloseSession,释放资源(B 方案)。
+	// ServiceStartup 起 goroutine,ServiceShutdown 优雅停。测试注入短 timeout。
+	idleTimeout time.Duration
+	reaperStop  chan struct{}
+	reaperDone  chan struct{}
 
 	// 测试钩子(nil = 生产路径,见 emit/persistTurn):emitHook 捕获 emit 事件序列、
 	// persistHook 在 persistTurn 入口阻塞。仅单测注入,用于确定性复现 runPrompt
@@ -157,7 +158,7 @@ type ChatService struct {
 
 // NewChatService 构造(尚未启动;ServiceStartup 时 open store)。
 func NewChatService(cfg *config.Config) *ChatService {
-	return &ChatService{cfg: cfg, active: map[string]*liveSession{}, cfgCache: map[string][]acp.ConfigOption{}, cfgProbing: map[string]bool{}}
+	return &ChatService{cfg: cfg, active: map[string]*liveSession{}, idleTimeout: 5 * time.Minute}
 }
 
 // ServiceStartup Wails3 启动钩子:建数据目录 + open store。
@@ -174,12 +175,18 @@ func (s *ChatService) ServiceStartup(ctx context.Context, options application.Se
 	s.loadPersistedConfig()
 	acp.SetPgidFile(filepath.Join(s.cfg.DataDir, "opencode-pgids.json")) // §3.2:限定 KillAll 范围到本应用残留
 	acp.KillAllOpencode()                                                // 启动时清上轮残留 opencode(§3.2)
+	s.startIdleReaper()                                                  // B 方案:idle reaper 回收空闲 harness
 	slog.Info("chat service started", "dataDir", s.cfg.DataDir)
 	return nil
 }
 
-// ServiceShutdown Wails3 关闭钩子:关所有活跃 session + store。
+// ServiceShutdown Wails3 关闭钩子:停 idle reaper + 关所有活跃 session + store。
 func (s *ChatService) ServiceShutdown() error {
+	// 先停 idle reaper,避免它与关 session 竞争。
+	if s.reaperStop != nil {
+		close(s.reaperStop)
+		<-s.reaperDone
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, ls := range s.active {
@@ -364,11 +371,8 @@ func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorkt
 			se.WorktreePath, se.Branch = wtPath, branch
 		}
 	}
-	// 首条消息前即展示 model selector:缓存热 → 推 model-only 下拉、首条消息再 lazy spawn;
-	// 缓存冷 → 预热 spawn(keep alive)拿到 configOptions 后缓存 + 推送(首条消息复用连接)。
-	if !s.emitSessionConfig(se) {
-		s.maybeWarmSession(se)
-	}
+	// B 方案:不在创建时 spawn。用户切到该 session 时 App.tsx 的 openSession 回调调
+	// OpenSession → 异步 ensureLive → spawn + 推 config_option。「没切过去就不 spawn」。
 	return se, nil
 }
 
@@ -727,7 +731,10 @@ func (s *ChatService) SessionRenamePath(sessionID, rel, newName string) (string,
 	return fsview.RenamePath(root, rel, newName)
 }
 
-// OpenSession 打开已有 session:有 acp_session_id 则 LoadSession 恢复,否则新建 ACP session(§1.4)。
+// OpenSession 打开已有 session:B 方案,异步 spawn harness(NewSession/LoadSession),
+// 完成后通过 event 推完整 config_option(model/mode/effort)+ started。
+// 立即返回(不阻塞前端加载历史,历史从 DB 读,独立于 harness)。ensureLive 的 spawnMu
+// 串行化保证用户在 spawn 完成前发消息不会双 spawn。
 func (s *ChatService) OpenSession(sessionID string) error {
 	if s.isActive(sessionID) {
 		return nil // 已活跃
@@ -739,11 +746,11 @@ func (s *ChatService) OpenSession(sessionID string) error {
 	if se == nil {
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
-	// 首条消息前展示 model selector:缓存热 → 推 model-only 下拉(lazy);缓存冷 → 预热 spawn
-	// (keep alive)拿到 configOptions 后缓存 + 推送。best-effort,不阻塞。
-	if !s.emitSessionConfig(se) {
-		s.maybeWarmSession(se)
-	}
+	go func() {
+		if err := s.ensureLive(sessionID); err != nil {
+			slog.Warn("open session spawn failed", "session", sessionID, "err", err)
+		}
+	}()
 	return nil
 }
 
@@ -809,7 +816,7 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 		cwd = se.WorktreePath // 每个 session 独占 worktree(并行隔离)
 	}
 
-	ls := &liveSession{proj: proj, tools: map[string]*toolAccum{}}
+	ls := &liveSession{proj: proj, tools: map[string]*toolAccum{}, lastActivity: time.Now().UnixMilli()}
 	onEvent := func(e acp.SessionEvent) {
 		s.handleEvent(ls, se.ID, e)
 	}
@@ -855,21 +862,31 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 }
 
 // CloseSession 关闭活跃 ACP session(保留 db 记录,可再次 Open)。
+// busy(turn 进行中)时拒绝:idle reaper 跳过、用户需先 Stop。避免杀掉正在输出的 turn。
 func (s *ChatService) CloseSession(sessionID string) error {
 	s.mu.Lock()
 	ls, ok := s.active[sessionID]
-	if ok {
-		delete(s.active, sessionID)
-	}
-	s.mu.Unlock()
 	if !ok {
+		s.mu.Unlock()
 		return nil
 	}
+	ls.mu.Lock()
+	busy := ls.busy
+	ls.mu.Unlock()
+	if busy {
+		s.mu.Unlock()
+		return errSessionBusy
+	}
+	delete(s.active, sessionID)
+	s.mu.Unlock()
 	ls.chat.Close()
 	s.reapIfIdle()
 	s.emitStatus(sessionID, "closed", "")
 	return nil
 }
+
+// errSessionBusy turn 进行中关闭/操作时返回(idle reaper 静默跳过,用户需先停)。
+var errSessionBusy = errors.New("对话进行中,请等回合结束再关闭")
 
 // reapIfIdle 仅当无活跃 session 时 reap 逃逸 opencode(多 session 并发安全,§3.2)。
 func (s *ChatService) reapIfIdle() {
@@ -878,6 +895,63 @@ func (s *ChatService) reapIfIdle() {
 	s.mu.RUnlock()
 	if n == 0 {
 		acp.ReapStrayOpencode()
+	}
+}
+
+// startIdleReaper 启动 idle reaper 后台 goroutine:周期扫描活跃 session,
+// 超 idleTimeout 未活动且非 busy 的自动 CloseSession,释放 harness 资源(B 方案)。
+// ServiceShutdown 经 reaperStop 优雅停。busy 双重检查(reaper 收集 + CloseSession)防误杀 turn。
+func (s *ChatService) startIdleReaper() {
+	s.reaperStop = make(chan struct{})
+	s.reaperDone = make(chan struct{})
+	go s.idleReaper()
+}
+
+// idleReaper 后台循环。扫描间隔 = idleTimeout/5(生产 5min→1min,测试可注入短 timeout 加速),
+// 上限 1 分钟(防 idleTimeout 设超大时扫太频繁)。无下限:测试用 100ms→20ms 即可快速回收。
+func (s *ChatService) idleReaper() {
+	defer close(s.reaperDone)
+	interval := s.idleTimeout / 5
+	if interval > time.Minute {
+		interval = time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.reaperStop:
+			return
+		case <-ticker.C:
+			s.closeIdle()
+		}
+	}
+}
+
+// closeIdle 收集超 idleTimeout 且非 busy 的 session,释放 RLock 后逐个 CloseSession
+//(自身拿 Lock,与 reaper 的 RLock 不重叠,无死锁)。busy 的跳过(进行中 turn 不杀)。
+func (s *ChatService) closeIdle() {
+	var toClose []string
+	now := time.Now().UnixMilli()
+	limit := s.idleTimeout.Milliseconds()
+	s.mu.RLock()
+	for id, ls := range s.active {
+		ls.mu.Lock()
+		busy := ls.busy
+		act := ls.lastActivity
+		ls.mu.Unlock()
+		if busy {
+			continue
+		}
+		if now-act > limit {
+			toClose = append(toClose, id)
+		}
+	}
+	s.mu.RUnlock()
+	for _, id := range toClose {
+		slog.Info("session idle timeout, closing", "session", id)
+		if err := s.CloseSession(id); err != nil {
+			slog.Debug("idle close skipped", "session", id, "err", err)
+		}
 	}
 }
 
@@ -1125,6 +1199,7 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 	ls.suppressIdle = false
 	// emit 前清 busy:保证前端收到 idle 时 busy 已 false,drain→SendMessage 不会撞上 stale busy。
 	ls.busy = false
+	ls.lastActivity = time.Now().UnixMilli() // turn 结束(含取消/失败),重置 idle 计时
 	ls.turnCancel = nil
 	ls.turnDone = nil
 	ls.mu.Unlock()
@@ -1292,170 +1367,31 @@ func (s *ChatService) StopSession(sessionID string) error {
 	return nil
 }
 
-// configCacheKey 是 cfgCache 的 key:harness + project。同一项目同 harness 的 model 列表
-// 只探测一次缓存(model 列表是 harness 全局属性,不随 session 变)。
-func configCacheKey(harnessID, projectID string) string {
-	return harnessID + "|" + projectID
-}
-
-// buildSessionConfig 为「未活跃 session」构造 config options:从缓存取 model 选项,
-// currentValue 设为 session 的 model(DB 真相,首条消息 NewSession 时钉死)。
-// 只返回 model 项 —— mode/effort 是运行时热切项,首条消息前不展示(避免「改了不生效」的假交互);
-// session 活跃后由 startLive 推送完整 live configOptions 覆盖。
-//
-// 两层兜底(真相来源 = DB 的 session.Model):
-//   - 缓存热 → 用 agent 自报完整 model 列表,currentValue 覆盖为 se.Model(用户之前选的);
-//   - 缓存冷 + se.Model 非空 → 构造单选项静态占位(currentValue = se.Model,DB 值),
-//     ModelSelect 展示为灰色只读输入框(不可选,仅作信息展示)。maybeWarmSession 预热完成后
-//     emitCachedConfigForProject 会用完整列表替换,前端切为标准下拉。
-func (s *ChatService) buildSessionConfig(se *store.Session) []acp.ConfigOption {
-	s.mu.RLock()
-	cached := s.cfgCache[configCacheKey(se.Harness, se.ProjectID)]
-	s.mu.RUnlock()
-	for _, o := range cached {
-		if o.Category == "model" {
-			out := o // 拷贝结构体(Options 切片只读不改,共享底层数组无妨)
-			out.CurrentValue = se.Model
-			return []acp.ConfigOption{out}
-		}
-	}
-	if se.Model == "" {
-		return nil // 没有任何已知 model,不构造占位(避免误导)
-	}
-	// 缓存冷:DB 值为唯一真相,推单选项静态占位。前端据此展示灰色只读输入框,
-	// 表明「model 已知,完整列表待 warm 完成」。
-	return []acp.ConfigOption{{
-		ID:           "model",
-		Name:         "Model",
-		Category:     "model",
-		CurrentValue: se.Model,
-		Options: []acp.ConfigOptionEntry{{
-			Value: se.Model,
-			Name:  se.Model,
-		}},
-	}}
-}
-
-// emitSessionConfig 给某 session 推 config_option(缓存就绪时)。活跃 session 跳过 ——
-// 其 live configOptions 是真相。返回是否推送了。
-func (s *ChatService) emitSessionConfig(se *store.Session) bool {
-	if s.isActive(se.ID) {
-		return false
-	}
-	opts := s.buildSessionConfig(se)
-	if len(opts) == 0 {
-		return false
-	}
-	s.emit(EventUpdate, acp.SessionEvent{SessionID: se.ID, Kind: "config_option", ConfigOptions: opts})
-	return true
-}
-
-// maybeWarmSession 为该 session 就地预热(冷缓存时 eager spawn,keep alive 拿到 configOptions
-// 立即可见;首条消息复用连接,免再 spawn)。幂等:已缓存或预热中则跳过。best-effort:
-// 失败只告警,降级为首条消息的 ensureLive 兜底,不阻塞会话创建。
-//
-// 复用 ensureLive(spawn 段持 spawnMu,与首条消息的 spawn 互斥,杜绝双 spawn)。
-// startLive 成功后:已 emit config_option(完整 live list)+ 推 "started" + 注册 active;
-// 此处再把 model 列表缓存,供同项目后续 session 即时展示、免 spawn。
-func (s *ChatService) maybeWarmSession(se *store.Session) {
-	key := configCacheKey(se.Harness, se.ProjectID)
-	s.mu.Lock()
-	if len(s.cfgCache[key]) > 0 || s.cfgProbing[key] {
-		s.mu.Unlock()
-		return
-	}
-	s.cfgProbing[key] = true
-	s.mu.Unlock()
-	go func() {
-		defer func() {
-			s.mu.Lock()
-			delete(s.cfgProbing, key)
-			s.mu.Unlock()
-		}()
-		if err := s.ensureLive(se.ID); err != nil {
-			slog.Warn("warm session spawn failed", "session", se.ID, "err", err)
-			return
-		}
-		s.mu.RLock()
-		ls := s.active[se.ID]
-		s.mu.RUnlock()
-		if ls == nil {
-			return
-		}
-		if opts := ls.chat.FlatConfigOptions(); len(opts) > 0 {
-			s.mu.Lock()
-			s.cfgCache[key] = opts
-			s.mu.Unlock()
-			s.emitCachedConfigForProject(se.Harness, se.ProjectID)
-		}
-	}()
-}
-
-// emitCachedConfigForProject 给某项目所有同 harness 的未活跃 session 推送缓存里的 model 下拉
-// (探测完成后调用,让一批「未发首条消息」的会话都能看到 model selector)。
-func (s *ChatService) emitCachedConfigForProject(harnessID, projectID string) {
-	sessions, err := s.st.ListSessions(s.ctx, projectID)
-	if err != nil {
-		return
-	}
-	for i := range sessions {
-		se := sessions[i]
-		if se.Harness != harnessID {
-			continue
-		}
-		s.emitSessionConfig(&se)
-	}
-}
-
 // GetSessionConfigOptions 返回当前 session 的 config options(给前端渲染下拉:model/mode/effort)。
-// 活跃时取 live 真相;未活跃时取缓存里的 model 项(currentValue = session.Model),让首条消息前
-// 也能展示 model selector(前端主要靠 config_option 事件,此方法为完整性保留)。
+// B 方案:OpenSession 即异步 spawn,session 始终活跃 → 直接取 live 真相。
 func (s *ChatService) GetSessionConfigOptions(sessionID string) ([]acp.ConfigOption, error) {
 	s.mu.RLock()
 	ls, ok := s.active[sessionID]
 	s.mu.RUnlock()
-	if ok {
-		return ls.chat.FlatConfigOptions(), nil
+	if !ok {
+		return nil, fmt.Errorf("session not active: %s", sessionID)
 	}
-	se, err := s.st.GetSession(s.ctx, sessionID)
-	if err != nil || se == nil {
-		return nil, err
-	}
-	return s.buildSessionConfig(se), nil
+	return ls.chat.FlatConfigOptions(), nil
 }
 
-// SetSessionConfigOption 切换 session 的某个 config option。
-//   - 活跃:harness 热切(session/set_config_option),即时生效,推送 live configOptions。
-//   - 未活跃(首条消息前):model 写 DB(创建时钉死 model,首条消息 ensureLive 用最新 se.Model
-//     写 opencode.json,§3.5/§5.4 #3),再推送缓存里的 model 项(新 currentValue)。不 spawn
-//     harness(避免空闲断连 §5.4 #9)。mode/effort 是运行时热切项,未活跃时忽略(下拉也不展示)。
+// SetSessionConfigOption 切换 session 的某个 config option(model/mode/effort),热切、即时生效。
+// B 方案:session 始终活跃,经 session/set_config_option 热切并推送 live configOptions。
 func (s *ChatService) SetSessionConfigOption(sessionID, configId, value string) error {
 	s.mu.RLock()
 	ls := s.active[sessionID]
 	s.mu.RUnlock()
-	if ls != nil {
-		if err := ls.chat.SetConfigOption(s.ctx, configId, value); err != nil {
-			return err
-		}
-		s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "config_option", ConfigOptions: ls.chat.FlatConfigOptions()})
-		return nil
+	if ls == nil {
+		return fmt.Errorf("session not active: %s", sessionID)
 	}
-	// 未活跃:只处理 model(写 DB,首条消息生效);mode/effort 运行时项忽略。
-	if configId != "model" {
-		return nil
-	}
-	se, err := s.st.GetSession(s.ctx, sessionID)
-	if err != nil {
+	if err := ls.chat.SetConfigOption(s.ctx, configId, value); err != nil {
 		return err
 	}
-	if se == nil {
-		return fmt.Errorf("session not found: %s", sessionID)
-	}
-	if err := s.st.UpdateSessionModel(s.ctx, sessionID, value); err != nil {
-		return err
-	}
-	se.Model = value
-	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "config_option", ConfigOptions: s.buildSessionConfig(se)})
+	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "config_option", ConfigOptions: ls.chat.FlatConfigOptions()})
 	return nil
 }
 
