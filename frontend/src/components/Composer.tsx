@@ -395,7 +395,12 @@ export default function Composer({ value, onChange, disabled, prompting, configO
 // ModelSelect 渲染 configOptions 里的 model/effort/mode 下拉(发送按钮左侧)。
 // model 按 value 的 provider 前缀("provider/model")分组(optgroup);
 // effort(thought_level)/mode 条件出现 —— agent 没报就不显示(如 GLM-4.6/5.1 无 effort)。
-// 未 active(harness 未启)时 configOptions 为空 → 不渲染(session.Model 仍在 header 静态显示)。
+//
+// 两种形态,由 modelOpt 数据结构驱动(后端 buildSessionConfig 决定):
+//   - 多选项(缓存热时使用 agent 自报的完整 model 列表) → 标准下拉,用户可切换;
+//   - 单选项(缓存冷时后端兜底为 session.Model 的伪 ConfigOption) → 灰色只读输入框,表示「不可切换」。
+//     等 maybeWarmSession 预热完成,后端会 emit 完整列表替换,下拉自动恢复可切。
+// session 完全无 configOption 时不渲染(session.Model 仍在 header 静态显示)。
 function ModelSelect({ configOptions, disabled, onSetConfig }: {
   configOptions: ConfigOption[];
   disabled: boolean;
@@ -404,6 +409,9 @@ function ModelSelect({ configOptions, disabled, onSetConfig }: {
   const modelOpt = configOptions.find((c) => c.category === "model");
   const effortOpt = configOptions.find((c) => c.category === "thought_level");
   const modeOpt = configOptions.find((c) => c.category === "mode");
+  // 双模态判断:后端缓存冷时只推单选项(DB model 兜底),缓存热时推完整列表(≥2 项)。
+  // 单选项 → 渲染灰色只读输入框(model 不可切换,仅信息展示);多选项 → 标准下拉。
+  const isStaticFallback = modelOpt ? modelOpt.options.length <= 1 : false;
   // model 按 provider 分组:value 形如 "zai/glm-4.6",取 "/" 前缀。
   const groups = useMemo(() => {
     const g: Record<string, { value: string; name: string }[]> = {};
@@ -416,23 +424,32 @@ function ModelSelect({ configOptions, disabled, onSetConfig }: {
   if (!modelOpt) return null;
   return (
     <div className="cfg-group">
-      <select
-        className="cfg-select"
-        value={modelOpt.currentValue}
-        disabled={disabled}
-        onChange={(e) => onSetConfig("model", e.target.value)}
-        title="选择模型"
-      >
-        {Object.entries(groups).map(([prov, opts]) => (
-          <optgroup key={prov} label={prov}>
-            {opts.map((o) => (
-              <option key={o.value} value={o.value}>{o.name}</option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
-      {modeOpt && (
+      {isStaticFallback ? (
+        <input
+          className="cfg-select cfg-static"
+          type="text"
+          value={modelOpt.currentValue}
+          disabled
+          readOnly
+          title="当前会话模型(开启对话后可切换)"
+        />
+      ) : (
         <select
+          className="cfg-select"
+          value={modelOpt.currentValue}
+          disabled={disabled}
+          onChange={(e) => onSetConfig("model", e.target.value)}
+          title="选择模型"
+        >
+          {Object.entries(groups).map(([prov, opts]) => (
+            <optgroup key={prov} label={prov}>
+              {opts.map((o) => (
+                <option key={o.value} value={o.value}>{o.name}</option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      )}
           className="cfg-select"
           value={modeOpt.currentValue}
           disabled={disabled}
