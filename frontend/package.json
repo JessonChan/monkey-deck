@@ -10,7 +10,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@radix-ui/react-popover": "^1.1.17",
     "@wailsio/runtime": "latest",
+    "cmdk": "^1.1.1",
     "lucide-react": "^1.21.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

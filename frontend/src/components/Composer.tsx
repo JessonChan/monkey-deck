@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import * as Popover from "@radix-ui/react-popover";
+import { Command } from "cmdk";
 import type { ConfigOption } from "../types";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import type { Mention } from "../types";
-import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, Search } from "lucide-react";
+import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown } from "lucide-react";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -392,10 +394,8 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   );
 }
 // ModelSelect 渲染 configOptions 里的 model/effort/mode 控件(发送按钮左侧)。
-// 用自定义 popover 替代原生 <select>:
-// - 触发器(当前选中名 + chevron)
-// - 弹层含搜索框(模型选项多时有用)+ 分组列表 + max-height 滚动
-// - 键盘导航(↑/↓ 移动 / Enter 选择 / Esc 关闭),与 slash-popover 风格对齐
+// 用 cmdk(Command) + @radix-ui/react-popover:Radix 管开合/定位/焦点/ARIA,cmdk 管搜索/分组/键盘导航。
+// model 按 value 的 provider 前缀("provider/model")分组;大量选项时 cmdk 内置搜索 + List 滚动。
 function ModelSelect({ configOptions, disabled, onSetConfig }: {
   configOptions: ConfigOption[];
   disabled: boolean;
@@ -405,223 +405,100 @@ function ModelSelect({ configOptions, disabled, onSetConfig }: {
   const effortOpt = configOptions.find((c) => c.category === "thought_level");
   const modeOpt = configOptions.find((c) => c.category === "mode");
   if (!modelOpt) return null;
-
   return (
     <div className="cfg-group">
-      <ConfigPopover
-        label="模型"
-        currentValue={modelOpt.currentValue}
-        options={modelOpt.options.map((o) => ({ value: o.value, name: o.name, provider: o.value.split("/")[0] || "other" }))}
-        disabled={disabled}
-        showSearch
-        onSelect={(v) => onSetConfig("model", v)}
-        groupBy="provider"
-      />
-      {modeOpt && (
-        <ConfigPopover
-          label="模式"
-          currentValue={modeOpt.currentValue}
-          options={modeOpt.options.map((o) => ({ value: o.value, name: o.name }))}
-          disabled={disabled}
-          onSelect={(v) => onSetConfig("mode", v)}
-        />
-      )}
-      {effortOpt && (
-        <ConfigPopover
-          label="思考"
-          currentValue={effortOpt.currentValue}
-          options={effortOpt.options.map((o) => ({ value: o.value, name: o.name }))}
-          disabled={disabled}
-          onSelect={(v) => onSetConfig("effort", v)}
-        />
-      )}
+      <ConfigSelect label="模型" currentValue={modelOpt.currentValue} options={modelOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("model", v)} groupByProvider searchable />
+      {modeOpt && <ConfigSelect label="模式" currentValue={modeOpt.currentValue} options={modeOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("mode", v)} />}
+      {effortOpt && <ConfigSelect label="思考" currentValue={effortOpt.currentValue} options={effortOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("effort", v)} />}
     </div>
   );
 }
 
-interface PopoverOption {
-  value: string;
-  name: string;
-  provider?: string;
-}
-
-interface ConfigPopoverProps {
+// 单个配置选择器:Radix Popover 触发器(当前值 + chevron) + cmdk 可搜索列表。
+// Radix 负责 open/close、点外部关闭、Esc、焦点陷阱、Portal 定位;cmdk 负责搜索/分组/↑↓键盘导航/选中。
+interface ConfigSelectProps {
   label: string;
   currentValue: string;
-  options: PopoverOption[];
+  options: { value: string; name: string }[];
   disabled: boolean;
-  showSearch?: boolean;
-  groupBy?: "provider";
   onSelect: (value: string) => void;
+  groupByProvider?: boolean;
+  searchable?: boolean;
 }
 
-function ConfigPopover({ label, currentValue, options, disabled, showSearch, groupBy, onSelect }: ConfigPopoverProps) {
+function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupByProvider, searchable }: ConfigSelectProps) {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [activeIdx, setActiveIdx] = useState(0);
-  const ref = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const currentName = options.find((o) => o.value === currentValue)?.name ?? currentValue ?? label;
 
-  const current = options.find((o) => o.value === currentValue);
-  const triggerText = current?.name ?? currentValue ?? label;
-
-  const filtered = useMemo(() => {
-    const all = options;
-    if (!query.trim()) return all;
-    const q = query.toLowerCase();
-    return all.filter((o) => o.name.toLowerCase().includes(q) || o.value.toLowerCase().includes(q));
-  }, [options, query]);
-
+  // provider 分组:value 形如 "zai/glm-4.6",按 "/" 前缀聚合。
   const groups = useMemo(() => {
-    if (!groupBy) return null;
-    const g: Record<string, PopoverOption[]> = {};
-    for (const o of filtered) {
-      const k = o.provider || "other";
-      (g[k] ??= []).push(o);
+    if (!groupByProvider) return null;
+    const g: Record<string, { value: string; name: string }[]> = {};
+    for (const o of options) {
+      const prov = o.value.split("/")[0] || "other";
+      (g[prov] ??= []).push(o);
     }
     return Object.entries(g).sort(([a], [b]) => a.localeCompare(b));
-  }, [filtered, groupBy]);
+  }, [options, groupByProvider]);
 
-  const flatItems: PopoverOption[] = groups ? groups.flatMap(([, items]) => items) : filtered;
-
-  // 翻/active 时把该项滚进视野
-  const scrollIntoView = useCallback((idx: number) => {
-    const el = listRef.current?.querySelectorAll("[data-cfg-idx]")?.[idx] as HTMLElement | undefined;
-    el?.scrollIntoView({ block: "nearest" });
-  }, []);
-
-  useEffect(() => { setActiveIdx(0); }, [query]);
-
-  // 关闭:点外部
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const t = setTimeout(() => document.addEventListener("mousedown", onDocClick), 0);
-    return () => { clearTimeout(t); document.removeEventListener("mousedown", onDocClick); };
-  }, [open]);
-
-  // 打开后聚焦搜索框
-  useEffect(() => {
-    if (open && inputRef.current && showSearch) inputRef.current.focus();
-  }, [open, showSearch]);
-
-  const openPopover = () => {
-    if (disabled) return;
-    setOpen(true);
-    setQuery("");
-  };
-
-  // 关闭弹层
-  const close = () => setOpen(false);
-
-  const pick = (o: PopoverOption) => {
-    onSelect(o.value);
-    close();
-  };
-
-  // 键盘导航:捕获阶段监听,让弹层开着时方向键永不落到 <input>。
-  const onKeyDownCapture = (e: KeyboardEvent) => {
-    if (e.key === "ArrowDown") {
-      e.stopPropagation();
-      e.preventDefault();
-      setActiveIdx((i) => { const n = Math.min(i + 1, flatItems.length - 1); scrollIntoView(n); return n; });
-    } else if (e.key === "ArrowUp") {
-      e.stopPropagation();
-      e.preventDefault();
-      setActiveIdx((i) => { const n = Math.max(i - 1, 0); scrollIntoView(n); return n; });
-    } else if (e.key === "Enter") {
-      e.stopPropagation();
-      e.preventDefault();
-      if (flatItems[activeIdx]) pick(flatItems[activeIdx]);
-    } else if (e.key === "Escape") {
-      e.stopPropagation();
-      e.preventDefault();
-      close();
-    }
-  };
-
-  // 触发器按键:Enter/Space/Down 打开弹层
-  const onTriggerKeyDown = (e: KeyboardEvent) => {
-    if (!open && (e.key === "Enter" || e.key === " " || e.key === "ArrowDown")) {
-      e.preventDefault();
-      openPopover();
-    }
+  const handleSelect = (v: string) => {
+    onSelect(v);
+    setOpen(false);
   };
 
   return (
-    <div className="cfg-popover" ref={ref}>
-      <button
-        className={`cfg-trigger ${open ? "open" : ""}`}
-        disabled={disabled}
-        onClick={openPopover}
-        onKeyDown={onTriggerKeyDown}
-        title={`${label}: ${triggerText}`}
-        data-testid={`cfg-trigger-${label}`}
-      >
-        <span className="cfg-trigger-text" title={triggerText}>{triggerText}</span>
-        <ChevronDown size={11} className="cfg-chevron" />
-      </button>
-      {open && (
-        <div
-          className="cfg-popover-panel"
-          role="listbox"
-          onKeyDownCapture={onKeyDownCapture}
-          data-testid={`cfg-panel-${label}`}
-        >
-          {showSearch && (
-            <div className="cfg-search-row">
-              <Search size={12} className="cfg-search-icon" />
-              <input
-                ref={inputRef}
-                className="cfg-search-input"
-                placeholder="搜索模型…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
-          )}
-          <div className="cfg-options" ref={listRef} data-testid={`cfg-options-${label}`}>
-            {groups ? (
-              groups.length === 0 ? (
-                <div className="cfg-empty">无匹配</div>
-              ) : (
-                groups.map(([key, items]) => (
-                  <div key={key} className="cfg-group-block">
-                    <div className="cfg-group-label">{key}</div>
-                    {buildOptionButtons(items, flatItems, currentValue)}
-                  </div>
-                ))
-              )
-            ) : flatItems.length === 0 ? (
-              <div className="cfg-empty">无匹配</div>
-            ) : (
-              buildOptionButtons(flatItems, flatItems, currentValue)
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-  function buildOptionButtons(items: PopoverOption[], flat: PopoverOption[], cur: string) {
-    return items.map((o) => {
-      const idx = flat.findIndex((x) => x.value === o.value);
-      return (
-        <button
-          key={o.value}
-          data-cfg-idx={idx}
-          className={`cfg-option ${o.value === cur ? "active" : ""} ${idx === activeIdx ? "focus" : ""}`}
-          onMouseEnter={() => setActiveIdx(idx)}
-          onClick={() => pick(o)}
-          data-testid={`cfg-option-${o.value}`}
-        >
-          <span className="cfg-option-name">{o.name}</span>
-          {o.value !== o.name && <span className="cfg-option-value">{o.value}</span>}
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <button className={`cfg-trigger ${open ? "open" : ""}`} disabled={disabled} title={`${label}: ${currentName}`} data-testid={`cfg-trigger-${label}`}>
+          <span className="cfg-trigger-text">{currentName}</span>
+          <ChevronDown size={11} className="cfg-chevron" />
         </button>
-      );
-    });
-  }
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content side="top" align="start" sideOffset={6} className="cfg-popover-content" data-testid={`cfg-popover-${label}`}>
+          <Command className="cfg-command" label={label}>
+            {searchable && (
+              <div className="cfg-search-row">
+                <Command.Input placeholder="搜索…" className="cfg-search-input" />
+              </div>
+            )}
+            <Command.List className="cfg-list">
+              <Command.Empty className="cfg-empty">无匹配</Command.Empty>
+              {groups ? (
+                groups.map(([prov, opts]) => (
+                  <Command.Group key={prov} heading={prov} className="cfg-group-block">
+                    {opts.map((o) => (
+                      <Command.Item
+                        key={o.value}
+                        value={`${o.name} ${o.value}`}
+                        onSelect={() => handleSelect(o.value)}
+                        className={`cfg-option ${o.value === currentValue ? "active" : ""}`}
+                        data-testid={`cfg-option-${o.value}`}
+                      >
+                        <span className="cfg-option-name">{o.name}</span>
+                        {o.value !== o.name && <span className="cfg-option-value">{o.value}</span>}
+                      </Command.Item>
+                    ))}
+                  </Command.Group>
+                ))
+              ) : (
+                options.map((o) => (
+                  <Command.Item
+                    key={o.value}
+                    value={`${o.name} ${o.value}`}
+                    onSelect={() => handleSelect(o.value)}
+                    className={`cfg-option ${o.value === currentValue ? "active" : ""}`}
+                    data-testid={`cfg-option-${o.value}`}
+                  >
+                    <span className="cfg-option-name">{o.name}</span>
+                    {o.value !== o.name && <span className="cfg-option-value">{o.value}</span>}
+                  </Command.Item>
+                ))
+              )}
+            </Command.List>
+          </Command>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
 }

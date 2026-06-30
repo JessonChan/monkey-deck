@@ -535,8 +535,7 @@ input, textarea { font-family: inherit; }
 }
 .composer-count { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
 .cfg-group { display: flex; align-items: center; gap: 5px; }
-/* ─── Custom popover select (model/mode/effort) ─── */
-.cfg-popover { position: relative; }
+/* ─── Config select: Radix Popover + cmdk (model/mode/effort) ─── */
 .cfg-trigger {
   display: inline-flex; align-items: center; gap: 4px;
   font-family: var(--mono); font-size: 10.5px; color: var(--text-2);
@@ -553,53 +552,54 @@ input, textarea { font-family: inherit; }
 .cfg-chevron { flex-shrink: 0; transition: transform 0.12s; }
 .cfg-trigger.open .cfg-chevron { transform: rotate(180deg); }
 
-.cfg-popover-panel {
-  position: absolute; z-index: 60; bottom: 100%; left: 0; margin-bottom: 6px;
+/* Radix Popover.Content 经 Portal 渲染到 body;z-index 用 Radix 默认即可。 */
+.cfg-popover-content {
   background: var(--elev-2); border: 1px solid var(--sep-strong);
   border-radius: var(--r-md); box-shadow: var(--shadow-pop);
-  min-width: 220px; max-width: 320px; overflow: hidden;
-  display: flex; flex-direction: column; max-height: 320px;
+  min-width: var(--radix-popover-trigger-width, 220px); max-width: 320px;
+  overflow: hidden; display: flex; flex-direction: column;
+  animation: cfg-pop-in 0.12s ease-out;
 }
+@keyframes cfg-pop-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+/* cmdk Command 容器 */
+.cfg-command { display: flex; flex-direction: column; max-height: 320px; }
 .cfg-search-row {
   display: flex; align-items: center; gap: 6px;
   padding: 6px 8px; border-bottom: 1px solid var(--sep);
   background: var(--elev);
 }
-.cfg-search-icon { color: var(--text-3); flex-shrink: 0; }
 .cfg-search-input {
   flex: 1; background: transparent; border: none; outline: none;
   font-size: 12px; color: var(--text); font-family: var(--sans);
 }
-.cfg-options {
+.cfg-list {
   overflow-y: auto; padding: 4px;
   scrollbar-width: thin; scrollbar-color: var(--sep) transparent;
 }
-.cfg-options::-webkit-scrollbar { width: 6px; }
-.cfg-options::-webkit-scrollbar-thumb { background: var(--sep); border-radius: 3px; }
+.cfg-list::-webkit-scrollbar { width: 6px; }
+.cfg-list::-webkit-scrollbar-thumb { background: var(--sep); border-radius: 3px; }
+
+/* cmdk Group:heading 用 [cmdk-group-heading],内容区 [role=group] */
 .cfg-group-block { padding: 2px 0; }
-.cfg-group-block + .cfg-group-block {
-  border-top: 1px solid var(--sep); margin-top: 2px; padding-top: 4px;
-}
-.cfg-group-label {
-  font-family: var(--mono); font-size: 10px; color: var(--text-3);
-  padding: 3px 8px 2px; font-weight: 500; letter-spacing: 0.02em;
-}
+.cfg-group-block + .cfg-group-block { border-top: 1px solid var(--sep); margin-top: 2px; padding-top: 4px; }
+.cfg-group-block [cmdk-group-heading] { font-family: var(--mono); font-size: 10px; color: var(--text-3); padding: 3px 8px 2px; font-weight: 500; letter-spacing: 0.02em; }
+
+/* cmdk Item:用 data-selected(active 键盘项) + .active(当前选中值) */
 .cfg-option {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   width: 100%; padding: 5px 8px; border-radius: var(--r-sm);
-  font-size: 12.5px; text-align: left; color: var(--text-2);
+  font-size: 12.5px; text-align: left; color: var(--text-2); cursor: pointer;
   line-height: 1.35;
 }
-.cfg-option:hover, .cfg-option.focus { background: var(--sel-accent); color: var(--text); }
+.cfg-option[data-selected] { background: var(--sel-accent); color: var(--text); }
 .cfg-option.active { color: var(--accent-2); }
 .cfg-option-name { flex: 1; min-width: 0; }
 .cfg-option-value {
   font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
   flex-shrink: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.cfg-empty {
-  font-size: 12px; color: var(--text-3); padding: 16px 8px; text-align: center;
-}
+.cfg-empty { font-size: 12px; color: var(--text-3); padding: 16px 8px; text-align: center; }
 
 .composer-row { display: flex; gap: 8px; align-items: flex-end; }
 .composer-input {
