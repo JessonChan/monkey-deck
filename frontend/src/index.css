@@ -161,19 +161,35 @@ input, textarea { font-family: inherit; }
 }
 
 .session-list { padding: 1px 0 4px 22px; }
-.session-item {
-  display: flex; align-items: center; gap: 7px;
-  width: 100%; padding: 6px 9px;
+/* session 行:外层 div 定位 hover/active 背景 + 给 ⋮ 菜单按钮留位;
+   内层 .session-item-main 是点击激活区(flex:1 占满),.session-menu-btn 是左键打开菜单的触发钮。 */
+.session-item-row {
+  display: flex; align-items: center; gap: 2px;
+  width: 100%; padding: 0 4px 0 0;
   border-radius: var(--r-sm);
   font-size: 12.5px; color: var(--text-2);
-  text-align: left;
   transition: background 0.1s, color 0.1s;
 }
-.session-item:hover { background: var(--hover); color: var(--text); }
-.session-item.active { background: var(--sel); color: var(--text); }
-.session-item.new { color: var(--accent); }
-.session-item svg { color: var(--text-3); flex-shrink: 0; }
-.session-item.active svg { color: var(--text-2); }
+.session-item-row:hover { background: var(--hover); color: var(--text); }
+.session-item-row.active { background: var(--sel); color: var(--text); }
+.session-item-main {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 9px;
+  text-align: left; color: inherit;
+}
+.session-menu-btn {
+  flex-shrink: 0;
+  display: none;
+  align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 5px;
+  color: var(--text-3);
+}
+.session-item-row:hover .session-menu-btn,
+.session-item-row.active .session-menu-btn { display: flex; }
+.session-menu-btn:hover { background: var(--hover); color: var(--text); }
+.session-item-row svg { color: var(--text-3); flex-shrink: 0; }
+.session-item-row.active svg { color: var(--text-2); }
 .session-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tail-spinner {
   width: 11px; height: 11px; flex-shrink: 0;
@@ -204,6 +220,8 @@ input, textarea { font-family: inherit; }
 .ctx-item.danger { color: var(--red); }
 .ctx-item.danger:hover { background: rgba(255, 69, 58, 0.14); }
 .ctx-sep { height: 1px; background: var(--sep); margin: 4px 2px; }
+.ctx-item:disabled { opacity: 0.4; cursor: default; }
+.ctx-item:disabled:hover { background: none; color: var(--text-2); }
 
 /* ─── Main / Chat ─── */
 .main { width: 100%; height: 100%; min-width: 0; display: flex; background: var(--bg); }
@@ -517,13 +535,71 @@ input, textarea { font-family: inherit; }
 }
 .composer-count { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
 .cfg-group { display: flex; align-items: center; gap: 5px; }
-.cfg-select {
+/* ─── Custom popover select (model/mode/effort) ─── */
+.cfg-popover { position: relative; }
+.cfg-trigger {
+  display: inline-flex; align-items: center; gap: 4px;
   font-family: var(--mono); font-size: 10.5px; color: var(--text-2);
   background: var(--elev); padding: 2px 6px; border-radius: 5px; border: 1px solid var(--sep);
-  max-width: 150px; outline: none; cursor: pointer; height: 22px;
+  height: 22px; outline: none; cursor: pointer; max-width: 180px;
+  transition: border-color 0.12s, background 0.12s;
 }
-.cfg-select:disabled { opacity: 0.5; cursor: not-allowed; }
-.cfg-select:hover:not(:disabled) { border-color: var(--text-3); }
+.cfg-trigger:hover:not(:disabled) { border-color: var(--text-3); background: var(--hover); }
+.cfg-trigger:disabled { opacity: 0.5; cursor: not-allowed; }
+.cfg-trigger.open { border-color: var(--accent); }
+.cfg-trigger-text {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.cfg-chevron { flex-shrink: 0; transition: transform 0.12s; }
+.cfg-trigger.open .cfg-chevron { transform: rotate(180deg); }
+
+.cfg-popover-panel {
+  position: absolute; z-index: 60; bottom: 100%; left: 0; margin-bottom: 6px;
+  background: var(--elev-2); border: 1px solid var(--sep-strong);
+  border-radius: var(--r-md); box-shadow: var(--shadow-pop);
+  min-width: 220px; max-width: 320px; overflow: hidden;
+  display: flex; flex-direction: column; max-height: 320px;
+}
+.cfg-search-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px; border-bottom: 1px solid var(--sep);
+  background: var(--elev);
+}
+.cfg-search-icon { color: var(--text-3); flex-shrink: 0; }
+.cfg-search-input {
+  flex: 1; background: transparent; border: none; outline: none;
+  font-size: 12px; color: var(--text); font-family: var(--sans);
+}
+.cfg-options {
+  overflow-y: auto; padding: 4px;
+  scrollbar-width: thin; scrollbar-color: var(--sep) transparent;
+}
+.cfg-options::-webkit-scrollbar { width: 6px; }
+.cfg-options::-webkit-scrollbar-thumb { background: var(--sep); border-radius: 3px; }
+.cfg-group-block { padding: 2px 0; }
+.cfg-group-block + .cfg-group-block {
+  border-top: 1px solid var(--sep); margin-top: 2px; padding-top: 4px;
+}
+.cfg-group-label {
+  font-family: var(--mono); font-size: 10px; color: var(--text-3);
+  padding: 3px 8px 2px; font-weight: 500; letter-spacing: 0.02em;
+}
+.cfg-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; padding: 5px 8px; border-radius: var(--r-sm);
+  font-size: 12.5px; text-align: left; color: var(--text-2);
+  line-height: 1.35;
+}
+.cfg-option:hover, .cfg-option.focus { background: var(--sel-accent); color: var(--text); }
+.cfg-option.active { color: var(--accent-2); }
+.cfg-option-name { flex: 1; min-width: 0; }
+.cfg-option-value {
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
+  flex-shrink: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cfg-empty {
+  font-size: 12px; color: var(--text-3); padding: 16px 8px; text-align: center;
+}
 
 .composer-row { display: flex; gap: 8px; align-items: flex-end; }
 .composer-input {

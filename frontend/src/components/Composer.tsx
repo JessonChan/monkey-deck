@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { ConfigOption } from "../types";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import type { Mention } from "../types";
-import { Paperclip, X, Slash, Square, ArrowUp, File, Folder } from "lucide-react";
+import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, Search } from "lucide-react";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -391,12 +391,11 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     </div>
   );
 }
-
-// ModelSelect 渲染 configOptions 里的 model/effort/mode 下拉(发送按钮左侧)。
-// model 按 value 的 provider 前缀("provider/model")分组(optgroup);
-// effort(thought_level)/mode 条件出现 —— agent 没报就不显示(如 GLM-4.6/5.1 无 effort)。
-// B 方案:session 打开即 spawn,configOptions 永远来自 agent 自报的完整列表(≥2 项),
-// 故无需静态兜底。session 完全无 configOption 时不渲染(session.Model 仍在 header 显示)。
+// ModelSelect 渲染 configOptions 里的 model/effort/mode 控件(发送按钮左侧)。
+// 用自定义 popover 替代原生 <select>:
+// - 触发器(当前选中名 + chevron)
+// - 弹层含搜索框(模型选项多时有用)+ 分组列表 + max-height 滚动
+// - 键盘导航(↑/↓ 移动 / Enter 选择 / Esc 关闭),与 slash-popover 风格对齐
 function ModelSelect({ configOptions, disabled, onSetConfig }: {
   configOptions: ConfigOption[];
   disabled: boolean;
@@ -405,59 +404,224 @@ function ModelSelect({ configOptions, disabled, onSetConfig }: {
   const modelOpt = configOptions.find((c) => c.category === "model");
   const effortOpt = configOptions.find((c) => c.category === "thought_level");
   const modeOpt = configOptions.find((c) => c.category === "mode");
-  // model 按 provider 分组:value 形如 "zai/glm-4.6",取 "/" 前缀。
-  const groups = useMemo(() => {
-    const g: Record<string, { value: string; name: string }[]> = {};
-    for (const o of modelOpt?.options ?? []) {
-      const prov = o.value.split("/")[0] || "other";
-      (g[prov] ??= []).push(o);
-    }
-    return g;
-  }, [modelOpt]);
   if (!modelOpt) return null;
+
   return (
     <div className="cfg-group">
-      <select
-        className="cfg-select"
-        value={modelOpt.currentValue}
+      <ConfigPopover
+        label="模型"
+        currentValue={modelOpt.currentValue}
+        options={modelOpt.options.map((o) => ({ value: o.value, name: o.name, provider: o.value.split("/")[0] || "other" }))}
         disabled={disabled}
-        onChange={(e) => onSetConfig("model", e.target.value)}
-        title="选择模型"
-      >
-        {Object.entries(groups).map(([prov, opts]) => (
-          <optgroup key={prov} label={prov}>
-            {opts.map((o) => (
-              <option key={o.value} value={o.value}>{o.name}</option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
+        showSearch
+        onSelect={(v) => onSetConfig("model", v)}
+        groupBy="provider"
+      />
       {modeOpt && (
-        <select
-          className="cfg-select"
-          value={modeOpt.currentValue}
+        <ConfigPopover
+          label="模式"
+          currentValue={modeOpt.currentValue}
+          options={modeOpt.options.map((o) => ({ value: o.value, name: o.name }))}
           disabled={disabled}
-          onChange={(e) => onSetConfig("mode", e.target.value)}
-          title="会话模式"
-        >
-          {modeOpt.options.map((o) => (
-            <option key={o.value} value={o.value}>{o.name}</option>
-          ))}
-        </select>
+          onSelect={(v) => onSetConfig("mode", v)}
+        />
       )}
       {effortOpt && (
-        <select
-          className="cfg-select"
-          value={effortOpt.currentValue}
+        <ConfigPopover
+          label="思考"
+          currentValue={effortOpt.currentValue}
+          options={effortOpt.options.map((o) => ({ value: o.value, name: o.name }))}
           disabled={disabled}
-          onChange={(e) => onSetConfig("effort", e.target.value)}
-          title="思考等级"
-        >
-          {effortOpt.options.map((o) => (
-            <option key={o.value} value={o.value}>{o.name}</option>
-          ))}
-        </select>
+          onSelect={(v) => onSetConfig("effort", v)}
+        />
       )}
     </div>
   );
+}
+
+interface PopoverOption {
+  value: string;
+  name: string;
+  provider?: string;
+}
+
+interface ConfigPopoverProps {
+  label: string;
+  currentValue: string;
+  options: PopoverOption[];
+  disabled: boolean;
+  showSearch?: boolean;
+  groupBy?: "provider";
+  onSelect: (value: string) => void;
+}
+
+function ConfigPopover({ label, currentValue, options, disabled, showSearch, groupBy, onSelect }: ConfigPopoverProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const ref = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const current = options.find((o) => o.value === currentValue);
+  const triggerText = current?.name ?? currentValue ?? label;
+
+  const filtered = useMemo(() => {
+    const all = options;
+    if (!query.trim()) return all;
+    const q = query.toLowerCase();
+    return all.filter((o) => o.name.toLowerCase().includes(q) || o.value.toLowerCase().includes(q));
+  }, [options, query]);
+
+  const groups = useMemo(() => {
+    if (!groupBy) return null;
+    const g: Record<string, PopoverOption[]> = {};
+    for (const o of filtered) {
+      const k = o.provider || "other";
+      (g[k] ??= []).push(o);
+    }
+    return Object.entries(g).sort(([a], [b]) => a.localeCompare(b));
+  }, [filtered, groupBy]);
+
+  const flatItems: PopoverOption[] = groups ? groups.flatMap(([, items]) => items) : filtered;
+
+  // 翻/active 时把该项滚进视野
+  const scrollIntoView = useCallback((idx: number) => {
+    const el = listRef.current?.querySelectorAll("[data-cfg-idx]")?.[idx] as HTMLElement | undefined;
+    el?.scrollIntoView({ block: "nearest" });
+  }, []);
+
+  useEffect(() => { setActiveIdx(0); }, [query]);
+
+  // 关闭:点外部
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const t = setTimeout(() => document.addEventListener("mousedown", onDocClick), 0);
+    return () => { clearTimeout(t); document.removeEventListener("mousedown", onDocClick); };
+  }, [open]);
+
+  // 打开后聚焦搜索框
+  useEffect(() => {
+    if (open && inputRef.current && showSearch) inputRef.current.focus();
+  }, [open, showSearch]);
+
+  const openPopover = () => {
+    if (disabled) return;
+    setOpen(true);
+    setQuery("");
+  };
+
+  // 关闭弹层
+  const close = () => setOpen(false);
+
+  const pick = (o: PopoverOption) => {
+    onSelect(o.value);
+    close();
+  };
+
+  // 键盘导航:捕获阶段监听,让弹层开着时方向键永不落到 <input>。
+  const onKeyDownCapture = (e: KeyboardEvent) => {
+    if (e.key === "ArrowDown") {
+      e.stopPropagation();
+      e.preventDefault();
+      setActiveIdx((i) => { const n = Math.min(i + 1, flatItems.length - 1); scrollIntoView(n); return n; });
+    } else if (e.key === "ArrowUp") {
+      e.stopPropagation();
+      e.preventDefault();
+      setActiveIdx((i) => { const n = Math.max(i - 1, 0); scrollIntoView(n); return n; });
+    } else if (e.key === "Enter") {
+      e.stopPropagation();
+      e.preventDefault();
+      if (flatItems[activeIdx]) pick(flatItems[activeIdx]);
+    } else if (e.key === "Escape") {
+      e.stopPropagation();
+      e.preventDefault();
+      close();
+    }
+  };
+
+  // 触发器按键:Enter/Space/Down 打开弹层
+  const onTriggerKeyDown = (e: KeyboardEvent) => {
+    if (!open && (e.key === "Enter" || e.key === " " || e.key === "ArrowDown")) {
+      e.preventDefault();
+      openPopover();
+    }
+  };
+
+  return (
+    <div className="cfg-popover" ref={ref}>
+      <button
+        className={`cfg-trigger ${open ? "open" : ""}`}
+        disabled={disabled}
+        onClick={openPopover}
+        onKeyDown={onTriggerKeyDown}
+        title={`${label}: ${triggerText}`}
+        data-testid={`cfg-trigger-${label}`}
+      >
+        <span className="cfg-trigger-text" title={triggerText}>{triggerText}</span>
+        <ChevronDown size={11} className="cfg-chevron" />
+      </button>
+      {open && (
+        <div
+          className="cfg-popover-panel"
+          role="listbox"
+          onKeyDownCapture={onKeyDownCapture}
+          data-testid={`cfg-panel-${label}`}
+        >
+          {showSearch && (
+            <div className="cfg-search-row">
+              <Search size={12} className="cfg-search-icon" />
+              <input
+                ref={inputRef}
+                className="cfg-search-input"
+                placeholder="搜索模型…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+          )}
+          <div className="cfg-options" ref={listRef} data-testid={`cfg-options-${label}`}>
+            {groups ? (
+              groups.length === 0 ? (
+                <div className="cfg-empty">无匹配</div>
+              ) : (
+                groups.map(([key, items]) => (
+                  <div key={key} className="cfg-group-block">
+                    <div className="cfg-group-label">{key}</div>
+                    {buildOptionButtons(items, flatItems, currentValue)}
+                  </div>
+                ))
+              )
+            ) : flatItems.length === 0 ? (
+              <div className="cfg-empty">无匹配</div>
+            ) : (
+              buildOptionButtons(flatItems, flatItems, currentValue)
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  function buildOptionButtons(items: PopoverOption[], flat: PopoverOption[], cur: string) {
+    return items.map((o) => {
+      const idx = flat.findIndex((x) => x.value === o.value);
+      return (
+        <button
+          key={o.value}
+          data-cfg-idx={idx}
+          className={`cfg-option ${o.value === cur ? "active" : ""} ${idx === activeIdx ? "focus" : ""}`}
+          onMouseEnter={() => setActiveIdx(idx)}
+          onClick={() => pick(o)}
+          data-testid={`cfg-option-${o.value}`}
+        >
+          <span className="cfg-option-name">{o.name}</span>
+          {o.value !== o.name && <span className="cfg-option-value">{o.value}</span>}
+        </button>
+      );
+    });
+  }
 }
