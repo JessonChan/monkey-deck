@@ -1,4 +1,4 @@
-import { Fragment, memo, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
@@ -115,6 +115,19 @@ export default function ChatView(props: Props) {
     prevFirstIdRef.current = firstId;
     prevHeightRef.current = el.scrollHeight;
   }, [items, props.session?.id, props.permission]);
+  // footer 高度变化(textarea autogrow / usage-bar / queue 面板)会压低 chat-body 可视区。
+  // 贴底时最新消息会被抬高的输入框遮挡 → 视觉上像「历史随按键向上滚」。
+  // onScroll 只在 scrollTop 变化时触发,而这里改的是 clientHeight,故用 ResizeObserver 补偿:
+  // 贴底则重新对齐到底;非贴底(用户在翻历史)不动,不打扰。
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [props.sessionId]);
 
   const pct = props.usage.size > 0 ? Math.min(100, Math.round((props.usage.used / props.usage.size) * 100)) : 0;
   // 分级配色:上下文越满越警示(绿 → 琥珀 → 红),让占比一眼可读。
