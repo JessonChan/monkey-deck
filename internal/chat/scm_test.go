@@ -150,6 +150,57 @@ func TestSCMNoWorktree(t *testing.T) {
 		}
 	}
 }
+// TestSCMNonWorktreeGitSession:无 worktree 但项目目录本身是 git 仓库时,
+// SCM 操作应 fallback 到 proj.Path 而非报错(对齐 orca / VS Code repo-kind 判定)。
+func TestSCMNonWorktreeGitSession(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	// 1. 临时 git 仓库作为项目目录
+	root := t.TempDir()
+	mustRunGit(t, root, "init", "-q", root)
+	mustWrite(t, filepath.Join(root, "a.txt"), "init")
+	mustRunGit(t, root, "add", ".")
+	mustRunGit(t, root, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init")
+
+	// 2. store + session,不建 worktree → session.WorktreePath="", cwd fallback 到 proj.Path
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.New(dbPath)
+	if err != nil { t.Fatal(err) }
+	t.Cleanup(func() { _ = st.Close() })
+	svc := NewChatService(&config.Config{DataDir: t.TempDir(), DBPath: dbPath})
+	svc.ctx = context.Background()
+	svc.st = st
+	proj, _ := st.CreateProject(svc.ctx, "p", root, "")
+	se, _ := st.CreateSession(svc.ctx, proj.ID, "title", "", "")
+
+	// 3. 在工作目录里改文件
+	mustWrite(t, filepath.Join(root, "a.txt"), "edited-without-worktree")
+
+	// 4. SessionChanges 应该能看到改动(未 worktree 仍 fallback 到 proj.Path)
+	got, err := svc.SessionChanges(se.ID)
+	if err != nil || !hasFile(got, "a.txt", false) {
+		t.Fatalf("SessionChanges on non-worktree git session: got=%+v err=%v", got, err)
+	}
+
+	// 5. Stage 和 Commit 也应该在 proj.Path 生效
+	if err := svc.SessionStage(se.ID, nil); err != nil {
+		t.Fatalf("Stage should work on non-worktree git session: %v", err)
+	}
+	if err := svc.SessionCommit(se.ID, "fix: 非 worktree git session 提交"); err != nil {
+		t.Fatalf("Commit should work on non-worktree git session: %v", err)
+	}
+	// 提交后工作区应干净
+	if after, _ := svc.SessionChanges(se.ID); len(after) != 0 {
+		t.Fatalf("expected clean worktree after commit, got %+v", after)
+	}
+	// HEAD 提交消息应是刚写的
+	// HEAD 提交消息应是刚写(TrimSpace 去掉 git 输出尾部换行)
+	if out, _ := exec.Command("git", "-C", root, "log", "-1", "--pretty=%s").Output(); strings.TrimSpace(string(out)) != "fix: 非 worktree git session 提交" {
+ 		t.Fatalf("unexpected HEAD commit: %q", out)
+ 	}
+}
+
 
 // A:MergeSession 不再 auto-commit —— 已提交的内容被合并,未提交的改动不进主仓库且结果给出提示。
 func TestMergeSessionNoAutoCommit(t *testing.T) {

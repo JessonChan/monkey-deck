@@ -480,30 +480,48 @@ func (s *ChatService) SessionAICommit(sessionID string) error {
 	return s.SendMessage(sessionID, aiCommitPrompt(), nil)
 }
 
-// SessionDiff 返回该 session 分支相对主仓库的变更摘要(diff --stat + commit log)。
-// 供前端在分支标签旁展示"这个分支改了什么",让用户决定是否合并。
+// SessionDiff 返回该 session 的 git 变更摘要。
+// 有 worktree 时展示分支相对主仓库的 diff --stat + commit log;
+// 无 worktree 时展示工作目录(项目目录)的未提交改动。
 func (s *ChatService) SessionDiff(sessionID string) (string, error) {
+	if !s.hasSCM(sessionID) {
+		return "", nil
+	}
 	se, err := s.st.GetSession(s.ctx, sessionID)
 	if err != nil {
 		return "", err
 	}
-	if se == nil || se.Branch == "" {
-		return "", nil
+	if se == nil {
+		return "", fmt.Errorf("session not found: %s", sessionID)
 	}
 	proj, err := s.st.GetProject(s.ctx, se.ProjectID)
 	if err != nil {
 		return "", err
 	}
 	if proj == nil {
-		return "", nil
+		return "", fmt.Errorf("project not found")
 	}
+	// 无 worktree:直接展示项目目录的工作区改动
+	if se.WorktreePath == "" {
+		dir, derr := s.scmDir(sessionID)
+		if derr != nil {
+			return "暂无变更", nil
+		}
+		changes, cerr := worktree.StatusFiles(dir)
+		if cerr != nil || len(changes) == 0 {
+			return "暂无变更", nil
+		}
+		var sb strings.Builder
+		sb.WriteString("工作区改动:\n")
+		for _, c := range changes {
+			sb.WriteString(fmt.Sprintf("  %s %s\n", c.Status, c.Path))
+		}
+		return sb.String(), nil
+	}
+	// 有 worktree:展示分支相对主仓库的变更摘要
 	stat, _ := worktree.DiffStat(proj.Path, se.Branch)
 	log, _ := worktree.BranchLog(proj.Path, se.Branch)
-	// 也检查 worktree 里未提交的改动(agent 改了文件但没 commit 时 DiffStat 看不到)
-	uncommitted := ""
-	if se.WorktreePath != "" {
-		uncommitted, _ = worktree.UncommittedStat(se.WorktreePath)
-	}
+	uncommitted, _ := worktree.UncommittedStat(se.WorktreePath)
 	var sb strings.Builder
 	if log != "" {
 		sb.WriteString("提交:\n" + log + "\n\n")
@@ -520,25 +538,16 @@ func (s *ChatService) SessionDiff(sessionID string) (string, error) {
 	return sb.String(), nil
 }
 
-// SessionChanges 返回该 session worktree 的文件级变更列表(VS Code 风格:逐文件 + M/A/D/U 状态)。
+// SessionChanges 返回该 session 的文件级变更列表(VS Code 风格:逐文件 + M/A/D/U 状态)。
 func (s *ChatService) SessionChanges(sessionID string) ([]worktree.FileChange, error) {
-	se, err := s.st.GetSession(s.ctx, sessionID)
-	if err != nil || se == nil || se.WorktreePath == "" {
+	if !s.hasSCM(sessionID) {
 		return nil, nil
 	}
-	return worktree.StatusFiles(se.WorktreePath)
-}
-
-// worktreeOf 返回 session 的 worktree 路径;无 worktree(非 git / 未建)返回错误。
-func (s *ChatService) worktreeOf(sessionID string) (string, error) {
-	se, err := s.st.GetSession(s.ctx, sessionID)
+	dir, err := s.scmDir(sessionID)
 	if err != nil {
-		return "", err
+		return nil, nil
 	}
-	if se == nil || se.WorktreePath == "" {
-		return "", fmt.Errorf("session 无独立 worktree(非 git 项目或未建)")
-	}
-	return se.WorktreePath, nil
+	return worktree.StatusFiles(dir)
 }
 
 // SessionStage 暂存文件;paths 为空暂存全部(供源码管理面板,参考 VS Code SCM)。
@@ -547,7 +556,7 @@ func (s *ChatService) SessionStage(sessionID string, paths []string) error {
 	if s.isBusy(sessionID) {
 		return errSCMBusy
 	}
-	wt, err := s.worktreeOf(sessionID)
+	wt, err := s.scmDir(sessionID)
 	if err != nil {
 		return err
 	}
@@ -559,7 +568,7 @@ func (s *ChatService) SessionUnstage(sessionID string, paths []string) error {
 	if s.isBusy(sessionID) {
 		return errSCMBusy
 	}
-	wt, err := s.worktreeOf(sessionID)
+	wt, err := s.scmDir(sessionID)
 	if err != nil {
 		return err
 	}
@@ -571,7 +580,7 @@ func (s *ChatService) SessionDiscard(sessionID string, paths []string) error {
 	if s.isBusy(sessionID) {
 		return errSCMBusy
 	}
-	wt, err := s.worktreeOf(sessionID)
+	wt, err := s.scmDir(sessionID)
 	if err != nil {
 		return err
 	}
@@ -584,7 +593,7 @@ func (s *ChatService) SessionCommit(sessionID, message string) error {
 	if s.isBusy(sessionID) {
 		return errSCMBusy
 	}
-	wt, err := s.worktreeOf(sessionID)
+	wt, err := s.scmDir(sessionID)
 	if err != nil {
 		return err
 	}
@@ -594,7 +603,7 @@ func (s *ChatService) SessionCommit(sessionID, message string) error {
 // SessionFileDiff 返回单个文件的 unified diff(staged=true:已暂存相对 HEAD;否则工作区相对 index,
 // 未跟踪文件展示为纯新增)。供源代码管理面板点击文件查看改动(VSCode SCM 风格)。
 func (s *ChatService) SessionFileDiff(sessionID, path string, staged bool) (string, error) {
-	wt, err := s.worktreeOf(sessionID)
+	wt, err := s.scmDir(sessionID)
 	if err != nil {
 		return "", err
 	}
@@ -624,6 +633,42 @@ func (s *ChatService) cwdOf(sessionID string) (string, error) {
 		return se.WorktreePath, nil
 	}
 	return proj.Path, nil
+}
+
+// scmDir 返回 session 的 git 操作目录(跟 VS Code 对齐:SCM 可见性 = 该目录是否为 git repo)。
+// 有 worktree → worktree 路径;无 worktree + proj.Path 是 git repo → proj.Path;
+// 两者都不是 → 报错(调用方应先用 hasSCM 判定再调)。
+func (s *ChatService) scmDir(sessionID string) (string, error) {
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if se == nil {
+		return "", fmt.Errorf("session not found: %s", sessionID)
+	}
+	proj, err := s.st.GetProject(s.ctx, se.ProjectID)
+	if err != nil {
+		return "", err
+	}
+	if proj == nil {
+		return "", fmt.Errorf("project not found")
+	}
+	if se.WorktreePath != "" {
+		return se.WorktreePath, nil
+	}
+	if worktree.IsRepo(proj.Path) {
+		return proj.Path, nil
+	}
+	return "", fmt.Errorf("session 无 git 上下文(非 git 项目)")
+}
+
+// hasSCM 报告 session 是否应显示「源代码管理」面板(对齐 orca / VS Code 的 repo-kind 判定)。
+func (s *ChatService) hasSCM(sessionID string) bool {
+	dir, err := s.scmDir(sessionID)
+	if err != nil {
+		return false
+	}
+	return worktree.IsRepo(dir)
 }
 
 // SessionListDir 列出 session 工作目录下 rel(相对路径)的直接子项。
@@ -788,7 +833,8 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 		return fmt.Errorf("start acp session: %w", err)
 	}
 	ls.chat = chat // chatConn 接口(chat *acp.ChatSession 满足)
-	// 加载项目级「允许访问外部目录」记忆到 handler:命中即对后续外部目录请求自动放行(§3.4)。
+	// 加载项目级权限记忆到 handler:按 project 存、跨 harness 共享,命中即对后续所有
+	// RequestPermission(含命令执行、外部目录)自动放行(§3.4)。
 	chat.Handler.SetProjectAllowExternal(proj.AllowExternal)
 
 	s.mu.Lock()
@@ -1206,7 +1252,7 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 
 // RespondPermission 用户在前端对某权限请求做出裁决(§3.4)。
 // level: once(允许本次)/ session(本会话允许)/ project(本项目允许)/ deny(本次拒绝)。
-// session/project 档令该 handler 后续的「外部目录读取」自动放行;project 档另写库(跨 session 持久)。
+// session/project 档令该 handler 后续「所有 RequestPermission」自动放行;project 档另写库(按 project 存、跨 harness 持久)。
 func (s *ChatService) RespondPermission(sessionID, reqID, level string) error {
 	s.mu.RLock()
 	ls, ok := s.active[sessionID]
