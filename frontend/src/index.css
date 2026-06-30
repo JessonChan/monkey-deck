@@ -473,6 +473,16 @@ input, textarea { font-family: inherit; }
 .slash-cmd { font-family: var(--mono); color: var(--accent-2); font-weight: 500; }
 .slash-desc { font-size: 11.5px; color: var(--text-3); }
 
+/* @ 提及面板:紧凑(不撑满整行宽度),靠左,带当前目录面包屑头 */
+.mention-popover { right: auto; min-width: 220px; max-width: 340px; }
+.mention-popover .slash-item { padding: 5px 9px; gap: 8px; }
+.mention-cwd {
+  font-size: 11px; color: var(--text-3); padding: 4px 9px 3px;
+  font-family: var(--mono); border-bottom: 1px solid var(--sep);
+  display: flex; align-items: center; gap: 6px;
+}
+.mention-hint { margin-left: auto; font-size: 10px; opacity: 0.7; }
+
 .att-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
 .att-chip {
   display: inline-flex; align-items: center; gap: 5px;

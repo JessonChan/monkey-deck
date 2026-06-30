@@ -49,7 +49,8 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
-  const cursorRef = useRef(0);                                       // 光标位置(供 @ 插入定位)
+  const cursorRef = useRef(0);                                       // 光标位置(命令式读写,供 @ 插入定位)
+  const [cursorPos, setCursorPos] = useState(0);                     // 光标位置(仅作 mention useMemo 的重算触发器;cursorRef 才是权威值)
   // IME 合成追踪:compositionStart/End 手动记录,配合 isComposing + keyCode===229 三重保险,
   // 彻底防中文输入法选词确认的 Enter 被误判为发送(部分 macOS IME 下 isComposing 不可靠)。
   const composingRef = useRef(false);
@@ -85,8 +86,8 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
   };
   useEffect(() => { if (ref.current) autoGrow(ref.current); }, [value]);
 
-  // @ 触发:每次 value 变化,据光标位置判定是否在 @ 提及中,拉目录列表过滤。
-  const mentionInfo = useMemo(() => detectMention(value, cursorRef.current), [value]);
+  // @ 触发:每次 value 或光标位置变化,据光标位置判定是否在 @ 提及中,拉目录列表过滤。
+  const mentionInfo = useMemo(() => detectMention(value, cursorRef.current), [value, cursorPos]);
   useEffect(() => {
     if (!sessionId || slashOpen) { setMentionOpen(false); return; }
     if (!mentionInfo) { setMentionOpen(false); return; }
@@ -95,18 +96,21 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
     const dir = slash >= 0 ? q.slice(0, slash) : "";
     const filter = slash >= 0 ? q.slice(slash + 1) : q;
     let cancelled = false;
-    ChatService.SessionListDir(sessionId, dir).then((nodes) => {
-      if (cancelled) return;
-      const list = (nodes || [])
-        .filter((n) => n.name !== ".git")
-        .filter((n) => n.name.toLowerCase().includes(filter.toLowerCase()))
-        .sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
-        .slice(0, 12);
-      setMentionItems(list);
-      setMentionIdx(0);
-      setMentionOpen(list.length > 0);
-    }).catch(() => setMentionOpen(false));
-    return () => { cancelled = true; };
+    // 防抖:快打字时不每次按键都打后端 IPC,150ms 内的新 keystroke 取消上一次拉目录。
+    const timer = setTimeout(() => {
+      ChatService.SessionListDir(sessionId, dir).then((nodes) => {
+        if (cancelled) return;
+        const list = (nodes || [])
+          .filter((n) => n.name !== ".git")
+          .filter((n) => n.name.toLowerCase().includes(filter.toLowerCase()))
+          .sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
+          .slice(0, 12);
+        setMentionItems(list);
+        setMentionIdx(0);
+        setMentionOpen(list.length > 0);
+      }).catch(() => { if (!cancelled) setMentionOpen(false); });
+    }, 150);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [mentionInfo, sessionId, slashOpen]);
 
   const baseName = (p: string) => p.split(/[/\\]/).pop() || p;
@@ -115,8 +119,14 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
   const submit = (finalText?: string) => {
     if (disabled) return;
     const t = (finalText ?? value).trim();
-    // 收集有效提及:@autocomplete 选中的需仍在文本里(用户可能已删掉);回形针附件总是有效。
-    const inline = mentions.filter((m) => t.includes("@" + m.path));
+    // 收集有效提及:@autocomplete 选中的需仍在文本里(用户可能已删掉);用词边界防 @src/foo 误命中 @src/foobar。
+    const inline = mentions.filter((m) => {
+      const token = "@" + m.path;
+      const idx = t.indexOf(token);
+      if (idx === -1) return false;
+      const after = idx + token.length;
+      return after >= t.length || /\s/.test(t[after]);
+    });
     const clips = attachments.map((p) => ({ path: p, name: baseName(p) }));
     const all = [...inline, ...clips];
     if (!t && all.length === 0) return;
@@ -136,12 +146,36 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
     requestAnimationFrame(() => ref.current?.focus());
   };
 
-  // 选中一个 @ 候选:把 @query 替换成 @完整路径 + 尾随空格,记录提及,光标移到末尾。
+  // 把当前光标所在的 @query 替换成 newQuery(不含 @),同步更新 cursorRef。
+  // 关键:cursorRef 必须在 onChange 前同步更新,否则 useMemo detectMention 用旧光标重开面板。
+  const setMentionQuery = (newQuery: string): boolean => {
+    const pos = cursorRef.current;
+    const m = detectMention(value, pos);
+    if (!m) return false;
+    const insert = "@" + newQuery;
+    cursorRef.current = m.start + insert.length;
+    onChange(value.slice(0, m.start) + insert + value.slice(pos));
+    setMentionIdx(0);
+    return true;
+  };
+  // 进入子文件夹:把 @query 改成 @folderPath/,列表随之刷新到该文件夹内容。
+  const descendMention = (node: FileNode) => setMentionQuery(node.path + "/");
+  // 返回上一级目录(←);已在根目录则不动作(返回 false 让光标正常左移)。
+  const ascendMention = (): boolean => {
+    const q = mentionInfo?.query ?? "";
+    const slash = q.lastIndexOf("/");
+    if (slash < 0) return false; // 已在根
+    const dir = q.slice(0, slash);
+    const upDir = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
+    return setMentionQuery(upDir ? upDir + "/" : "");
+  };
+  // 选中一个 @ 候选:把 @query 替换成 @完整路径 + 尾随空格,记录提及,关闭面板。
   const pickMention = (node: FileNode) => {
     const pos = cursorRef.current;
     const m = detectMention(value, pos);
     if (!m) return;
     const token = "@" + node.path + " ";
+    cursorRef.current = m.start + token.length; // 同步,防面板重开
     const next = value.slice(0, m.start) + token + value.slice(pos);
     onChange(next);
     if (!mentions.some((x) => x.path === node.path)) {
@@ -150,7 +184,7 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
     setMentionOpen(false);
     requestAnimationFrame(() => {
       const el = ref.current;
-      if (el) { const caret = m.start + token.length; el.focus(); el.selectionStart = el.selectionEnd = caret; cursorRef.current = caret; }
+      if (el) { el.focus(); el.selectionStart = el.selectionEnd = cursorRef.current; }
     });
   };
 
@@ -166,11 +200,20 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickSlash(filtered[slashIdx]); return; }
       if (e.key === "Escape") { e.preventDefault(); setSlashOpen(false); return; }
     }
-    // @ 提及菜单
+    // @ 提及菜单(业界惯例:→/Tab/点击 进文件夹,← 返回上级,Enter 确认选中)
     if (mentionOpen) {
       if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((i) => Math.min(i + 1, mentionItems.length - 1)); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => Math.max(i - 1, 0)); return; }
-      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickMention(mentionItems[mentionIdx]); return; }
+      if (e.key === "Enter") { e.preventDefault(); pickMention(mentionItems[mentionIdx]); return; }
+      // Tab / → :文件夹 → 进入;文件 → 选中。
+      if (e.key === "Tab" || e.key === "ArrowRight") {
+        e.preventDefault();
+        const node = mentionItems[mentionIdx];
+        if (node?.isDir) descendMention(node); else pickMention(node);
+        return;
+      }
+      // ← :返回上一级(已在根则放行,让光标正常左移)。
+      if (e.key === "ArrowLeft" && ascendMention()) { e.preventDefault(); return; }
       if (e.key === "Escape") { e.preventDefault(); setMentionOpen(false); return; }
     }
 
@@ -205,7 +248,7 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
       draftRef.current = value; // 进入翻历史前存当前草稿
       navRef.current = history.length - 1;
     } else {
-      const next = navRef.current - dir; // dir=-1(↑向旧) → idx 减;dir=1(↓向新) → idx 增
+      const next = navRef.current + dir; // dir=-1(↑向旧) → idx 减;dir=1(↓向新) → idx 增
       if (next >= history.length) { navRef.current = -1; onChange(draftRef.current); moveCursorEnd(); return; }
       if (next < 0) { navRef.current = 0; }
       else { navRef.current = next; }
@@ -222,12 +265,13 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     cursorRef.current = e.target.selectionEnd ?? 0;
+    setCursorPos(cursorRef.current);
     navRef.current = -1; // 真实输入(非翻历史)→ 退出翻历史模式
     onChange(e.target.value);
   };
   const handleSelect = () => {
     const el = ref.current;
-    if (el) cursorRef.current = el.selectionEnd ?? 0;
+    if (el) { cursorRef.current = el.selectionEnd ?? 0; setCursorPos(cursorRef.current); }
   };
 
   const addFiles = async () => {
@@ -251,11 +295,17 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
       )}
       {mentionOpen && (
         <div className="slash-popover mention-popover" data-testid="mention-popover">
+          {(() => {
+            const q = mentionInfo?.query ?? "";
+            const s = q.lastIndexOf("/");
+            const dir = s >= 0 ? q.slice(0, s) : "";
+            return dir ? <div className="mention-cwd">📁 {dir}/ <span className="mention-hint">← 返回</span></div> : null;
+          })()}
           {mentionItems.map((n, i) => (
-            <button key={n.path} className={`slash-item ${i === mentionIdx ? "active" : ""}`} onMouseEnter={() => setMentionIdx(i)} onClick={() => pickMention(n)}>
+            <button key={n.path} className={`slash-item ${i === mentionIdx ? "active" : ""}`} onMouseEnter={() => setMentionIdx(i)} onClick={() => (n.isDir ? descendMention(n) : pickMention(n))}>
               {n.isDir ? <Folder size={13} /> : <File size={13} />}
               <span className="slash-cmd">{n.name}</span>
-              {n.isDir && <span className="slash-desc">文件夹</span>}
+              <span className="slash-desc">{n.isDir ? "→ 进入" : ""}</span>
             </button>
           ))}
         </div>
@@ -273,7 +323,16 @@ export default function Composer({ value, onChange, disabled, prompting, model, 
             {mentions.map((m) => (
               <span key={m.path} className="att-chip att-chip-mention" title={"@" + m.path}>
                 <span className="att-chip-name"><File size={11} /> {m.name}</span>
-                <button className="att-chip-x" onClick={() => onMentionsChange(mentions.filter((x) => x.path !== m.path))}><X size={11} /></button>
+                <button className="att-chip-x" onClick={() => {
+                  const token = "@" + m.path;
+                  const idx = value.indexOf(token);
+                  if (idx !== -1) {
+                    let end = idx + token.length;
+                    if (value[end] === " ") end += 1; // 吃掉插入时的尾随空格
+                    onChange(value.slice(0, idx) + value.slice(end));
+                  }
+                  onMentionsChange(mentions.filter((x) => x.path !== m.path));
+                }}><X size={11} /></button>
               </span>
             ))}
           </div>
