@@ -59,19 +59,6 @@ export default function NewSessionModal({ harnesses, isGit, onConfirm, onCancel 
             </div>
             <div className="ns-worktree-group">
               <button
-                className={`ns-worktree ${worktree === true ? "active" : ""}`}
-                onClick={() => setWorktree(true)}
-                data-testid="ns-worktree-new"
-              >
-                <span className={`ns-radio ${worktree === true ? "on" : ""}`} />
-                <span className="ns-worktree-text">
-                  <span className="ns-worktree-title">新建独立分支（worktree）</span>
-                  <span className="ns-worktree-desc">
-                    为本次对话创建独立的 git 工作树与分支，多会话互不污染，可合并回主仓库
-                  </span>
-                </span>
-              </button>
-              <button
                 className={`ns-worktree ${worktree === false ? "active" : ""}`}
                 onClick={() => setWorktree(false)}
                 data-testid="ns-worktree-share"
@@ -81,6 +68,19 @@ export default function NewSessionModal({ harnesses, isGit, onConfirm, onCancel 
                   <span className="ns-worktree-title">使用项目当前目录</span>
                   <span className="ns-worktree-desc">
                     多个会话共享同一目录，修改彼此可见，适合在同一上下文上继续对话
+                  </span>
+                </span>
+              </button>
+              <button
+                className={`ns-worktree ${worktree === true ? "active" : ""}`}
+                onClick={() => setWorktree(true)}
+                data-testid="ns-worktree-new"
+              >
+                <span className={`ns-radio ${worktree === true ? "on" : ""}`} />
+                <span className="ns-worktree-text">
+                  <span className="ns-worktree-title">新建独立分支（worktree）</span>
+                  <span className="ns-worktree-desc">
+                    为本次对话创建独立的 git 工作树与分支，多会话互不污染，可合并回主仓库
                   </span>
                 </span>
               </button>
