@@ -171,6 +171,7 @@ export default function Sidebar(props: Props) {
                         key={s.id}
                         className={`session-item-row ${props.selectedSessionId === s.id ? "active" : ""}`}
                         data-testid={`session-${s.id}`}
+                        onContextMenu={(e) => { e.preventDefault(); setCtx({ kind: "session", x: e.clientX, y: e.clientY, session: s }); }}
                       >
                         <button
                           className="session-item-main"
