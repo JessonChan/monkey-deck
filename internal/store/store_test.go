@@ -283,3 +283,46 @@ func sessionIDs(ss []Session) []string {
 	}
 	return out
 }
+
+// TestSearchSessionIDsByContent 校验会话内容搜索:大小写不敏感、按项目隔离、去重、空结果。
+func TestSearchSessionIDsByContent(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	p, _ := s.CreateProject(ctx, "demo", "/tmp/demo", "m")
+	p2, _ := s.CreateProject(ctx, "other", "/tmp/other", "m")
+	s1, _ := s.CreateSession(ctx, p.ID, "first", "m", "opencode")
+	s2, _ := s.CreateSession(ctx, p.ID, "second", "m", "opencode")
+	s3, _ := s.CreateSession(ctx, p2.ID, "other-proj", "m", "opencode")
+
+	s.AppendMessage(ctx, s1.ID, "user", "", "Hello World", "")
+	s.AppendMessage(ctx, s1.ID, "agent", "agent_message_chunk", "FIX the bug now", "")
+	s.AppendMessage(ctx, s1.ID, "agent", "", "refactor the World module", "") // s1 第二条含 world,验去重
+	s.AppendMessage(ctx, s2.ID, "user", "", "totally unrelated text", "")
+	s.AppendMessage(ctx, s3.ID, "user", "", "Hello World", "") // 同文但属另一项目,不应命中
+
+	// 大小写不敏感 + 项目隔离:搜 hello 只命中 s1(p 内),不含 p2 的 s3。
+	got, _ := s.SearchSessionIDsByContent(ctx, p.ID, "hello")
+	if len(got) != 1 || got[0] != s1.ID {
+		t.Fatalf("search hello in p: %+v", got)
+	}
+	// 搜 fix(小写)命中含 "FIX" 的 s1。
+	got, _ = s.SearchSessionIDsByContent(ctx, p.ID, "fix")
+	if len(got) != 1 || got[0] != s1.ID {
+		t.Fatalf("case-insensitive fix: %+v", got)
+	}
+	// 跨项目:在 p2 搜 hello 命中 s3。
+	got, _ = s.SearchSessionIDsByContent(ctx, p2.ID, "hello")
+	if len(got) != 1 || got[0] != s3.ID {
+		t.Fatalf("search hello in p2: %+v", got)
+	}
+	// 无命中返回空切片(非 nil 也允许,关键是长度 0)。
+	got, _ = s.SearchSessionIDsByContent(ctx, p.ID, "zzz")
+	if len(got) != 0 {
+		t.Fatalf("no match should be empty: %+v", got)
+	}
+	// 多消息同 session 只返回一次(去重):搜命中 s1 两条消息,仍只一个 id。
+	got, _ = s.SearchSessionIDsByContent(ctx, p.ID, "world") // s1 两条含 world,s2/s3 无(去重)
+	if len(got) != 1 || got[0] != s1.ID {
+		t.Fatalf("dedup within session: %+v", got)
+	}
+}

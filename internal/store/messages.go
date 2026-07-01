@@ -118,6 +118,29 @@ func (s *Store) ListMessagesBefore(ctx context.Context, sessionID string, before
 	return desc, nil
 }
 
+// SearchSessionIDsByContent 返回某项目下消息内容包含 query(大小写不敏感)的 session id 去重列表。
+// 供侧栏会话搜索:桌面级 SQLite 单项目 LIKE 扫描是毫秒级,无需 FTS5。
+// 返回 id 列表,前端在已加载的 session 列表上与标题命中做并集过滤(KISS:只回 id,不回 snippet)。
+// 注意:query 中的 %/_ 会作 LIKE 通配符,桌面搜索场景可接受。
+func (s *Store) SearchSessionIDsByContent(ctx context.Context, projectID, query string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT m.session_id FROM messages m JOIN sessions s ON s.id=m.session_id WHERE s.project_id=? AND m.content LIKE ? COLLATE NOCASE`,
+		projectID, "%"+query+"%")
+	if err != nil {
+		return nil, fmt.Errorf("search session content: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // --- Settings ---
 
 // GetSetting 取配置值;无则返回空串。

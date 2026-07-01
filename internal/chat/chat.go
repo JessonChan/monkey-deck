@@ -336,6 +336,12 @@ func (s *ChatService) ListSessions(projectID string) ([]store.Session, error) {
 	return s.st.ListSessions(s.ctx, projectID)
 }
 
+// SearchSessionContent 返回某项目下消息内容包含 query(大小写不敏感)的 session id 列表。
+// 供侧栏会话搜索:与标题命中(前端本地子串)做并集,实现「按标题或内容找会话」(§4.1)。
+func (s *ChatService) SearchSessionContent(projectID, query string) ([]string, error) {
+	return s.st.SearchSessionIDsByContent(s.ctx, projectID, query)
+}
+
 // CreateSession 新建 session。harness 指定使用的 agent(omp/opencode,空=omp 默认);
 // useWorktree=true 时为 git 项目建独立 worktree+分支(并行隔离),否则直接用项目目录(§1.4)。
 func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorktree bool) (*store.Session, error) {
@@ -928,7 +934,7 @@ func (s *ChatService) idleReaper() {
 }
 
 // closeIdle 收集超 idleTimeout 且非 busy 的 session,释放 RLock 后逐个 CloseSession
-//(自身拿 Lock,与 reaper 的 RLock 不重叠,无死锁)。busy 的跳过(进行中 turn 不杀)。
+// (自身拿 Lock,与 reaper 的 RLock 不重叠,无死锁)。busy 的跳过(进行中 turn 不杀)。
 func (s *ChatService) closeIdle() {
 	var toClose []string
 	now := time.Now().UnixMilli()
