@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X } from "lucide-react";
 
 interface Props {
   projects: Project[];
@@ -30,12 +30,25 @@ type ConfirmTarget =
   | { kind: "project"; project: Project }
   | { kind: "session"; session: Session };
 
+// 侧栏 session 列表分片渲染每页大小:本地 SQLite 全量已加载(查询本来就快),
+// 这里只控制渲染的 DOM 节点数,避免单项目几百个 session 一次性撑爆。
+const SESSION_PAGE = 25;
+
 export default function Sidebar(props: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
   const [pathInput, setPathInput] = useState("");
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [confirm, setConfirm] = useState<ConfirmTarget | null>(null);
+  // session 列表分片渲染:每个项目默认 SESSION_PAGE 个,「加载更多」每次 +SESSION_PAGE。
+  const [sessionLimit, setSessionLimit] = useState<Record<string, number>>({});
+  // 会话搜索:searchProj 标记哪个项目展开了搜索框。标题本地即时过滤,
+  // 内容命中经 SearchSessionContent(后端 LIKE)异步回流,与标题做并集(§4.1)。
+  const [searchProj, setSearchProj] = useState<string | null>(null);
+  const [searchQ, setSearchQ] = useState("");
+  const [contentHits, setContentHits] = useState<string[] | null>(null); // null=未发起内容搜索
+  const [contentLoading, setContentLoading] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const toggle = (id: string) =>
     setExpanded((prev) => {
@@ -92,6 +105,26 @@ export default function Sidebar(props: Props) {
 
   const closeCtx = () => { setCtx(null); setConfirm(null); };
 
+  // 点项目行搜索按钮切换:开则展开项目并聚焦输入框,关则清空(只允许一个项目同时搜索)。
+  const toggleSearch = (pId: string) => {
+    if (searchProj === pId) {
+      setSearchProj(null); setSearchQ(""); setContentHits(null); setContentLoading(false);
+      return;
+    }
+    if (!expanded.has(pId)) setExpanded((prev) => new Set(prev).add(pId));
+    setSearchProj(pId); setSearchQ(""); setContentHits(null); setContentLoading(false);
+    setTimeout(() => searchInputRef.current?.focus(), 0);
+  };
+
+  // 单个 session 是否命中:空 query 全过;标题子串(本地即时)∪ 内容命中(后端回流)。
+  const matchSession = (s: Session) => {
+    const q = searchQ.trim().toLowerCase();
+    if (!q) return true;
+    if ((s.title || "").toLowerCase().includes(q)) return true;
+    if (contentHits && contentHits.includes(s.id)) return true;
+    return false;
+  };
+
   // 菜单关闭:Esc、外部点击、窗口 resize。任一 ctx / confirm 存在即注册监听。
   useEffect(() => {
     if (!ctx && !confirm) return;
@@ -119,6 +152,22 @@ export default function Sidebar(props: Props) {
     el.style.left = `${left}px`;
     el.style.top = `${top}px`;
   }, [ctx]);
+
+  // 内容搜索:query≥2 字符时去抖 200ms 调后端 LIKE(桌面 SQLite 毫秒级),回填命中 session id。
+  // 标题命中是本地即时过滤,不在此 effect 内;切项目/清空立即重置。
+  useEffect(() => {
+    if (searchProj == null) return;
+    const q = searchQ.trim();
+    if (q.length < 2) { setContentHits(null); setContentLoading(false); return; }
+    setContentLoading(true);
+    const h = setTimeout(() => {
+      ChatService.SearchSessionContent(searchProj, q)
+        .then((ids) => { setContentHits(ids ?? []); })
+        .catch(() => { setContentHits([]); })
+        .finally(() => setContentLoading(false));
+    }, 200);
+    return () => clearTimeout(h);
+  }, [searchProj, searchQ]);
 
   return (
     <aside className="sidebar" data-testid="sidebar">
@@ -154,6 +203,11 @@ export default function Sidebar(props: Props) {
         {props.projects.map((p) => {
           const isOpen = expanded.has(p.id);
           const projSessions = props.sessionsByProject[p.id] ?? [];
+          const sessLimit = sessionLimit[p.id] ?? SESSION_PAGE;
+          const visibleSessions = projSessions.slice(0, sessLimit);
+          const hiddenCount = projSessions.length - visibleSessions.length;
+          const searching = searchProj === p.id && searchQ.trim() !== "";
+          const list = searching ? projSessions.filter(matchSession) : visibleSessions;
           // 项目行活跃信号:折叠时显示左竖条(running=慢呼吸 / unread=静态)。展开时 session 行已有 dot/spinner,无需重复。
           const projRunning = projSessions.some((s) => props.statusBySession[s.id] === "prompting");
           const projUnread = projSessions.some((s) => props.statusBySession[s.id] !== "prompting" && props.unreadBySession[s.id]);
@@ -174,10 +228,33 @@ export default function Sidebar(props: Props) {
                 <button className="icon-btn small" onClick={() => props.onCreateSession(p.id)} data-tooltip-id="md-tip" data-tooltip-content="新对话" data-testid={`new-session-${p.id}`}>
                   <Plus size={13} />
                 </button>
+                <button className="icon-btn small" onClick={() => toggleSearch(p.id)} data-tooltip-id="md-tip" data-tooltip-content={searchProj === p.id ? "关闭搜索" : "搜索会话"} data-tooltip-place="bottom" data-testid={`search-sessions-${p.id}`}>
+                  <Search size={12} />
+                </button>
               </div>
               {isOpen && (
                 <div className="session-list">
-                  {projSessions.map((s) => {
+                  {searchProj === p.id && (
+                    <div className="session-search-row">
+                      <Search size={12} />
+                      <input
+                        ref={searchInputRef}
+                        className="session-search-input"
+                        data-testid={`session-search-${p.id}`}
+                        placeholder="搜索标题或内容…"
+                        value={searchQ}
+                        onChange={(e) => setSearchQ(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Escape") toggleSearch(p.id); }}
+                      />
+                      {contentLoading && <span className="search-spinner" data-tooltip-id="md-tip" data-tooltip-content="正在搜索内容…" />}
+                      {searchQ && (
+                        <button className="icon-btn small" data-tooltip-id="md-tip" data-tooltip-content="清空" onClick={() => setSearchQ("")}>
+                          <X size={11} />
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {list.map((s) => {
                     const st = props.statusBySession[s.id];
                     const active = st === "prompting";
                     const act = props.activityBySession[s.id];
@@ -217,6 +294,18 @@ export default function Sidebar(props: Props) {
                       </div>
                     );
                   })}
+                  {searching && list.length === 0 && (
+                    <div className="session-search-empty">无匹配的会话</div>
+                  )}
+                  {!searching && hiddenCount > 0 && (
+                    <button
+                      className="session-more-btn"
+                      data-testid={`load-more-sessions-${p.id}`}
+                      onClick={() => setSessionLimit((prev) => ({ ...prev, [p.id]: (prev[p.id] ?? SESSION_PAGE) + SESSION_PAGE }))}
+                    >
+                      加载更多（还有 {hiddenCount} 个）
+                    </button>
+                  )}
                 </div>
               )}
             </div>
