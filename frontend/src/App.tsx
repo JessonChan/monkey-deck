@@ -83,9 +83,24 @@ export default function App() {
     }
   }, []);
 
-  const refreshSessions = useCallback(async (projectId: string) => {
+  const refreshSessions = useCallback(async (projectId: string, keepFields = false) => {
     const list = await ChatService.ListSessions(projectId);
-    setSessionsByProject((prev) => ({ ...prev, [projectId]: list || [] }));
+    setSessionsByProject((prev) => {
+      const cur = prev[projectId] ?? [];
+      // keepFields(状态刷新用):DB 里 title 只在 turn 结束后回写(status prompting 触发时还是空),
+      // 全量替换会洗掉前端现/会话元事件里已经拿到的标题,导致侧栏前端标题搜索中途失效。
+      // 这里只把 DB 仍然有值的 title 覆盖过来,前端原值(= 直播拿到的标题)保留。
+      if (keepFields && cur.length > 0) {
+        const byId = new Map(cur.map((s) => [s.id, s]));
+        const merged = (list || []).map((ns) => {
+          const live = byId.get(ns.id);
+          if (live && !ns.title && live.title) return { ...ns, title: live.title };
+          return ns;
+        });
+        return { ...prev, [projectId]: merged };
+      }
+      return { ...prev, [projectId]: list || [] };
+    });
   }, []);
 
   // 把一条 SessionEvent 合并进指定 session 的 items(纯函数,防乱序)。
@@ -240,10 +255,12 @@ export default function App() {
       // 用户发消息(prompting)→ 即时刷新侧栏顺序。后端 startTurn 已把 prompted_at 刷为
       // now(主排序键),这里重拉让该 session 跳到顶部。后台活动(usage_update/标题同步)不
       // 走 status 事件,故侧栏不会被后台 session 抖动。
+      // keepFields=true:DB 里 title 要 turn 结束才回写,全量替换会洗掉前端已有的
+      // 直播标题,导致搜索中途失效——仅保留 DB 仍为空的 title 的原值。
       if (s.status === "prompting") {
         for (const pid of Object.keys(sessionsByProjectRef.current)) {
           if (sessionsByProjectRef.current[pid].some((x) => x.id === s.sessionId)) {
-            void refreshSessions(pid);
+            void refreshSessions(pid, true);
             break;
           }
         }

@@ -44,6 +44,32 @@
 - `TestSearchSessionIDsByContent` 覆盖:大小写不敏感、跨项目隔离、同 session 多消息去重、无命中空切片。
 - `bunx tsc --noEmit` → 0;`bun run build:dev`(tsc + vite build)→ 通过。
 
+## 修复:清空态下搜索中途失效
+
+### 根因
+
+搜索匹配的是 `sessionsByProject` 里每条 session 的 `title` 字段(前端子串)。
+但 App 的 `chat:status` handler 里,**status 切 `prompting`(用户发消息)时会触发 `refreshSessions(pid)`**,该函数用 `ListSessions` 的 DB 结果**全量替换**该项目 session 列表。
+
+问题:DB 里 session title 只在回合结束后才由 `syncSessionTitle` 回写(`chat.go` `persistTurn` 成功后),
+turn 进行中 DB 里 title 仍为空串。全量替换 → 前端已有的直播标题(`chat:session-meta` 流的)被洗掉,
+**前端子串匹配突然全部落空 → 搜索「失效」**。
+
+`chat:session-meta` event 虽然会在 title 到来时原地更新(第 290-301 行),但它补一帧、status 就刷掉一帧,时序上始终落后。
+
+### 修法(`frontend/src/App.tsx`)
+
+- `refreshSessions(projectId, keepFields?)`:加第二个参数。`keepFields=true` 时按 session id 做合并,
+  仅当 DB 返回的 title 为空时,保留前端 `prev` 里已有的 title(`!ns.title && live.title`),其余字段以 DB 为准。
+  初次加载 / 删除等调用点默认 `keepFields=false` 不变(必须全量替换的场景)。
+  Map 动态 key(id)运行时查询,用 `Map`(呼应规则 ts-set-map)。
+- status handler `prompting` 分支:改调 `refreshSessions(pid, true)`,保留前端标题。
+
+### 验证
+
+- `bunx tsc --noEmit` → 0;`bun run build:dev` → 通过。
+- 手动逻辑:推空标题后 DB 重拉 + DB 非空标题后重拉,两条路径均符合预期(空保留 / 非空覆盖)。
+
 ## 注意 / 已知
 
 - `LIKE` 查询里 query 的 `%`/`_` 会作通配符(桌面搜索场景可接受,代码注释已标)。
