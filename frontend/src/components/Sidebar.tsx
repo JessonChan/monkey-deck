@@ -12,6 +12,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { timeAgo } from "../utils";
 
 interface Props {
   projects: Project[];
@@ -344,6 +345,7 @@ export default function Sidebar(props: Props) {
                         >
                           <span className={`session-dot ${cls}`} data-tooltip-id="md-tip" data-tooltip-content={dotTip} />
                           <span className="session-label">{s.title || "新对话"}</span>
+                          <span className="session-time">{timeAgo(s.updatedAt)}</span>
                           {props.permPendingBySession[s.id] ? (
                             <span className="perm-dot" data-tooltip-id="md-tip" data-tooltip-content="等待授权 · 点击进入裁决" data-testid={`perm-dot-${s.id}`} />
                           ) : active ? (
