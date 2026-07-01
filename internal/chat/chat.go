@@ -311,6 +311,11 @@ func (s *ChatService) UpdateProject(id, name, model string) error {
 	return s.st.UpdateProject(s.ctx, id, name, model)
 }
 
+// ReorderProjects 按传入 id 顺序重写项目排序(侧栏拖拽后调用,0007)。
+func (s *ChatService) ReorderProjects(ids []string) error {
+	return s.st.ReorderProjects(s.ctx, ids)
+}
+
 // RemoveProject 删除项目(同时关掉其活跃 session)。
 func (s *ChatService) RemoveProject(id string) error {
 	s.mu.Lock()

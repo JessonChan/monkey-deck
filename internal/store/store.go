@@ -38,6 +38,7 @@ type Project struct {
 	Path          string `json:"path"`
 	Model         string `json:"model"`
 	AllowExternal bool   `json:"allowExternalDir"` // 项目级权限记忆(§3.4):曾选「本项目允许」则该 project 所有 session(跨 harness)的 RequestPermission 自动放行
+	SortOrder     int64  `json:"sortOrder"`        // 侧栏手动排序(0007):全 0 时兜底 updated_at DESC;拖拽后按 0..N-1 排。新建恒在顶部(MIN-1)
 	CreatedAt     int64  `json:"createdAt"`
 	UpdatedAt     int64  `json:"updatedAt"`
 }

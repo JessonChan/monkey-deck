@@ -20,19 +20,25 @@ func (s *Store) CreateProject(ctx context.Context, name, path, model string) (*P
 		CreatedAt: now(),
 		UpdatedAt: now(),
 	}
+	// sort_order = MIN-1(表空则 0):新建项目恒在顶部(0007)。
+	var minOrder int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE((SELECT MIN(sort_order)-1 FROM projects), 0)`).Scan(&minOrder); err != nil {
+		return nil, fmt.Errorf("create project (sort_order): %w", err)
+	}
+	p.SortOrder = minOrder
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO projects(id,name,path,model,created_at,updated_at) VALUES(?,?,?,?,?,?)`,
-		p.ID, p.Name, p.Path, p.Model, p.CreatedAt, p.UpdatedAt)
+		`INSERT INTO projects(id,name,path,model,created_at,updated_at,sort_order) VALUES(?,?,?,?,?,?,?)`,
+		p.ID, p.Name, p.Path, p.Model, p.CreatedAt, p.UpdatedAt, p.SortOrder)
 	if err != nil {
 		return nil, fmt.Errorf("create project: %w", err)
 	}
 	return p, nil
 }
 
-// ListProjects 列出全部项目(按更新时间倒序)。
+// ListProjects 列出全部项目(按 sort_order ASC, updated_at DESC):全 0 时兜底 updated_at DESC(原行为不变),拖拽后按手动顺序。
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id,name,path,model,created_at,updated_at,allow_external_dir FROM projects ORDER BY updated_at DESC`)
+		`SELECT id,name,path,model,created_at,updated_at,allow_external_dir,sort_order FROM projects ORDER BY sort_order ASC, updated_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
@@ -40,7 +46,7 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	var out []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.CreatedAt, &p.UpdatedAt, &p.AllowExternal); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.CreatedAt, &p.UpdatedAt, &p.AllowExternal, &p.SortOrder); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -52,8 +58,8 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 func (s *Store) GetProject(ctx context.Context, id string) (*Project, error) {
 	var p Project
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id,name,path,model,created_at,updated_at,allow_external_dir FROM projects WHERE id=?`, id).
-		Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.CreatedAt, &p.UpdatedAt, &p.AllowExternal)
+		`SELECT id,name,path,model,created_at,updated_at,allow_external_dir,sort_order FROM projects WHERE id=?`, id).
+		Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.CreatedAt, &p.UpdatedAt, &p.AllowExternal, &p.SortOrder)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -67,8 +73,8 @@ func (s *Store) GetProject(ctx context.Context, id string) (*Project, error) {
 func (s *Store) GetProjectByPath(ctx context.Context, path string) (*Project, error) {
 	var p Project
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id,name,path,model,created_at,updated_at,allow_external_dir FROM projects WHERE path=?`, path).
-		Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.CreatedAt, &p.UpdatedAt, &p.AllowExternal)
+		`SELECT id,name,path,model,created_at,updated_at,allow_external_dir,sort_order FROM projects WHERE path=?`, path).
+		Scan(&p.ID, &p.Name, &p.Path, &p.Model, &p.CreatedAt, &p.UpdatedAt, &p.AllowExternal, &p.SortOrder)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -76,6 +82,27 @@ func (s *Store) GetProjectByPath(ctx context.Context, path string) (*Project, er
 		return nil, fmt.Errorf("get project by path: %w", err)
 	}
 	return &p, nil
+}
+
+// ReorderProjects 按传入 id 顺序全量重写 sort_order 为 0..N-1(侧栏拖拽后调用)。
+// 项目量级小(几十),事务内逐条 UPDATE,全量重写最简单可靠,无需 lexorank/浮点。
+func (s *Store) ReorderProjects(ctx context.Context, ids []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("reorder projects (begin): %w", err)
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `UPDATE projects SET sort_order=? WHERE id=?`)
+	if err != nil {
+		return fmt.Errorf("reorder projects (prepare): %w", err)
+	}
+	defer stmt.Close()
+	for i, id := range ids {
+		if _, err := stmt.ExecContext(ctx, i, id); err != nil {
+			return fmt.Errorf("reorder projects (update %s): %w", id, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // UpdateProject 更新项目的 name/model。

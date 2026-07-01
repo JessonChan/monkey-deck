@@ -326,3 +326,50 @@ func TestSearchSessionIDsByContent(t *testing.T) {
 		t.Fatalf("dedup within session: %+v", got)
 	}
 }
+
+// projectIDs 提取项目 id 列表(测试辅助)。
+func projectIDs(ps []Project) []string {
+	out := make([]string, len(ps))
+	for i, p := range ps {
+		out[i] = p.ID
+	}
+	return out
+}
+
+// 项目手动排序(0007):新建恒在顶部 + ReorderProjects 重写 + sort_order 优先于 updated_at。
+func TestProjectReorderSortOrder(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// 顺序创建:首个表空 sort_order=0,之后每个 MIN-1 → 严格递减(新建恒在顶部)。
+	p1, _ := s.CreateProject(ctx, "p1", "/tmp/p1", "m/m")
+	p2, _ := s.CreateProject(ctx, "p2", "/tmp/p2", "m/m")
+	p3, _ := s.CreateProject(ctx, "p3", "/tmp/p3", "m/m")
+	if p1.SortOrder != 0 || p2.SortOrder != -1 || p3.SortOrder != -2 {
+		t.Fatalf("sort_order: p1=%d(want 0) p2=%d(want -1) p3=%d(want -2)", p1.SortOrder, p2.SortOrder, p3.SortOrder)
+	}
+
+	// sort_order ASC → [p3, p2, p1](新建在顶)。
+	list, _ := s.ListProjects(ctx)
+	if got := projectIDs(list); got[0] != p3.ID || got[1] != p2.ID || got[2] != p1.ID {
+		t.Fatalf("new-on-top order = %v, want [p3 p2 p1]", got)
+	}
+
+	// ReorderProjects 全量重写为手动顺序 [p1, p2, p3]。
+	if err := s.ReorderProjects(ctx, []string{p1.ID, p2.ID, p3.ID}); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = s.ListProjects(ctx)
+	if got := projectIDs(list); got[0] != p1.ID || got[1] != p2.ID || got[2] != p3.ID {
+		t.Fatalf("after reorder = %v, want [p1 p2 p3]", got)
+	}
+
+	// sort_order 优先于 updated_at:touch p2 让其 updated_at 最新,顺序应不变。
+	if err := s.TouchProject(ctx, p2.ID); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = s.ListProjects(ctx)
+	if got := projectIDs(list); got[0] != p1.ID || got[1] != p2.ID || got[2] != p3.ID {
+		t.Fatalf("sort_order should win over updated_at: %v", got)
+	}
+}
