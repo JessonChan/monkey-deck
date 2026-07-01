@@ -283,6 +283,7 @@ monkey-deck/
 6. **`PromptResponse.Usage` 常为 nil**:用量靠流式 `SessionUsageUpdate` 兜底,别假设一定有值（见 §1.6）。
 7. **安全切片**:`id[:8]` 当 id 不足 8 字符会 panic,用 safe slice。
 8. **改 Go 导出方法签名后必须重新 `wails3 gen bindings`**,否则前端用旧签名。
+9. **进程回收必须 harness 无关**:启动清残留(`KillAllHarnesses`)/ reap 逃逸(`reapStrayHarnesses`)以 pgidFile 登记的 **pgid** 为唯一真相,**禁止写死某个 harness 命令**做 grep——曾写死 `"opencode acp"`,默认 harness omp 实以 `bun …/omp acp` 启动,命令行不含该串 → omp 孤儿**永不回收**(漏掉主力 harness)。受支持命令经 `harness.Commands()` → `acp.SetHarnessCommands` 注入,仅作「pgid 被复用」的安全过滤(见 §3.2)。
 
 
 > **具体项目踩坑与修复记录**(含根因 / 修法 / 验证)统一落在 `docs/worklog/YYYY-MM-DD-<slug>.md`,本文只保留原则性规则。
