@@ -230,11 +230,11 @@ export default function Sidebar(props: Props) {
                   <Folder size={15} />
                   <span className="project-name" data-tooltip-id="md-tip" data-tooltip-content={p.path}>{p.name}</span>
                 </button>
-                <button className="icon-btn small" onClick={() => props.onCreateSession(p.id)} data-tooltip-id="md-tip" data-tooltip-content="新对话" data-testid={`new-session-${p.id}`}>
-                  <Plus size={13} />
-                </button>
                 <button className="icon-btn small" onClick={() => toggleSearch(p.id)} data-tooltip-id="md-tip" data-tooltip-content={searchProj === p.id ? "关闭搜索" : "搜索会话"} data-tooltip-place="bottom" data-testid={`search-sessions-${p.id}`}>
                   <Search size={12} />
+                </button>
+                <button className="icon-btn small" onClick={() => props.onCreateSession(p.id)} data-tooltip-id="md-tip" data-tooltip-content="新对话" data-testid={`new-session-${p.id}`}>
+                  <Plus size={13} />
                 </button>
               </div>
               {isOpen && (
