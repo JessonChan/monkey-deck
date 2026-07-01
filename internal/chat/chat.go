@@ -67,7 +67,7 @@ func isTerminalToolStatus(status string) bool {
 // chatConn 是 *acp.ChatSession 的最小行为接口,供单测注入 mock(AGENTS.md §5.1:
 // ACP 行为靠接口注入 mock,单测不启真 harness)。*acp.ChatSession 满足此接口。
 type chatConn interface {
-	Prompt(ctx context.Context, message string, attachments []acp.Attachment, timeout time.Duration) (acp.StopReason, error)
+	Prompt(ctx context.Context, message string, attachments []acp.Attachment) (acp.StopReason, error)
 	Close()
 	// IsAlive 报告 harness 进程是否存活(预热后空闲断连兜底:活跃但进程已死 → 拆掉重 spawn)。
 	IsAlive() bool
@@ -1141,7 +1141,7 @@ func (s *ChatService) SendAndWaitSync(sessionID, text string, attachments []acp.
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
-	stopReason, err := ls.chat.Prompt(ctx, text, attachments, 300*time.Second)
+	stopReason, err := ls.chat.Prompt(ctx, text, attachments)
 	ls.mu.Lock()
 	if ls.thought.Len() > 0 {
 		ls.segments = append(ls.segments, segEntry{"thought", ls.thought.String()})
@@ -1198,7 +1198,7 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 		close(done)
 	}()
 
-	stopReason, err := ls.chat.Prompt(turnCtx, text, attachments, 300*time.Second)
+	stopReason, err := ls.chat.Prompt(turnCtx, text, attachments)
 
 	// 收尾段持 sendMu:与 startTurn/SendMessage 互斥,杜绝「busy 已清、emit 未发」窗口被
 	// 并发 send 抢占 → 旧 emit 延迟覆盖新 prompting(§5.4 覆盖竞态)。defer 早于 close(done)

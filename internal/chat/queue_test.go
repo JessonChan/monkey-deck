@@ -39,7 +39,7 @@ func newFakeChat() *fakeChat {
 	}
 }
 
-func (f *fakeChat) Prompt(ctx context.Context, msg string, _ []acp.Attachment, _ time.Duration) (acp.StopReason, error) {
+func (f *fakeChat) Prompt(ctx context.Context, msg string, _ []acp.Attachment) (acp.StopReason, error) {
 	f.mu.Lock()
 	f.prompts = append(f.prompts, msg)
 	f.mu.Unlock()

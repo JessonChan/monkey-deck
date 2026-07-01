@@ -25,7 +25,7 @@ type mockChatConn struct {
 	closed atomic.Bool
 }
 
-func (m *mockChatConn) Prompt(ctx context.Context, message string, attachments []acp.Attachment, timeout time.Duration) (acp.StopReason, error) {
+func (m *mockChatConn) Prompt(ctx context.Context, message string, attachments []acp.Attachment) (acp.StopReason, error) {
 	return "", nil
 }
 func (m *mockChatConn) Close()                                       { m.closed.Store(true) }

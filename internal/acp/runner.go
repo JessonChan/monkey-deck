@@ -19,10 +19,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
-	"time"
 
 	"github.com/coder/acp-go-sdk"
 )
@@ -196,149 +193,19 @@ func (r *Runner) spawnAndInit(ctx context.Context, workDir string, handler *Hand
 	return cmd, conn, initResp, nil
 }
 
-// activityTracker 跟踪一个 prompt turn 的活动状态:最后活动时间 + in_progress tool 计数。
-//
-// 静默超时判定时,只要还有 tool 处于 in_progress(ToolCallStatus,协议级「正在工作」信号)
-// 就不算超时 —— 长 tool 期间即便无 chunk 流入也不误判卡死(AGENTS.md §3.3)。
-// 纯静默(无 chunk 且无 in_progress tool)仍按 timeout 兜底,避免 agent 真卡死时永久挂起。
-type activityTracker struct {
-	lastActivity atomic.Int64
-	inProgress   atomic.Int64 // 当前 in_progress 的 tool 数
-	mu           sync.Mutex
-	toolStatus   map[string]string // callID -> 上次 status(用于正确增减计数)
-}
-
-func newActivityTracker() *activityTracker {
-	return &activityTracker{toolStatus: map[string]string{}}
-}
-
 // isTerminalToolStatus 判断 tool status 是否终态(completed/failed)。
 // 单调状态保护用:终态后不接受回退到 in_progress/pending(§5.4 #10)。
 func isTerminalToolStatus(status string) bool {
 	return status == "completed" || status == "failed"
 }
 
-// observe 收到一条 SessionEvent:刷新活动时间,并维护 in_progress tool 计数。
-func (a *activityTracker) observe(e SessionEvent) {
-	a.lastActivity.Store(time.Now().UnixNano())
-	if (e.Kind != "tool_call" && e.Kind != "tool_call_update") || e.ToolCallID == "" || e.ToolStatus == "" {
-		return
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	prev := a.toolStatus[e.ToolCallID]
-	if prev == e.ToolStatus {
-		return
-	}
-	// 单调状态保护:终态后不接受回退(§5.4 #10)—— omp async task 的
-	// onUpdate 在 tool_execution_end 之后到达,会把 completed 打回 in_progress。
-	if isTerminalToolStatus(prev) && !isTerminalToolStatus(e.ToolStatus) {
-		return
-	}
-	if prev == "in_progress" {
-		a.inProgress.Add(-1)
-	}
-	if e.ToolStatus == "in_progress" {
-		a.inProgress.Add(1)
-	}
-	a.toolStatus[e.ToolCallID] = e.ToolStatus
-}
-
-// timedOut 判定是否静默超时:静默超过 timeout 且无 in_progress tool。
-// 有 tool 在 in_progress 时永不超时(协议级「正在工作」信号)。
-func (a *activityTracker) timedOut(timeout time.Duration) bool {
-	return a.timedOutAt(time.Now(), timeout)
-}
-
-// timedOutAt 是 timedOut 的可注入版(now 显式传入,供 shouldCancelTurn 单测):
-// 有 in_progress tool 时不超时(§3.3)。
-func (a *activityTracker) timedOutAt(now time.Time, timeout time.Duration) bool {
-	if a.inProgress.Load() > 0 {
-		return false
-	}
-	return now.Sub(time.Unix(0, a.lastActivity.Load())) > timeout
-}
-
-// maxTurnAbsolute 是单轮 Prompt 的「彻底无活动」兜底上限(滑动窗口,从最后一次活动起算)。
-// 区别于静默超时(idle,从 lastActivity 起算、有 in_progress tool 豁免),absolute 无 in_progress 豁免:
-// 当 harness 在 in_progress tool 中途死亡(tool 永不到终态)→ 静默超时被 in_progress 豁免 →
-// 只剩 absolute 兜底,保证 turn 一定能被取消、runPrompt 能返回去拆死连接(§5.4 #16)。
-//
-// 滑动窗口语义:只要 turn 还在产出(tool/message 在流)→ lastActivity 持续刷新 → absolute 不命中 →
-// 长任务不被误杀(治 ca5e8add 那种 15min 整被砍的真·大任务);仅当「彻底无活动」超过 absolute 才兜底。
-// 设得较大(60min)以容纳真正长时任务,作为死 harness 的最终安全网而非常规路径。
-const maxTurnAbsolute = 60 * time.Minute
-
-// shouldCancelTurn 统一判定静默超时 goroutine 是否应取消本轮,返回原因(""=不取消):
-//   - "idle":静默超时(从 lastActivity 起算,有 in_progress tool 时不命中,§3.3)——
-//     专杀「无 chunk 且无 tool 在跑」的真卡死;
-//   - "absolute":从 lastActivity 起算的滑动窗口超过绝对上限(无 in_progress 豁免)——
-//     兜底治 in_progress tool 挂死(§5.4 #16),且因滑窗不误杀仍在产出的长任务。
-//
-// 抽成纯函数(显式传 now/start)便于单测,无需真定时器。
-func (a *activityTracker) shouldCancelTurn(start, now time.Time, silence, absolute time.Duration) string {
-	if a.timedOutAt(now, silence) {
-		return "idle"
-	}
-	if now.Sub(time.Unix(0, a.lastActivity.Load())) > absolute {
-		return "absolute"
-	}
-	return ""
-}
-
 // Prompt 在已有 session 上发送消息并等待回复(同步返回,期间 SessionUpdate 并发流入)。
-// timeout 是「静默超时」(从最后一次活动算)——只要 opencode 还在输出就不超时(§3.3)。
-// 有 tool 处于 in_progress 时豁免静默超时(协议级「正在工作」信号,见 activityTracker),
-// 避免「长 tool 期间无 chunk」被误判为卡死。返回 StopReason 与可能的错误。
+// 不设超时:对齐 omp TUI 的设计——turn 跑到自然结束(end_turn / error),
+// 靠用户 Stop(走 ctx cancel)+ harness 崩溃检测(peer disconnected)兜底(§3.3)。
 // attachments(@提及的文件/目录)经 ACP ContentBlock::ResourceLink 发送(协议 baseline),
 // agent 可直接按 file:// URI 访问;文本本身也照常作为 TextBlock 发出。
-// 崩溃表现为含 "peer disconnected" 的错误(§5.4 #2)。
-func (cs *ChatSession) Prompt(ctx context.Context, message string, attachments []Attachment, timeout time.Duration) (acp.StopReason, error) {
-	act := newActivityTracker()
-	act.lastActivity.Store(time.Now().UnixNano())
-
-	wrapped := cs.Handler.OnEvent
-	cs.Handler.OnEvent = func(e SessionEvent) {
-		act.observe(e)
-		if wrapped != nil {
-			wrapped(e)
-		}
-	}
-	defer func() { cs.Handler.OnEvent = wrapped }()
-
-	promptCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	if timeout > 0 {
-		start := time.Now()
-		go func() {
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-promptCtx.Done():
-					return
-				case <-ticker.C:
-				}
-				switch act.shouldCancelTurn(start, time.Now(), timeout, maxTurnAbsolute) {
-				case "absolute":
-					slog.Warn("chat absolute turn timeout", "elapsed", time.Since(start), "inProgress", act.inProgress.Load())
-					cancel()
-					return
-				case "idle":
-					slog.Warn("chat idle timeout", "silence", time.Since(time.Unix(0, act.lastActivity.Load())))
-					cancel()
-					return
-				}
-				// 诊断:已静默超阈值却未取消,通常是 in_progress tool 豁免(尚未到绝对上限)。
-				if d := time.Since(time.Unix(0, act.lastActivity.Load())); d > timeout && act.inProgress.Load() > 0 {
-					slog.Debug("chat idle exempt by in_progress tool", "silence", d, "inProgress", act.inProgress.Load())
-				}
-			}
-		}()
-	}
-
-	resp, err := cs.Conn.Prompt(promptCtx, acp.PromptRequest{
+func (cs *ChatSession) Prompt(ctx context.Context, message string, attachments []Attachment) (acp.StopReason, error) {
+	resp, err := cs.Conn.Prompt(ctx, acp.PromptRequest{
 		SessionId: cs.SessionID,
 		Prompt:    buildPromptBlocks(message, attachments, cs.WorkDir),
 	})
