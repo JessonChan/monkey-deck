@@ -12,9 +12,11 @@ import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/inte
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { Tooltip } from "react-tooltip";
 import type { FileChange } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
+const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
 // 按 session 隔离的状态:切走再切回时,进行中的流式输出 / 用量 / 状态 / 权限都保留在各自缓存里,
 // 不会因「切走→事件被丢弃→切回只剩 DB 已落库内容」而丢失正在输出的内容。
+
 type Usage = { used: number; size: number; cost: number };
 const EMPTY_USAGE: Usage = { used: 0, size: 0, cost: 0 };
 
@@ -858,7 +860,7 @@ export default function App() {
         onCancel={() => setNewSession(null)}
       />
     )}
-    <Tooltip id="md-tip" delayShow={400} />
+    <Tooltip id="md-tip" delayShow={isMac ? 1500 : 500} />
     </>
   );
 }
