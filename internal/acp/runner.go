@@ -248,23 +248,29 @@ func (a *activityTracker) timedOutAt(now time.Time, timeout time.Duration) bool 
 	return now.Sub(time.Unix(0, a.lastActivity.Load())) > timeout
 }
 
-// maxTurnAbsolute 是单轮 Prompt 的绝对墙上时间上限,独立于静默超时与 in_progress 豁免。
-// 防止 harness 在某个 in_progress tool 中途死亡(tool 永不到终态)→ 静默超时被永久豁免
-// → turn 永久挂起、死 harness 永不拆(变僵尸)(§5.4 #16)。设得足够大以容纳真正长时的
-// tool(如大构建/长 bash),仅作兜底。
-const maxTurnAbsolute = 15 * time.Minute
+// maxTurnAbsolute 是单轮 Prompt 的「彻底无活动」兜底上限(滑动窗口,从最后一次活动起算)。
+// 区别于静默超时(idle,从 lastActivity 起算、有 in_progress tool 豁免),absolute 无 in_progress 豁免:
+// 当 harness 在 in_progress tool 中途死亡(tool 永不到终态)→ 静默超时被 in_progress 豁免 →
+// 只剩 absolute 兜底,保证 turn 一定能被取消、runPrompt 能返回去拆死连接(§5.4 #16)。
+//
+// 滑动窗口语义:只要 turn 还在产出(tool/message 在流)→ lastActivity 持续刷新 → absolute 不命中 →
+// 长任务不被误杀(治 ca5e8add 那种 15min 整被砍的真·大任务);仅当「彻底无活动」超过 absolute 才兜底。
+// 设得较大(60min)以容纳真正长时任务,作为死 harness 的最终安全网而非常规路径。
+const maxTurnAbsolute = 60 * time.Minute
 
 // shouldCancelTurn 统一判定静默超时 goroutine 是否应取消本轮,返回原因(""=不取消):
-//   - "absolute":elapsed > absolute,一律取消(忽略 in_progress 豁免)——治本 in_progress 挂死;
-//   - "idle":静默超时(有 in_progress tool 时不命中,§3.3)。
+//   - "idle":静默超时(从 lastActivity 起算,有 in_progress tool 时不命中,§3.3)——
+//     专杀「无 chunk 且无 tool 在跑」的真卡死;
+//   - "absolute":从 lastActivity 起算的滑动窗口超过绝对上限(无 in_progress 豁免)——
+//     兜底治 in_progress tool 挂死(§5.4 #16),且因滑窗不误杀仍在产出的长任务。
 //
 // 抽成纯函数(显式传 now/start)便于单测,无需真定时器。
 func (a *activityTracker) shouldCancelTurn(start, now time.Time, silence, absolute time.Duration) string {
-	if now.Sub(start) > absolute {
-		return "absolute"
-	}
 	if a.timedOutAt(now, silence) {
 		return "idle"
+	}
+	if now.Sub(time.Unix(0, a.lastActivity.Load())) > absolute {
+		return "absolute"
 	}
 	return ""
 }

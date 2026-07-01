@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -132,5 +133,44 @@ func TestShouldCancelTurnRecentActive(t *testing.T) {
 	a.lastActivity.Store(now.Add(-2 * time.Second).UnixNano()) // 近期有活动
 	if got := a.shouldCancelTurn(start, now, 5*time.Minute, 15*time.Minute); got != "" {
 		t.Fatalf("近期活动且未到绝对上限不应取消:got %q, want \"\"", got)
+	}
+}
+// TestShouldCancelTurnSlidingAbsoluteDoesNotKillActiveLongTask 回归:长任务持续
+// 产出(tool/message 每几分钟一次)→ 旧 fixed-15min-absolute 在 start+15min 硬杀,
+// 滑动窗口因 lastActivity 持续刷新而不再命中 → 不取消。正是 ca5e8add 被误杀的那类场景。
+func TestShouldCancelTurnSlidingAbsoluteDoesNotKillActiveLongTask(t *testing.T) {
+	a := newActivityTracker()
+	// 模拟 30min 长任务:每 5min 来一次活动(远未超 absolute),start 已超 15min/30min 阈值。
+	base := time.Now().Add(-30 * time.Minute)
+	start := base
+	now := base.Add(30 * time.Minute)
+	// 推进并周期性刷新活动时间(每 5min 一趟)。
+	for i := 0; i <= 6; i++ {
+		a.observe(SessionEvent{Kind: "tool_call", ToolCallID: fmt.Sprintf("t%d", i), ToolStatus: "completed"})
+		a.lastActivity.Store(base.Add(time.Duration(i) * 5 * time.Minute).UnixNano())
+	}
+	// 近期有活动 → 滑窗 absolute(60min) 未命中;无 in_progress 近期活动也不超 idle(5min)。
+	if got := a.shouldCancelTurn(start, now, 5*time.Minute, 60*time.Minute); got != "" {
+		t.Fatalf("活跃长任务不应被 absolute 误杀:got %q, want \"\"", got)
+	}
+	// 印证这正是旧 fixed-absolute(start+15min) 会误杀的场景:15min 时 lastActivity 刚刷新,
+	// 固定起点已超 15min,旧逻辑必出 absolute。(滑动窗口不会,因 lastActivity 距 now 仅 ~5min)
+}
+
+// TestShouldCancelTurnAbsoluteStillKillsInactiveDeadTool:死 harness 兜底——in_progress
+// tool 中途死亡,tool 永不到终态,且彻底无活动超过 absolute → 静默超时被 in_progress 豁免,
+// 滑动窗口 absolute 仍命中(从 lastActivity 起算无豁免),保证 turn 必被取消(§5.4 #16)。
+func TestShouldCancelTurnAbsoluteStillKillsInactiveDeadTool(t *testing.T) {
+	a := newActivityTracker()
+	base := time.Now().Add(-12 * time.Minute)
+	start := base
+	now := time.Now()
+	a.observe(SessionEvent{Kind: "tool_call", ToolCallID: "t1", ToolStatus: "in_progress"})
+	// tool 挂死后彻底无活动:lastActivity 停在 12min 前。静默超时 5min 被 in_progress 豁免
+	// (timedOutAt 见 in_progress>0 → false),绝不命中 idle;靠绝对兜底(10min,从 lastActivity
+	// 起算无豁免)命中,保证 turn 必被取消、死 harness 能被拆(§5.4 #16)。
+	a.lastActivity.Store(base.UnixNano())
+	if got := a.shouldCancelTurn(start, now, 5*time.Minute, 10*time.Minute); got != "absolute" {
+		t.Fatalf("死 harness 兜底 absolute 应命中:got %q, want absolute", got)
 	}
 }
