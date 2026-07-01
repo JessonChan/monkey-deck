@@ -369,9 +369,10 @@ func (cs *ChatSession) RespondPermission(id, optionID string) bool {
 	return cs.Handler.RespondPermission(id, optionID)
 }
 
-// SessionTitle 通过 session/list 取 opencode 为本 session 生成的权威标题(§5.4 #14)。
-// opencode 实证不发 session_info_update 通知,但会把它生成的标题写进自身库并通过
-// session/list 的 SessionInfo.Title 暴露。返回空串 = 暂无标题或 session/list 不可用。
+// SessionTitle 通过 session/list 拉 harness 为本 session 生成的权威标题(§5.4 #14)。
+// 协议硬约束:仅当 harness 在 Initialize 声明 session/list 能力时才可调用(session-list.mdx)。
+// 与 session_info_update 推送正交:推送由 handleEvent 的 session_info 分支即时处理,
+// 这里是主动拉取的兜底。返回空串 = harness 暂无标题或未声明该能力。
 func (cs *ChatSession) SessionTitle(ctx context.Context) (string, error) {
 	if !cs.CanListSessions {
 		// 协议硬约束:agent 未声明 session/list 能力时禁止调用(session-list.mdx)。

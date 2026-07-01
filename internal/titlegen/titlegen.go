@@ -1,8 +1,8 @@
 // Package titlegen 为会话生成「即时兜底标题」(无 LLM)。
 //
-// 用途:用户发首条消息、opencode 尚未生成标题前,先给侧栏一个可读标题。
-// 真正的权威标题由 opencode 生成、经 ACP session/list 读取(见 chat.go runPrompt);
-// 本包只负责 opencode 标题到达前的瞬时显示(去 markdown/命令/引号,截断 maxChars)。
+// 用途:用户发首条消息、harness 尚未生成标题前,先给侧栏一个可读标题。
+// 真正的权威标题由 harness 生成、经 ACP session_info_update 推送或 session/list 读取;
+// 本包只负责权威标题到达前的瞬时显示(去 markdown/命令/引号,截断 maxChars)。
 //
 // 归一化逻辑移植自 wesight (MIT):src/shared/cowork/sessionTitle.ts
 // (buildSessionTitleContext / normalizeSessionTitleToPlainText)。
@@ -123,7 +123,7 @@ func Normalize(value, fallback string) string {
 	return v
 }
 
-// FallbackTitle 从用户输入即时生成纯文本标题(无 LLM),用于 opencode 标题到达前的瞬时显示。
+// FallbackTitle 从用户输入即时生成纯文本标题(无 LLM),用于 harness 标题到达前的瞬时显示。
 func FallbackTitle(input, fallback string) string {
 	ctx := BuildContext(input)
 	if ctx == "" {

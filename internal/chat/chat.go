@@ -67,7 +67,7 @@ type chatConn interface {
 	// IsAlive 报告 harness 进程是否存活(预热后空闲断连兜底:活跃但进程已死 → 拆掉重 spawn)。
 	IsAlive() bool
 	RespondPermission(id, optionID string) bool
-	// SessionTitle 经 ACP session/list 取 opencode 生成的权威标题(§5.4 #14)。
+	// SessionTitle 经 ACP session/list 拉 harness 生成的权威标题(§5.4 #14)。
 	SessionTitle(ctx context.Context) (string, error)
 	// FlatConfigOptions 返回扁平化的 config options(给前端渲染下拉)。
 	FlatConfigOptions() []acp.ConfigOption
@@ -238,9 +238,9 @@ func (s *ChatService) emitSessionMeta(sessionID, title string) {
 // maybeAutoTitle 会话无标题时,用首条消息生成「兜底纯文本标题」并持久化 + 推前端。
 // 返回写入的兜底标题(空 = 未写入:会话已有标题或消息为空)。
 //
-// 这是**瞬时兜底**:opencode 尚未生成标题前给侧栏一个可读标题。opencode 的权威标题
-// 经 session/list 读取(见 runPrompt,§5.4 #14)—— opencode 实证不发 session_info_update
-// 通知,但会在 turn 结束后通过 session/list 的 SessionInfo.Title 暴露它生成的标题。
+// 这是**瞬时兜底**:harness 尚未生成/送达标题前给侧栏一个可读标题。harness 的权威标题
+// 经 session_info_update 推送(见 handleEvent)或 session/list 拉取(见 syncSessionTitle)
+// 到达后覆盖本兜底。harness 是否生成标题、走哪条通道,由其自身决定(§5.4 #14)。
 func (s *ChatService) maybeAutoTitle(sessionID, text string) string {
 	se, err := s.st.GetSession(s.ctx, sessionID)
 	if err != nil || se == nil || se.Title != "" {
@@ -257,9 +257,10 @@ func (s *ChatService) maybeAutoTitle(sessionID, text string) string {
 	return title
 }
 
-// syncSessionTitle 经 session/list 取 opencode 为本 session 生成的权威标题,
-// 若与当前存储标题不同则覆盖 + 推前端(§5.4 #14)。opencode 在 turn 结束后才暴露标题,
-// 故在 runPrompt 成功后调用。失败(无标题/session/list 不可用)静默跳过,fallback 保留。
+// syncSessionTitle 经 session/list 拉 harness 为本 session 生成的权威标题,
+// 若与当前存储标题不同则覆盖 + 推前端(§5.4 #14)。仅当 harness 声明了 session/list
+// 能力时可调;harness 通常在 turn 结束后才暴露标题,故在 runPrompt 成功后调用。
+// 失败(未声明能力/无标题)静默跳过,兜底标题保留。
 func (s *ChatService) syncSessionTitle(ls *liveSession, sessionID string) {
 	tctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
@@ -460,7 +461,7 @@ func (s *ChatService) MergeSession(sessionID string) (string, error) {
 	return sb.String(), nil
 }
 
-// mergeCommitMessage 组合并到主仓库时用的提交信息:优先用 opencode 生成的会话标题
+// mergeCommitMessage 组合并到主仓库时用的提交信息:优先用 harness 生成的会话标题
 // (AI 对本次工作的总结,经 session/list 取得)作主题,标题为空时降级到分支名。
 // 纯函数,便于单测。
 func mergeCommitMessage(branch, title string) string {
@@ -1239,7 +1240,7 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 		s.emitStatus(sessionID, "error", "agent 连接已重置,下条消息将自动重连")
 		return
 	}
-	// 取 opencode 生成的权威标题覆盖兜底标题(§5.4 #14)。
+	// 取 harness 生成的权威标题覆盖兜底标题(§5.4 #14)。
 	s.syncSessionTitle(ls, sessionID)
 	s.emitStatus(sessionID, "idle", "stopReason="+string(stopReason))
 }
@@ -1318,7 +1319,7 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 	}
 	ls.mu.Unlock()
 	if e.Kind == "session_info" && e.Title != "" {
-		// opencode 发来的会话标题(更优,覆盖自动标题)。
+		// harness 经 session_info_update 推送的会话标题(更优,覆盖兜底标题)。
 		if err := s.st.UpdateSessionTitle(s.ctx, sessionID, e.Title); err == nil {
 			s.emitSessionMeta(sessionID, e.Title)
 		}

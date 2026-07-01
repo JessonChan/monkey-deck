@@ -28,7 +28,7 @@ type fakeChat struct {
 	cancelled int
 	block     chan struct{} // 关闭则所有阻塞 Prompt 返回 end_turn
 	started   chan struct{} // 每次 Prompt 进入时发信号(buffered,防丢)
-	title     string        // SessionTitle 返回值(模拟 opencode 经 session/list 给的标题)
+	title     string        // SessionTitle 返回值(模拟 harness 经 session/list 给的标题)
 }
 
 func newFakeChat() *fakeChat {

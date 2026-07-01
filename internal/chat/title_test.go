@@ -1,6 +1,6 @@
 package chat
 
-// title_test.go:syncSessionTitle 的回归测试 —— opencode 经 session/list 给的
+// title_test.go:syncSessionTitle 的回归测试 —— harness 经 session/list 给的
 // 权威标题应覆盖兜底标题(§5.4 #14),无标题/相同标题不写。
 
 import (
@@ -20,7 +20,7 @@ func assertTitle(t *testing.T, se *store.Session, want string) {
 	}
 }
 
-// syncSessionTitle 应把 opencode 标题写入 DB(与已存不同时覆盖)。
+// syncSessionTitle 应把 harness 标题写入 DB(与已存不同时覆盖)。
 func TestSyncSessionTitleOverrides(t *testing.T) {
 	svc, sid, fc := newTestService(t)
 	fc.title = "README 翻译为中文并添加安装说明"
@@ -30,7 +30,7 @@ func TestSyncSessionTitleOverrides(t *testing.T) {
 	assertTitle(t, se, fc.title)
 }
 
-// 无标题(opencode 尚未生成)时不应清空已存标题。
+// 无标题(harness 尚未生成)时不应清空已存标题。
 func TestSyncSessionTitleEmptyNoClobber(t *testing.T) {
 	svc, sid, fc := newTestService(t)
 	if err := svc.st.UpdateSessionTitle(context.Background(), sid, "已有标题"); err != nil {
