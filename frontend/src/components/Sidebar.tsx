@@ -53,8 +53,13 @@ export default function Sidebar(props: Props) {
   const toggle = (id: string) =>
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        // 折叠:清掉该项目的 session 分片(下次展开回到默认 SESSION_PAGE)。
+        next.delete(id);
+        setSessionLimit((lim) => { const c = { ...lim }; delete c[id]; return c; });
+      } else {
+        next.add(id);
+      }
       return next;
     });
 
