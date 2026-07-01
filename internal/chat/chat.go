@@ -58,6 +58,11 @@ type toolAccum struct {
 	RawInput  any    `json:"rawInput,omitempty"`
 	RawOutput any    `json:"rawOutput,omitempty"`
 }
+// isTerminalToolStatus 判断 tool status 是否终态(completed/failed)。
+// 用于单调状态保护:终态后不接受回退到 in_progress/pending(§5.4 #10)。
+func isTerminalToolStatus(status string) bool {
+	return status == "completed" || status == "failed"
+}
 
 // chatConn 是 *acp.ChatSession 的最小行为接口,供单测注入 mock(AGENTS.md §5.1:
 // ACP 行为靠接口注入 mock,单测不启真 harness)。*acp.ChatSession 满足此接口。
@@ -1319,8 +1324,8 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 			if e.ToolTitle != "" {
 				t.Title = e.ToolTitle
 			}
-			if e.ToolStatus != "" {
-				t.Status = e.ToolStatus
+		if e.ToolStatus != "" && !isTerminalToolStatus(t.Status) {
+			t.Status = e.ToolStatus
 			}
 			if e.ToolKind != "" {
 				t.Kind = e.ToolKind

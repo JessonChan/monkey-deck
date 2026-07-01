@@ -212,6 +212,12 @@ func newActivityTracker() *activityTracker {
 	return &activityTracker{toolStatus: map[string]string{}}
 }
 
+// isTerminalToolStatus 判断 tool status 是否终态(completed/failed)。
+// 单调状态保护用:终态后不接受回退到 in_progress/pending(§5.4 #10)。
+func isTerminalToolStatus(status string) bool {
+	return status == "completed" || status == "failed"
+}
+
 // observe 收到一条 SessionEvent:刷新活动时间,并维护 in_progress tool 计数。
 func (a *activityTracker) observe(e SessionEvent) {
 	a.lastActivity.Store(time.Now().UnixNano())
@@ -222,6 +228,11 @@ func (a *activityTracker) observe(e SessionEvent) {
 	defer a.mu.Unlock()
 	prev := a.toolStatus[e.ToolCallID]
 	if prev == e.ToolStatus {
+		return
+	}
+	// 单调状态保护:终态后不接受回退(§5.4 #10)—— omp async task 的
+	// onUpdate 在 tool_execution_end 之后到达,会把 completed 打回 in_progress。
+	if isTerminalToolStatus(prev) && !isTerminalToolStatus(e.ToolStatus) {
 		return
 	}
 	if prev == "in_progress" {
