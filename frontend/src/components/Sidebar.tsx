@@ -89,10 +89,18 @@ export default function Sidebar(props: Props) {
   const [contentHits, setContentHits] = useState<string[] | null>(null); // null=未发起内容搜索
   const [contentLoading, setContentLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // 拖拽时自动折叠所有项目:展开项虽 disabled 仍占满高度(含 session 列表),拖动需跨越整段 → 距离过长 + 碰撞失准。
+  // 开始时记录并全折叠,结束/取消时恢复原展开态,不打断用户原本在看的项目。
+  const expandedBeforeDrag = useRef<Set<string>>(new Set());
 
   // 拖拽排序(0007):distance=6 区分点击/拖动,避免点子按钮误触发拖。
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const handleDragStart = () => {
+    expandedBeforeDrag.current = new Set(expanded);
+    setExpanded(new Set());
+  };
   const handleDragEnd = (e: DragEndEvent) => {
+    setExpanded(expandedBeforeDrag.current); // 恢复原展开态(无论是否实际重排)
     const { active, over } = e;
     if (!over || active.id === over.id) return;
     const ids = props.projects.map((p) => p.id);
@@ -101,6 +109,7 @@ export default function Sidebar(props: Props) {
     if (from < 0 || to < 0) return;
     props.onReorderProjects(arrayMove(ids, from, to));
   };
+  const handleDragCancel = () => setExpanded(expandedBeforeDrag.current);
 
   const toggle = (id: string) =>
     setExpanded((prev) => {
@@ -253,7 +262,7 @@ export default function Sidebar(props: Props) {
         </div>
       )}
 
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={handleDragCancel}>
       <SortableContext items={props.projects.map((p) => p.id)} strategy={verticalListSortingStrategy}>
       <div className="project-list">
         {props.projects.length === 0 && !adding && (
