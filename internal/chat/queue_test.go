@@ -29,6 +29,7 @@ type fakeChat struct {
 	block     chan struct{} // 关闭则所有阻塞 Prompt 返回 end_turn
 	started   chan struct{} // 每次 Prompt 进入时发信号(buffered,防丢)
 	title     string        // SessionTitle 返回值(模拟 harness 经 session/list 给的标题)
+	emitHook  func(msg string) // 成功返回前回调(模拟 agent 产出一条消息,避免空 turn)
 }
 
 func newFakeChat() *fakeChat {
@@ -53,6 +54,9 @@ func (f *fakeChat) Prompt(ctx context.Context, msg string, _ []acp.Attachment, _
 		f.mu.Unlock()
 		return "", ctx.Err()
 	case <-f.block:
+		if f.emitHook != nil {
+			f.emitHook(msg)
+		}
 		return acp.StopReason("end_turn"), nil
 	}
 }
@@ -110,7 +114,12 @@ func newTestService(t *testing.T) (svc *ChatService, sessionID string, fc *fakeC
 	sessionID = se.ID
 
 	fc = newFakeChat()
-	svc.active[sessionID] = &liveSession{chat: fc, proj: proj, tools: map[string]*toolAccum{}}
+	ls := &liveSession{chat: fc, proj: proj, tools: map[string]*toolAccum{}}
+	// emitHook 模拟 agent 在 Prompt 成功返回前产出一条消息(避免 runPrompt 空响应检测)。
+	fc.emitHook = func(msg string) {
+		svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "ok"})
+	}
+	svc.active[sessionID] = ls
 	t.Cleanup(fc.release) // 兜底:放行所有阻塞 Prompt,防 goroutine 泄漏
 	return svc, sessionID, fc
 }

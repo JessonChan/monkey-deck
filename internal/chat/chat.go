@@ -1246,6 +1246,15 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 		s.emitStatus(sessionID, "error", "agent 连接已重置,下条消息将自动重连")
 		return
 	}
+	// 空响应检测:Prompt 成功返回但零输出(无 segments / tools)——通常是 resume 后
+	// harness 内部 session 状态损坏(§5.4)。不静默当成功,否则用户发了消息没反应。
+	// 按 error 路径处理:拆连接 + 用户可见提示,下条消息走 ensureLive 重连。
+	if len(segments) == 0 && len(tools) == 0 {
+		s.teardownLive(sessionID, ls)
+		slog.Error("prompt empty turn", "session", sessionID, "stopReason", stopReason)
+		s.emitStatus(sessionID, "error", "agent 未产生响应,连接已重置,下条消息将自动重连")
+		return
+	}
 	// 取 harness 生成的权威标题覆盖兜底标题(§5.4 #14)。
 	s.syncSessionTitle(ls, sessionID)
 	s.emitStatus(sessionID, "idle", "stopReason="+string(stopReason))
