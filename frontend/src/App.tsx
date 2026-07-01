@@ -682,6 +682,22 @@ export default function App() {
     [refreshProjects, selectedProjectId]
   );
 
+  // 拖拽重排项目(0007):乐观更新前端顺序 → 持久化 sort_order;失败回滚拉真实顺序。
+  const reorderProjects = useCallback(
+    async (ids: string[]) => {
+      const byId = new Map(projects.map((p) => [p.id, p]));
+      const next = ids.map((id) => byId.get(id)).filter(Boolean) as Project[];
+      if (next.length !== projects.length) return; // id 集合不一致,放弃
+      setProjects(next);
+      try {
+        await ChatService.ReorderProjects(ids);
+      } catch {
+        void refreshProjects();
+      }
+    },
+    [projects, refreshProjects]
+  );
+
   // 删除 session:后端关 harness + 清 worktree + 删 DB;前端清掉该 session 的所有 per-session 缓存 + 从侧栏列表移除,
   // 若是当前选中则清空选中态。删除是硬删除(DB 记录也没了),不可恢复。
   const removeSession = useCallback(
@@ -761,6 +777,7 @@ export default function App() {
           statusBySession={statusBySession}
           activityBySession={activityBySession}
           unreadBySession={unreadBySession}
+          onReorderProjects={reorderProjects}
         />
       </Panel>
       <Separator className="resize-handle" />

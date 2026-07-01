@@ -1,7 +1,17 @@
-import { useState, useEffect, useLayoutEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X } from "lucide-react";
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 interface Props {
   projects: Project[];
@@ -20,6 +30,36 @@ interface Props {
   unreadBySession: Record<string, boolean>;
   permPendingBySession: Record<string, boolean>;
   draftBySession?: Record<string, string>;
+  onReorderProjects: (ids: string[]) => void;
+}
+
+// 可拖拽项目行(0007):折叠态整行可拖,展开态 disabled(不可主动拖,但仍可被其他项挤动)。
+// listeners+attributes 展开到外层 wrap;PointerSensor distance 约束让子按钮(caret/搜索/新对话)点击不误触发拖动。
+// isDragging 时加 dragging class 去 sticky(见 index.css),规避 transform 与 position:sticky 在 WebKit 的冲突。
+function SortableProjectRow({
+  id,
+  disabled,
+  children,
+}: {
+  id: string;
+  disabled: boolean;
+  children: ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+    disabled,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`project-item-wrap${isDragging ? " dragging" : ""}`}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      {...attributes}
+      {...listeners}
+    >
+      {children}
+    </div>
+  );
 }
 
 type Ctx =
@@ -49,6 +89,18 @@ export default function Sidebar(props: Props) {
   const [contentHits, setContentHits] = useState<string[] | null>(null); // null=未发起内容搜索
   const [contentLoading, setContentLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // 拖拽排序(0007):distance=6 区分点击/拖动,避免点子按钮误触发拖。
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const handleDragEnd = (e: DragEndEvent) => {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const ids = props.projects.map((p) => p.id);
+    const from = ids.indexOf(active.id as string);
+    const to = ids.indexOf(over.id as string);
+    if (from < 0 || to < 0) return;
+    props.onReorderProjects(arrayMove(ids, from, to));
+  };
 
   const toggle = (id: string) =>
     setExpanded((prev) => {
@@ -201,6 +253,8 @@ export default function Sidebar(props: Props) {
         </div>
       )}
 
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+      <SortableContext items={props.projects.map((p) => p.id)} strategy={verticalListSortingStrategy}>
       <div className="project-list">
         {props.projects.length === 0 && !adding && (
           <div className="sidebar-empty">还没有项目。点右上角 + 添加一个代码目录。</div>
@@ -218,7 +272,7 @@ export default function Sidebar(props: Props) {
           const projUnread = projSessions.some((s) => props.statusBySession[s.id] !== "prompting" && props.unreadBySession[s.id]);
           const barCls = !isOpen && projRunning ? "has-running" : !isOpen && projUnread ? "has-unread" : "";
           return (
-            <div key={p.id} className="project-item-wrap">
+            <SortableProjectRow key={p.id} id={p.id} disabled={isOpen}>
               <div
                 className={`project-item ${props.selectedProjectId === p.id ? "active" : ""} ${barCls}`}
                 onContextMenu={(e) => openProjectMenu(e, p)}
@@ -313,10 +367,12 @@ export default function Sidebar(props: Props) {
                   )}
                 </div>
               )}
-            </div>
+            </SortableProjectRow>
           );
         })}
       </div>
+      </SortableContext>
+      </DndContext>
 
       {ctx?.kind === "project" && (
         <div ref={menuRef} className="ctx-menu" style={{ left: ctx.x, top: ctx.y }} onMouseDown={(e) => e.stopPropagation()}>

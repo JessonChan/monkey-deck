@@ -162,6 +162,9 @@ input, textarea { font-family: inherit; }
 }
 .project-item.has-running::before { animation: proj-bar-breathe 2.5s ease-in-out infinite; }
 @keyframes proj-bar-breathe { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+/* 拖拽中(0007):project-item 去 sticky(规避 transform 与 position:sticky 在 WebKit 的冲突),wrap 浮起置顶。 */
+.project-item-wrap.dragging { z-index: 10; box-shadow: 0 6px 16px rgba(0,0,0,0.35); border-radius: var(--r-sm); }
+.project-item-wrap.dragging .project-item { position: relative; }
 .caret { width: 18px; height: 18px; color: var(--text-3); display: inline-flex; align-items: center; justify-content: center; }
 .caret.open svg { transform: rotate(0deg); }
 .project-main {
