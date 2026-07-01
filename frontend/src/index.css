@@ -899,6 +899,7 @@ input, textarea { font-family: inherit; }
 .side-tab.active { color: var(--text); border-bottom-color: var(--accent); }
 .side-body { flex: 1; min-height: 0; display: flex; }
 .side-body > * { flex: 1; min-width: 0; }
+.side-empty { width: 100%; height: 100%; }
 
 /* git-panel 内嵌时去掉顶部留白(tab 已占位) */
 .git-panel.embedded, .side-body .git-panel { padding-top: 12px; }

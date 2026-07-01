@@ -835,30 +835,30 @@ export default function App() {
           )}
         </main>
       </Panel>
-      {selectedSessionId && activeSession && (
-        <>
-          <Separator className="resize-handle" />
-          <Panel id="side" defaultSize="20%" minSize="14%" maxSize="34%">
-            <SidePanel
-              sessionId={selectedSessionId}
-              rootName={selectedProject?.name || ""}
-              isGitProject={gitByProject[selectedProject?.id ?? ""] ?? false}
-              changes={sessionChanges}
-              status={status}
-              branch={activeSession.branch || ""}
-              mergeResult={mergeResult}
-              onMerge={mergeSession}
-              onStage={stageFiles}
-              onUnstage={unstageFiles}
-              onDiscard={discardFiles}
-              onCommit={commitSession}
-              onAICommit={aiCommit}
-              onDiff={fileDiff}
-              busy={status === "prompting"}
-            />
-          </Panel>
-        </>
-      )}
+      <Separator className="resize-handle" />
+      <Panel id="side" defaultSize="20%" minSize="14%" maxSize="34%">
+        {selectedSessionId && activeSession ? (
+          <SidePanel
+            sessionId={selectedSessionId}
+            rootName={selectedProject?.name || ""}
+            isGitProject={gitByProject[selectedProject?.id ?? ""] ?? false}
+            changes={sessionChanges}
+            status={status}
+            branch={activeSession.branch || ""}
+            mergeResult={mergeResult}
+            onMerge={mergeSession}
+            onStage={stageFiles}
+            onUnstage={unstageFiles}
+            onDiscard={discardFiles}
+            onCommit={commitSession}
+            onAICommit={aiCommit}
+            onDiff={fileDiff}
+            busy={status === "prompting"}
+          />
+        ) : (
+          <div className="side-empty" />
+        )}
+      </Panel>
     </Group>
     {newSession && (
       <NewSessionModal
