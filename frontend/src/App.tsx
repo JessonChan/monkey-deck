@@ -269,14 +269,22 @@ export default function App() {
       }
       // 错误提示只对当前查看的 session 弹(切走时不在意别的 session 的错误条)。
       if (s.status === "error" && s.sessionId === selectedSessionIdRef.current) setError(s.detail || "出错");
-      // 回合结束:清掉该 session 最后 agent/thought 的 streaming 标志(去光标 + 显复制按钮)。
+      // 回合结束:清掉该 session 最后 agent/thought 的 streaming 标志(去光标 + 显复制按钮);
+      // 同时把残留的中间态 tool(in_progress/pending)收口到终态 —— Prompt 正常返回(idle)
+      // 意味着所有 tool 必然已完成;若最后的 tool_call_update(completed) 因时序/投递未到前端,
+      // tool 会永远卡在「执行中」,重开 session 才恢复(治此 bug)。error/closed → failed。
       if (s.status === "idle" || s.status === "error" || s.status === "closed") {
+        const toolFinal = s.status === "idle" ? "completed" : "failed";
         setItemsBySession((prev) => {
           const cur = prev[s.sessionId];
           if (!cur) return prev;
           return {
             ...prev,
-            [s.sessionId]: cur.map((it) => (it.type === "agent" || it.type === "thought" ? { ...it, streaming: false } : it)),
+            [s.sessionId]: cur.map((it) => {
+              if (it.type === "agent" || it.type === "thought") return { ...it, streaming: false };
+              if (it.type === "tool" && (it.status === "in_progress" || it.status === "pending")) return { ...it, status: toolFinal };
+              return it;
+            }),
           };
         });
         setActivityBySession((p) => { if (!p[s.sessionId]) return p; const n = { ...p }; delete n[s.sessionId]; return n; });
