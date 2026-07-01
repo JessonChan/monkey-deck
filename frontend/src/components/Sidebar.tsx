@@ -345,7 +345,6 @@ export default function Sidebar(props: Props) {
                         >
                           <span className={`session-dot ${cls}`} data-tooltip-id="md-tip" data-tooltip-content={dotTip} />
                           <span className="session-label">{s.title || "新对话"}</span>
-                          <span className="session-time">{timeAgo(s.updatedAt)}</span>
                           {props.permPendingBySession[s.id] ? (
                             <span className="perm-dot" data-tooltip-id="md-tip" data-tooltip-content="等待授权 · 点击进入裁决" data-testid={`perm-dot-${s.id}`} />
                           ) : active ? (
@@ -358,7 +357,7 @@ export default function Sidebar(props: Props) {
                               <span className="draft-indicator" data-tooltip-id="md-tip" data-tooltip-content={`草稿: ${dh.slice(0, 40)}${dh.length > 40 ? "…" : ""}`} data-testid={`draft-${s.id}`}>
                                 <Pencil size={6} />
                               </span>
-                            ) : null;
+                            ) : <span className="session-time">{timeAgo(s.updatedAt)}</span>;
                           })()}
                         </button>
                       </div>
