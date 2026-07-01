@@ -191,10 +191,12 @@ monkey-deck/
 - **reap 逃逸子进程的时机关键:只能在 harness 已结束（unregister）后 reap,禁止周期性 reap**——运行中时逃逸 worker 与孤儿无法区分,周期 reap 会误杀活跃 worker 打断任务（RAK §5.4 #23 实测血泪）。
 - 每个活跃 harness 要注册到活跃集合,reaper 据此区分。这条直接从 RAK 迁移,**先照做再理解**。
 
-### 3.3 失败必须有兜底,不能裸跑
-- 任何 agent 执行路径,**禁止「无超时、无崩溃检测、无清理」地裸跑**。
-- 最小兜底:`Prompt` 设**静默超时**（从最后一次 `SessionUpdate` 活动算,不是总超时——agent 还在输出就不算超时,见 RAK `ChatSession.Prompt` 注释）+ `peer disconnected` 判崩溃 + 异常时杀进程组清理。
-- **禁止**用固定 `sleep` 假装「等 agent 回复」。
+### 3.3 不能裸跑:崩溃检测 + 用户可停(无静默超时)
+- **Prompt 不设静默超时或绝对超时**——对齐 omp TUI 的设计:turn 跑到自然结束(`end_turn` / error),内部空停止重试(最多 3 次)、auto-retry(429/503/timeout)对 ACP client 不可见,设超时会打断这些机制。
+- 兜底靠两条:
+  1. **崩溃检测**:harness 进程死 → ACP 连接断 → `IsPeerDisconnected`(含 "peer disconnected" / "broken pipe")→ teardown + 下条消息走 `ensureLive` 重连(§5.4 #2)。
+  2. **用户可停**:桌面应用有人在场,用户点 Stop → `turnCancel()` 取消 `ctx` → Prompt 返回(等价 TUI 的 Ctrl+C)。
+- **禁止**用固定 `sleep` 假装「等 agent 回复」;**禁止**恢复静默超时/绝对超时(已删除,见 `docs/worklog/2026-07-01-remove-silent-timeout.md`)。
 
 ### 3.4 权限裁决:有人在场,可交互（与 RAK 的关键差异）
 - **我们是桌面应用,屏幕前有人**——这与 RAK 的无头 daemon 不同。
@@ -337,7 +339,7 @@ monkey-deck/
 - [ ] session 的 `cwd` 钉在项目目录,且支持 LoadSession 恢复?(§1.4)
 - [ ] 数据只在本地 SQLite,没引入「需联网读自己历史」?(§1.5)
 - [ ] 子进程建了独立进程组、结束整组回收、reap 只在结束后?(§3.2)
-- [ ] agent 执行有静默超时 + peer-disconnected 崩溃检测 + 清理?(§3.3)
+- [ ] agent 执行有 peer-disconnected 崩溃检测 + 用户 Stop,没设静默/绝对超时?(§3.3)
 - [ ] `RequestPermission` 走「UI 提示 + 默认动作 + 超时兜底」,没裸跑也没死等?(§3.4)
 - [ ] model 是 `provider/model` 格式?(§3.5)
 - [ ] 没把结构化/技术格式(JSON、原始 cwd / 工具 I/O 对象)裸露给用户?(§4.4)
