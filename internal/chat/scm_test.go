@@ -43,7 +43,7 @@ func newSCMService(t *testing.T) (svc *ChatService, sessionID, wtPath string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	svc = NewChatService(&config.Config{DataDir: t.TempDir(), DBPath: dbPath, HarnessCmd: "opencode acp"})
+	svc = NewChatService(&config.Config{DataDir: t.TempDir(), DBPath: dbPath})
 	svc.ctx = context.Background()
 	svc.st = st
 	proj, err := st.CreateProject(svc.ctx, "p", root, "")

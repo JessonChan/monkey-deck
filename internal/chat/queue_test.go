@@ -95,7 +95,7 @@ func newTestService(t *testing.T) (svc *ChatService, sessionID string, fc *fakeC
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	svc = NewChatService(&config.Config{DataDir: t.TempDir(), DBPath: dbPath, HarnessCmd: "opencode acp"})
+	svc = NewChatService(&config.Config{DataDir: t.TempDir(), DBPath: dbPath})
 	svc.ctx = context.Background()
 	svc.st = st
 

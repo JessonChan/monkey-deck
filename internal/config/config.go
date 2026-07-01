@@ -10,10 +10,9 @@ import (
 
 // Config 应用级配置(启动时确定的部分)。
 type Config struct {
-	DataDir       string // 数据目录(SQLite 落盘处)
-	DBPath        string // SQLite 文件路径
-	HarnessCmd    string // harness 启动命令(opencode acp)
-	DefaultModel  string // 默认 model(provider/model 格式)
+	DataDir      string // 数据目录(SQLite 落盘处)
+	DBPath       string // SQLite 文件路径
+	DefaultModel string // 默认 model(provider/model 格式)
 }
 
 // Default 返回基于 XDG 的默认配置。
@@ -23,7 +22,6 @@ func Default() *Config {
 	return &Config{
 		DataDir:      dataDir,
 		DBPath:       filepath.Join(dataDir, "monkey-deck.db"),
-		HarnessCmd:   "opencode acp",
 		DefaultModel: "",
 	}
 }

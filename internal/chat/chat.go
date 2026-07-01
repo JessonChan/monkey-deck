@@ -1456,10 +1456,9 @@ func (s *ChatService) IsGitProject(projectID string) (bool, error) {
 	return worktree.IsRepo(proj.Path), nil
 }
 
-// GetConfig 返回当前配置(harness 命令、默认 model、数据目录)。
+// GetConfig 返回当前配置(默认 model、数据目录)。
 func (s *ChatService) GetConfig() map[string]string {
 	return map[string]string{
-		"harnessCmd":   s.cfg.HarnessCmd,
 		"defaultModel": s.cfg.DefaultModel,
 		"dataDir":      s.cfg.DataDir,
 	}

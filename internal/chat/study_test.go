@@ -64,7 +64,7 @@ func TestStudyWesight(t *testing.T) {
 		fmu.Unlock()
 	}
 
-	cfg := &config.Config{DataDir: "/tmp", DBPath: studyDBPath, HarnessCmd: "opencode acp", DefaultModel: ""}
+	cfg := &config.Config{DataDir: "/tmp", DBPath: studyDBPath, DefaultModel: ""}
 	svc := NewChatService(cfg)
 	svc.ctx = context.Background()
 	st, err := store.New(studyDBPath)

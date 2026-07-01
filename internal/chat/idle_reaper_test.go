@@ -43,7 +43,7 @@ func newIdleTestService(t *testing.T, idleTimeout time.Duration) *ChatService {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	svc := NewChatService(&config.Config{HarnessCmd: "opencode acp"})
+	svc := NewChatService(&config.Config{})
 	svc.ctx = context.Background()
 	svc.st = st
 	svc.idleTimeout = idleTimeout

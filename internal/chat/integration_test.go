@@ -22,7 +22,7 @@ func TestIntegrationServiceConversation(t *testing.T) {
 		t.Skip("opencode not installed")
 	}
 	dir := t.TempDir()
-	cfg := &config.Config{DataDir: dir, DBPath: filepath.Join(dir, "t.db"), HarnessCmd: "opencode acp", DefaultModel: "zai/glm-4.6"}
+	cfg := &config.Config{DataDir: dir, DBPath: filepath.Join(dir, "t.db"), DefaultModel: "zai/glm-4.6"}
 
 	svc := NewChatService(cfg)
 	svc.ctx = context.Background()
