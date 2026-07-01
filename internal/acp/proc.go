@@ -11,12 +11,13 @@
 //	→ 判定 StopReasonEndTurn → kill 进程组 + 注销活跃 + reap 逃逸子进程
 package acp
 
-// proc.go:harness 子进程的进程组管理 —— 治本 opencode 子进程泄漏(AGENTS.md §3.2 / §5.4 #4)。
+// proc.go:harness 子进程的进程组管理 —— 治本 harness 子进程泄漏(AGENTS.md §3.2 / §5.4 #4)。
+// 与具体 harness 无关:omp/opencode/... 都走同一套(以 pgidFile 登记的 pgid 为准)。
 //
 // 两层防线:
 //  1. 进程组:Setpgid 建独立进程组 + kill -PGID 整组回收(覆盖留在组内的子孙)。
-//  2. 精确 reap:opencode 内部 fork 的子进程会自己 setpgid 逃逸(脱离父组)+ reparent。
-//     reapStrayOpencode 在安全时机调用(harness 已 unregister 之后),杀掉这些逃逸进程。
+//  2. 精确 reap:harness 内部 fork 的子进程会自己 setpgid 逃逸(脱离父组)+ reparent。
+//     reapStrayHarnesses 在安全时机调用(harness 已 unregister 之后),杀掉这些逃逸进程。
 //     ⚠️ 不做周期性 reap:运行中时逃逸 worker 与孤儿无法区分,周期 reap 会误杀活跃 worker(§5.4 #5)。
 
 import (
@@ -90,13 +91,22 @@ var (
 	activeHarnesses = map[int]struct{}{} // pgid 集合;当前活跃的 harness 进程组(Setpgid 后 pgid==主 PID)
 
 	// pgidFile:持久化记录「本应用 spawn 过的 harness pgid」,跨进程存活。
-	// 启动时 KillAllOpencode 只杀 pgid 在此文件中的残留进程 —— 避免误杀用户在其它终端
-	// 跑的 opencode(§3.2 回收范围只限本应用)。空字符串 = 不启用(单测/未配置)。
+	// 启动时 KillAllHarnesses 只杀 pgid 在此文件中的残留进程 —— 避免误杀用户在其它终端
+	// 跑的 harness(§3.2 回收范围只限本应用)。空字符串 = 不启用(单测/未配置)。
 	pgidFile string
+
+	// harnessCmds:受支持 harness 的 ACP 启动命令子串(如 "omp acp"/"opencode acp"),
+	// SetHarnessCommands 注入。listHarnessProcs 据此识别「我们的 harness」——与具体 harness 无关。
+	// 空 = 不识别任何进程 → KillAllHarnesses/reapStrayHarnesses 不杀(安全:宁可漏杀不误杀)。
+	harnessCmds []string
 )
 
 // SetPgidFile 配置 pgid 持久化文件路径(应用启动时调一次,传 dataDir 下的文件)。
 func SetPgidFile(path string) { pgidFile = path }
+
+// SetHarnessCommands 配置受支持 harness 的 ACP 启动命令(应用启动时调一次,传 harness.Supported
+// 的 Command 列表)。进程回收据此识别本应用派生的 harness(omp/opencode/...),不再写死 opencode。
+func SetHarnessCommands(cmds []string) { harnessCmds = cmds }
 
 // readPgidFile 读回 pgid 集合;文件不存在/损坏返回空集(容错:宁可漏杀不误杀)。
 func readPgidFile() map[int]struct{} {
@@ -159,20 +169,35 @@ func isActiveHarness(pgid int) bool {
 	return ok
 }
 
-type opencodeProc struct {
+type harnessProc struct {
 	pid, pgid int
 }
 
-// listOpencodeProcs 一次 ps 列出所有 "opencode acp" 进程的 pid + pgid。
-func listOpencodeProcs() []opencodeProc {
+// isHarnessCmdline 报告 ps 命令行是否命中任一受支持 harness 命令子串(omp/opencode/...)。
+// omp 实际以 `bun …/omp acp` 启动,"omp acp" 仍是其子串,故子串匹配覆盖裸命令与 wrapper 两种形态。
+func isHarnessCmdline(line string, cmds []string) bool {
+	for _, c := range cmds {
+		if c != "" && strings.Contains(line, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// listHarnessProcs 一次 ps 列出所有「受支持 harness」进程的 pid + pgid(omp/opencode/...)。
+// 匹配规则见 isHarnessCmdline。未配置 harnessCmds(SetHarnessCommands 未调)时返回 nil(安全)。
+func listHarnessProcs() []harnessProc {
+	if len(harnessCmds) == 0 {
+		return nil
+	}
 	out, err := exec.Command("ps", "-eo", "pid=,pgid=,command=").Output()
 	if err != nil {
 		return nil
 	}
-	var procs []opencodeProc
+	var procs []harnessProc
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || !strings.Contains(line, "opencode acp") {
+		if line == "" || !isHarnessCmdline(line, harnessCmds) {
 			continue
 		}
 		fields := strings.Fields(line)
@@ -184,27 +209,29 @@ func listOpencodeProcs() []opencodeProc {
 		if err1 != nil || err2 != nil || pid <= 0 {
 			continue
 		}
-		procs = append(procs, opencodeProc{pid: pid, pgid: pgid})
+		procs = append(procs, harnessProc{pid: pid, pgid: pgid})
 	}
 	return procs
 }
 
-// reapStrayOpencode 杀掉所有 pgid 不属于活跃 harness 的 opencode 进程。
+// reapStrayHarnesses 杀掉所有 pgid 不属于活跃 harness 的 harness 进程(脱组逃逸的 harness)。
 // ⚠️ 只能在安全时机调(harness 已 unregister 之后)。返回杀掉的进程数。
-func reapStrayOpencode() int {
+// 注意:按「非活跃 harness 命令行」判定,理论上会命中其它应用(如 RAK)派生的同命令 harness——
+// 这是既有行为;限定本应用 pgid 的主孤儿回收在 KillAllHarnesses(启动时)。
+func reapStrayHarnesses() int {
 	killed := 0
-	for _, p := range listOpencodeProcs() {
+	for _, p := range listHarnessProcs() {
 		if isActiveHarness(p.pgid) {
 			continue
 		}
 		if err := syscall.Kill(p.pid, syscall.SIGKILL); err != nil && !isNoProcess(err) {
-			slog.Warn("reap kill stray opencode", "pid", p.pid, "pgid", p.pgid, "err", err)
+			slog.Warn("reap kill stray harness", "pid", p.pid, "pgid", p.pgid, "err", err)
 			continue
 		}
 		killed++
 	}
 	if killed > 0 {
-		slog.Info("reaper: killed stray opencode processes", "count", killed)
+		slog.Info("reaper: killed stray harness processes", "count", killed)
 	}
 	return killed
 }
@@ -216,31 +243,34 @@ func ActiveHarnessCount() int {
 	return len(activeHarnesses)
 }
 
-// ReapStrayOpencode 导出版(杀掉所有非活跃 opencode)。多 session 时只能在 ActiveHarnessCount()==0 调。
-func ReapStrayOpencode() int { return reapStrayOpencode() }
+// ReapStrayHarnesses 导出版(杀掉所有非活跃 harness)。多 session 时只能在 ActiveHarnessCount()==0 调。
+func ReapStrayHarnesses() int { return reapStrayHarnesses() }
 
-// KillAllOpencode 杀掉「本应用上轮残留」的 opencode acp 进程(应用启动时调)。
-// 只杀 pgid 命中持久化 pgidFile 的进程 —— 不误杀用户在其它终端跑的 opencode(§3.2
-// 回收范围只限本应用)。杀完清空 pgidFile(本轮重新登记)。
-func KillAllOpencode() int {
+// KillAllHarnesses 杀掉「本应用上轮残留」的 harness 进程组(应用启动时调)。
+// 与具体 harness 无关:以 pgidFile 登记的 pgid 为唯一真相(omp/opencode/... spawn 时都登记了),
+// 对每个 tracked pgid 整组 kill -PGID 回收(§3.2)。仅当该 pgid 当前进程仍是受支持 harness
+// 时才杀(isHarnessCmdline 安全过滤,防 pgid 被 OS 复用后误杀无关进程)。杀完清空 pgidFile(本轮重新登记)。
+func KillAllHarnesses() int {
 	tracked := readPgidFile()
 	if len(tracked) == 0 {
 		// 未配置 pgidFile 或上轮干净退出:不杀任何进程(保守,宁可漏杀不误杀)。
 		return 0
 	}
+	// 当前存活且形似受支持 harness 的 pgid 集合(安全过滤)。
+	alive := map[int]struct{}{}
+	for _, p := range listHarnessProcs() {
+		alive[p.pgid] = struct{}{}
+	}
 	killed := 0
-	for _, p := range listOpencodeProcs() {
-		if _, ok := tracked[p.pgid]; !ok {
-			continue // 不属于本应用:用户的终端 opencode 等,跳过
+	for pgid := range tracked {
+		if _, ok := alive[pgid]; !ok {
+			continue // 该 pgid 当前不是 harness 进程(已死 / 被复用为非 harness):跳过
 		}
-		if err := syscall.Kill(p.pid, syscall.SIGKILL); err != nil && !isNoProcess(err) {
-			slog.Warn("startup kill opencode", "pid", p.pid, "pgid", p.pgid, "err", err)
-			continue
-		}
+		killGroup(pgid) // 整组 SIGKILL(harness 主进程 + 留在组内的子孙,§3.2)
 		killed++
 	}
 	if killed > 0 {
-		slog.Info("startup: killed leftover opencode processes (this app only)", "count", killed)
+		slog.Info("startup: killed leftover harness processes (this app only)", "count", killed)
 	}
 	// 清空登记文件:本轮 registerHarness 会重新写入。best-effort。
 	if pgidFile != "" {

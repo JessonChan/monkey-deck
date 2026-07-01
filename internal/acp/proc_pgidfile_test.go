@@ -1,7 +1,7 @@
 package acp
 
-// proc_pgidfile_test.go:验证 pgidFile 持久化机制 —— 限定 KillAllOpencode 只杀本应用残留,
-// 不误杀用户在其它终端跑的 opencode(AGENTS.md §3.2 + 本次 #21 修复)。
+// proc_pgidfile_test.go:验证 pgidFile 持久化机制 —— 限定 KillAllHarnesses 只杀本应用残留,
+// 不误杀用户在其它终端跑的 harness(AGENTS.md §3.2 + #21 修复;后通用化为 harness 无关)。
 //
 // 不启真 harness:仅测文件读写 + 集合判定逻辑(register/unregister/isActive/readPgidFile)。
 
@@ -63,5 +63,35 @@ func TestReadPgidFile_Disabled(t *testing.T) {
 	registerHarness(9999) // 无文件,不应 panic、不应落盘
 	if got := readPgidFile(); len(got) != 0 {
 		t.Fatalf("disabled should yield empty set, got %v", got)
+	}
+}
+
+// TestIsHarnessCmdline 回归:此前 listOpencodeProcs 写死 "opencode acp",omp 以 `bun …/omp acp`
+// 启动时被漏掉 → omp 孤儿从不被回收。验证现在按受支持命令子串匹配,覆盖 omp/opencode 两形态。
+// 不启真 harness,纯字符串匹配。
+func TestIsHarnessCmdline(t *testing.T) {
+	cmds := []string{"omp acp", "opencode acp"}
+	cases := []struct {
+		line string
+		want bool
+	}{
+		{"  2938  2938  bun /Users/jessonchan/.bun/bin/omp acp", true},                  // omp 经 bun wrapper
+		{"  5251  5251  opencode acp", true},                                          // opencode 裸命令
+		{"  1234  1234  /Applications/Google Chrome.app/Contents/MacOS/Chrome", false}, // 无关进程
+		{"  1234  1234  node /usr/local/bin/some-server", false},                      // 无关进程
+		{"  1234  1234  omp-compiler build", false},                                   // 子串 "omp acp" 不命中
+	}
+	for _, c := range cases {
+		if got := isHarnessCmdline(c.line, cmds); got != c.want {
+			t.Errorf("isHarnessCmdline(%q) = %v, want %v", c.line, got, c.want)
+		}
+	}
+}
+
+// TestListHarnessProcsEmptyConfig 未配置 harnessCmds(SetHarnessCommands 未调)时返回 nil ——
+// 安全降级:不识别任何进程 = 不杀(宁可漏杀不误杀)。
+func TestListHarnessProcsEmptyConfig(t *testing.T) {
+	if got := listHarnessProcs(); got != nil {
+		t.Fatalf("nil harnessCmds should yield nil, got %v", got)
 	}
 }

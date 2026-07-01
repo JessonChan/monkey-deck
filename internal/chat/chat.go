@@ -173,9 +173,10 @@ func (s *ChatService) ServiceStartup(ctx context.Context, options application.Se
 	}
 	s.st = st
 	s.loadPersistedConfig()
-	acp.SetPgidFile(filepath.Join(s.cfg.DataDir, "opencode-pgids.json")) // §3.2:限定 KillAll 范围到本应用残留
-	acp.KillAllOpencode()                                                // 启动时清上轮残留 opencode(§3.2)
-	s.startIdleReaper()                                                  // B 方案:idle reaper 回收空闲 harness
+	acp.SetPgidFile(filepath.Join(s.cfg.DataDir, "harness-pgids.json")) // §3.2:限定回收范围到本应用派生的 harness
+	acp.SetHarnessCommands(harness.Commands())                          // 注入受支持 harness 命令,回收层据此识别 omp/opencode/...(不再写死 opencode)
+	acp.KillAllHarnesses()                                              // 启动时清上轮残留 harness 进程组(§3.2)
+	s.startIdleReaper()                                                 // B 方案:idle reaper 回收空闲 harness
 	slog.Info("chat service started", "dataDir", s.cfg.DataDir)
 	return nil
 }
@@ -900,13 +901,13 @@ func (s *ChatService) CloseSession(sessionID string) error {
 // errSessionBusy turn 进行中关闭/操作时返回(idle reaper 静默跳过,用户需先停)。
 var errSessionBusy = errors.New("对话进行中,请等回合结束再关闭")
 
-// reapIfIdle 仅当无活跃 session 时 reap 逃逸 opencode(多 session 并发安全,§3.2)。
+// reapIfIdle 仅当无活跃 session 时 reap 逃逸 harness(多 session 并发安全,§3.2)。
 func (s *ChatService) reapIfIdle() {
 	s.mu.RLock()
 	n := len(s.active)
 	s.mu.RUnlock()
 	if n == 0 {
-		acp.ReapStrayOpencode()
+		acp.ReapStrayHarnesses()
 	}
 }
 

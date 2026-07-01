@@ -39,6 +39,16 @@ func Command(id string) string {
 	return Command(DefaultID)
 }
 
+// Commands 返回所有受支持 harness 的 stdio ACP 启动命令(如 ["omp acp","opencode acp"])。
+// 供进程回收层识别本应用派生的 harness(§3.2):启动时注入 acp.SetHarnessCommands。
+func Commands() []string {
+	cmds := make([]string, 0, len(Supported))
+	for _, h := range Supported {
+		cmds = append(cmds, h.Command)
+	}
+	return cmds
+}
+
 // IsOpenCode 报告 id 是否为 opencode。
 // 决定 model 注入是否走 opencode.json(§3.5);其它 harness 的 model 注入方式待各自适配。
 // 注意:与默认 harness 无关 —— 显式判 "opencode",不随 DefaultID 变化。
