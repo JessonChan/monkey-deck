@@ -16,3 +16,12 @@ export function timeAgo(ts: number): string {
   if (day < 365) return `${Math.floor(day / 30.4375)}个月前`;
   return `${Math.floor(day / 365)}年前`;
 }
+
+// 完整时间(供 session-time 的 tooltip 显示具体时刻)。
+// 格式:YYYY-MM-DD HH:mm;ts 为 0/无效返回空串。
+export function formatDateTime(ts: number): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}

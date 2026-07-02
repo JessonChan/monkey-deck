@@ -12,7 +12,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { timeAgo } from "../utils";
+import { timeAgo, formatDateTime } from "../utils";
 
 interface Props {
   projects: Project[];
@@ -374,7 +374,7 @@ export default function Sidebar(props: Props) {
                               <span className="draft-indicator" data-tooltip-id="md-tip" data-tooltip-content={`草稿: ${dh.slice(0, 40)}${dh.length > 40 ? "…" : ""}`} data-testid={`draft-${s.id}`}>
                                 <Pencil size={6} />
                               </span>
-                            ) : <span className="session-time">{timeAgo(s.updatedAt)}</span>;
+                            ) : <span className="session-time" data-tooltip-id="md-tip" data-tooltip-content={formatDateTime(s.updatedAt)}>{timeAgo(s.updatedAt)}</span>;
                           })()}
                         </button>
                       </div>
