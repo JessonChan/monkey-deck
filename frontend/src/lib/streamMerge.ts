@@ -63,8 +63,13 @@ export function applyEventToItems(cur: ChatItem[], ev: SessionEvent): ChatItem[]
           }
           return next;
         }
-        // messageId 存在但无对应气泡 → 新建(不 finalize 同 messageId 的 thought/agent,
-        // 因为协议允许同 messageId 下 thought+text 共存,它们是同一条逻辑消息的两个气泡)。
+        // messageId 存在但无对应气泡 → 新建。先 finalize 上一个 agent/thought 气泡,
+        // **仅当其 messageId 不同**(新消息开始 → 上一个收口);同 messageId 不 finalize
+        // (协议允许同 messageId 下 thought+text 共存,它们是同一条逻辑消息的两个气泡)。
+        const prev = next[next.length - 1];
+        if (prev && (prev.type === "agent" || prev.type === "thought") && prev.streaming && prev.messageId !== ev.messageId) {
+          next[next.length - 1] = { ...prev, streaming: false } as Extract<ChatItem, { type: "agent" } | { type: "thought" }>;
+        }
         next.push({
           type, id: `${type[0]}-${ev.seq ?? Date.now()}`, text: ev.text || "",
           streaming: true, seq: ev.seq, ts: Date.now(), messageId: ev.messageId,

@@ -121,3 +121,25 @@ test("tool_call_update 更新已存在工具的字段", () => {
     expect(tool.rawOutput).toBe("done");
   }
 });
+
+test("messageId 变化时 finalize 上一个气泡(不留多个 loading)", () => {
+  // thought(mA) → agent(mB):mA 应被 finalize,不能两个都 streaming=true
+  let items: ChatItem[] = [];
+  items = applyEventToItems(items, ev({ kind: "agent_thought_chunk", text: "想", messageId: "mA", seq: 1 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "答", messageId: "mB", seq: 2 }));
+  const thoughts = items.filter((i) => i.type === "thought") as Extract<ChatItem, { type: "thought" }>[];
+  const agents = agentBubbles(items);
+  expect(thoughts[0].streaming).toBe(false); // mA 被 finalize
+  expect(agents[0].streaming).toBe(true);    // mB 仍在流式
+});
+
+test("同 messageId 的 thought+agent 都保持 streaming(同逻辑消息共存)", () => {
+  let items: ChatItem[] = [];
+  items = applyEventToItems(items, ev({ kind: "agent_thought_chunk", text: "想", messageId: "mA", seq: 1 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "答", messageId: "mA", seq: 2 }));
+  const thoughts = items.filter((i) => i.type === "thought") as Extract<ChatItem, { type: "thought" }>[];
+  const agents = agentBubbles(items);
+  // 同 messageId:thought 保持 streaming(后续可能有更多 chunk),agent 也在 streaming
+  expect(thoughts[0].streaming).toBe(true);
+  expect(agents[0].streaming).toBe(true);
+});
