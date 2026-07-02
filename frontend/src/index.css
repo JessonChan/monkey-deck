@@ -323,6 +323,15 @@ input, textarea { font-family: inherit; }
 .chat-body { flex: 1; overflow-y: auto; padding: 22px 0; }
 .chat-placeholder { text-align: center; color: var(--text-3); padding: 64px 0; font-size: 13px; }
 
+/* content-visibility:屏幕外的行自动跳过 layout/paint(浏览器原生"虚拟化"),大幅提升长会话渲染速度。
+   不卸载 DOM(内存收益不如 JS 虚拟化),但渲染提速显著且零副作用:不碰滚动逻辑、无高度跳动。
+   contain-intrinsic-size:auto 让浏览器记住元素上次实际高度,跳过渲染时用记忆值 → 滚动条不跳。
+   (Baseline 2024:Safari 18+/Chrome/Firefox 全支持) */
+.row, .thought-block, .tool-card, .tool-group {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+
 /* 对话行 */
 .row { max-width: 1080px; margin: 0 auto; padding: 5px 28px; width: 100%; display: flex; gap: 11px; }
 .row-user { justify-content: flex-end; }
