@@ -39,7 +39,7 @@
   --rt-opacity: 1;
 }
 
-.react-tooltip { border-radius: 6px; box-shadow: var(--shadow-pop); border: 1px solid var(--sep-strong); font-size: 11.5px; }
+.react-tooltip { border-radius: 6px; box-shadow: var(--shadow-pop); border: 1px solid var(--sep-strong); font-size: 11.5px; z-index: 70; }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #root { height: 100%; overflow: hidden; }
