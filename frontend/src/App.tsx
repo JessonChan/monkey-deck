@@ -12,6 +12,7 @@ import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/inte
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { Tooltip } from "react-tooltip";
 import type { FileChange } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
+import { applyEventToItems as applyEventToItemsPure } from "./lib/streamMerge";
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
 // 按 session 隔离的状态:切走再切回时,进行中的流式输出 / 用量 / 状态 / 权限都保留在各自缓存里,
@@ -106,67 +107,8 @@ export default function App() {
   }, []);
 
   // 把一条 SessionEvent 合并进指定 session 的 items(纯函数,防乱序)。
-  const applyEventToItems = useCallback((cur: ChatItem[], ev: SessionEvent): ChatItem[] => {
-    const next = [...cur];
-    // 段边界:push 新段前,清除上一个 thought/agent 的 streaming 标志(否则 spinner 永不消失)。
-    const finalizeLast = () => {
-      const l = next[next.length - 1];
-      if (l && (l.type === "thought" || l.type === "agent") && l.streaming) {
-        next[next.length - 1] = { ...l, streaming: false };
-      }
-    };
-    const last = next[next.length - 1];
-    switch (ev.kind) {
-      case "user_message_chunk":
-        if (last && last.type === "user") return next; // 已有 user,不重复
-        finalizeLast();
-        next.push({ type: "user", id: `u-${Date.now()}`, text: ev.text || "", ts: Date.now() });
-        return next;
-      case "agent_message_chunk":
-        if (last && last.type === "agent" && last.streaming) {
-          // 累积全文 + 序号:序号更小(乱序迟到)则忽略,否则替换(非追加,防乱码)
-          if (ev.seq == null || last.seq == null || ev.seq >= last.seq) {
-            next[next.length - 1] = { ...last, text: ev.text || "", seq: ev.seq };
-          }
-        } else {
-          finalizeLast();
-          next.push({ type: "agent", id: `a-${ev.seq ?? Date.now()}`, text: ev.text || "", streaming: true, seq: ev.seq, ts: Date.now() });
-        }
-        return next;
-      case "agent_thought_chunk":
-        if (last && last.type === "thought" && last.streaming) {
-          if (ev.seq == null || last.seq == null || ev.seq >= last.seq) {
-            next[next.length - 1] = { ...last, text: ev.text || "", seq: ev.seq };
-          }
-        } else {
-          finalizeLast();
-          next.push({ type: "thought", id: `t-${ev.seq ?? Date.now()}`, text: ev.text || "", streaming: true, seq: ev.seq });
-        }
-        return next;
-      case "tool_call":
-      case "tool_call_update": {
-        finalizeLast();
-        const id = ev.toolCallId || `tool-${Date.now()}`;
-        const idx = next.findIndex((it) => it.type === "tool" && it.id === id);
-        const existing = idx >= 0 ? (next[idx] as Extract<ChatItem, { type: "tool" }>) : null;
-        const toolItem = {
-          type: "tool" as const,
-          id,
-          title: ev.toolTitle || existing?.title || "",
-          status: ev.toolStatus || existing?.status || "pending",
-          kind: ev.toolKind || existing?.kind || "",
-          rawInput: ev.rawInput ?? existing?.rawInput,
-          rawOutput: ev.rawOutput ?? existing?.rawOutput,
-        };
-        if (idx >= 0) next[idx] = toolItem;
-        else next.push(toolItem);
-        return next;
-      }
-      case "session_info":
-      default:
-        return next;
-    }
-  }, []);
+  // 抽出到 lib/streamMerge.ts 便于单测流式段边界行为(§5.3)。
+  const applyEventToItems = useCallback(applyEventToItemsPure, []);
 
   // 事件入口:总是写入「事件所属 session」的缓存(不再过滤 selectedSessionId),
   // 这样切走时进行中的流式仍累积在缓存里,切回即见。
