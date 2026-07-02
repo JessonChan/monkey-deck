@@ -290,6 +290,8 @@ monkey-deck/
 
 11. **`tool_call_update` 不是段边界,不得打断正在流式的 agent/thought 气泡**:前端流式合并(`applyEventToItems`,`frontend/src/lib/streamMerge.ts`)按「累积全文 + 单调序号」替换当前 agent/thought 气泡,仅在**真正段边界**(`tool_call` 新工具开始 / 下一个不同类型 chunk)时 finalize 上一段。`tool_call_update`(仅更新已存在工具)**不是**段边界。但 omp async task(`async.enabled`)的后台 job 完成时仍调 `onUpdate` → 发出 `tool_call_update`(见 #10),这种 update 会在 agent 后续文本流中**反复穿插到达**。若把 `tool_call_update` 也当段边界(旧实现 `tool_call`/`tool_call_update` 共用 `finalizeLast`),会反复把正在流式的 agent 气泡 `streaming` 打 false → 后续每个 `agent_message_chunk` 新建气泡。叠加后端 `agentBuf` 对这些 chunk **持续累积**(后端只有 `tool_call` 才 flush,`tool_call_update` 不 flush)→ 同一条 agent 消息被前端拆成**「累积前缀」的多条**(用户看到的「连续收到 这个问题 / 这个问题值得我 / 这个问题值得我认真」message-duplication)。**修法**:前端 `tool_call_update` 仅就地更新已存在 tool,不调 `finalizeLast`(孤儿 update —— 无对应 `tool_call` 的异常乱序 —— 才兜底建条);`tool_call` 仍是段边界。DB 里每段只一条记录(persistTurn 逐段写),故 DB 干净无重复,此 bug 纯前端流式渲染。回归测试:`frontend/src/lib/streamMerge.test.ts`。
 
+12. **持久化必须按真实时序交错写库(tool 不能堆到 turn 末尾)**:实时流式里思考/回复/工具是**交错**的(thought→tool→agent→tool→agent)。旧 `persistTurn` 先写完所有 segment,再写所有 tool —— DB `seq` 丢失真实时序,重开会话加载历史时**工具卡片全聚到 turn 末尾**,思考和回复间不再夹着工具。**修法**:后端维护统一时序队列 `liveSession.items []turnItem`(segment / tool 按真实发生顺序排列),`tool_call` 注册时按当前位置入队,`tool_call_update` 就地改字段**不动位置**(与 #10/#11 协同),`persistTurn` 按 `items` 序逐条写库。`runPrompt` 与 `SendAndWaitSync` 收尾共用 `finalizeTurnItems()` flush 残留 buffer。回归测试:`internal/chat/turn_order_test.go`。
+
 > **具体项目踩坑与修复记录**(含根因 / 修法 / 验证)统一落在 `docs/worklog/YYYY-MM-DD-<slug>.md`,本文只保留原则性规则。
 
 ---
