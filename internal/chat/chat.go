@@ -86,6 +86,16 @@ type segEntry struct {
 	content string
 }
 
+// turnItem 一轮里时序上的一项:或为一段文本(thought/agent),或为一次工具调用。
+// 统一时序队列保证 persistTurn 按**真实发生顺序**写库(thought→tool→agent→tool 交错还原),
+// 而非旧实现把所有段写完再写所有工具 —— 旧实现重开会话后工具全堆到 turn 末尾,丢失交错。
+// tool 项持有 *toolAccum 指针:tool_call_update 就地改其字段,**不动其在队列里的位置**。
+type turnItem struct {
+	kind string // "segment" | "tool"
+	seg  segEntry    // kind == "segment"
+	tool *toolAccum  // kind == "tool"(指针:与 ls.tools[id] 同一对象,update 直接改它)
+}
+
 // liveSession 一个活跃的 ACP 对话(内存态,钉在某个 db session 上)。
 type liveSession struct {
 	chat chatConn
@@ -94,9 +104,9 @@ type liveSession struct {
 	mu            sync.Mutex
 	agentBuf      strings.Builder // 累积当前段的 agent_message_chunk 文本
 	thought       strings.Builder // 累积当前段的 agent_thought_chunk 文本
-	tools         map[string]*toolAccum
+	tools         map[string]*toolAccum // tool 状态(快速查找 update);指针与 items 里的 tool 项共享
 	seq           int64      // 单调序号,流式事件防乱序(§4.3)
-	segments      []segEntry // 已完成的段(类型切换时 flush,持久化时逐段写库)
+	items         []turnItem // 本轮时序队列:segment / tool 按真实发生顺序排列,持久化按此序写库
 	lastChunkKind string     // 上一个 chunk 类型:"thought"/"agent"/"" — 检测段边界
 
 	// 单 turn 生命周期:ACP 协议无 queue,一个 session 同时只允许一个 Prompt
@@ -117,25 +127,51 @@ func (ls *liveSession) resetBuffers() {
 	ls.agentBuf.Reset()
 	ls.thought.Reset()
 	ls.tools = map[string]*toolAccum{}
-	ls.segments = nil
+	ls.items = nil
 	ls.lastChunkKind = ""
 }
 
-// flushCurrentSegment 把上一个段类型的 buffer 内容存入 segments 并重置。
+// flushCurrentSegment 把上一个段类型的 buffer 内容作为一项存入 items 并重置。
 // 段边界(thought→message / message→thought / any→tool)时调用,确保各段独立。
 func (ls *liveSession) flushCurrentSegment() {
 	switch ls.lastChunkKind {
 	case "thought":
 		if ls.thought.Len() > 0 {
-			ls.segments = append(ls.segments, segEntry{"thought", ls.thought.String()})
+			ls.items = append(ls.items, turnItem{kind: "segment", seg: segEntry{"thought", ls.thought.String()}})
 		}
 		ls.thought.Reset()
 	case "agent":
 		if ls.agentBuf.Len() > 0 {
-			ls.segments = append(ls.segments, segEntry{"agent", ls.agentBuf.String()})
+			ls.items = append(ls.items, turnItem{kind: "segment", seg: segEntry{"agent", ls.agentBuf.String()}})
 		}
 		ls.agentBuf.Reset()
 	}
+}
+
+// finalizeTurnItems 把残留的 thought/agent buffer flush 进 items,返回本轮完整时序队列。
+// runPrompt 与 SendAndWaitSync 收尾共用,保证持久化按真实时序写库(segment / tool 交错)。
+// 调用方须持 ls.mu。
+func (ls *liveSession) finalizeTurnItems() []turnItem {
+	if ls.thought.Len() > 0 {
+		ls.items = append(ls.items, turnItem{kind: "segment", seg: segEntry{"thought", ls.thought.String()}})
+		ls.thought.Reset()
+	}
+	if ls.agentBuf.Len() > 0 {
+		ls.items = append(ls.items, turnItem{kind: "segment", seg: segEntry{"agent", ls.agentBuf.String()}})
+		ls.agentBuf.Reset()
+	}
+	return ls.items
+}
+
+// segmentEntries 返回 items 中所有 segment 项(按顺序),供段边界回归测试断言。
+func (ls *liveSession) segmentEntries() []segEntry {
+	out := make([]segEntry, 0, len(ls.items))
+	for _, it := range ls.items {
+		if it.kind == "segment" {
+			out = append(out, it.seg)
+		}
+	}
+	return out
 }
 
 // ChatService 暴露给前端的主服务。
@@ -1143,23 +1179,13 @@ func (s *ChatService) SendAndWaitSync(sessionID, text string, attachments []acp.
 	defer cancel()
 	stopReason, err := ls.chat.Prompt(ctx, text, attachments)
 	ls.mu.Lock()
-	if ls.thought.Len() > 0 {
-		ls.segments = append(ls.segments, segEntry{"thought", ls.thought.String()})
-	}
-	if ls.agentBuf.Len() > 0 {
-		ls.segments = append(ls.segments, segEntry{"agent", ls.agentBuf.String()})
-	}
-	segments := ls.segments
-	tools := make([]*toolAccum, 0, len(ls.tools))
-	for _, t := range ls.tools {
-		tools = append(tools, t)
-	}
+	items := ls.finalizeTurnItems()
 	ls.mu.Unlock()
-	s.persistTurn(sessionID, segments, tools)
+	s.persistTurn(sessionID, items)
 	agentText := ""
-	for _, seg := range segments {
-		if seg.role == "agent" {
-			agentText = seg.content
+	for _, it := range items {
+		if it.kind == "segment" && it.seg.role == "agent" {
+			agentText = it.seg.content
 		}
 	}
 	if err != nil {
@@ -1206,18 +1232,8 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 	ls.sendMu.Lock()
 	defer ls.sendMu.Unlock()
 	ls.mu.Lock()
-	// flush 当前段残留到 segments(thought / agent 分别 flush,顺序保持时序)。
-	if ls.thought.Len() > 0 {
-		ls.segments = append(ls.segments, segEntry{"thought", ls.thought.String()})
-	}
-	if ls.agentBuf.Len() > 0 {
-		ls.segments = append(ls.segments, segEntry{"agent", ls.agentBuf.String()})
-	}
-	segments := ls.segments
-	tools := make([]*toolAccum, 0, len(ls.tools))
-	for _, t := range ls.tools {
-		tools = append(tools, t)
-	}
+	// flush 当前段残留进 items(thought / agent),并取本轮完整时序队列。
+	items := ls.finalizeTurnItems()
 	suppressed := ls.suppressIdle
 	ls.suppressIdle = false
 	// emit 前清 busy:保证前端收到 idle 时 busy 已 false,drain→SendMessage 不会撞上 stale busy。
@@ -1229,7 +1245,7 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 
 	cancelled := err != nil && turnCtx.Err() != nil
 	// 持久化已收到的部分回复(取消/失败也不丢)。
-	s.persistTurn(sessionID, segments, tools)
+	s.persistTurn(sessionID, items)
 
 	if suppressed {
 		return // 打断:不发 status,新轮 startTurn 会发 prompting
@@ -1254,7 +1270,7 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 	// 空响应检测:Prompt 成功返回但零输出(无 segments / tools)——通常是 resume 后
 	// harness 内部 session 状态损坏(§5.4)。不静默当成功,否则用户发了消息没反应。
 	// 按 error 路径处理:拆连接 + 用户可见提示,下条消息走 ensureLive 重连。
-	if len(segments) == 0 && len(tools) == 0 {
+	if len(items) == 0 {
 		s.teardownLive(sessionID, ls)
 		slog.Error("prompt empty turn", "session", sessionID, "stopReason", stopReason)
 		s.emitStatus(sessionID, "error", "agent 未产生响应,连接已重置,下条消息将自动重连")
@@ -1265,29 +1281,31 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 	s.emitStatus(sessionID, "idle", "stopReason="+string(stopReason))
 }
 
-// persistTurn 把本轮各段(thinking/agent message,时序) + 工具调用写库。
-// 多 tool call 交替时一轮有多个 thought/agent 段,逐段独立写入(而非合并),
-// 历史 reload 时段与实时流式一一对应。
-func (s *ChatService) persistTurn(sessionID string, segments []segEntry, tools []*toolAccum) {
+// persistTurn 把本轮时序队列按真实发生顺序写库。
+// segment(thought/agent)与 tool 交错写入 —— 重开会话加载历史时,顺序与实时流式一一对应,
+// 工具卡片不会全部堆到 turn 末尾(旧实现先写所有段再写所有工具的 bug)。
+func (s *ChatService) persistTurn(sessionID string, items []turnItem) {
 	if s.persistHook != nil {
 		s.persistHook() // 测试钩子:在此阻塞放大收尾窗口(生产 nil,直通)
 	}
-	for _, seg := range segments {
-		if strings.TrimSpace(seg.content) == "" {
-			continue
-		}
-		kind := "agent_message_chunk"
-		if seg.role == "thought" {
-			kind = "agent_thought_chunk"
-		}
-		if _, err := s.st.AppendMessage(s.ctx, sessionID, seg.role, kind, seg.content, ""); err != nil {
-			slog.Warn("persist "+seg.role, "err", err)
-		}
-	}
-	for _, t := range tools {
-		body, _ := json.Marshal(t)
-		if _, err := s.st.AppendMessage(s.ctx, sessionID, "tool", "tool_call", string(body), t.ID); err != nil {
-			slog.Warn("persist tool", "err", err)
+	for _, it := range items {
+		switch it.kind {
+		case "segment":
+			if strings.TrimSpace(it.seg.content) == "" {
+				continue
+			}
+			kind := "agent_message_chunk"
+			if it.seg.role == "thought" {
+				kind = "agent_thought_chunk"
+			}
+			if _, err := s.st.AppendMessage(s.ctx, sessionID, it.seg.role, kind, it.seg.content, ""); err != nil {
+				slog.Warn("persist "+it.seg.role, "err", err)
+			}
+		case "tool":
+			body, _ := json.Marshal(it.tool)
+			if _, err := s.st.AppendMessage(s.ctx, sessionID, "tool", "tool_call", string(body), it.tool.ID); err != nil {
+				slog.Warn("persist tool", "err", err)
+			}
 		}
 	}
 }
@@ -1318,14 +1336,25 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 	case "tool_call":
 		ls.flushCurrentSegment() // tool 是硬边界:flush 当前 thinking/message 段
 		ls.lastChunkKind = "tool"
-		ls.tools[e.ToolCallID] = &toolAccum{ID: e.ToolCallID, Title: e.ToolTitle, Status: e.ToolStatus, Kind: e.ToolKind, RawInput: e.RawInput}
+		// 已注册(同 id 重复 tool_call,异常)→ 就地更新,不动队列位置;否则建条并按真实位置入队。
+		if t, ok := ls.tools[e.ToolCallID]; ok {
+			t.Title = e.ToolTitle
+			t.Status = e.ToolStatus
+			t.Kind = e.ToolKind
+			t.RawInput = e.RawInput
+		} else {
+			t := &toolAccum{ID: e.ToolCallID, Title: e.ToolTitle, Status: e.ToolStatus, Kind: e.ToolKind, RawInput: e.RawInput}
+			ls.tools[e.ToolCallID] = t
+			ls.items = append(ls.items, turnItem{kind: "tool", tool: t})
+		}
 	case "tool_call_update":
 		if t, ok := ls.tools[e.ToolCallID]; ok {
+			// 已存在 tool:就地改字段(指针与 items 共享,直接生效),**不动队列位置**。
 			if e.ToolTitle != "" {
 				t.Title = e.ToolTitle
 			}
 		if e.ToolStatus != "" && !isTerminalToolStatus(t.Status) {
-			t.Status = e.ToolStatus
+				t.Status = e.ToolStatus
 			}
 			if e.ToolKind != "" {
 				t.Kind = e.ToolKind
@@ -1334,7 +1363,10 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 				t.RawOutput = e.RawOutput
 			}
 		} else {
-			ls.tools[e.ToolCallID] = &toolAccum{ID: e.ToolCallID, Title: e.ToolTitle, Status: e.ToolStatus, Kind: e.ToolKind, RawOutput: e.RawOutput}
+			// 孤儿 update(无对应 tool_call 的异常乱序):兜底建条,按当前位置入队。
+			t := &toolAccum{ID: e.ToolCallID, Title: e.ToolTitle, Status: e.ToolStatus, Kind: e.ToolKind, RawOutput: e.RawOutput}
+			ls.tools[e.ToolCallID] = t
+			ls.items = append(ls.items, turnItem{kind: "tool", tool: t})
 		}
 	}
 	ls.mu.Unlock()

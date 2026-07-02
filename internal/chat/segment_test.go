@@ -36,8 +36,9 @@ func TestSegmentBoundaryReset(t *testing.T) {
 	if ls.thought.Len() != 0 {
 		t.Fatalf("thought buffer should be reset after boundary, got %q", ls.thought.String())
 	}
-	if len(ls.segments) != 1 || ls.segments[0].role != "thought" || ls.segments[0].content != "I need to think" {
-		t.Fatalf("segments after thought→message: %+v", ls.segments)
+	segs := ls.segmentEntries()
+	if len(segs) != 1 || segs[0].role != "thought" || segs[0].content != "I need to think" {
+		t.Fatalf("segments after thought→message: %+v", segs)
 	}
 	if ls.agentBuf.String() != "Let me help" {
 		t.Fatalf("first agent buffer: got %q", ls.agentBuf.String())
@@ -55,15 +56,14 @@ func TestSegmentBoundaryReset(t *testing.T) {
 	if ls.thought.String() != "Now done" {
 		t.Fatalf("second thought should be 'Now done', got %q (first segment leaked!)", ls.thought.String())
 	}
-	// agentBuf 应已 flush 到 segments
 	foundAgent1 := false
-	for _, seg := range ls.segments {
+	for _, seg := range ls.segmentEntries() {
 		if seg.role == "agent" && seg.content == "Let me help" {
 			foundAgent1 = true
 		}
 	}
 	if !foundAgent1 {
-		t.Fatalf("first agent segment not flushed: %+v", ls.segments)
+		t.Fatalf("first agent segment not flushed: %+v", ls.segmentEntries())
 	}
 	ls.mu.Unlock()
 
@@ -77,26 +77,23 @@ func TestSegmentBoundaryReset(t *testing.T) {
 	}
 	// 第二段 thought 应已 flush
 	foundThought2 := false
-	for _, seg := range ls.segments {
+	for _, seg := range ls.segmentEntries() {
 		if seg.role == "thought" && seg.content == "Now done" {
 			foundThought2 = true
 		}
 	}
 	if !foundThought2 {
-		t.Fatalf("second thought segment not flushed: %+v", ls.segments)
+		t.Fatalf("second thought segment not flushed: %+v", ls.segmentEntries())
 	}
 	ls.mu.Unlock()
 
 	// ── flush 最终段(模拟 turn 结束)──
 	ls.mu.Lock()
-	if ls.thought.Len() > 0 {
-		ls.segments = append(ls.segments, segEntry{"thought", ls.thought.String()})
-	}
-	if ls.agentBuf.Len() > 0 {
-		ls.segments = append(ls.segments, segEntry{"agent", ls.agentBuf.String()})
-	}
-	segs := ls.segments
+	ls.finalizeTurnItems()
 	ls.mu.Unlock()
+	// 取 segment 子序列做段边界断言(不含 tool 项)。
+	segOnly := ls.segmentEntries()
+	_ = segs
 
 	// 验证:4 个段,各自独立无重复
 	want := []struct{ role, content string }{
@@ -105,12 +102,12 @@ func TestSegmentBoundaryReset(t *testing.T) {
 		{"thought", "Now done"},
 		{"agent", "Result here"},
 	}
-	if len(segs) != len(want) {
-		t.Fatalf("expected %d segments, got %d: %+v", len(want), len(segs), segs)
+	if len(segOnly) != len(want) {
+		t.Fatalf("expected %d segments, got %d: %+v", len(want), len(segOnly), segOnly)
 	}
 	for i, w := range want {
-		if segs[i].role != w.role || segs[i].content != w.content {
-			t.Fatalf("segment %d: want {%s, %q}, got {%s, %q}", i, w.role, w.content, segs[i].role, segs[i].content)
+		if segOnly[i].role != w.role || segOnly[i].content != w.content {
+			t.Fatalf("segment %d: want {%s, %q}, got {%s, %q}", i, w.role, w.content, segOnly[i].role, segOnly[i].content)
 		}
 	}
 }
