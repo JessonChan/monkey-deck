@@ -299,11 +299,15 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   );
 });
 
+
 const ChatRow = memo(function ChatRow({ item, sessionId }: { item: ChatItem; sessionId: string }) {
   if (item.type === "user") {
     return (
       <div className="row row-user" data-testid="msg-user">
-        <div className="bubble-user">{item.text}</div>
+        <div className="bubble-user-wrap">
+          <MessageActions text={item.text} className="user-msg-actions" testId="copy-user-msg" />
+          <div className="bubble-user">{item.text}</div>
+        </div>
       </div>
     );
   }
@@ -367,14 +371,21 @@ function ThoughtBlock({ item, sessionId }: { item: Extract<ChatItem, { type: "th
   );
 }
 
-function MessageActions({ text }: { text: string }) {
+function MessageActions({ text, className = "", testId = "copy-msg" }: { text: string; className?: string; testId?: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* noop */ }
   };
   return (
-    <div className="msg-actions">
-      <button className="msg-action-btn" onClick={copy} data-testid="copy-msg">
+    <div className={`msg-actions${className ? ` ${className}` : ""}`}>
+      <button
+        className="msg-action-btn"
+        type="button"
+        onClick={copy}
+        data-testid={testId}
+        data-tooltip-id="md-tip"
+        data-tooltip-content={copied ? "消息已复制" : "复制消息"}
+      >
         {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "已复制" : "复制"}
       </button>
     </div>
