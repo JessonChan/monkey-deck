@@ -28,6 +28,7 @@ type SessionEvent struct {
 	Kind      string `json:"kind"` // agent_message_chunk | agent_thought_chunk | tool_call | tool_call_update | usage_update | plan | session_info | config_option
 	Text      string `json:"text"` // chunk 文本(message/thought);agent/thought 为累积全文
 	Seq       int64  `json:"seq,omitempty"` // 单调序号(防流式乱序,§4.3)
+	MessageID string `json:"messageId,omitempty"` // ACP messageId:同一条逻辑消息的所有 chunk 共享(§5.4 #11),主键归并用
 
 	ToolCallID string `json:"toolCallId,omitempty"`
 	ToolTitle  string `json:"toolTitle,omitempty"`
@@ -365,17 +366,26 @@ func flattenUpdate(sessionID string, u acp.SessionUpdate) (SessionEvent, bool) {
 		if u.AgentMessageChunk.Content.Text != nil {
 			e.Text = u.AgentMessageChunk.Content.Text.Text
 		}
+		if u.AgentMessageChunk.MessageId != nil {
+			e.MessageID = *u.AgentMessageChunk.MessageId
+		}
 		return e, true
 	case u.AgentThoughtChunk != nil:
 		e.Kind = "agent_thought_chunk"
 		if u.AgentThoughtChunk.Content.Text != nil {
 			e.Text = u.AgentThoughtChunk.Content.Text.Text
 		}
+		if u.AgentThoughtChunk.MessageId != nil {
+			e.MessageID = *u.AgentThoughtChunk.MessageId
+		}
 		return e, true
 	case u.UserMessageChunk != nil:
 		e.Kind = "user_message_chunk"
 		if u.UserMessageChunk.Content.Text != nil {
 			e.Text = u.UserMessageChunk.Content.Text.Text
+		}
+		if u.UserMessageChunk.MessageId != nil {
+			e.MessageID = *u.UserMessageChunk.MessageId
 		}
 		return e, true
 	case u.ToolCall != nil:

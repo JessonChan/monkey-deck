@@ -20,8 +20,8 @@ func TestToolStatusMonotonicNoRegression(t *testing.T) {
 		Kind: "tool_call", ToolCallID: id, ToolStatus: "in_progress",
 		ToolTitle: "Test", ToolKind: "read",
 	})
-	if ls.tools[id].Status != "in_progress" {
-		t.Fatalf("after start: status=%q, want in_progress", ls.tools[id].Status)
+	if tc := ls.toolByID(id); tc == nil || tc.Status != "in_progress" {
+		t.Fatalf("after start: %+v", tc)
 	}
 
 	// ② tool_call_update: completed (终态)
@@ -29,8 +29,8 @@ func TestToolStatusMonotonicNoRegression(t *testing.T) {
 		Kind: "tool_call_update", ToolCallID: id, ToolStatus: "completed",
 		RawOutput: map[string]any{"text": "done"},
 	})
-	if ls.tools[id].Status != "completed" {
-		t.Fatalf("after completed: status=%q, want completed", ls.tools[id].Status)
+	if tc := ls.toolByID(id); tc.Status != "completed" {
+		t.Fatalf("after completed: status=%q, want completed", tc.Status)
 	}
 
 	// ③ tool_call_update: in_progress (迟到的 onUpdate——必须被忽略)
@@ -38,12 +38,12 @@ func TestToolStatusMonotonicNoRegression(t *testing.T) {
 		Kind: "tool_call_update", ToolCallID: id, ToolStatus: "in_progress",
 		RawOutput: map[string]any{"text": "stale partial"},
 	})
-	if ls.tools[id].Status != "completed" {
-		t.Fatalf("late in_progress should not regress: status=%q, want completed", ls.tools[id].Status)
+	if tc := ls.toolByID(id); tc.Status != "completed" {
+		t.Fatalf("late in_progress should not regress: status=%q, want completed", tc.Status)
 	}
 
 	// rawOutput 仍应被更新(非状态字段不受保护)
-	if ls.tools[id].RawOutput == nil {
+	if tc := ls.toolByID(id); tc.RawOutput == nil {
 		t.Fatal("rawOutput should still be updated after status lock")
 	}
 }

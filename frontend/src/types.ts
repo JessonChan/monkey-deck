@@ -14,6 +14,7 @@ export interface SessionEvent {
     | "session_info"
     | "config_option";
   text?: string; // agent/thought 为累积全文
+  messageId?: string; // ACP messageId:同一条逻辑消息的所有 chunk 共享(§5.4 #11),主键归并用
   seq?: number; // 单调序号(防流式乱序)
   toolCallId?: string;
   toolTitle?: string;
@@ -79,9 +80,9 @@ export interface QueueItem {
 
 // 前端展示用的对话条目(由持久化历史 + 实时流式合并而来)。
 export type ChatItem =
-  | { type: "user"; id: string; text: string; ts?: number }
-  | { type: "agent"; id: string; text: string; streaming?: boolean; seq?: number; ts?: number }
-  | { type: "thought"; id: string; text: string; streaming?: boolean; seq?: number; ts?: number }
+  | { type: "user"; id: string; text: string; ts?: number; messageId?: string }
+  | { type: "agent"; id: string; text: string; streaming?: boolean; seq?: number; ts?: number; messageId?: string }
+  | { type: "thought"; id: string; text: string; streaming?: boolean; seq?: number; ts?: number; messageId?: string }
   | {
       type: "tool";
       id: string; // toolCallId

@@ -114,7 +114,7 @@ func newTestService(t *testing.T) (svc *ChatService, sessionID string, fc *fakeC
 	sessionID = se.ID
 
 	fc = newFakeChat()
-	ls := &liveSession{chat: fc, proj: proj, tools: map[string]*toolAccum{}}
+	ls := &liveSession{chat: fc, proj: proj, index: map[string]*turnEntry{}}
 	// emitHook 模拟 agent 在 Prompt 成功返回前产出一条消息(避免 runPrompt 空响应检测)。
 	fc.emitHook = func(msg string) {
 		svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "ok"})

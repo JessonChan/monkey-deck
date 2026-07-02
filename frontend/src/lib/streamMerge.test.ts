@@ -1,8 +1,4 @@
-// streamMerge.test.ts:回归流式合并的段边界行为(§5.3)。bun test 运行(bun 内置,无需装依赖)。
-//
-// 核心 bug:tool_call_update(omp async task 后台 onUpdate,见 §5.4 #10)在 agent 文本流中
-// 反复到达时,旧实现把它当段边界 finalize 了正在流式的 agent 气泡 → 后续每个 chunk 新建
-// 气泡,同一条 agent 消息被拆成「累积前缀」的多条(message-duplication bug)。
+// streamMerge.test.ts:回归流式合并的主键归并行为(§5.3)。bun test 运行。
 
 import { test, expect } from "bun:test";
 import { applyEventToItems } from "./streamMerge";
@@ -14,58 +10,53 @@ const ev = (e: Partial<SessionEvent> & { kind: SessionEvent["kind"] }): SessionE
 const agentBubbles = (items: ChatItem[]) =>
   items.filter((i) => i.type === "agent") as Extract<ChatItem, { type: "agent" }>[];
 
-test("纯 agent message chunks 累积成单个流式气泡", () => {
+test("同 messageId 的 agent chunks 归并成单个流式气泡(主键归并)", () => {
   let items: ChatItem[] = [];
-  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题", seq: 1 }));
-  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题 这个问题值得我", seq: 2 }));
-  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题 这个问题值得我 这个问题值得我认真", seq: 3 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题", messageId: "mA", seq: 1 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题 这个问题值得我", messageId: "mA", seq: 2 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题 这个问题值得我 这个问题值得我认真", messageId: "mA", seq: 3 }));
   const bubbles = agentBubbles(items);
   expect(bubbles.length).toBe(1);
   expect(bubbles[0].text).toBe("这个问题 这个问题值得我 这个问题值得我认真");
-  expect(bubbles[0].streaming).toBe(true);
+  expect(bubbles[0].messageId).toBe("mA");
 });
 
-test("tool_call_update 穿插不得拆分正在流式的 agent 消息(回归 bug)", () => {
-  // 真实 omp 场景:tool 先 tool_call 注册,async 后台 onUpdate(tool_call_update)在
-  // agent 后续文本流中反复到达。旧实现会生成 4 个累积前缀气泡(用户报的「连续收到」)。
+test("messageId 变化 = 新消息(新气泡)", () => {
   let items: ChatItem[] = [];
-  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题", seq: 10 }));
-  items = applyEventToItems(items, ev({ kind: "tool_call", toolCallId: "T1", toolTitle: "run", seq: 11 })); // 段边界
-  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题 这个问题值得我", seq: 12 }));
-  items = applyEventToItems(items, ev({ kind: "tool_call_update", toolCallId: "T1", seq: 13 })); // 后台 onUpdate 穿插
-  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题 这个问题值得我 这个问题值得我认真", seq: 14 }));
-  items = applyEventToItems(items, ev({ kind: "tool_call_update", toolCallId: "T1", seq: 15 }));
-  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题 这个问题值得我 这个问题值得我认真。结论", seq: 16 }));
-
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "第一段", messageId: "mA", seq: 1 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "第二段", messageId: "mB", seq: 2 }));
   const bubbles = agentBubbles(items);
-  // 2 个 agent 段:tool_call 之前的 "这个问题" + tool_call 之后的整段。不应是累积前缀的多条。
   expect(bubbles.length).toBe(2);
-  expect(bubbles[0].text).toBe("这个问题");
-  expect(bubbles[1].text).toBe("这个问题 这个问题值得我 这个问题值得我认真。结论");
-  expect(bubbles[1].streaming).toBe(true);
-  // 关键:tool_call_update 不应把正在流式的 agent 气泡打成 streaming:false
-  expect(bubbles[1].streaming).toBe(true);
+  expect(bubbles[0].text).toBe("第一段");
+  expect(bubbles[1].text).toBe("第二段");
 });
 
-test("tool_call 仍是段边界(finalize 当前 agent 段)", () => {
+test("同 messageId 的 thought+agent 共存为两个气泡(协议:同逻辑消息的两种 part)", () => {
   let items: ChatItem[] = [];
-  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "先说一句", seq: 1 }));
-  items = applyEventToItems(items, ev({ kind: "tool_call", toolCallId: "T1", toolTitle: "read", toolStatus: "in_progress", seq: 2 }));
-  const bubbles = agentBubbles(items);
-  expect(bubbles.length).toBe(1);
-  expect(bubbles[0].streaming).toBe(false); // tool_call 把 agent 段 finalize
-  expect(items[items.length - 1].type).toBe("tool");
+  items = applyEventToItems(items, ev({ kind: "agent_thought_chunk", text: "想", messageId: "mA", seq: 1 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "答", messageId: "mA", seq: 2 }));
+  const thoughts = items.filter((i) => i.type === "thought");
+  const agents = agentBubbles(items);
+  expect(thoughts.length).toBe(1);
+  expect(agents.length).toBe(1);
+  expect((thoughts[0] as Extract<ChatItem, { type: "thought" }>).messageId).toBe("mA");
+  expect(agents[0].messageId).toBe("mA");
 });
 
-test("乱序 chunk(更小 seq)被忽略,不覆盖更新的累积文本", () => {
+test("tool_call_update 穿插不得拆分同 messageId 的 agent 消息(§5.4 #11 回归)", () => {
   let items: ChatItem[] = [];
-  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "AB", seq: 5 }));
-  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "ABC", seq: 6 }));
-  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "A", seq: 4 })); // 迟到
-  expect(agentBubbles(items)[0].text).toBe("ABC");
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题", messageId: "mA", seq: 10 }));
+  items = applyEventToItems(items, ev({ kind: "tool_call", toolCallId: "T1", toolTitle: "run", seq: 11 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题 这个问题值得我", messageId: "mA", seq: 12 }));
+  items = applyEventToItems(items, ev({ kind: "tool_call_update", toolCallId: "T1", seq: 13 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题 这个问题值得我 这个问题值得我认真", messageId: "mA", seq: 14 }));
+
+  const bubbles = agentBubbles(items).filter((b) => b.messageId === "mA");
+  expect(bubbles.length).toBe(1); // 关键:update 穿插不拆分
+  expect(bubbles[0].text).toBe("这个问题 这个问题值得我 这个问题值得我认真");
 });
 
-test("thought→message 边界正确分两段", () => {
+test("无 messageId 回退:role 变化 = 新气泡(启发式降级路径)", () => {
   let items: ChatItem[] = [];
   items = applyEventToItems(items, ev({ kind: "agent_thought_chunk", text: "想", seq: 1 }));
   items = applyEventToItems(items, ev({ kind: "agent_thought_chunk", text: "想想", seq: 2 }));
@@ -73,9 +64,49 @@ test("thought→message 边界正确分两段", () => {
   const thoughts = items.filter((i) => i.type === "thought");
   const agents = agentBubbles(items);
   expect(thoughts.length).toBe(1);
-  expect((thoughts[0] as any).text).toBe("想想");
+  expect((thoughts[0] as Extract<ChatItem, { type: "thought" }>).text).toBe("想想");
   expect(agents.length).toBe(1);
   expect(agents[0].text).toBe("答");
+});
+
+test("无 messageId 回退:纯 agent chunks 累积成单气泡", () => {
+  let items: ChatItem[] = [];
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题", seq: 1 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题 这个问题值得我", seq: 2 }));
+  const bubbles = agentBubbles(items);
+  expect(bubbles.length).toBe(1);
+  expect(bubbles[0].text).toBe("这个问题 这个问题值得我");
+});
+
+test("无 messageId 回退:tool_call_update 穿插不打断流式 agent", () => {
+  let items: ChatItem[] = [];
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题", seq: 10 }));
+  items = applyEventToItems(items, ev({ kind: "tool_call", toolCallId: "T1", toolTitle: "run", seq: 11 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题 这个问题值得我", seq: 12 }));
+  items = applyEventToItems(items, ev({ kind: "tool_call_update", toolCallId: "T1", seq: 13 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "这个问题 这个问题值得我 这个问题值得我认真", seq: 14 }));
+  // tool_call 后的 agent 是新气泡(tool 是段边界),但 update 穿插不拆它。
+  const newBubbles = agentBubbles(items).filter((b) => !b.messageId);
+  expect(newBubbles.length).toBe(2); // tool_call 前1个 + tool_call 后1个(update 不拆)
+  expect(newBubbles[1].text).toBe("这个问题 这个问题值得我 这个问题值得我认真");
+});
+
+test("乱序 chunk(更小 seq)被忽略", () => {
+  let items: ChatItem[] = [];
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "AB", messageId: "mA", seq: 5 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "ABC", messageId: "mA", seq: 6 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "A", messageId: "mA", seq: 4 })); // 迟到
+  expect(agentBubbles(items)[0].text).toBe("ABC");
+});
+
+test("tool_call 仍是段边界(finalize 当前 agent 段)", () => {
+  let items: ChatItem[] = [];
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "先说一句", messageId: "mA", seq: 1 }));
+  items = applyEventToItems(items, ev({ kind: "tool_call", toolCallId: "T1", toolTitle: "read", toolStatus: "in_progress", seq: 2 }));
+  const bubbles = agentBubbles(items);
+  expect(bubbles.length).toBe(1);
+  expect(bubbles[0].streaming).toBe(false); // tool_call 把 agent 段 finalize
+  expect(items[items.length - 1].type).toBe("tool");
 });
 
 test("tool_call_update 更新已存在工具的字段", () => {
