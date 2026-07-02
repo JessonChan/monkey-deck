@@ -81,6 +81,8 @@ export default function Sidebar(props: Props) {
   const [pathInput, setPathInput] = useState("");
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [confirm, setConfirm] = useState<ConfirmTarget | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
   // session 列表分片渲染:每个项目默认 SESSION_PAGE 个,「加载更多」每次 +SESSION_PAGE。
   const [sessionLimit, setSessionLimit] = useState<Record<string, number>>({});
   // 会话搜索:searchProj 标记哪个项目展开了搜索框。标题本地即时过滤,
@@ -170,7 +172,22 @@ export default function Sidebar(props: Props) {
   };
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const closeCtx = () => { setCtx(null); setConfirm(null); };
+  const closeCtx = () => { setCtx(null); setConfirm(null); setDeleteErr(null); };
+  // 确认删除:调 onRemove*(async),失败时弹窗内联报错、不关弹窗;成功才关。
+  // 关键:全局 window mousedown 监听会把 mousedown 冒泡当「外部点击」关掉弹窗,
+  // 故弹窗容器必须 onMouseDown stopPropagation,否则按钮 click 永远拿不到。
+  const onConfirmRemoveProject = async (id: string) => {
+    setDeleting(true); setDeleteErr(null);
+    try { await props.onRemoveProject(id); setConfirm(null); }
+    catch (e) { setDeleteErr(String(e)); }
+    finally { setDeleting(false); }
+  };
+  const onConfirmRemoveSession = async (id: string) => {
+    setDeleting(true); setDeleteErr(null);
+    try { await props.onRemoveSession(id); setConfirm(null); }
+    catch (e) { setDeleteErr(String(e)); }
+    finally { setDeleting(false); }
+  };
 
   // 点项目行搜索按钮切换:开则展开项目并聚焦输入框,关则清空(只允许一个项目同时搜索)。
   const toggleSearch = (pId: string) => {
@@ -393,7 +410,7 @@ export default function Sidebar(props: Props) {
             <FolderOpen size={13} /> 在 Finder 打开
           </button>
           <div className="ctx-sep" />
-          <button className="ctx-item danger" onClick={() => { setConfirm({ kind: "project", project: ctx.project }); setCtx(null); }}>
+          <button className="ctx-item danger" onClick={() => { setConfirm({ kind: "project", project: ctx.project }); setCtx(null); setDeleteErr(null); }}>
             <Trash2 size={13} /> 移除项目
           </button>
         </div>
@@ -417,33 +434,34 @@ export default function Sidebar(props: Props) {
             </button>
           )}
           <div className="ctx-sep" />
-          <button className="ctx-item danger" onClick={() => { setConfirm({ kind: "session", session: ctx.session }); setCtx(null); }}>
+          <button className="ctx-item danger" onClick={() => { setConfirm({ kind: "session", session: ctx.session }); setCtx(null); setDeleteErr(null); }}>
             <Trash2 size={13} /> 删除会话
           </button>
         </div>
       )}
 
       {confirm?.kind === "project" && (
-        <div className="modal-overlay" onClick={() => setConfirm(null)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => setConfirm(null)} onMouseDown={(e) => e.stopPropagation()}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
             <div className="modal-title">移除项目?</div>
             <div className="modal-del-target" data-tooltip-id="md-tip" data-tooltip-content={confirm.project.path}>{confirm.project.name} · {confirm.project.path}</div>
             <div className="modal-actions">
               <button className="modal-btn ghost" onClick={() => setConfirm(null)}>取消</button>
-              <button className="modal-btn danger" onClick={() => { props.onRemoveProject(confirm.project.id); setConfirm(null); }}>移除</button>
+              <button className="modal-btn danger" disabled={deleting} onClick={() => void onConfirmRemoveProject(confirm.project.id)}>移除</button>
             </div>
           </div>
         </div>
       )}
 
       {confirm?.kind === "session" && (
-        <div className="modal-overlay" onClick={() => setConfirm(null)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => setConfirm(null)} onMouseDown={(e) => e.stopPropagation()}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
             <div className="modal-title">删除会话?</div>
             <div className="modal-del-target">{confirm.session.title || "新对话"} · {confirm.session.id.slice(0, 8)}</div>
+            {deleteErr && <div className="modal-del-err">⚠ {deleteErr}</div>}
             <div className="modal-actions">
               <button className="modal-btn ghost" onClick={() => setConfirm(null)}>取消</button>
-              <button className="modal-btn danger" onClick={() => { props.onRemoveSession(confirm.session.id); setConfirm(null); }}>删除</button>
+              <button className="modal-btn danger" disabled={deleting} onClick={() => void onConfirmRemoveSession(confirm.session.id)}>删除</button>
             </div>
           </div>
         </div>
