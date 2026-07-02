@@ -48,8 +48,3 @@ func Commands() []string {
 	}
 	return cmds
 }
-
-// IsOpenCode 报告 id 是否为 opencode。
-// 决定 model 注入是否走 opencode.json(§3.5);其它 harness 的 model 注入方式待各自适配。
-// 注意:与默认 harness 无关 —— 显式判 "opencode",不随 DefaultID 变化。
-func IsOpenCode(id string) bool { return Normalize(id) == "opencode" }

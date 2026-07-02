@@ -59,6 +59,7 @@ type toolAccum struct {
 	RawInput  any    `json:"rawInput,omitempty"`
 	RawOutput any    `json:"rawOutput,omitempty"`
 }
+
 // isTerminalToolStatus 判断 tool status 是否终态(completed/failed)。
 // 用于单调状态保护:终态后不接受回退到 in_progress/pending(§5.4 #10)。
 func isTerminalToolStatus(status string) bool {
@@ -88,12 +89,12 @@ type chatConn interface {
 // 消灭旧实现"先写所有段再写所有工具 → 工具堆 turn 末尾"的 bug(§5.4 #12),
 // 也消灭"tool_call_update 打断流式 agent 气泡"的 bug(§5.4 #11)。
 type turnEntry struct {
-	id    string // 主键:message=messageId+role 复合 / tool=toolCallId / user=合成
-	kind  string // "message" | "tool"
-	role  string // message: "agent"|"thought"|"user";tool:""
+	id    string          // 主键:message=messageId+role 复合 / tool=toolCallId / user=合成
+	kind  string          // "message" | "tool"
+	role  string          // message: "agent"|"thought"|"user";tool:""
 	text  strings.Builder // message 累积全文(chunk 是增量,按 id 归并累加)
-	tool  *toolAccum // kind=="tool":工具状态(update 就地 patch,指针单例)
-	final bool      // message 收口(轮结束 finalize)/ tool 终态
+	tool  *toolAccum      // kind=="tool":工具状态(update 就地 patch,指针单例)
+	final bool            // message 收口(轮结束 finalize)/ tool 终态
 }
 
 // liveSession 一个活跃的 ACP 对话(内存态,钉在某个 db session 上)。
@@ -101,7 +102,7 @@ type liveSession struct {
 	chat chatConn
 	proj *store.Project
 
-	mu      sync.Mutex
+	mu       sync.Mutex
 	timeline []*turnEntry          // 单一时序队列:真相,持久化按此序写库
 	index    map[string]*turnEntry // 主键 → entry(归并用);message 主键=mid+role,tool 主键=toolCallId
 	seq      int64                 // 单调序号,流式事件防乱序(§4.3)
@@ -852,13 +853,9 @@ func (s *ChatService) ensureLive(sessionID string) error {
 func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessionID string, resume bool) error {
 	// 按 session 选择的 harness 解析启动命令(§2.1 harness 适配层)。
 	cmdStr := harness.Command(se.Harness)
-	// model 注入:opencode 走 cwd 写 opencode.json(§3.5);其它 harness 的 model 注入方式
-	// 待各自适配,暂不写(留空让 NewRunner.WriteModelConfig 跳过,各 harness 用自身全局配置)。
-	model := se.Model
-	if !harness.IsOpenCode(se.Harness) {
-		model = ""
-	}
-	runner := acp.NewRunner(cmdStr, nil, model)
+	// model 不在 spawn 注入:统一走 ACP session config option(model selector)
+	// + session/set_config_option 在 NewSession 后应用(见 SetSessionConfigOption)。
+	runner := acp.NewRunner(cmdStr, nil)
 	cwd := proj.Path
 	if se.WorktreePath != "" {
 		cwd = se.WorktreePath // 每个 session 独占 worktree(并行隔离)
@@ -1304,6 +1301,7 @@ func (s *ChatService) persistTurn(sessionID string, timeline []*turnEntry) {
 		}
 	}
 }
+
 // handleEvent 处理一条 SessionUpdate:按稳定标识归并进 timeline + 推前端(§5.4 #11/#12)。
 //
 // 归并主键(对标 omp/opencode 的"对象归并"):

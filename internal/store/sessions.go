@@ -59,8 +59,8 @@ func (s *Store) UpdateSessionTitle(ctx context.Context, id, title string) error 
 	return err
 }
 
-// UpdateSessionModel 更新 session 的 model(首条消息前在 model selector 里改 model 时用:
-// model 在 NewSession 时钉死,首条消息 ensureLive 用最新 se.Model 写 opencode.json,§3.5/§5.4 #3)。
+// UpdateSessionModel 更新 session 的 model(首条消息前在 model selector 改 model 时写库;
+// 首条消息 NewSession 后改走 session/set_config_option 热切)。
 func (s *Store) UpdateSessionModel(ctx context.Context, id, model string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET model=?, updated_at=? WHERE id=?`, model, now(), id)
 	return err

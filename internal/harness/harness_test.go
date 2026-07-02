@@ -47,15 +47,3 @@ func TestNormalizeAndCommand(t *testing.T) {
 		t.Fatalf(`Command("bogus")=%q, want "omp acp"`, got)
 	}
 }
-
-func TestIsOpenCode(t *testing.T) {
-	if !IsOpenCode("opencode") {
-		t.Fatal(`IsOpenCode("opencode") = false, want true`)
-	}
-	if IsOpenCode("omp") {
-		t.Fatal(`IsOpenCode("omp") = true, want false`)
-	}
-	if IsOpenCode("") { // 空归一化到默认 omp,非 opencode
-		t.Fatal(`IsOpenCode("") = true, want false`)
-	}
-}

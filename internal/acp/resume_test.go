@@ -14,7 +14,7 @@ import (
 )
 
 func TestDiagResume(t *testing.T) {
-	runner := NewRunner("opencode acp --print-logs --log-level DEBUG", nil, "")
+	runner := NewRunner("opencode acp --print-logs --log-level DEBUG", nil)
 	cwd := t.TempDir()
 	ctx := context.Background()
 

@@ -17,7 +17,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 
@@ -37,15 +36,15 @@ type Attachment struct {
 	Name string `json:"name"`
 }
 
-// Runner 驱动单个 harness(opencode acp)。
+// Runner 驱动单个 harness(其 stdio ACP server)。model 不在 spawn 注入:
+// 统一走 ACP session config option(category=model)+ session/set_config_option。
 type Runner struct {
 	HarnessCmd []string // 启动命令,如 ["opencode","acp"]
 	Env        []string // 额外环境变量
-	Model      string   // per-agent model(provider/model 格式,非空时在 workDir 写 opencode.json 注入,§3.5)
 }
 
 // NewRunner 构造 Runner。command 默认 "opencode acp"。
-func NewRunner(command string, env map[string]string, model string) *Runner {
+func NewRunner(command string, env map[string]string) *Runner {
 	parts := strings.Fields(command)
 	if len(parts) == 0 {
 		parts = []string{"opencode", "acp"}
@@ -54,21 +53,7 @@ func NewRunner(command string, env map[string]string, model string) *Runner {
 	for k, v := range env {
 		envList = append(envList, k+"="+v)
 	}
-	return &Runner{HarnessCmd: parts, Env: envList, Model: model}
-}
-
-// WriteModelConfig 在 workDir 写一份 opencode.json(只含 model 字段),规避协议层传 model 被忽略的 bug(§3.5)。
-// opencode 启动时按 cwd → 父目录 → global 顺序找 config,我们写的覆盖 global model。
-// 只在 model 非空时写;best-effort:写失败只告警不阻塞。
-func (r *Runner) WriteModelConfig(workDir string) {
-	if r.Model == "" || workDir == "" {
-		return
-	}
-	configPath := workDir + string(os.PathSeparator) + "opencode.json"
-	content := `{"$schema":"https://opencode.ai/config.json","model":` + strconv.Quote(r.Model) + "}\n"
-	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
-		slog.Warn("runner: write opencode.json for per-agent model failed", "dir", workDir, "model", r.Model, "err", err)
-	}
+	return &Runner{HarnessCmd: parts, Env: envList}
 }
 
 // ChatSession 保持 harness 进程 + ACP session 跨多轮对话。
@@ -79,7 +64,6 @@ type ChatSession struct {
 	Handler   *Handler
 	SessionID acp.SessionId
 	WorkDir   string
-	Model     string
 	// CanListSessions:agent 是否声明了 session/list 能力(Initialize 响应的
 	// capabilities.session.list)。协议硬约束:未声明时禁止调用 session/list
 	// (session-list.mdx:Clients MUST verify this capability before calling)。
@@ -108,7 +92,7 @@ func (r *Runner) NewChatSession(ctx context.Context, workDir string, onEvent fun
 	}
 	slog.Info("chat session created", "sessionId", sess.SessionId, "cwd", workDir, "agent", initResp.AgentInfo.Name)
 	cs := &ChatSession{
-		Runner: r, Cmd: cmd, Conn: conn, Handler: handler, SessionID: sess.SessionId, WorkDir: workDir, Model: r.Model,
+		Runner: r, Cmd: cmd, Conn: conn, Handler: handler, SessionID: sess.SessionId, WorkDir: workDir,
 		CanListSessions: initResp.AgentCapabilities.SessionCapabilities.List != nil,
 		ConfigOptions:   sess.ConfigOptions,
 	}
@@ -142,7 +126,7 @@ func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string,
 	}
 	slog.Info("chat session loaded", "sessionId", sessionID, "cwd", workDir)
 	cs := &ChatSession{
-		Runner: r, Cmd: cmd, Conn: conn, Handler: handler, SessionID: acp.SessionId(sessionID), WorkDir: workDir, Model: r.Model,
+		Runner: r, Cmd: cmd, Conn: conn, Handler: handler, SessionID: acp.SessionId(sessionID), WorkDir: workDir,
 		CanListSessions: initResp.AgentCapabilities.SessionCapabilities.List != nil,
 		ConfigOptions:   resumeResp.ConfigOptions,
 	}
@@ -152,9 +136,8 @@ func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string,
 	return cs, nil
 }
 
-// spawnAndInit 公共前置:写 model config → spawn harness(独立进程组)→ 建连接 → Initialize。
+// spawnAndInit 公共前置:spawn harness(独立进程组)→ 建连接 → Initialize。
 func (r *Runner) spawnAndInit(ctx context.Context, workDir string, handler *Handler) (*exec.Cmd, *acp.ClientSideConnection, acp.InitializeResponse, error) {
-	r.WriteModelConfig(workDir) // §3.5
 	cmd := exec.CommandContext(ctx, r.HarnessCmd[0], r.HarnessCmd[1:]...)
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(), r.Env...)

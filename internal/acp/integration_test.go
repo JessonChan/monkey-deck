@@ -20,7 +20,7 @@ func TestIntegrationChatSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
 	defer cancel()
 
-	runner := NewRunner("opencode acp", nil, "zai/glm-4.6")
+	runner := NewRunner("opencode acp", nil)
 	tmp := t.TempDir()
 
 	var agentText strings.Builder
