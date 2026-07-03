@@ -43,7 +43,7 @@ func newSCMService(t *testing.T) (svc *ChatService, sessionID, wtPath string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	svc = NewChatService(&config.Config{DataDir: t.TempDir(), DBPath: dbPath})
+	svc = NewChatService(config.TestConfig(t.TempDir()))
 	svc.ctx = context.Background()
 	svc.st = st
 	proj, err := st.CreateProject(svc.ctx, "p", root, "")
@@ -134,7 +134,7 @@ func TestSCMNoWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	svc := NewChatService(&config.Config{DataDir: t.TempDir(), DBPath: dbPath})
+	svc := NewChatService(config.TestConfig(t.TempDir()))
 	svc.ctx = context.Background()
 	svc.st = st
 	proj, _ := st.CreateProject(svc.ctx, "p", t.TempDir(), "")
@@ -168,7 +168,7 @@ func TestSCMNonWorktreeGitSession(t *testing.T) {
 	st, err := store.New(dbPath)
 	if err != nil { t.Fatal(err) }
 	t.Cleanup(func() { _ = st.Close() })
-	svc := NewChatService(&config.Config{DataDir: t.TempDir(), DBPath: dbPath})
+	svc := NewChatService(config.TestConfig(t.TempDir()))
 	svc.ctx = context.Background()
 	svc.st = st
 	proj, _ := st.CreateProject(svc.ctx, "p", root, "")

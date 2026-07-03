@@ -209,7 +209,7 @@ func (s *ChatService) ServiceStartup(ctx context.Context, options application.Se
 	}
 	s.st = st
 	s.loadPersistedConfig()
-	acp.SetPgidFile(filepath.Join(s.cfg.DataDir, "harness-pgids.json")) // §3.2:限定回收范围到本应用派生的 harness
+	acp.SetPgidFile(filepath.Join(s.cfg.CachesDir, "harness-pgids.json")) // §3.2:限定回收范围到本应用派生的 harness
 	acp.SetHarnessCommands(harness.Commands())                          // 注入受支持 harness 命令,回收层据此识别 omp/opencode/...(不再写死 opencode)
 	acp.KillAllHarnesses()                                              // 启动时清上轮残留 harness 进程组(§3.2)
 	s.startIdleReaper()                                                 // B 方案:idle reaper 回收空闲 harness
@@ -411,7 +411,7 @@ func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorkt
 			short = short[:8]
 		}
 		branch := "md/" + short
-		wtPath := filepath.Join(s.cfg.DataDir, "worktrees", proj.ID, se.ID)
+		wtPath := filepath.Join(s.cfg.CachesDir, "worktrees", proj.ID, se.ID)
 		if err := worktree.Create(proj.Path, branch, wtPath, ""); err != nil {
 			slog.Warn("create session worktree failed, fallback to project dir", "err", err)
 		} else if err := s.st.SetSessionWorktree(s.ctx, se.ID, wtPath, branch); err != nil {
@@ -1517,11 +1517,14 @@ func (s *ChatService) IsGitProject(projectID string) (bool, error) {
 	return worktree.IsRepo(proj.Path), nil
 }
 
-// GetConfig 返回当前配置(默认 model、数据目录)。
+// GetConfig 返回当前配置(默认 model、各数据目录)。
 func (s *ChatService) GetConfig() map[string]string {
 	return map[string]string{
 		"defaultModel": s.cfg.DefaultModel,
 		"dataDir":      s.cfg.DataDir,
+		"logsDir":      s.cfg.LogsDir,
+		"cachesDir":    s.cfg.CachesDir,
+		"stateDir":     s.cfg.StateDir,
 	}
 }
 

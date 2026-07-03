@@ -29,13 +29,16 @@ var assets embed.FS
 
 func main() {
 	cfg := config.Default()
-	_ = cfg.EnsureDir()
+	if err := cfg.EnsureDir(); err != nil {
+		// 目录创建失败不致命:继续启动,后续 store/log 打开会自行报错。
+		slog.Warn("ensure data dirs failed", "err", err)
+	}
 
 	// 诊断日志落盘:GUI 应用 stderr 默认 → /dev/null,曾导致 session 卡死等关键 slog
 	// (chat idle/absolute timeout、prompt failed、session live、harness started)全部丢失、
-	// 无法事后诊断(§5.4 #16)。重定向 slog 与标准 log 到 DataDir 下的 monkey-deck.log(append);
+	// 无法事后诊断(§5.4 #16)。重定向 slog 与标准 log 到 LogsDir 下的 monkey-deck.log(append);
 	// 打开失败则退回默认(stderr)。LevelInfo 足以覆盖 Warn/Error/Info 级关键诊断。
-	if logFile, logErr := os.OpenFile(filepath.Join(cfg.DataDir, "monkey-deck.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); logErr == nil {
+	if logFile, logErr := os.OpenFile(filepath.Join(cfg.LogsDir, config.AppSlug+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); logErr == nil {
 		slog.SetDefault(slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: slog.LevelInfo})))
 		log.SetOutput(logFile)
 	} else {
@@ -46,7 +49,7 @@ func main() {
 	chatSvc := chat.NewChatService(cfg)
 
 	app := application.New(application.Options{
-		Name:        "Monkey Deck",
+		Name:        config.AppName,
 		Description: "ACP 桌面客户端 —— 以项目/目录为单位管理编码 agent 的对话",
 		Services: []application.Service{
 			application.NewService(chatSvc),
@@ -93,7 +96,7 @@ func main() {
 	app.Menu.SetApplicationMenu(menu)
 
 	// 窗口状态记忆:记住上次的尺寸/位置/是否最大化(ui_state.json,AGENTS.md §0.5)。
-	statePath := filepath.Join(cfg.DataDir, "ui_state.json")
+	statePath := filepath.Join(cfg.StateDir, "ui_state.json")
 	saved, err := ui.LoadWindow(statePath)
 	if err != nil {
 		log.Printf("ui: load window state: %v", err)
@@ -103,7 +106,7 @@ func main() {
 		width, height = saved.Width, saved.Height
 	}
 	opts := application.WebviewWindowOptions{
-		Title:  "Monkey Deck",
+		Title:  config.AppName,
 		Width:  width,
 		Height: height,
 		Mac: application.MacWindow{

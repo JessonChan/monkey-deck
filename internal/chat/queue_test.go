@@ -99,7 +99,7 @@ func newTestService(t *testing.T) (svc *ChatService, sessionID string, fc *fakeC
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	svc = NewChatService(&config.Config{DataDir: t.TempDir(), DBPath: dbPath})
+	svc = NewChatService(config.TestConfig(t.TempDir()))
 	svc.ctx = context.Background()
 	svc.st = st
 
