@@ -1,7 +1,7 @@
 # 更新源选型与自建服务器指引
 
 > 本文件回答:**自动升级必须依赖 GitHub 吗?能不能自建更新服务器?** 以及「想自建时该怎么选、怎么换」。
-> 操作性的「打 tag → 发布 → 客户端升级」流程见 [RELEASE.md](./RELEASE.md);实现见 [`internal/update/`](./internal/update/update.go)。
+> 操作性的「打 tag → 发布 → 客户端升级」流程见 [RELEASE.md](./RELEASE.md);实现见 [`internal/update/`](../internal/update/update.go)。
 > 状态:**当前默认走 GitHub Releases;自建路线已论证可行,切换留待后续处理。**
 
 ---

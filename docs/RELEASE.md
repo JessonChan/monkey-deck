@@ -1,7 +1,7 @@
 # 应用升级与发布指引
 
 > 本文件说明 **monkey-deck 如何自我升级**(用户视角)以及 **如何发布一个可被升级的新版本**(发布者视角)。
-> 实现代码在 [`internal/update/`](./internal/update/update.go);进度/决策见 [PROCESS.md](./PROCESS.md) §G(2026-06-29 auto-update)。
+> 实现代码在 [`internal/update/`](../internal/update/update.go);进度/决策见 [PROCESS.md](./PROCESS.md) §G(2026-06-29 auto-update)。
 
 ---
 

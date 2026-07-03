@@ -99,11 +99,11 @@ Wails3 脚手架默认的 `generate:icons` 带这两个参数：
 `build/appicon.png` 自动生成自以下设计源文件之一：
 
 ```
-monkey-deck-icon-v2.png          ← 设计师交付的 2048×2048 主图（完整含透明 padding）
-monkey-deck-icon-v2-cropped.png  ← 最终扣好的 1062×1062 1:1 内容（去掉羽化白边）
+assets/monkey-deck-icon-v2.png          ← 设计师交付的 2048×2048 主图（完整含透明 padding）
+assets/monkey-deck-icon-v2-cropped.png  ← 最终扣好的 1062×1062 1:1 内容（去掉羽化白边）
 ```
 
-设计源文件放在项目根目录，不入库（`.gitignore` 排除构建产物，但 git 跟踪根目录 PNG）。
+设计源文件放在 `assets/`（git 跟踪，入库）。
 
 **从设计稿到 `build/appicon.png` 的处理链**：
 
@@ -112,14 +112,14 @@ monkey-deck-icon-v2-cropped.png  ← 最终扣好的 1062×1062 1:1 内容（去
 # 2. 扣掉羽化白边，保留 1:1 核心主体
 python3 -c "
 from PIL import Image; import numpy as np
-img = Image.open('monkey-deck-icon-v2.png').convert('RGBA')
+img = Image.open('assets/monkey-deck-icon-v2.png').convert('RGBA')
 a = np.array(img)[:,:,3]
 ys, xs = np.where(a >= 180)  # 实色核心，避开低 alpha 羽化
 img.crop((xs.min(), ys.min(), xs.max()+1, ys.max()+1)) \
-   .save('monkey-deck-icon-v2-cropped.png', 'PNG')
+   .save('assets/monkey-deck-icon-v2-cropped.png', 'PNG')
 "
 # 3. 等比缩放到 1024×1024
-sips -Z 1024 monkey-deck-icon-v2-cropped.png --out build/appicon.png
+sips -Z 1024 assets/monkey-deck-icon-v2-cropped.png --out build/appicon.png
 ```
 
 ## Windows / Linux 图标生成

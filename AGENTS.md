@@ -143,12 +143,12 @@ spawn harness 子进程（独立进程组,见 §3.2）
 ```
 monkey-deck/
 ├── AGENTS.md                  # 本文件(规矩)
-├── PROCESS.md                 # 历史归档(只读;2026-06-30 起停维,见 §0.3)
-├── references/                # 只读参考(real-agent-kanban / wesight / openwork / orca 等),严禁改动;不入库,实际在主源码树 /Users/jessonchan/temp/monkey-deck/references(见 §0.2)
+├── references/                # 只读参考(严禁改动,不入库,见 §0.2)
+├── assets/                    # 图标设计源 PNG(换图标流程输入,见 docs/icon.md)
 ├── go.mod                     # 单一 Go module
 ├── main.go                    # Wails3 application.New() 入口
 ├── internal/
-│   ├── acp/                   # ACP client 封装(Handler 回调 + Runner 生命周期)← 照搬 RAK internal/acp 思路
+│   ├── acp/                   # ACP client 封装(Handler 回调 + Runner 生命周期)
 │   ├── harness/               # harness 适配层(抹平 ACP 实现差异,只接 ACP)
 │   ├── store/                 # SQLite 持久化(迁移 + CRUD)
 │   ├── project/               # 项目/目录管理
@@ -157,7 +157,8 @@ monkey-deck/
 ├── frontend/                  # React 19 + TS + Vite(Wails3 前端)
 │   └── src/
 ├── migrations/                # SQLite 迁移 SQL(纯 SQL,按序号)
-├── docs/worklog/              # 工作日志(一条一文件,开发追踪的唯一活载体,见 §0.3)
+├── docs/                      # 文档:RELEASE/UPDATE_SOURCES/icon + worklog(开发追踪) + PROCESS(历史归档)
+│   └── worklog/               # 工作日志(一条一文件,开发追踪唯一活载体,见 §0.3)
 └── Makefile                   # gen/dev/build/test/migrate
 ```
 
