@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 	<dict>
+		<key>CFBundleDevelopmentRegion</key>
+		<string>zh-Hans</string>
+		<key>CFBundleDisplayName</key>
+		<string>Monkey Deck</string>
 		<key>CFBundleExecutable</key>
 		<string>monkey-deck</string>
 		<key>CFBundleGetInfoString</key>
@@ -10,6 +14,8 @@
 		<string>icons</string>
 		<key>CFBundleIdentifier</key>
 		<string>com.jessonchan.monkeydeck</string>
+		<key>CFBundleInfoDictionaryVersion</key>
+		<string>6.0</string>
 		<key>CFBundleName</key>
 		<string>Monkey Deck</string>
 		<key>CFBundlePackageType</key>
@@ -20,6 +26,8 @@
 		<string>0.0.1</string>
 		<key>LSMinimumSystemVersion</key>
 		<string>12.0.0</string>
+		<key>LSApplicationCategoryType</key>
+		<string>public.app-category.developer-tools</string>
 		<key>NSAppTransportSecurity</key>
 		<dict>
 			<key>NSAllowsLocalNetworking</key>
