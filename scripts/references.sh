@@ -19,11 +19,10 @@ set -euo pipefail
 # 记录格式:名称|URL|相对仓库根路径|协议|用途
 # URL = "-" 表示无公开 remote(本地私有副本),脚本不会克隆,需自行放置或软链。
 REFERENCES=(
-"real-agent-kanban|-|references/real-agent-kanban|本地私有|Go ACP client 生命周期/回调权威范例(AGENTS.md §0.1 #3)"
 "openwork|https://github.com/different-ai/openwork.git|references/openwork|MIT(ee/ 除外)|首选 UI/交互蓝本(§4.1),仅参考形态,工作原理不照搬"
 "wesight|https://github.com/freestylefly/wesight.git|references/wesight|MIT|UI/产品形态补充灵感(§0.1 #5)"
 "orca|https://github.com/stablyai/orca.git|references/orca|MIT|parallel worktree 模型参考(§1.4)"
-"opencode|https://github.com/sst/opencode.git|references/opencode|MIT|主 harness(§1.1),ACP 实现参照(本地副本无 remote,URL 按 sst/opencode 填,请核对)"
+"opencode|https://github.com/anomalyco/opencode.git|references/opencode|MIT|主 harness(§1.1),ACP 实现参照"
 "agent-client-protocol|https://github.com/agentclientprotocol/agent-client-protocol.git|references/agent-client-protocol|Apache-2.0|ACP 协议规范本体"
 "oh-my-pi|https://github.com/can1357/oh-my-pi.git|references/oh-my-pi|MIT|探索参考"
 "vscode|https://github.com/microsoft/vscode.git|references/vscode|MIT|探索参考(体积大,建议按需拉取)"
