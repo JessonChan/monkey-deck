@@ -32,6 +32,7 @@
 - `references/`(仓库根下,不入库)是外部参考项目集(`wesight/`、`orca`、`openwork` 等),**只读**。下文 `references/xxx` 均指此相对路径。
 - **严禁创建、修改、删除 `references/` 下的任何文件**,严禁往里面写测试 / 构建产物 / 临时文件。要验证想法就在本项目自己的代码里验证。
 - 只允许 `read` / `search` / `find` 获取知识。
+- **获取参考(`references/` 不入库,克隆者 / AI 工具需自行拉取)**:清单(URL / 协议 / 用途)与一键同步都在**入库的** `scripts/references.sh`(单一事实来源,见其顶部 `REFERENCES` 表)。`bash scripts/references.sh` 浅克隆全部缺失项,`--status` 预览,`--pull` 更新,或 `task references -- --status`。这样无需把 ~5GB 内容入库:别人克隆后一条命令补齐;AI 编码工具读脚本即可"看见"参考目录(否则 `.gitignore` 会让它们忽略 `references/`)。
 
 ### 0.3 开发追踪:docs/worklog/(PROCESS.md 已停维)
 
