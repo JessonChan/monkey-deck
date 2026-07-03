@@ -2,6 +2,7 @@ version: '3'
 
 vars:
   APP_NAME: "monkey-deck"
+  BUNDLE_NAME: "Monkey Deck"
   BIN_DIR: "bin"
   PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "bun"}}'
   VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
@@ -67,28 +68,91 @@ tasks:
 
 
   release:darwin:
-    summary: 构建+打包 macOS 应用,产出 GitHub Release 所需的 zip + SHA256SUMS
+    summary: 构建+打包 macOS 应用,产出 universal DMG + 各架构 updater zip + SHA256SUMS
     description: |
-      产出 bin/monkey-deck-darwin-<arch>.zip 与 bin/SHA256SUMS。
+      产出(位于 {{.BIN_DIR}}/):
+        - Monkey Deck <version>-universal.dmg  (拖拽安装,人工下载用)
+        - monkey-deck-darwin-arm64.zip         (更新器 asset)
+        - monkey-deck-darwin-amd64.zip         (更新器 asset)
+        - SHA256SUMS                            (所有产物校验和)
       发布流程:① git tag v<版本>  ② task release:darwin  ③ 用输出里的 gh 命令发布。
-      资源名含 darwin/<arch>,命中更新器的默认 asset 匹配。
-    vars:
-      ARCH: '{{.ARCH | default ARCH}}'
+      zip 资源名含 darwin/<arch>,命中更新器的默认 asset 匹配。
     cmds:
       - task: darwin:package
         vars:
-          ARCH: '{{.ARCH}}'
+          ARCH: arm64
+          BUNDLE_SUFFIX: "-arm64"
+      - task: darwin:package
+        vars:
+          ARCH: amd64
+          BUNDLE_SUFFIX: "-amd64"
+      # 1) 注入 git tag 版本到两个架构的 .app 的 Info.plist(单一源 = git describe)
+      - cmd: |
+          set -e
+          VER="$(git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev)"
+          cd "{{.BIN_DIR}}"
+          for arch in arm64 amd64; do
+            app="{{.BUNDLE_NAME}}-$arch.app"
+            # /usr/libexec/PlistBuddy 在所有键不存在时创建它们
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VER" "$app/Contents/Info.plist" 2>/dev/null \
+              || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VER" "$app/Contents/Info.plist"
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VER" "$app/Contents/Info.plist" 2>/dev/null \
+              || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VER" "$app/Contents/Info.plist"
+          done
+      # 2) 各架构 updater zip(slug 命名,更新器依赖 darwin+arch 子串匹配)
       - cmd: |
           set -e
           cd "{{.BIN_DIR}}"
-          ZIP="{{.APP_NAME}}-darwin-{{.ARCH}}.zip"
-          rm -f "$ZIP" SHA256SUMS
-          # -y 保留 .app 内的符号链接(MacOS 可执行、Resources 等)
-          zip -r -y "$ZIP" "{{.APP_NAME}}.app"
-          shasum -a 256 "$ZIP" > SHA256SUMS
+          rm -f {{.APP_NAME}}-darwin-arm64.zip {{.APP_NAME}}-darwin-amd64.zip SHA256SUMS
+          zip -r -y {{.APP_NAME}}-darwin-arm64.zip "{{.BUNDLE_NAME}}-arm64.app"
+          zip -r -y {{.APP_NAME}}-darwin-amd64.zip "{{.BUNDLE_NAME}}-amd64.app"
+      # 3) Universal DMG:用 lipo 合并两架构二进制,塞进一个 .app,create-dmg 打包
+      - task: darwin:dmg
+      # 4) 汇总 SHA256SUMS(DMG + 两个 zip)
+      - cmd: |
+          set -e
+          cd "{{.BIN_DIR}}"
           VER="$(git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev)"
-          echo "==== 已生成 release 资源(位于 {{.BIN_DIR}}/): $ZIP + SHA256SUMS ===="
-          ls -la "$ZIP" SHA256SUMS
+          shasum -a 256 "{{.BUNDLE_NAME}} $VER-universal.dmg" {{.APP_NAME}}-darwin-arm64.zip {{.APP_NAME}}-darwin-amd64.zip > SHA256SUMS
+          echo "==== 已生成 release 资源(位于 {{.BIN_DIR}}/): ===="
+          ls -la "{{.BUNDLE_NAME}} $VER-universal.dmg" {{.APP_NAME}}-darwin-arm64.zip {{.APP_NAME}}-darwin-amd64.zip SHA256SUMS
           echo "二进制内 currentVersion = $VER(应与下方 tag 一致)"
           echo "发布(确保 tag 与上面的版本一致):"
-          echo "  gh release create \"v$VER\" {{.BIN_DIR}}/SHA256SUMS {{.BIN_DIR}}/$ZIP --title \"v$VER\" --generate-notes"
+          echo "  gh release create \"v$VER\" \\"
+          echo "    {{.BIN_DIR}}/SHA256SUMS \\"
+          echo "    \"{{.BIN_DIR}}/{{.BUNDLE_NAME}} $VER-universal.dmg\" \\"
+          echo "    {{.BIN_DIR}}/{{.APP_NAME}}-darwin-arm64.zip \\"
+          echo "    {{.BIN_DIR}}/{{.APP_NAME}}-darwin-amd64.zip \\"
+          echo "    --title \"v$VER\" --generate-notes"
+
+  darwin:dmg:
+    summary: 构建 universal DMG(拖拽安装),需 create-dmg(brew install create-dmg)
+    internal: true
+    cmds:
+      - cmd: |
+          set -e
+          command -v create-dmg >/dev/null 2>&1 || { echo "需要 create-dmg: brew install create-dmg"; exit 1; }
+          VER="$(git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev)"
+          cd "{{.BIN_DIR}}"
+          # lipo 合并 arm64 + amd64 二进制成 universal
+          lipo -create -output "monkey-deck-universal" "{{.BUNDLE_NAME}}-arm64.app/Contents/MacOS/{{.APP_NAME}}" "{{.BUNDLE_NAME}}-amd64.app/Contents/MacOS/{{.APP_NAME}}"
+          # 复制 arm64 .app 为 universal 版,替换可执行文件
+          cp -R "{{.BUNDLE_NAME}}-arm64.app" "{{.BUNDLE_NAME}}.app"
+          cp "monkey-deck-universal" "{{.BUNDLE_NAME}}.app/Contents/MacOS/{{.APP_NAME}}"
+          rm -f "monkey-deck-universal"
+          codesign --force --deep --sign - "{{.BUNDLE_NAME}}.app"
+          rm -rf dmg-staging
+          mkdir dmg-staging
+          cp -R "{{.BUNDLE_NAME}}.app" dmg-staging/
+          ln -s /Applications dmg-staging/Applications
+          create-dmg \
+            --volname "{{.BUNDLE_NAME}} $VER" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "{{.BUNDLE_NAME}}" 150 120 \
+            --app-drop-link 450 120 \
+            --no-internet-enable \
+            "{{.BUNDLE_NAME}} $VER-universal.dmg" \
+            dmg-staging
+          rm -rf dmg-staging "{{.BUNDLE_NAME}}.app"
