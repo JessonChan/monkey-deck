@@ -8,29 +8,27 @@
         AllowPromptForPassword="false">
     </Settings>
     <Installer
-        Path="testapp"
+        Path="monkey-deck.exe"
         Arguments=""
-        InstallLocation="C:\Program Files\My Company\My Product">
+        InstallLocation="C:\Program Files\jessonchan\Monkey Deck">
     </Installer>
     <PackageInformation
-        PackageName="My Product"
-        PackageDisplayName="My Product"
-        PublisherName="CN=My Company"
-        PublisherDisplayName="My Company"
+        PackageName="Monkey Deck"
+        PackageDisplayName="Monkey Deck"
+        PublisherName="CN=jessonchan"
+        PublisherDisplayName="jessonchan"
         Version="0.1.0.0"
-        PackageDescription="A testapp application">
+        PackageDescription="Pure ACP desktop client for coding agents">
         <Capabilities>
             <Capability Name="runFullTrust" />
-            
         </Capabilities>
         <Applications>
             <Application
-                Id="com.example.testapp"
-                Description="A testapp application"
-                DisplayName="My Product"
-                ExecutableName="testapp"
-                EntryPoint="Windows.FullTrustApplication">
-                
+                Id="com.jessonchan.monkeydeck"
+                Description="Pure ACP desktop client for coding agents"
+                DisplayName="Monkey Deck"
+                ExecutableName="monkey-deck.exe"
+                EntryPoint="Windows.FullTrustApplication"
             </Application>
         </Applications>
         <Resources>
@@ -41,13 +39,13 @@
         </Dependencies>
         <Properties>
             <Framework>false</Framework>
-            <DisplayName>My Product</DisplayName>
-            <PublisherDisplayName>My Company</PublisherDisplayName>
-            <Description>A testapp application</Description>
+            <DisplayName>Monkey Deck</DisplayName>
+            <PublisherDisplayName>jessonchan</PublisherDisplayName>
+            <Description>Pure ACP desktop client for coding agents</Description>
             <Logo>Assets\AppIcon.png</Logo>
         </Properties>
     </PackageInformation>
-    <SaveLocation PackagePath="testapp.msix" />
+    <SaveLocation PackagePath="monkey-deck.msix" />
     <PackageIntegrity>
         <CertificatePath></CertificatePath>
     </PackageIntegrity>

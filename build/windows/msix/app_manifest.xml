@@ -6,50 +6,47 @@
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
   IgnorableNamespaces="uap3">
-  
-  <Identity 
-    Name="com.example.testapp"
-    Publisher="CN=My Company"
-    Version="0.1.0.0" 
+
+  <Identity
+    Name="com.jessonchan.monkeydeck"
+    Publisher="CN=jessonchan"
+    Version="0.1.0.0"
     ProcessorArchitecture="arm64" />
-  
+
   <Properties>
-    <DisplayName>My Product</DisplayName>
-    <PublisherDisplayName>My Company</PublisherDisplayName>
-    <Description>A testapp application</Description>
+    <DisplayName>Monkey Deck</DisplayName>
+    <PublisherDisplayName>jessonchan</PublisherDisplayName>
+    <Description>Pure ACP desktop client for coding agents</Description>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
-  
+
   <Dependencies>
     <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
   </Dependencies>
-  
+
   <Resources>
     <Resource Language="en-us" />
   </Resources>
-  
+
   <Applications>
-    <Application Id="com.example.testapp" Executable="testapp" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="com.jessonchan.monkeydeck" Executable="monkey-deck.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="My Product"
-        Description="A testapp application"
+        DisplayName="Monkey Deck"
+        Description="Pure ACP desktop client for coding agents"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
         <uap:SplashScreen Image="Assets\SplashScreen.png" />
       </uap:VisualElements>
-      
+
       <Extensions>
-        <desktop:Extension Category="windows.fullTrustProcess" Executable="testapp" />
-        
-        
+        <desktop:Extension Category="windows.fullTrustProcess" Executable="monkey-deck.exe" />
       </Extensions>
     </Application>
   </Applications>
-  
+
   <Capabilities>
     <rescap:Capability Name="runFullTrust" />
-    
   </Capabilities>
 </Package>
