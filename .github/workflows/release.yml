@@ -1,0 +1,202 @@
+# Release 构建 —— tag(v*) 触发,三平台并行构建,汇总发 GitHub Release。
+#
+# 产物:
+#   macOS:   Monkey Deck <ver>-universal.dmg        (拖拽安装)
+#            monkey-deck-darwin-arm64.zip            (更新器 asset)
+#            monkey-deck-darwin-amd64.zip            (更新器 asset)
+#   Windows: monkey-deck-windows-amd64-installer.exe (NSIS 安装器)
+#   Linux:   monkey-deck-linux-amd64.deb / .rpm      (nfpm)
+#            monkey-deck-linux-amd64.AppImage
+#   汇总:   SHA256SUMS                               (全部产物校验和)
+#
+# 签名公证(P0)暂未接入:需 secrets APPLE_DEV_ID / APPLE_KEYCHAIN_PROFILE /
+# WINDOWS_CERT_THUMBPRINT 等。当前为 ad-hoc / 未签名,用户首次打开需手动放行。
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. 0.1.0), overrides git describe'
+        required: false
+
+permissions:
+  contents: write
+
+# 同一 tag 快速重推时取消旧 run,避免 release 资源竞争。
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  # ══════════════════════════════════════════════════════════════
+  # macOS —— universal DMG + 双架构 updater zip
+  # ══════════════════════════════════════════════════════════════
+  build-macos:
+    name: macOS (universal DMG + zips)
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 需完整历史让 git describe 解析版本
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install Wails3 CLI + create-dmg
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha2.106
+          brew install create-dmg
+
+      - name: Generate bindings
+        run: wails3 generate bindings
+
+      - name: Build + package (DMG + zips)
+        run: wails3 task release:darwin
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-assets
+          path: |
+            bin/*.dmg
+            bin/monkey-deck-darwin-*.zip
+          if-no-files-found: error
+
+  # ══════════════════════════════════════════════════════════════
+  # Windows —— NSIS installer
+  # ══════════════════════════════════════════════════════════════
+  build-windows:
+    name: Windows (NSIS installer)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install Wails3 CLI + NSIS
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha2.106
+          choco install nsis -y
+
+      - name: Generate bindings
+        run: wails3 generate bindings
+
+      - name: Build + package (NSIS)
+        run: wails3 task windows:package
+
+      - name: Rename installer with platform tag
+        shell: bash
+        run: |
+          mv "build/windows/nsis/monkey-deck-installer.exe" \
+             "bin/monkey-deck-windows-amd64-installer.exe"
+          ls -la bin/*.exe
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-assets
+          path: bin/*.exe
+          if-no-files-found: error
+
+  # ══════════════════════════════════════════════════════════════
+  # Linux —— deb + rpm + AppImage
+  # ══════════════════════════════════════════════════════════════
+  build-linux:
+    name: Linux (deb/rpm/AppImage)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: oven-sh/setup-bun@v2
+
+      # Wails Linux 需要 WebKitGTK 6.0 + GTK4 dev 头(AGENTS.md §0.5 技术栈)
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
+
+      - name: Install Wails3 CLI + packaging tools
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha2.106
+          # nfpm(goreleaser)做 deb/rpm
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+      - name: Generate bindings
+        run: wails3 generate bindings
+
+      - name: Build + package (deb/rpm/AppImage)
+        run: wails3 task linux:package
+
+      - name: Rename packages with platform tag
+        run: |
+          mv bin/*.deb bin/monkey-deck-linux-amd64.deb
+          mv bin/*.rpm bin/monkey-deck-linux-amd64.rpm
+          mv bin/*.AppImage bin/monkey-deck-linux-amd64.AppImage
+          ls -la bin/*.deb bin/*.rpm bin/*.AppImage
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-assets
+          path: |
+            bin/*.deb
+            bin/*.rpm
+            bin/*.AppImage
+          if-no-files-found: error
+
+  # ══════════════════════════════════════════════════════════════
+  # Release —— 汇总三平台产物 + SHA256SUMS + 发 GitHub Release
+  # ══════════════════════════════════════════════════════════════
+  release:
+    name: Publish GitHub Release
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: assets
+
+      - name: Flatten + generate SHA256SUMS
+        run: |
+          mkdir -p release
+          find assets -type f -exec mv {} release/ \;
+          cd release
+          shasum -a 256 * > SHA256SUMS
+          echo "=== Release contents ==="
+          ls -la
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') || contains(github.ref_name, '-dev') }}

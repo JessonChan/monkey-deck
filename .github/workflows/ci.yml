@@ -1,0 +1,69 @@
+# Pull request / push 编译验证(不发 release)。
+# 确保三平台均可构建、前端类型检查通过、后端测试编译通过。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 后端:Go 编译 + 测试 ──────────────────────────────────────
+  backend:
+    name: Backend (Go ${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+            runner: macos-14
+          - goos: linux
+            goarch: amd64
+            runner: ubuntu-24.04
+          - goos: windows
+            goarch: amd64
+            runner: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build backend
+        env:
+          GOOS: ${{ matrix.goos }}
+        run: go build . ./internal/...
+
+      # Linux Wails 需要 WebKitGTK dev 头才能 CGO 编译,CI 仅验证 Go 编译(不 CGO)。
+      # 完整 Wails 构建在 release.yml 跑(装齐 dev 依赖)。
+      - name: Vet
+        if: matrix.goos != 'windows'
+        run: go vet ./internal/...
+      - name: Test compile (no run)
+        run: go test -run xxx_none ./internal/...
+
+  # ── 前端:TypeScript 类型检查 + 构建 ──────────────────────────
+  frontend:
+    name: Frontend (tsc + vite build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install deps
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+      - name: Type check + build
+        working-directory: frontend
+        run: bun run build
