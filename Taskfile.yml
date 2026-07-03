@@ -41,6 +41,11 @@ tasks:
     cmds:
       - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
 
+  references:
+    summary: 拉取/同步外部只读参考库到 references/(gitignored;清单与用法见 scripts/references.sh)
+    cmds:
+      - bash scripts/references.sh {{.CLI_ARGS}}
+
   setup:docker:
     summary: Builds Docker image for cross-compilation (~800MB download)
     cmds:
