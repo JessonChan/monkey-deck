@@ -12,7 +12,7 @@ priority: "extra"
 maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
 description: "ACP 桌面客户端 —— 以项目/目录为单位管理编码 agent 的对话"
 vendor: "jessonchan"
-homepage: "https://wails.io"
+homepage: "https://github.com/jessonchan/monkey-deck"
 license: "MIT"
 release: "1"
 

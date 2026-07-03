@@ -7,7 +7,7 @@ Exec=/usr/local/bin/monkey-deck %u
 Terminal=false
 Type=Application
 Icon=monkey-deck
-Categories=Utility;
+Categories=Development;
 StartupWMClass=monkey-deck
 
  
