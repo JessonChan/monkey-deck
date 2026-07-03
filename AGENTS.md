@@ -21,22 +21,18 @@
 
 1. **本文件** —— 搞清楚规矩。
 2. **`docs/worklog/`** —— 搞清楚最近做到哪、下一步干什么(`ls docs/worklog/ | sort -r | head` 看最新几条)。**PROCESS.md 已停维**(历史归档,只读,见 §0.3)。
-3. **ACP 协议怎么用**:看 `/Users/jessonchan/temp/monkey-deck/references/real-agent-kanban/internal/acp/`（`runner.go` 的完整生命周期、`handler.go` 的回调实现）——这是 ACP client 用法的权威范例,**直接照搬其生命周期与回调模式**。
-4. **UI / 产品形态参考(首选)**:`/Users/jessonchan/temp/monkey-deck/references/openwork`([github.com/different-ai/openwork](https://github.com/different-ai/openwork))——**与本项目最接近的同类产品**:opencode-first 的桌面 agent 客户端(Electron/Tauri + React),覆盖工作区/项目管理、session 管理、SSE 流式对话、执行计划(todos 时间线)、权限审批弹窗、model-select、各类 tool 卡片(apply-patch / bash / edit / file / glob / grep / lsp …)、markdown 渲染等**全套前端形态**。**这是最值得借鉴的 UI / 交互蓝本**。⚠️ **仅参考形态**——openwork 走 HTTP+SSE(`opencode serve` + `@opencode-ai/sdk`),**不是 ACP**;我们是纯 ACP,工作原理 / 数据通道一律不照搬。
-5. **UI / 产品形态参考(补充)**:`/Users/jessonchan/temp/monkey-deck/references/wesight`([github.com/freestylefly/wesight](https://github.com/freestylefly/wesight))——统一 agent 管理、model 路由、运行时监控、菜单栏 HUD 等概念可作 UI 灵感。**仅参考形态,不照搬其工作原理**(wesight 多为 CLI 子进程管理,我们是纯 ACP)。
+3. **ACP 协议怎么用**:看 `references/real-agent-kanban/internal/acp/`（`runner.go` 的完整生命周期、`handler.go` 的回调实现）——这是 ACP client 用法的权威范例,**直接照搬其生命周期与回调模式**。
+4. **UI / 产品形态参考(首选)**:`references/openwork`([github.com/different-ai/openwork](https://github.com/different-ai/openwork))——**与本项目最接近的同类产品**:opencode-first 的桌面 agent 客户端(Electron/Tauri + React),覆盖工作区/项目管理、session 管理、SSE 流式对话、执行计划(todos 时间线)、权限审批弹窗、model-select、各类 tool 卡片(apply-patch / bash / edit / file / glob / grep / lsp …)、markdown 渲染等**全套前端形态**。**这是最值得借鉴的 UI / 交互蓝本**。⚠️ **仅参考形态**——openwork 走 HTTP+SSE(`opencode serve` + `@opencode-ai/sdk`),**不是 ACP**;我们是纯 ACP,工作原理 / 数据通道一律不照搬。
+5. **UI / 产品形态参考(补充)**:`references/wesight`([github.com/freestylefly/wesight](https://github.com/freestylefly/wesight))——统一 agent 管理、model 路由、运行时监控、菜单栏 HUD 等概念可作 UI 灵感。**仅参考形态,不照搬其工作原理**(wesight 多为 CLI 子进程管理,我们是纯 ACP)。
 6. 按需查阅 ACP 协议规范本身与 `coder/acp-go-sdk`。
 
 **禁止跳过阅读直接写代码。** ACP 生命周期搞错（比如把 client 当 server、漏掉 SessionUpdate 回调、Prompt 当成纯异步）是一切偏离的源头。
 
 ### 0.2 references/ 是只读参考,严禁改动
 
-> **绝对路径(给 git worktree 用)**:`references/` 不入库、不在各 worktree 里。它的真实位置在**主源码树**:
-> `/Users/jessonchan/temp/monkey-deck/references`
-> （含 `real-agent-kanban/`、`wesight/`、`orca/`、`openwork/`、`DeepSeek-Reasonix/`）。下文凡写 `references/xxx` 的,均指此绝对路径下的对应子目录——在任意 worktree 里直接按这个绝对路径读即可。
-
-- `references/` 下所有子项目(`real-agent-kanban/`、`wesight/`、`orca/`、`openwork/`、`DeepSeek-Reasonix/` 等)都是**参考资料,只读**。
-- **严禁创建、修改、删除 `references/` 下的任何文件或内容**,严禁往里面写测试产物 / 构建产物 / 临时文件。要验证想法就在本项目自己的代码里验证。
-- 只允许 `read` / `search` / `find` 它们来获取知识。
+- `references/`(仓库根下,不入库)是外部参考项目集(`real-agent-kanban/`、`wesight/`、`orca/`、`openwork/` 等),**只读**。下文 `references/xxx` 均指此相对路径。
+- **严禁创建、修改、删除 `references/` 下的任何文件**,严禁往里面写测试 / 构建产物 / 临时文件。要验证想法就在本项目自己的代码里验证。
+- 只允许 `read` / `search` / `find` 获取知识。
 
 ### 0.3 开发追踪:docs/worklog/(PROCESS.md 已停维)
 
@@ -56,11 +52,11 @@
 
 ### 0.4 借用代码的协议署名(wesight / openwork 为 MIT)
 
-- `/Users/jessonchan/temp/monkey-deck/references/wesight` 是 **MIT 协议**。**凡是从 wesight 借用 / 改写的代码,必须保留 MIT 协议署名:**
+- `references/wesight` 是 **MIT 协议**。**凡是从 wesight 借用 / 改写的代码,必须保留 MIT 协议署名:**
   - **文件级**:被借用代码的文件顶部保留 MIT 版权声明与许可文本(原作者 copyright 行 + "Permission is hereby granted..." 全文)。
   - **项目级**:在 `THIRD_PARTY_LICENSES.md`(或 `NOTICE.md`)登记一条「来源 = wesight (MIT) / 借用了哪些文件 / 原版权声明」。
-- 从 `/Users/jessonchan/temp/monkey-deck/references/real-agent-kanban` 借用代码同理,**先确认其 LICENSE 文件,按对应协议署名**。
-- `/Users/jessonchan/temp/monkey-deck/references/openwork` 整体是 **MIT 协议**(`LICENSE`),但 **`ee/` 目录是 Fair Source License,非 MIT**——**借用代码时避开 `ee/`,只从 MIT 部分(`apps/`、`packages/` 等)借**;同样须保留版权声明 + 登记到 `THIRD_PARTY_LICENSES.md`(来源 = openwork (MIT),原版权 `Copyright (c) 2026 Different AI`)。
+- 从 `references/real-agent-kanban` 借用代码同理,**先确认其 LICENSE 文件,按对应协议署名**。
+- `references/openwork` 整体是 **MIT 协议**(`LICENSE`),但 **`ee/` 目录是 Fair Source License,非 MIT**——**借用代码时避开 `ee/`,只从 MIT 部分(`apps/`、`packages/` 等)借**;同样须保留版权声明 + 登记到 `THIRD_PARTY_LICENSES.md`(来源 = openwork (MIT),原版权 `Copyright (c) 2026 Different AI`)。
 - **禁止**把借用代码当成原创、抹掉版权声明。借一行也算;只参考思路(不抄代码)不受此约束。
 
 ---
@@ -69,14 +65,14 @@
 
 | 层 | 技术 | 说明 |
 |---|---|---|
-| 桌面框架 | **Wails3**（v3,`/Users/jessonchan/go/bin/wails3`）| 单一 Go 进程:后端逻辑 + 前端 webview + 子进程管理全在这里,**没有 daemon/server 分离** |
+| 桌面框架 | **Wails3**（v3,跟最新 alpha）| 单一 Go 进程:后端逻辑 + 前端 webview + 子进程管理全在这里,**没有 daemon/server 分离** |
 | 后端 | Go 1.26+,单一 module `github.com/jessonchan/monkey-deck` | Go 进程 spawn harness 子进程并独占 ACP 连接 |
 | ACP | `github.com/coder/acp-go-sdk`（RAK 用 v0.13.5,我们跟进最新稳定版）| 唯一的 agent 通道 |
 | 持久化 | **SQLite** + `modernc.org/sqlite`(纯 Go 驱动,免 CGO)+ `golang-migrate/v4` | 本地单文件是真相来源,无中央数据库 |
 | 前端 | React 19 + TypeScript + Vite（Wails3 官方 React 模板）,Bun 管理依赖 | 通过 Wails3 **binding（Go 方法暴露给前端）+ event（后端推前端）** 与 Go 交互 |
 | 配置 | 应用配置 SQLite 表 + 少量 YAML/JSON（`gopkg.in/yaml.v3`）| harness 命令、model、provider 等 |
 
-**Wails 版本纪律(硬约束)**:Wails3 始终跟进**最新版**(当前 `v3.0.0-alpha2.106`;wails3 目前仅以 alpha 发布,该 alpha 即最新)。**wails3 CLI、go module(`github.com/wailsapp/wails/v3`)、生成的 bindings 三者版本必须同步**——脚手架/绑定按 CLI 版本生成。升级时三者一起升,**禁止锁旧版**;改 Go 导出方法签名后必须 `wails3 gen bindings`。
+**Wails 版本纪律(硬约束)**:Wails3 跟进**最新 alpha**(**wails3 CLI、go module、生成的 bindings 三者版本必须同步**,升级时一起升,**禁止锁旧版**)。改 Go 导出方法签名后必须 `wails3 gen bindings`(dev 起的进程前端 binding 走运行时注入,不重新生成则前端用旧签名)。
 
 **典型命令（脚手架后补全 Makefile）:**
 ```bash
@@ -86,8 +82,6 @@ wails3 build             # 产出桌面应用
 go test ./...            # 后端单测
 bun run dev              # 仅前端 dev（Wails3 dev 通常已含）
 ```
-
-**开发期注意**:Wails3 `dev` 起的进程,前端调 binding 走的是运行时注入。改了 Go 导出方法的签名**必须重新 `wails3 gen bindings`** 再用,否则前端拿到旧签名。
 
 ---
 
@@ -191,6 +185,7 @@ monkey-deck/
 - spawn harness 时**必须建独立进程组**（`Setpgid=true`），结束时 `kill -PGID` 整组回收,**不只杀主 PID**。agent 内部 fork 的子进程会自己 setpgid 逃逸。
 - **reap 逃逸子进程的时机关键:只能在 harness 已结束（unregister）后 reap,禁止周期性 reap**——运行中时逃逸 worker 与孤儿无法区分,周期 reap 会误杀活跃 worker 打断任务（RAK §5.4 #23 实测血泪）。
 - 每个活跃 harness 要注册到活跃集合,reaper 据此区分。这条直接从 RAK 迁移,**先照做再理解**。
+- **回收必须 harness 无关:以 pgidFile 登记的 pgid 为唯一真相**(启动清残留 / reap 逃逸都基于它),**禁止写死某个 harness 命令字符串做 grep**——harness 启动命令会变(如 omp 以 `bun …/omp acp` 启动),写死会漏掉主力 harness 致孤儿永不回收。
 
 ### 3.3 不能裸跑:崩溃检测 + 用户可停(无静默超时)
 - **Prompt 不设静默超时或绝对超时**——对齐 omp TUI 的设计:turn 跑到自然结束(`end_turn` / error),内部空停止重试(最多 3 次)、auto-retry(429/503/timeout)对 ACP client 不可见,设超时会打断这些机制。
@@ -232,29 +227,16 @@ monkey-deck/
 
 ### 4.5 统一 hover tooltip:用 react-tooltip,禁用原生 title(硬约束)
 - **所有可交互 / 需解释的元素(图标按钮、状态指示、被截断的文本等)必须有 hover tooltip**,用人话说明它的作用/含义,不靠用户猜。
-- **工具实现统一用 `react-tooltip`**(成熟库,React 19 兼容,属性驱动)。**禁止用浏览器原生 `title="..."`**——样式不可控(系统样式、出现延迟长、不可定制)、与深色主题不协调。
-- **用法**:全局只挂一个 `<Tooltip id="md-tip" />`(在 `App.tsx` 根级),元素上加 `data-tooltip-id="md-tip" data-tooltip-content="说明文字"` 即可;窗口顶部元素加 `data-tooltip-place="bottom"` 防裁切。主题对齐走 `index.css` 的 `--rt-*` 变量。
-- **理由**:原生 title 太丑、不可定制,违反 §4.4「面向人而非机器」的总则;用成熟库而非自研(§5.3)。
+- **统一用 `react-tooltip`**(成熟库,React 19 兼容),**禁用浏览器原生 `title`**(样式不可控、与深色主题不协调)。具体 API 用法见前端代码,不在此规定。
 ### 4.6 UI 库 / 组件选型三约束(贴近原生 / 轻量 / 跨平台一致)
 
-> Wails3 的 WebView 因平台而异:**Windows = WebView2(Edge/Chromium)**、**macOS = WebKit**、**Linux = WebKitGTK**。同一库 / 自定义组件在不同 webview 下的渲染、字体、滚动行为、输入表现可能不一致——这是我们与 Electron(全 Chromium) 最大的体验差异。选型时必须同时满足三条:
+> Wails3 WebView 因平台而异(Win=WebView2、macOS=WebKit、Linux=WebKitGTK),同一库在不同 webview 下渲染/字体/滚动/输入可能不一致——这是我们与 Electron(全 Chromium) 最大的体验差异。选型须同时满足:
 
-1. **贴近不同平台的 native 样式(优先)**
-   - **首选**:各平台「看起来像原生控件」的库,或能按平台适配 native 观感的方案(如 mac 上拟 macOS 风格、Win 上拟 WinUI/Fluent 风格)。
-   - **次选**:中性、简约、不标榜「某平台拟物」但能在各平台都协调的通用设计(如 shadcn/ui 风)。
-   - **禁止**:只在某一平台惊艳、在另一平台突兀的「重度拟物」库(例如纯 macOS 糖霜风在 Win/WebKitGTK 会格格不入)。桌面客户端的第一印象是「它属于这个平台」,不是「它想成为另一个平台」。
+1. **贴近平台 native 样式**:首选各平台看起来像原生控件的库或可平台适配的方案;**禁止**只在某平台惊艳、在另一平台突兀的重度拟物库(如纯 macOS 糖霜风在 Win/WebKitGTK 格格不入)。
+2. **轻量、低 GPU/CPU 开销(硬约束)**:**禁止**重度 canvas/WebGL、粒子背景、滚动视差、大面积 backdrop-filter 重绘、重型可视化等耗资源库(桌面长期驻留,资源占用决定发热/风扇/续航);倾向 CSS 驱动、纯 DOM、可 tree-shake 的轻量方案。
+3. **跨平台一致性强制验证(硬约束)**:新引入的库/复杂组件,**引入前**须在 macOS WebKit + Win WebView2 实测(布局/字体/滚动/输入/快捷键/tooltip/暗色主题,Linux WebKitGTK 抽检);存在不可接受差异则**禁止引入**,回退纯 CSS/轻量原语自研。
 
-2. **轻量、低 GPU / CPU 开销(硬约束)**
-   - **禁止**引入重度 canvas / WebGL 动画、复杂粒子背景、滚动视差、实时模糊(backdrop-filter 大面积重绘)、重型图表/可视化(如 three.js 首页特效)等耗资源的库作为 UI 基础——桌面应用长期驻留前台,资源占用直接决定发热、风扇、续航。
-   - **禁止**仅为视觉华丽而引入的 UI 库(含大量预置动画、spring physics)。动效只是锦上添花,交互反馈够用即可。
-   - **倾向**:CSS 驱动、纯 DOM 的轻量方案,首屏 JS / CSS 体积在合理范围(单包不过百 KB 级),能被 tree-shaken。
-
-3. **跨平台一致性强制验证(硬约束)**
-   - 任何新引入的 UI 库 / 自定义复杂组件,**必须在引入前**同时在 macOS WebView 与 Win WebView2 实测基础表现(布局、字体渲染、滚动、输入框行为、快捷键、tooltip 避让、暗色主题)。Linux WebKitGTK 做抽检。
-   - 若某库在三个平台上存在**不可接受的差异**(如滚动条样式不可控、input 聚焦 ring 不一致、字体 fallback 乱码、菜单定位错位),**禁止引入**,回退到更底层的方案或自己用纯 CSS / 轻量原语实现。
-   - **理由**:我们不是 Electron——没有单一 Chromium 兜底。一致性不是可选项,是桌面体验底线;不一致的 UI 比粗糙但一致的 UI 更毁信任。
-
-**决策链路**:有现成轻量跨平台成熟库 → 用;没有 → 自己用 React + 原语 CSS 实现;只在「自研成本远高于容忍不一致的风险」时选平台适配型库,并在 README / THIRD_PARTY_LICENSES 记录选择理由与已验证平台。
+**决策链路**:有现成轻量跨平台成熟库 → 用;没有 → React + 原语 CSS 自研;仅当自研成本远高于不一致风险时选平台适配型库,并在 README/THIRD_PARTY_LICENSES 记录理由与已验证平台。
 
 ---
 
@@ -268,38 +250,25 @@ monkey-deck/
 - store 测试用 `t.TempDir()` 下的临时 db,跑完即弃。**禁止**测试读写用户的真实应用数据目录。
 
 ### 5.3 KISS + 成熟库优先 + references 优先参考 + Less is More
-- **references/ 优先参考(硬约束)**:任何功能的实现——无论 UI 还是功能设计——**先看 `references/` 下的项目(orca / wesight / real-agent-kanban / openwork)有没有对应实现**,参考其做法再动手。能用 read/search/find 从参考项目里学到方案就不凭空设计。**先参考后动手。**
-- **成熟库优先(硬约束)**:任何功能,**先搜索有没有成熟的代码库 / 库可以满足需要**,而不是自己动手写。能用成熟库解决的就不自己造轮子。自研只在「没有成熟方案 / 方案太重 / 有特殊定制」时考虑,且在 commit 里说明理由。**先搜后写,不搜不写。**
-- **KISS**:用最简单直白的方式实现,重复 3 次再抽象。
-- **Less is More**:相同的功能,**越少的代码越是好代码**——更少 bug、更低维护成本。能用 10 行解决的不用 50 行。**删掉后功能不变的代码就该删。**
+- **references/ 优先参考(硬约束)**:任何功能(无论 UI 还是逻辑)**先看 `references/` 下项目(orca/wesight/real-agent-kanban/openwork)有没有对应实现**,参考其做法再动手。能用 read/search/find 学到方案就不凭空设计。**先参考后动手。**
+- **成熟库优先(硬约束)**:任何功能**先搜有没有成熟库能满足**,能用就不自己造轮子;自研仅在「无成熟方案/方案太重/有特殊定制」时考虑,且 commit 里说明理由。**先搜后写,不搜不写。**
+- **KISS / Less is More**:用最简单直白的方式实现,重复 3 次再抽象;相同功能越少代码越好(更少 bug、更低维护成本),**删掉后功能不变的代码就该删**。
 - **每个 bug 修复必须配一个能复现该 bug 的测试**,先复现再修。测试比修复更重要。
-- **修症状 vs 治根因(硬约束)**:修一个 bug 时,不要只问"这段代码哪里写错了",要问"**这个 bug 背后的不变量是什么**"。如果修法本身依赖一个脆弱的假设(如"事件会按某种顺序到达"),那你只是推迟了下一个 bug,不是修好了。**先找根因的不变量,再动手。**
-- **尊重数据源:不要在转换层丢弃协议/上游已给的标识(硬约束)**:当你在做"推断/猜测"某件事(如消息边界)时,先检查数据源是否已直接给出了答案(如协议字段)。**转换层(flatten/marshal)不得丢弃当前或未来可能用到的信息**,哪怕当时觉得用不到。"我们在重新发明协议已经给的东西"是最常见的返工来源。
-- **禁用启发式分段,只用稳定标识归并(硬约束)**:处理外部事件流时,不得用"上一个事件是什么类型"这种启发式做分段/归并。**必须按数据源的稳定标识(messageId / toolCallId 等协议主键)归并** —— 同主键 patch 同一对象,不同主键新建。启发式对事件序列的形状做假设,而事件形状是无限的;主键归并对形状零假设,对任何形状都成立。当你发现自己在为越来越多的 edge case 加 if 分支时,你缺的不是另一个 if,是一个不变量。
-- **外部事实是设计前提时,先验证再动手(硬约束)**:任何依赖某个外部事实(协议字段是否被填充、上游行为是否符合预期)的设计,动手前**先用最小成本验证那个事实**(读参考实现 / 打日志 / 跑探针)。验证不是为了"确认你是对的",是为了"如果前提错了,早 10 分钟知道"。同时必须想清楚"主干失败时的降级路径"。
-- **"能跑"不等于"对"(硬约束)**:启发式代码天然有**长潜伏期** —— 它的错误只在"输入形状不符合假设"时显现,很多场景下形状恰好符合,于是"测试通过、日常正常"很久后才爆发。对处理外部事件流的代码,**必须问的不是"它跑过了哪些场景",而是"它对哪些场景形状做了假设,那些假设是否可能被打破"**。任何"假设事件按特定顺序/组合到来"的代码都是定时炸弹。
-- **最好的修复是减代码,不是加代码**:大量"能跑"的复杂代码,往往是在**对抗自己制造的复杂性**(维持多套表示同步的胶水、为启发式 edge case 加的分支)。找到那个让你不需要这些胶水的不变量,把多套表示收敛成一套,代码自然减少、正确性自然上升。**当你发现修复需要大幅加代码时,先退一步:你可能在对抗根因,而不是消除根因。**
+- **找不变量,不堆 if(硬约束)**:处理外部事件流时**按协议稳定标识(`messageId`/`toolCallId` 等主键)归并**——同主键 patch 同一对象,不同主键新建;**禁用"上一个事件是什么类型"的启发式分段**(它对事件形状做假设,而形状无限,长潜伏期后必爆;发现自己在为 edge case 加 if 时,缺的不是另一个 if,是不变量)。修 bug 先问"背后的不变量是什么"——若修法依赖脆弱假设(如"事件按某顺序到达")只是推迟下一个 bug;最好的修复常是减代码(把多套表示收敛成一套),不是加代码对抗自己制造的复杂性。
+- **尊重数据源,转换层不丢弃标识(硬约束)**:做"推断/猜测"(如消息边界)前,先检查数据源是否已给出答案(协议字段);**转换层(flatten/marshal)不得丢弃当前或未来可能用到的信息**。"重新发明协议已给的东西"是最常见的返工来源。
+- **外部事实是设计前提时,先验证再动手(硬约束)**:依赖某外部事实(协议字段是否填充、上游行为)的设计,动手前**先用最小成本验证**(读参考实现/打日志/跑探针)——不是为"确认你对",是为"前提错了早 10 分钟知道";同时想清楚主干失败的降级路径。
 
 ### 5.4 已知/可预见的 ACP 坑（从 RAK 参考迁移,预先防范）
 
-> 这些是 RAK 实测揪出的 ACP 实战问题（详见 `/Users/jessonchan/temp/monkey-deck/references/real-agent-kanban/AGENTS.md` §5.4）,在我们的栈里**大概率会复发**。先记录、先防,踩到了就在这里补本项目实证。
+> 这些是 RAK 实测揪出的 ACP 实战问题(详见 `references/real-agent-kanban/AGENTS.md` §5.4),在我们的栈里大概率复发。先记录先防,踩到了就在这里补本项目实证。
 
-1. **model 必须是 `provider/model` 格式**,裸名 → 占位 model → 0 产出静默 idle（见 §3.5）。
-2. **harness 崩溃 = `peer disconnected`**,不要当成普通 error 静默吞,要触发清理 + 用户可见提示。
-3. **session 创建时钉死 model**,改 model 可能需新建 session（见 §3.5）。
-4. **子进程泄漏**:不建进程组 / 不 reap 逃逸 worker → agent 子进程爆炸（见 §3.2）。
-5. **reap 不能周期性跑**:运行中误杀活跃 worker（见 §3.2）。
-6. **`PromptResponse.Usage` 常为 nil**:用量靠流式 `SessionUsageUpdate` 兜底,别假设一定有值（见 §1.6）。
-7. **安全切片**:`id[:8]` 当 id 不足 8 字符会 panic,用 safe slice。
-8. **改 Go 导出方法签名后必须重新 `wails3 gen bindings`**,否则前端用旧签名。
-9. **进程回收必须 harness 无关**:启动清残留(`KillAllHarnesses`)/ reap 逃逸(`reapStrayHarnesses`)以 pgidFile 登记的 **pgid** 为唯一真相,**禁止写死某个 harness 命令**做 grep——曾写死 `"opencode acp"`,默认 harness omp 实以 `bun …/omp acp` 启动,命令行不含该串 → omp 孤儿**永不回收**(漏掉主力 harness)。受支持命令经 `harness.Commands()` → `acp.SetHarnessCommands` 注入,仅作「pgid 被复用」的安全过滤(见 §3.2)。
-10. **tool 状态必须单调推进(禁止回退)**:ACP `tool_call_update` 的字段是可选的("only changed fields need to be included")。但 omp 的 async task(`async.enabled`)在 `execute()` 返回(触发 `tool_execution_end` → `status=completed`)后,后台 job 完成时仍调 `onUpdate`(触发 `tool_execution_update` → omp mapper 硬编码 `status=in_progress`),**把已到终态的 tool 状态打回 `in_progress`**。表现:tool 有 rawOutput(甚至内容里带 `state:completed`)但 status 卡在 `in_progress`,永不收口。**我们必须做单调状态保护**:tool 一旦到终态(`completed`/`failed`),后续 `tool_call_update` 只更新 `rawOutput` 等非状态字段,**不接受 `status` 回退到 `in_progress`/`pending`**。这条在 `handleEvent`(`internal/chat`)和 `activityTracker.observe`(`internal/acp`)两处都要做。
+1. **harness 崩溃 = `peer disconnected`**:不要当普通 error 静默吞,要触发清理 + 用户可见提示(错误含 "peer disconnected" / "broken pipe")。
+2. **`PromptResponse.Usage` 常为 nil**:用量靠流式 `SessionUsageUpdate` 兜底,别假设一定有值(见 §1.6)。
+3. **安全切片**:`id[:8]` 当 id 不足 8 字符会 panic,用 safe slice。
+4. **tool 状态必须单调推进,禁止回退**:tool 一旦到终态(`completed`/`failed`),后续 `tool_call_update` 只更新 `rawOutput` 等非状态字段,**不接受 `status` 回退到 `in_progress`/`pending`**(omp async task 的 `tool_execution_update` 会硬编码打回 in_progress)。`handleEvent`(`internal/chat`)与 `activityTracker.observe`(`internal/acp`)两处都做。
+5. **持久化按真实时序交错写库**:思考/回复/工具是交错的(thought→tool→agent→tool→agent),`persistTurn` 必须按真实发生顺序逐条写 `seq`,不能先写完所有 segment 再写所有 tool(否则重开会话历史时工具卡片全聚到 turn 末尾)。
 
-11. **流式合并必须按协议稳定标识归并,不得用"上一个事件类型"启发式(§5.4 #11)**:ACP 的 message chunk 带 `messageId`(同一逻辑消息的所有 chunk 共享,id 变化=新消息),tool 带 `toolCallId`。我们的表示层(后端 `liveSession.timeline` + 前端 `streamMerge.ts`)**必须按这两个主键归并** —— 同主键的 chunk/事件 patch 同一个 entry,不同主键新建。旧实现用"上一个 chunk 是不是同类型 agent 且 streaming"这种启发式判断,遇到 omp async task 的 `tool_call_update`(在 `execute()` 返回后才发,见 #10)在 agent 文本流中反复穿插时,update 把正在流式的 agent 气泡 `streaming` 打 false → 后续每个 chunk 新建气泡 → 同一条 agent 消息被拆成「累积前缀」的多条(message-duplication:「这个问题 / 这个问题值得我 / 这个问题值得我认真」)。**修法(已落地)**:后端 `timeline []*turnEntry` + `index map[string]*turnEntry`,message 主键=`messageId+role` 复合,tool 主键=`toolCallId`;前端 `streamMerge.ts` 同构主键归并。`tool_call_update` 按 `toolCallId` 只命中 tool entry,物理上碰不到 message → 构造性消灭。messageId 是协议 UNSTABLE,harness 可能不发 → 回退"role 变化/被 tool 打断=新 entry"(降级 fallback,非主干)。回归测试:`internal/chat/turn_order_test.go`(TestMessageIdMergeSurvivesToolUpdateInterleave)+ `frontend/src/lib/streamMerge.test.ts`。
-
-12. **持久化必须按真实时序交错写库(tool 不能堆到 turn 末尾,§5.4 #12)**:实时流式里思考/回复/工具是**交错**的(thought→tool→agent→tool→agent)。旧 `persistTurn` 先写完所有 segment 再写所有 tool —— DB `seq` 丢失真实时序,重开会话加载历史时**工具卡片全聚到 turn 末尾**。**修法(已落地,与 #11 同一次重构)**:后端单一时序队列 `liveSession.timeline`(message/tool 按真实发生顺序排列,见 #11),`persistTurn` 按 `timeline` 序逐条写库。`runPrompt` 与 `SendAndWaitSync` 收尾共用 `finalizeTurn()`。回归测试:`internal/chat/turn_order_test.go`(TestPersistTurnWritesItemsInOrder / TestTimelineInterleaveToolsInOrder)。
-
-> **具体项目踩坑与修复记录**(含根因 / 修法 / 验证)统一落在 `docs/worklog/YYYY-MM-DD-<slug>.md`,本文只保留原则性规则。
+> 具体项目踩坑与修复记录(根因/修法/验证)统一落在 `docs/worklog/YYYY-MM-DD-<slug>.md`,本文只保留原则性规则。流式合并按主键归并的原则见 §5.3。
 
 ---
 
@@ -341,23 +310,13 @@ monkey-deck/
 
 ## 8. 自检清单（提交代码前自检）
 
-- [ ] 读过 §0（做什么/不做什么）和 §7（当前不做）,本次改动没越界?
-- [ ] 开工前读过 `docs/worklog/` 最近几条,知道当前做到哪、下一步干什么?(§0.3)
-- [ ] 收工前已在 `docs/worklog/` 新增一条工作日志(做了什么 / 为什么 / 改了哪些文件 / 怎么验证)?(§0.3)
-- [ ] 本次改动是原子提交、commit message 清楚(改了什么/为什么)、没夹带无关改动、没提交 references/ 与构建产物?(§6.2)
-- [ ] 是纯 ACP,没偷偷加 CLI 后端?(§1.1)
-- [ ] 没把 client/server 方向搞反,ACP 生命周期顺序正确?(§1.2、§1.3)
-- [ ] session 的 `cwd` 钉在项目目录,且支持 LoadSession 恢复?(§1.4)
-- [ ] 数据只在本地 SQLite,没引入「需联网读自己历史」?(§1.5)
-- [ ] 子进程建了独立进程组、结束整组回收、reap 只在结束后?(§3.2)
-- [ ] agent 执行有 peer-disconnected 崩溃检测 + 用户 Stop,没设静默/绝对超时?(§3.3)
-- [ ] `RequestPermission` 走「UI 提示 + 默认动作 + 超时兜底」,没裸跑也没死等?(§3.4)
-- [ ] model 是 `provider/model` 格式?(§3.5)
-- [ ] 没把结构化/技术格式(JSON、原始 cwd / 工具 I/O 对象)裸露给用户?(§4.4)
+- [ ] 读过 §0(做什么/不做什么)和 §7(当前不做),本次改动没越界?
+- [ ] 开工前读过 `docs/worklog/` 最近几条?(§0.3)
+- [ ] 收工前已在 `docs/worklog/` 新增工作日志?(§0.3)
+- [ ] 原子提交、commit message 清楚、没夹带无关改动、没提交 references/ 与构建产物?(§6.2)
 - [ ] 没碰 `references/` 下任何文件?(§0.2)
-- [ ] 代码若借用自 wesight / openwork(避开 ee/),已按 MIT 协议署名(版权声明 + 许可文本 + THIRD_PARTY_LICENSES 登记)?(§0.4)
-- [ ] ACP 相关单测用 mock,没启真 harness?(§5.1)
-- [ ] 没踩 §5.4 列出的已知坑?
+- [ ] 借用自 wesight/openwork(避开 ee/)的代码已按 MIT 署名(版权声明 + 许可文本 + THIRD_PARTY_LICENSES 登记)?(§0.4)
+- [ ] ACP 单测用 mock,没启真 harness?(§5.1)
 - [ ] `go test ./...` 通过?
 
-**任一项不满足,不要提交。**
+**任一项不满足,不要提交。** 架构硬约束(§1/§3)是违反=推翻重来的底线,不在此重复——直接遵守。
