@@ -50,12 +50,12 @@
 - **开工前不读 `docs/worklog/` 最近日志 = 盲干**(不知道上次做到哪、有什么 OPEN / 阻塞)。
 - **收工前不写 `docs/worklog/` 条目 = 不算完成**(下一个接手的 agent 会断片)。代码 commit 与 worklog 新增应同步。
 
-### 0.4 借用代码的协议署名(wesight / openwork 为 MIT)
+### 0.4 借用代码的协议署名(覆盖 references/ 下全部参考项目)
 
-- `references/wesight` 是 **MIT 协议**。**凡是从 wesight 借用 / 改写的代码,必须保留 MIT 协议署名:**
-  - **文件级**:被借用代码的文件顶部保留 MIT 版权声明与许可文本(原作者 copyright 行 + "Permission is hereby granted..." 全文)。
-  - **项目级**:在 `THIRD_PARTY_LICENSES.md`(或 `NOTICE.md`)登记一条「来源 = wesight (MIT) / 借用了哪些文件 / 原版权声明」。
-- `references/openwork` 整体是 **MIT 协议**(`LICENSE`),但 **`ee/` 目录是 Fair Source License,非 MIT**——**借用代码时避开 `ee/`,只从 MIT 部分(`apps/`、`packages/` 等)借**;同样须保留版权声明 + 登记到 `THIRD_PARTY_LICENSES.md`(来源 = openwork (MIT),原版权 `Copyright (c) 2026 Different AI`)。
+- **凡从 `references/` 下任何项目借用 / 改写代码,必须按其原始开源协议保留版权署名。**各参考项目的协议见 `scripts/references.sh` 顶部 `REFERENCES` 表(单一事实来源);**借用前以各项目根目录的 `LICENSE` / `NOTICE` 原文为准**(表格仅作索引,不替代核对)。
+- **文件级**:被借用代码的文件顶部保留原版权声明与许可文本(copyright 行 + 协议要求的全文——MIT 须保留 "Permission is hereby granted..." 全文;Apache-2.0 须保留 LICENSE 全文 + NOTICE + 标注修改)。
+- **项目级**:在 `THIRD_PARTY_LICENSES.md`(或 `NOTICE.md`)登记一条「来源项目 / 协议 / 借用了哪些文件 / 原版权声明」。
+- **协议特殊点(已知)**:openwork 整体 MIT,但 **`ee/` 目录是 Fair Source License、非 MIT**——**借用时避开 `ee/`,只从 MIT 部分(`apps/`、`packages/` 等)取**。其他项目若仓库内多协议混排,同理以所借文件实际适用的协议为准。
 - **禁止**把借用代码当成原创、抹掉版权声明。借一行也算;只参考思路(不抄代码)不受此约束。
 
 ---
@@ -314,7 +314,7 @@ monkey-deck/
 - [ ] 收工前已在 `docs/worklog/` 新增工作日志?(§0.3)
 - [ ] 原子提交、commit message 清楚、没夹带无关改动、没提交 references/ 与构建产物?(§6.2)
 - [ ] 没碰 `references/` 下任何文件?(§0.2)
-- [ ] 借用自 wesight/openwork(避开 ee/)的代码已按 MIT 署名(版权声明 + 许可文本 + THIRD_PARTY_LICENSES 登记)?(§0.4)
+- [ ] 借用 `references/` 下任何项目的代码已按其原始协议署名(版权声明 + 许可文本 + THIRD_PARTY_LICENSES 登记;openwork 避开 `ee/`)?(§0.4)
 - [ ] ACP 单测用 mock,没启真 harness?(§5.1)
 - [ ] `go test ./...` 通过?
 
