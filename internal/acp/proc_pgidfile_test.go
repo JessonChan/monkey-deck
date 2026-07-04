@@ -75,11 +75,11 @@ func TestIsHarnessCmdline(t *testing.T) {
 		line string
 		want bool
 	}{
-		{"  2938  2938  bun /Users/jessonchan/.bun/bin/omp acp", true},                  // omp 经 bun wrapper
-		{"  5251  5251  opencode acp", true},                                          // opencode 裸命令
-		{"  1234  1234  /Applications/Google Chrome.app/Contents/MacOS/Chrome", false}, // 无关进程
-		{"  1234  1234  node /usr/local/bin/some-server", false},                      // 无关进程
-		{"  1234  1234  omp-compiler build", false},                                   // 子串 "omp acp" 不命中
+		{"  2938  2938  bun /path/to/omp acp", true},          // omp 经 bun wrapper,"omp acp" 子串命中
+		{"  5251  5251  opencode acp", true},                  // opencode 裸命令
+		{"  1234  1234  /usr/bin/ssh user@host", false},       // 无关进程
+		{"  1234  1234  /usr/bin/python3 http.server", false}, // 无关进程
+		{"  1234  1234  omp-compiler build", false},           // 子串 "omp acp" 不命中
 	}
 	for _, c := range cases {
 		if got := isHarnessCmdline(c.line, cmds); got != c.want {

@@ -1,7 +1,7 @@
 .PHONY: all bindings dev dev-frontend build build-frontend app package run test test-integration clean server fmt vet tidy
 
 # monkey-deck Makefile(AGENTS.md §0.5)
-WAILS3 ?= /Users/jessonchan/go/bin/wails3
+WAILS3 ?= wails3
 
 ## 生成 Go 方法 → 前端 TS 类型(改了导出方法签名后必须重新跑,§5.4 #8)
 bindings:

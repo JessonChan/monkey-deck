@@ -22,7 +22,7 @@ func TestDiagConcurrentSameCwd(t *testing.T) {
 	if _, err := exec.LookPath("opencode"); err != nil {
 		t.Skip("opencode not installed")
 	}
-	cwd := "/tmp/wesight-study"
+	cwd := t.TempDir()
 	const n = 3
 	var wg sync.WaitGroup
 	type res struct {
@@ -58,7 +58,7 @@ func TestDiagConcurrentSameCwd(t *testing.T) {
 			handler := &Handler{Log: nil, WorkDir: cwd, OnEvent: func(SessionEvent) {}, OnPermission: nil, pending: map[string]*pendingPermission{}, permTTL: 5 * time.Minute}
 			conn := acp.NewClientSideConnection(handler, stdin, stdout)
 			if _, err := conn.Initialize(ctx, acp.InitializeRequest{
-				ProtocolVersion: acp.ProtocolVersionNumber,
+				ProtocolVersion:    acp.ProtocolVersionNumber,
 				ClientCapabilities: acp.ClientCapabilities{Fs: acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true}},
 			}); err != nil {
 				r.err = "init: " + err.Error()

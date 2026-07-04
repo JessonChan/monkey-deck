@@ -10,18 +10,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/jessonchan/monkey-deck/internal/config"
 	"github.com/jessonchan/monkey-deck/internal/store"
-)
-
-const (
-	studyDBPath   = "/tmp/md-study.db"
-	studyAnswers  = "/tmp/study-answers.txt"
-	studyCwdFixed = "/tmp/wesight-study"
 )
 
 var studyQ = map[string][]string{
@@ -46,12 +41,16 @@ var studyQ = map[string][]string{
 }
 
 func TestStudyWesight(t *testing.T) {
-	if _, err := os.Stat(studyCwdFixed); err != nil {
-		t.Skipf("wesight dir not found: %v", err)
+	dir := t.TempDir()
+	cwd := "references" + string(os.PathSeparator) + "wesight"
+	if _, err := os.Stat(cwd); err != nil {
+		t.Skipf("wesight reference not present (run: bash scripts/references.sh): %v", err)
 	}
-	os.Remove(studyDBPath)
-	os.Remove(studyAnswers)
-	fout, err := os.Create(studyAnswers)
+	dbPath := filepath.Join(dir, "md-study.db")
+	answers := filepath.Join(dir, "study-answers.txt")
+	os.Remove(dbPath)
+	os.Remove(answers)
+	fout, err := os.Create(answers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,18 +63,18 @@ func TestStudyWesight(t *testing.T) {
 		fmu.Unlock()
 	}
 
-	cfg := config.TestConfig("/tmp")
+	cfg := config.TestConfig(dir)
 	cfg.DefaultModel = ""
 	svc := NewChatService(cfg)
 	svc.ctx = context.Background()
-	st, err := store.New(studyDBPath)
+	st, err := store.New(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	svc.st = st
 	t.Cleanup(func() { svc.ServiceShutdown() })
 
-	proj, err := svc.AddProject("wesight-study", studyCwdFixed, "zai/glm-4.6")
+	proj, err := svc.AddProject("wesight-study", cwd, "zai/glm-4.6")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +89,7 @@ func TestStudyWesight(t *testing.T) {
 		writeLine(fmt.Sprintf("\n==== 会话%d【%s】 session=%s ====", idx+1, label, se.ID[:8]))
 		for qi, q := range studyQ[label] {
 			ans, lastErr := "", error(nil)
-			for attempt := 0; attempt < 3; attempt++ {
+			for attempt := range 3 {
 				a, err := svc.SendAndWaitSync(se.ID, q, nil)
 				ans, lastErr = a, err
 				if err == nil {
@@ -109,7 +108,7 @@ func TestStudyWesight(t *testing.T) {
 		writeLine(fmt.Sprintf("==== 会话%d【%s】完成 ====", idx+1, label))
 	}
 	writeLine("\n==== 全部 3 个会话完成 ====")
-	t.Log("study complete, see " + studyAnswers)
+	t.Log("study complete, see " + answers)
 }
 
 func studyClip(s string) string {

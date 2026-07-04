@@ -19,7 +19,7 @@ import (
 )
 
 func TestDiagDisconnectReason(t *testing.T) {
-	cwd := "/tmp/wesight-study"
+	cwd := t.TempDir()
 	qs := []string{
 		"wesight 是什么?列出全部 agent 引擎。",
 		"是 Electron 吗?主进程/渲染进程如何分工?",
