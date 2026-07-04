@@ -385,6 +385,12 @@ func (s *ChatService) SearchSessionContent(projectID, query string) ([]string, e
 	return s.st.SearchSessionIDsByContent(s.ctx, projectID, query)
 }
 
+// SetSessionPinned 设置会话置顶(0008)。前端侧栏右键菜单切换 → 乐观本地重排即时生效;
+// 持久化在 DB,pinned 由 ListSessions ORDER BY 接管顶部位置。
+func (s *ChatService) SetSessionPinned(sessionID string, pinned bool) error {
+	return s.st.SetSessionPinned(s.ctx, sessionID, pinned)
+}
+
 // CreateSession 新建 session。harness 指定使用的 agent(omp/opencode,空=omp 默认);
 // useWorktree=true 时为 git 项目建独立 worktree+分支(并行隔离),否则直接用项目目录(§1.4)。
 func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorktree bool) (*store.Session, error) {

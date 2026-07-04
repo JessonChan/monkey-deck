@@ -9,14 +9,14 @@ import (
 )
 
 // sessionColumns / scanSession:统一 session 的列与扫描,避免多处 SELECT/Scan 漂移(§1.5)。
-const sessionColumns = `id,project_id,acp_session_id,title,model,harness,worktree_path,branch,used_tokens,size_tokens,cost,created_at,updated_at,prompted_at`
+const sessionColumns = `id,project_id,acp_session_id,title,model,harness,worktree_path,branch,used_tokens,size_tokens,cost,created_at,updated_at,prompted_at,pinned`
 
 func scanSession(r interface {
 	Scan(dest ...any) error
 }, se *Session) error {
 	return r.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model, &se.Harness,
 		&se.WorktreePath, &se.Branch,
-		&se.UsedTokens, &se.SizeTokens, &se.Cost, &se.CreatedAt, &se.UpdatedAt, &se.PromptedAt)
+		&se.UsedTokens, &se.SizeTokens, &se.Cost, &se.CreatedAt, &se.UpdatedAt, &se.PromptedAt, &se.Pinned)
 }
 
 // --- Sessions ---
@@ -87,11 +87,22 @@ func (s *Store) TouchPrompted(ctx context.Context, id string) error {
 	return err
 }
 
+// SetSessionPinned 设置置顶(0008)。置顶不是内容活动 → 不动 updated_at(避免影响「时间」显示与二级排序)。
+// pinned 由 ListSessions ORDER BY pinned DESC 接管顶部位置;前端乐观本地重排即可即时生效。
+func (s *Store) SetSessionPinned(ctx context.Context, id string, pinned bool) error {
+	v := 0
+	if pinned {
+		v = 1
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET pinned=? WHERE id=?`, v, id)
+	return err
+}
+
 // ListSessions 列出某项目的全部 session。
-// 排序:prompted_at DESC(用户最后发消息时间,主键)→ updated_at DESC(最后修改时间,二级兜底)。
+// 排序:pinned DESC(置顶恒在顶)→ prompted_at DESC(用户最后发消息时间)→ updated_at DESC(二级兜底)。
 func (s *Store) ListSessions(ctx context.Context, projectID string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+sessionColumns+` FROM sessions WHERE project_id=? ORDER BY prompted_at DESC, updated_at DESC`,
+		`SELECT `+sessionColumns+` FROM sessions WHERE project_id=? ORDER BY pinned DESC, prompted_at DESC, updated_at DESC`,
 		projectID)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)

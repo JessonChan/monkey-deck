@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X, Pin, PinOff } from "lucide-react";
 import {
   DndContext,
   PointerSensor,
@@ -26,6 +26,7 @@ interface Props {
   onAddProjectByPath?: (path: string) => void;
   onRemoveProject: (id: string) => void;
   onRemoveSession: (sessionId: string) => void;
+  onTogglePin: (sessionId: string, pinned: boolean) => void;
   statusBySession: Record<string, string>;
   activityBySession: Record<string, "thinking" | "executing" | "replying">;
   unreadBySession: Record<string, boolean>;
@@ -362,6 +363,11 @@ export default function Sidebar(props: Props) {
                         >
                           <span className={`session-dot ${cls}`} data-tooltip-id="md-tip" data-tooltip-content={dotTip} />
                           <span className="session-label">{s.title || "新对话"}</span>
+                          {s.pinned && (
+                            <span className="session-pin" data-tooltip-id="md-tip" data-tooltip-content="已置顶 · 右键可取消" data-testid={`pin-${s.id}`}>
+                              <Pin size={11} />
+                            </span>
+                          )}
                           {props.permPendingBySession[s.id] ? (
                             <span className="perm-dot" data-tooltip-id="md-tip" data-tooltip-content="等待授权 · 点击进入裁决" data-testid={`perm-dot-${s.id}`} />
                           ) : active ? (
@@ -424,6 +430,9 @@ export default function Sidebar(props: Props) {
             onClick={() => { if (props.selectedSessionId !== ctx.session.id) void props.onSelectSession(ctx.session.id, ctx.session.projectId); closeCtx(); }}
           >
             <Folder size={13} /> 激活对话
+          </button>
+          <button className="ctx-item" onClick={() => { void props.onTogglePin(ctx.session.id, !ctx.session.pinned); closeCtx(); }}>
+            {ctx.session.pinned ? <><PinOff size={13} /> 取消置顶</> : <><Pin size={13} /> 置顶对话</>}
           </button>
           <button className="ctx-item" onClick={() => { void navigator.clipboard?.writeText(ctx.session.id); closeCtx(); }}>
             <Copy size={13} /> 复制会话 ID

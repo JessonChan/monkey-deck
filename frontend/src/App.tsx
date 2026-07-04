@@ -684,6 +684,32 @@ export default function App() {
     [selectedSessionId]
   );
 
+  // 切换置顶(0008):后端落库后前端乐观本地重排。不复用 refreshSessions —— 那会全量替换、
+  // turn 进行中时洗掉前端直播标题(见 2026-07-01-sidebar-session-search.md 的坑);本地重排规避它、即时生效。
+  // 重排复刻 DB 排序:pinned DESC → promptedAt DESC → updatedAt DESC,稳定排序保证同级不乱跳。
+  const toggleSessionPin = useCallback(
+    async (sessionId: string, pinned: boolean) => {
+      await ChatService.SetSessionPinned(sessionId, pinned);
+      setSessionsByProject((prev) => {
+        const next: Record<string, Session[]> = {};
+        for (const [pid, list] of Object.entries(prev)) {
+          const idx = list.findIndex((s) => s.id === sessionId);
+          if (idx < 0) { next[pid] = list; continue; }
+          const updated = { ...list[idx], pinned };
+          const rest = list.filter((_, i) => i !== idx);
+          next[pid] = [...rest, updated].sort(
+            (a, b) =>
+              Number(b.pinned) - Number(a.pinned) ||
+              b.promptedAt - a.promptedAt ||
+              b.updatedAt - a.updatedAt,
+          );
+        }
+        return next;
+      });
+    },
+    []
+  );
+
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) || null,
@@ -726,6 +752,7 @@ export default function App() {
           draftBySession={draftBySession}
           onRemoveProject={removeProject}
           onRemoveSession={removeSession}
+          onTogglePin={toggleSessionPin}
           statusBySession={statusBySession}
           activityBySession={activityBySession}
           unreadBySession={unreadBySession}

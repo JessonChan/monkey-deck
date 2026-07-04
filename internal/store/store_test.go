@@ -284,6 +284,71 @@ func sessionIDs(ss []Session) []string {
 	return out
 }
 
+// TestSessionPinnedSort 校验置顶排序(0008):pinned 恒在未置顶之上;
+// 组内仍按 prompted_at DESC → updated_at DESC;SetSessionPinned 不动 updated_at。
+func TestSessionPinnedSort(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	p, err := s.CreateProject(ctx, "demo", "/tmp/pin", "m/m")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a, _ := s.CreateSession(ctx, p.ID, "A", "m/m", "opencode")
+	b, _ := s.CreateSession(ctx, p.ID, "B", "m/m", "opencode")
+	c, _ := s.CreateSession(ctx, p.ID, "C", "m/m", "opencode")
+
+	// A = 最近被用户 prompt(prompted_at 最大),B 次之,C 最老。
+	// 直接写库造出稳定的三档 prompted_at,规避同毫秒不稳。
+	if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET prompted_at=? WHERE id=?`, 3000, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET prompted_at=? WHERE id=?`, 2000, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET prompted_at=? WHERE id=?`, 1000, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	// 未置顶时顺序应为 A,B,C。
+	list, _ := s.ListSessions(ctx, p.ID)
+	if got := sessionIDs(list); len(got) != 3 || got[0] != a.ID || got[1] != b.ID || got[2] != c.ID {
+		t.Fatalf("unpinned order = %v, want A,B,C", got)
+	}
+
+	// 置顶 C(最老的):它应跳到最前,A、B 顺延。pinned 组此时只有 C。
+	if err := s.SetSessionPinned(ctx, c.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = s.ListSessions(ctx, p.ID)
+	if got := sessionIDs(list); got[0] != c.ID || got[1] != a.ID || got[2] != b.ID {
+		t.Fatalf("after pinning C, order = %v, want C,A,B", got)
+	}
+	if got, _ := s.GetSession(ctx, c.ID); got == nil || !got.Pinned {
+		t.Fatalf("C should be pinned after SetSessionPinned(true)")
+	}
+
+	// 再置顶 B:pinned 组内 B(prompted_at=2000)应在 C(1000)之上。整体 B,C,A。
+	if err := s.SetSessionPinned(ctx, b.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = s.ListSessions(ctx, p.ID)
+	if got := sessionIDs(list); got[0] != b.ID || got[1] != c.ID || got[2] != a.ID {
+		t.Fatalf("after pinning B, order = %v, want B,C,A", got)
+	}
+
+	// 取消置顶 B:回到 C,A,B。SetSessionPinned(false) 是幂等的取消路径。
+	if err := s.SetSessionPinned(ctx, b.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = s.ListSessions(ctx, p.ID)
+	if got := sessionIDs(list); got[0] != c.ID || got[1] != a.ID || got[2] != b.ID {
+		t.Fatalf("after unpinning B, order = %v, want C,A,B", got)
+	}
+	if got, _ := s.GetSession(ctx, b.ID); got == nil || got.Pinned {
+		t.Fatalf("B should be unpinned after SetSessionPinned(false)")
+	}
+}
+
 // TestSearchSessionIDsByContent 校验会话内容搜索:大小写不敏感、按项目隔离、去重、空结果。
 func TestSearchSessionIDsByContent(t *testing.T) {
 	s := newTestStore(t)
