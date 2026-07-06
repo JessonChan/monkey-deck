@@ -20,6 +20,7 @@ set -euo pipefail
 # URL = "-" 表示无公开 remote(本地私有副本),脚本不会克隆,需自行放置或软链。
 REFERENCES=(
 "openwork|https://github.com/different-ai/openwork.git|references/openwork|MIT(ee/ 除外)|首选 UI/交互蓝本(§4.1),仅参考形态,工作原理不照搬"
+"emdash|https://github.com/generalaction/emdash.git|references/emdash|Apache-2.0|桌面并行 agent 客户端(Electron+本地 SQLite+每任务 git worktree),形态最贴近本项目(§1.4/§1.5),仅参考形态"
 "wesight|https://github.com/freestylefly/wesight.git|references/wesight|MIT|UI/产品形态补充灵感(§0.1 #5)"
 "orca|https://github.com/stablyai/orca.git|references/orca|MIT|parallel worktree 模型参考(§1.4)"
 "opencode|https://github.com/anomalyco/opencode.git|references/opencode|MIT|主 harness(§1.1),ACP 实现参照"
