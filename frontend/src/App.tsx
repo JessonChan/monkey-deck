@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Events } from "@wailsio/runtime";
 import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
+import * as TerminalService from "../bindings/github.com/jessonchan/monkey-deck/internal/terminal/terminalservice";
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention } from "./types";
 import Sidebar from "./components/Sidebar";
 import ChatView, { type ChatViewHandle } from "./components/ChatView";
 import { Sparkles } from "lucide-react";
 import SidePanel from "./components/SidePanel";
+import TerminalPanel from "./components/TerminalPanel";
+import type { TerminalTab } from "./lib/terminalTypes";
+import { disposeTerminal } from "./lib/termRegistry";
 import NewSessionModal from "./components/NewSessionModal";
 import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
@@ -50,6 +54,12 @@ export default function App() {
   const [configOptionsBySession, setConfigOptionsBySession] = useState<Record<string, ConfigOption[]>>({}); // model/mode/effort(agent 自报)
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
   const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean } | null>(null);  // 新建对话弹窗
+  // 集成终端(per-session,与 agent ACP 通道完全分离;§1.1 agent 永远走 ACP)。
+  // 终端面板开关也 per-session:session A 开着,切到 B 时 B 按自己的状态显示(各自独立)。
+  const [termTabsBySession, setTermTabsBySession] = useState<Record<string, TerminalTab[]>>({});
+  const [activeTermBySession, setActiveTermBySession] = useState<Record<string, string | null>>({});
+  const [termOpenBySession, setTermOpenBySession] = useState<Record<string, boolean>>({});
+  const termCwdRef = useRef("");
   const queueBySessionRef = useRef<Record<string, QueueItem[]>>({});
   const userStoppedRef = useRef(false);                    // 用户主动停止:抑制该次 idle 的 auto-continue
   // status 派生值的 ref:sendMessage 闭包锁 status 导致「prompting 时仍直发 → 后端报 busy」,
@@ -535,11 +545,78 @@ export default function App() {
     [selectedSessionId, permissionBySession]
   );
 
-  const closeSession = useCallback(async () => {
-    if (!selectedSessionId) return;
-      await ChatService.CloseSession(selectedSessionId);
-      setSelectedSessionId(null);
-  }, [selectedSessionId]);
+
+  // —— 集成终端(per-session,与 agent ACP 通道分离)——
+  const createTerminal = useCallback(async () => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    try {
+      const cwd = termCwdRef.current;
+      const id = await TerminalService.Start(sid, cwd, 80, 24);
+      const title = cwd ? (cwd.replace(/\/$/, "").split("/").pop() || "终端") : "终端";
+      setTermTabsBySession((prev) => ({ ...prev, [sid]: [...(prev[sid] ?? []), { id, sessionId: sid, title, status: "running" }] }));
+      setActiveTermBySession((prev) => ({ ...prev, [sid]: id }));
+      setTermOpenBySession((prev) => ({ ...prev, [sid]: true }));
+    } catch (e) { setError(String(e)); }
+  }, []);
+
+  // toggle:打开时若该 session 还没终端,自动建一个;已开 → 关。开关状态 per-session。
+  const toggleTerminalPanel = useCallback(() => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    setTermOpenBySession((prev) => {
+      if (prev[sid]) return { ...prev, [sid]: false }; // 已开 → 关
+      if ((termTabsBySession[sid]?.length ?? 0) === 0) void createTerminal(); // 要开且无终端 → 先建
+      return { ...prev, [sid]: true };
+    });
+  }, [termTabsBySession, createTerminal]);
+
+  // ⌘J / Ctrl+J 切换终端面板(VSCode/openwork 共识,肌肉记忆)。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "j" || e.key === "J")) {
+        e.preventDefault();
+        toggleTerminalPanel();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleTerminalPanel]);
+
+  const closeTerminalTab = useCallback(async (tabId: string) => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    void TerminalService.Kill(tabId);
+    disposeTerminal(tabId);
+    const remaining = (termTabsBySession[sid] ?? []).filter((t) => t.id !== tabId);
+    setTermTabsBySession((prev) => ({ ...prev, [sid]: remaining }));
+    if (activeTermBySession[sid] === tabId) setActiveTermBySession((prev) => ({ ...prev, [sid]: remaining[0]?.id ?? null }));
+    if (remaining.length === 0) setTermOpenBySession((prev) => ({ ...prev, [sid]: false }));
+  }, [termTabsBySession, activeTermBySession]);
+
+  const selectTerminalTab = useCallback((tabId: string) => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    setActiveTermBySession((prev) => ({ ...prev, [sid]: tabId }));
+  }, []);
+
+  const renameTerminalTab = useCallback((tabId: string, title: string) => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid || !title) return;
+    setTermTabsBySession((prev) => {
+      const cur = prev[sid] ?? [];
+      return { ...prev, [sid]: cur.map((t) => (t.id === tabId ? { ...t, userTitle: title } : t)) };
+    });
+  }, []);
+
+  const onTabExit = useCallback((tabId: string) => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    setTermTabsBySession((prev) => {
+      const cur = prev[sid] ?? [];
+      return { ...prev, [sid]: cur.map((t) => (t.id === tabId ? { ...t, status: "dead" as const } : t)) };
+    });
+  }, []);
 
   // 切换 session 的 config option(model/mode/effort):热切,后端成功后推 config_option event 回更新。
   const setSessionConfig = useCallback(async (configId: string, value: string) => {
@@ -656,6 +733,10 @@ export default function App() {
     async (sessionId: string) => {
       await ChatService.DeleteSession(sessionId);
       const drop = <T,>(prev: Record<string, T>) => { if (!(sessionId in prev)) return prev; const n = { ...prev }; delete n[sessionId]; return n; };
+      void TerminalService.KillSessionTerminals(sessionId);
+      setTermTabsBySession(drop);
+      setActiveTermBySession(drop);
+      setTermOpenBySession(drop);
       setSessionsByProject((prev) => {
         const next: Record<string, Session[]> = {};
         for (const [pid, list] of Object.entries(prev)) next[pid] = list.filter((s) => s.id !== sessionId);
@@ -720,6 +801,8 @@ export default function App() {
     () => sessions.find((s) => s.id === selectedSessionId) || null,
     [sessions, selectedSessionId]
   );
+  // 终端 cwd = session worktree(或项目目录)。ref 在此赋值(createTerminal 在上方定义,引用 ref 而非 termCwd 变量,绕开声明顺序)。
+  termCwdRef.current = activeSession?.worktreePath || selectedProject?.path || "";
 
   // 三栏布局尺寸持久化:用户拖拽过的分隔位置存 localStorage,重开恢复。
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
@@ -763,6 +846,8 @@ export default function App() {
       <Panel id="main" minSize="30%">
         <main className="main">
           {selectedSessionId ? (
+            <Group orientation="vertical" id="main-vertical" className="main-vertical">
+              <Panel id="chat-area" minSize="20%">
             <ChatView
               ref={chatViewRef}
               project={selectedProject}
@@ -777,7 +862,7 @@ export default function App() {
               onStop={stopSession}
               onAction={handleComposerAction}
               onRespondPermission={respondPermission}
-              onCloseSession={closeSession}
+              onToggleTerminal={toggleTerminalPanel}
               onMerge={mergeSession}
               mergeResult={mergeResult}
               sessionDiff={sessionDiff}
@@ -799,6 +884,27 @@ export default function App() {
               loadingMore={loadingMore}
               onLoadMore={() => selectedSessionId && loadMoreMessages(selectedSessionId)}
             />
+              </Panel>
+              {termOpenBySession[selectedSessionId] && (
+                <>
+                  <Separator className="resize-handle-v" />
+                  <Panel id="terminal-area" defaultSize={260} minSize={120}>
+                    <TerminalPanel
+                      sessionId={selectedSessionId}
+                      cwd={termCwdRef.current}
+                      tabs={termTabsBySession[selectedSessionId] ?? []}
+                      activeTabId={activeTermBySession[selectedSessionId] ?? null}
+                      onSelectTab={selectTerminalTab}
+                      onCloseTab={closeTerminalTab}
+                      onTabExit={onTabExit}
+                      onNewTab={createTerminal}
+                      onRenameTab={renameTerminalTab}
+                      onClosePanel={() => setTermOpenBySession((p) => ({ ...p, [selectedSessionId]: false }))}
+                    />
+                  </Panel>
+                </>
+              )}
+            </Group>
           ) : (
             <EmptyState />
           )}

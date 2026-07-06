@@ -84,6 +84,25 @@ input, textarea { font-family: inherit; }
 .resize-handle[data-separator="active"] {
   background: var(--accent-2);
 }
+/* 垂直 Group(main-vertical,上下分栏)的分隔条:水平条,row-resize,命中区上下扩大 */
+.resize-handle-v {
+  height: 1px;
+  flex-basis: 1px;
+  background: var(--sep);
+  cursor: row-resize;
+  position: relative;
+  transition: background 0.15s;
+}
+.resize-handle-v::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0;
+  top: -4px; bottom: -4px;
+}
+.resize-handle-v:hover,
+.resize-handle-v[data-separator="active"] {
+  background: var(--accent-2);
+}
 
 /* ─── Sidebar ─── */
 /* 实色背景(非 backdrop-filter):大面积 backdrop-filter 是 WebKit 内 sticky 元素滚动抖动的根因
@@ -272,7 +291,7 @@ input, textarea { font-family: inherit; }
 
 /* ─── Main / Chat ─── */
 .main { width: 100%; height: 100%; min-width: 0; display: flex; background: var(--bg); }
-.chat-view { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.chat-view { height: 100%; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
 /* Floating scroll-to-bottom FAB: sticky 粘在 chat-body 滚动容器底部,不破坏 flex/overflow 布局。 */
 .scroll-bottom-wrap { position: sticky; bottom: 16px; z-index: 14; display: flex; justify-content: center; padding: 0 28px; pointer-events: none; }
@@ -1077,3 +1096,38 @@ input, textarea { font-family: inherit; }
 .ns-worktree-text { display: flex; flex-direction: column; gap: 3px; }
 .ns-worktree-title { font-size: 13px; font-weight: 600; color: var(--text); }
 .ns-worktree-desc { font-size: 11.5px; color: var(--text-2); line-height: 1.4; }
+
+/* ═══ 集成终端面板 ═══ */
+.main-vertical { width: 100%; height: 100%; flex: 1; min-height: 0; }
+.terminal-panel { display: flex; flex-direction: column; width: 100%; height: 100%; background: var(--bg); min-height: 0; }
+
+/* tab 条:横向滚动(用子 margin 不用 gap —— 旧 WebKit 滚动容器 gap 抖动,不变式) */
+.terminal-tabs-bar { display: flex; align-items: center; flex-shrink: 0; height: 32px; padding: 0 4px 0 6px; border-bottom: 1px solid var(--sep); background: var(--bg); }
+.terminal-tabs-scroll { display: flex; align-items: center; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.terminal-tabs-scroll::-webkit-scrollbar { height: 0; }
+
+.terminal-tab { display: inline-flex; align-items: center; gap: 5px; height: 24px; max-width: 170px; padding: 0 6px; margin-right: 2px; border-radius: 6px; cursor: pointer; color: var(--text-2); white-space: nowrap; transition: background 0.1s, color 0.1s; }
+.terminal-tab:hover { background: var(--hover); color: var(--text); }
+.terminal-tab.active { background: var(--sel); color: var(--text); }
+.terminal-tab.dead { opacity: 0.5; }
+.terminal-tab-icon { flex-shrink: 0; color: var(--text-3); }
+.terminal-tab.active .terminal-tab-icon { color: var(--accent-2); }
+.terminal-tab-title { overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; }
+.terminal-tab-close { display: flex; align-items: center; justify-content: center; width: 15px; height: 15px; flex-shrink: 0; margin-left: 2px; border: none; border-radius: 4px; background: transparent; color: var(--text-3); opacity: 0; cursor: pointer; }
+.terminal-tab:hover .terminal-tab-close { opacity: 1; }
+.terminal-tab-close:hover { background: var(--sep-strong); color: var(--text); }
+.terminal-tab-rename { font-size: 11.5px; padding: 1px 4px; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); max-width: 120px; }
+
+.terminal-icon-btn { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex-shrink: 0; margin-left: 2px; border: none; border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; transition: background 0.1s, color 0.1s; }
+.terminal-icon-btn:hover { background: var(--hover); color: var(--text); }
+
+/* xterm 区 */
+.terminal-views { position: relative; flex: 1; min-height: 0; }
+.terminal-instance { width: 100%; height: 100%; }
+.terminal-empty { display: flex; align-items: center; justify-content: center; height: 100%; font-size: 12px; color: var(--text-3); }
+
+/* 右键菜单 */
+.terminal-context-menu { position: fixed; z-index: 1000; min-width: 120px; padding: 4px; background: var(--elev-2); border: 1px solid var(--sep-strong); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+.terminal-context-item { display: block; width: 100%; padding: 6px 10px; font-size: 12.5px; text-align: left; color: var(--text); background: transparent; border: none; border-radius: 5px; cursor: pointer; }
+.terminal-context-item:hover { background: var(--accent); color: #fff; }
+.terminal-context-item.danger:hover { background: #ff453a; }

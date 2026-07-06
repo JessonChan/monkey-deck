@@ -7,7 +7,7 @@ import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem
 import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
-import { X, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ArrowDown } from "lucide-react";
+import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ArrowDown } from "lucide-react";
 
 interface Usage { used: number; size: number; cost: number; }
 
@@ -26,7 +26,7 @@ interface Props {
   onStop: () => void;
   onAction: (action: "clear" | "new" | "stop") => void;
   onRespondPermission: (optionId: string) => void;
-  onCloseSession: () => void;
+  onToggleTerminal: () => void;
   onMerge: () => void;
   queue: QueueItem[];
   onInterruptQueue: (id: string) => void;
@@ -197,8 +197,8 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         </div>
         <div className="chat-header-actions">
           {s.label && <span className={`status-badge ${s.cls}`}>{s.label}</span>}
-          <button className="icon-btn small" onClick={props.onCloseSession} title="关闭会话">
-            <X size={14} />
+          <button className="icon-btn small" onClick={props.onToggleTerminal} data-tooltip-id="md-tip" data-tooltip-content="终端 (⌘J)" aria-label="切换终端">
+            <SquareTerminal size={15} />
           </button>
         </div>
       </header>
