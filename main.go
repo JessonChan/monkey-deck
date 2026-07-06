@@ -12,6 +12,7 @@ import (
 
 	"github.com/jessonchan/monkey-deck/internal/chat"
 	"github.com/jessonchan/monkey-deck/internal/config"
+	"github.com/jessonchan/monkey-deck/internal/terminal"
 	"github.com/jessonchan/monkey-deck/internal/ui"
 	"github.com/jessonchan/monkey-deck/internal/update"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -47,12 +48,14 @@ func main() {
 
 	// 单一 Go 进程:webview 宿主 + harness 子进程父 + ACP 连接持有 + SQLite 读写(§2.2)。
 	chatSvc := chat.NewChatService(cfg)
+	termSvc := terminal.NewTerminalService()
 
 	app := application.New(application.Options{
 		Name:        config.AppName,
 		Description: "ACP 桌面客户端 —— 以项目/目录为单位管理编码 agent 的对话",
 		Services: []application.Service{
 			application.NewService(chatSvc),
+			application.NewService(termSvc),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
