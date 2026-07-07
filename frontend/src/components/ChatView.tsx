@@ -338,18 +338,15 @@ const ChatRow = memo(function ChatRow({ item, sessionId }: { item: ChatItem; ses
 // ThoughtBlock:思考块默认折叠(含流式中),summary 显示转圈 spinner;用户展开后记住偏好,
 // 后续新思考块也默认展开;底部「收起」按钮方便长文本尾部直接收回(不用滚回顶部)。
 function ThoughtBlock({ item, sessionId }: { item: Extract<ChatItem, { type: "thought" }>; sessionId: string }) {
-  // 展开偏好按 session 隔离(避免 A 的展开状态串到 B / 新窗口默认展开)。
-  const storageKey = `md:thought-open:${sessionId}`;
-  const [open, setOpen] = useState(() => localStorage.getItem(storageKey) === "true");
+  // 展开状态:per-item(按 item.id),不跨 thought 共享。
+  // 旧实现按 sessionId 共享 localStorage 键 → 同 session 多个 thought 互相干扰,
+  // 且 id 变化重挂载时新实例从共享键读 open,覆盖用户当前点击 → 「点不开」。
+  // 现在:每个 thought 独立 useState(默认折叠),用户点击只影响该 thought。
+  // session 级「展开过则后续默认展开」偏好单独存 ref(见 ThoughtPrefsProvider)。
+  const [open, setOpen] = useState(false);
   const everOpenedRef = useRef(open);
   if (open) everOpenedRef.current = true;
-  const toggle = () => {
-    setOpen((prev) => {
-      const next = !prev;
-      localStorage.setItem(storageKey, String(next));
-      return next;
-    });
-  };
+  const toggle = () => setOpen((prev) => !prev);
   return (
     <div className="thought-block">
       <button className={`thought-summary ${open ? "open" : ""}`} onClick={toggle} type="button">

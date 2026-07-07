@@ -150,3 +150,25 @@ test("同 messageId 的 thought 在 text 开始时收口 streaming(reasoning 先
   expect(agents[0].streaming).toBe(true);
   expect(agents[0].text).toBe("答");
 });
+test("thought id 基于 messageId(同 messageId 归并后 id 稳定)", () => {
+  // id 用 messageId 而非 seq → 同 messageId 的 chunk 即使首次未归并命中,
+  // 后续 id 也一致(React key 稳定,不重挂载 → 不「反复创建」/「点不开」)。
+  let items: ChatItem[] = [];
+  items = applyEventToItems(items, ev({ kind: "agent_thought_chunk", text: "想", messageId: "m1", seq: 1 }));
+  const id1 = (items[0] as Extract<ChatItem, { type: "thought" }>).id;
+  items = applyEventToItems(items, ev({ kind: "agent_thought_chunk", text: "想想", messageId: "m1", seq: 2 }));
+  const id2 = (items[0] as Extract<ChatItem, { type: "thought" }>).id;
+  expect(id1).toBe(id2); // 同 messageId → id 稳定
+  expect(id1).toContain("m1"); // id 基于 messageId
+});
+
+test("无 messageId 回退:同类连续归并(不因中间异类新建)", () => {
+  // 无 messageId 的同类连续 chunk 归并到最后同类型 streaming item。
+  let items: ChatItem[] = [];
+  items = applyEventToItems(items, ev({ kind: "agent_thought_chunk", text: "想1", seq: 1 }));
+  items = applyEventToItems(items, ev({ kind: "agent_thought_chunk", text: "想12", seq: 2 }));
+  items = applyEventToItems(items, ev({ kind: "agent_thought_chunk", text: "想123", seq: 3 }));
+  const thoughts = items.filter((i) => i.type === "thought");
+  expect(thoughts.length).toBe(1);
+  expect((thoughts[0] as Extract<ChatItem, { type: "thought" }>).text).toBe("想123");
+});

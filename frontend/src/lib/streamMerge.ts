@@ -73,15 +73,21 @@ export function applyEventToItems(cur: ChatItem[], ev: SessionEvent): ChatItem[]
           next[next.length - 1] = { ...prev, streaming: false } as Extract<ChatItem, { type: "agent" } | { type: "thought" }>;
         }
         next.push({
-          type, id: `${type[0]}-${ev.seq ?? Date.now()}`, text: ev.text || "",
+          type, id: `${type[0]}-${ev.messageId || ev.seq || Date.now()}`, text: ev.text || "",
           streaming: true, seq: ev.seq, ts: Date.now(), messageId: ev.messageId,
         } as ChatItem);
         return next;
       }
-      // 回退(无 messageId):上一个同类型且流式 → 替换;否则 finalize 新建。
-      if (last && last.type === type && last.streaming) {
-        if (ev.seq == null || last.seq == null || ev.seq >= last.seq) {
-          next[next.length - 1] = { ...last, text: ev.text || "", seq: ev.seq } as Extract<ChatItem, { type: "agent" } | { type: "thought" }>;
+      // 回退(无 messageId):找最后一个同类型 streaming item 归并;否则 finalize 新建。
+      // 注意:不只看 last(可能是异类型 agent),要向回查找同类型,避免交替时反复新建。
+      let lastSameType = -1;
+      for (let j = next.length - 1; j >= 0; j--) {
+        if (next[j].type === type) { lastSameType = j; break; }
+      }
+      if (lastSameType >= 0 && (next[lastSameType] as Extract<ChatItem, { type: "agent" } | { type: "thought" }>).streaming) {
+        const existing = next[lastSameType] as Extract<ChatItem, { type: "agent" } | { type: "thought" }>;
+        if (ev.seq == null || existing.seq == null || ev.seq >= existing.seq) {
+          next[lastSameType] = { ...existing, text: ev.text || "", seq: ev.seq } as Extract<ChatItem, { type: "agent" } | { type: "thought" }>;
         }
       } else {
         finalizeLast();
