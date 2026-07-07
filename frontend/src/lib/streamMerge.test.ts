@@ -133,13 +133,20 @@ test("messageId 变化时 finalize 上一个气泡(不留多个 loading)", () =>
   expect(agents[0].streaming).toBe(true);    // mB 仍在流式
 });
 
-test("同 messageId 的 thought+agent 都保持 streaming(同逻辑消息共存)", () => {
+test("同 messageId 的 thought 在 text 开始时收口 streaming(reasoning 先于 text)", () => {
+  // ACP 协议:一条 message 的 reasoning part delta 全部先于 text part delta。
+  // 故 agent_message_chunk 到达 = reasoning 结束 → thought 必须收口 streaming,
+  // 否则 spinner 一直转到整轮 idle(回归:思考结束后 loading 不停)。
   let items: ChatItem[] = [];
   items = applyEventToItems(items, ev({ kind: "agent_thought_chunk", text: "想", messageId: "mA", seq: 1 }));
-  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "答", messageId: "mA", seq: 2 }));
+  items = applyEventToItems(items, ev({ kind: "agent_thought_chunk", text: "想想", messageId: "mA", seq: 2 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "答", messageId: "mA", seq: 3 }));
   const thoughts = items.filter((i) => i.type === "thought") as Extract<ChatItem, { type: "thought" }>[];
   const agents = agentBubbles(items);
-  // 同 messageId:thought 保持 streaming(后续可能有更多 chunk),agent 也在 streaming
-  expect(thoughts[0].streaming).toBe(true);
+  expect(thoughts.length).toBe(1);
+  expect(thoughts[0].streaming).toBe(false); // 关键:text 开始 → thought 收口
+  expect(thoughts[0].text).toBe("想想");
+  expect(agents.length).toBe(1);
   expect(agents[0].streaming).toBe(true);
+  expect(agents[0].text).toBe("答");
 });
