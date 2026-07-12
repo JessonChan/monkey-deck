@@ -73,7 +73,7 @@ export default function TerminalPanel(props: TerminalPanelProps) {
   return (
     <div className="terminal-panel">
       <div className="terminal-tabs-bar">
-        <div className="terminal-tabs-scroll">
+        <div className="terminal-tabs-scroll" onClick={(e) => { if (e.target === e.currentTarget) onNewTab(); }}>
           {tabs.map((tab) => (
             <div
               key={tab.id}
@@ -109,13 +109,13 @@ export default function TerminalPanel(props: TerminalPanelProps) {
               ><X size={13} /></button>
             </div>
           ))}
+          <button
+            className="terminal-icon-btn"
+            onClick={onNewTab}
+            data-tooltip-id="md-tip"
+            data-tooltip-content="新建终端"
+          ><Plus size={16} /></button>
         </div>
-        <button
-          className="terminal-icon-btn"
-          onClick={onNewTab}
-          data-tooltip-id="md-tip"
-          data-tooltip-content="新建终端"
-        ><Plus size={16} /></button>
         <button
           className="terminal-icon-btn"
           onClick={onClosePanel}
@@ -126,7 +126,7 @@ export default function TerminalPanel(props: TerminalPanelProps) {
 
       <div className="terminal-views">
         {tabs.length === 0 ? (
-          <div className="terminal-empty">点击 + 新建一个终端</div>
+          <div className="terminal-empty">点击 + 或空白处新建终端</div>
         ) : (
           tabs.map((tab) => (
             <TerminalView

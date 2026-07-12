@@ -1103,7 +1103,7 @@ input, textarea { font-family: inherit; }
 
 /* tab 条:横向滚动(用子 margin 不用 gap —— 旧 WebKit 滚动容器 gap 抖动,不变式) */
 .terminal-tabs-bar { display: flex; align-items: center; flex-shrink: 0; height: 32px; padding: 0 4px 0 6px; border-bottom: 1px solid var(--sep); background: var(--bg); }
-.terminal-tabs-scroll { display: flex; align-items: center; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.terminal-tabs-scroll { display: flex; align-items: center; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; cursor: pointer; }
 .terminal-tabs-scroll::-webkit-scrollbar { height: 0; }
 
 .terminal-tab { display: inline-flex; align-items: center; gap: 5px; height: 24px; max-width: 170px; padding: 0 6px; margin-right: 2px; border-radius: 6px; cursor: pointer; color: var(--text-2); white-space: nowrap; transition: background 0.1s, color 0.1s; }
