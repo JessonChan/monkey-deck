@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Events } from "@wailsio/runtime";
 import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import * as TerminalService from "../bindings/github.com/jessonchan/monkey-deck/internal/terminal/terminalservice";
@@ -13,8 +13,9 @@ import type { TerminalTab } from "./lib/terminalTypes";
 import { disposeTerminal } from "./lib/termRegistry";
 import NewSessionModal from "./components/NewSessionModal";
 import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
+import { Group, Panel, Separator, useDefaultLayout, usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
 import { Tooltip } from "react-tooltip";
+import { PanelLeftOpen, PanelRightOpen } from "lucide-react";
 import type { FileChange } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import { applyEventToItems as applyEventToItemsPure } from "./lib/streamMerge";
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
@@ -810,6 +811,22 @@ export default function App() {
     onlySaveAfterUserInteractions: true,
   });
 
+  // 左右面板可收起/展开:用 react-resizable-panels 的 collapsible + 命令式 API,
+  // 面板结构恒定(只改尺寸),布局切换无抖动。collapsed 状态经 onResize 同步,
+  // 以兼容「持久化布局恰好把该面板存成 0(collapsedSize)」的复载场景。
+  const sidebarPanelRef = usePanelRef();
+  const sidePanelRef = usePanelRef();
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
+  const syncCollapsed = (ref: RefObject<PanelImperativeHandle | null>, set: (v: boolean) => void) => {
+    const c = ref.current?.isCollapsed();
+    if (c != null) set(c);
+  };
+  const collapseSidebar = () => sidebarPanelRef.current?.collapse();
+  const expandSidebar = () => sidebarPanelRef.current?.expand();
+  const collapseSide = () => sidePanelRef.current?.collapse();
+  const expandSide = () => sidePanelRef.current?.expand();
+
 
 
   return (
@@ -820,8 +837,18 @@ export default function App() {
       id="monkey-deck-layout"
       defaultLayout={defaultLayout}
       onLayoutChanged={onLayoutChanged}
+      data-sidebar-collapsed={leftCollapsed ? "true" : "false"}
     >
-      <Panel id="sidebar" defaultSize="18%" minSize="12%" maxSize="30%">
+      <Panel
+        id="sidebar"
+        defaultSize="18%"
+        minSize="12%"
+        maxSize="30%"
+        collapsible
+        collapsedSize={0}
+        panelRef={sidebarPanelRef}
+        onResize={() => syncCollapsed(sidebarPanelRef, setLeftCollapsed)}
+      >
         <Sidebar
           projects={projects}
           selectedProjectId={selectedProjectId}
@@ -840,9 +867,10 @@ export default function App() {
           activityBySession={activityBySession}
           unreadBySession={unreadBySession}
           onReorderProjects={reorderProjects}
+          onCollapse={collapseSidebar}
         />
       </Panel>
-      <Separator className="resize-handle" />
+      {!leftCollapsed && <Separator className="resize-handle" />}
       <Panel id="main" minSize="30%">
         <main className="main">
           {selectedSessionId ? (
@@ -910,8 +938,17 @@ export default function App() {
           )}
         </main>
       </Panel>
-      <Separator className="resize-handle" />
-      <Panel id="side" defaultSize="20%" minSize="14%" maxSize="34%">
+      {!rightCollapsed && <Separator className="resize-handle" />}
+      <Panel
+        id="side"
+        defaultSize="20%"
+        minSize="14%"
+        maxSize="34%"
+        collapsible
+        collapsedSize={0}
+        panelRef={sidePanelRef}
+        onResize={() => syncCollapsed(sidePanelRef, setRightCollapsed)}
+      >
         {selectedSessionId && activeSession ? (
           <SidePanel
             sessionId={selectedSessionId}
@@ -929,12 +966,41 @@ export default function App() {
             onAICommit={aiCommit}
             onDiff={fileDiff}
             busy={status === "prompting"}
+            onCollapse={collapseSide}
           />
         ) : (
           <div className="side-empty" />
         )}
       </Panel>
     </Group>
+    {leftCollapsed && (
+      <button
+        type="button"
+        className="panel-rail left"
+        onClick={expandSidebar}
+        data-testid="expand-sidebar"
+        aria-label="展开侧栏"
+        data-tooltip-id="md-tip"
+        data-tooltip-content="展开侧栏"
+        data-tooltip-place="right"
+      >
+        <PanelLeftOpen size={14} />
+      </button>
+    )}
+    {rightCollapsed && (
+      <button
+        type="button"
+        className="panel-rail right"
+        onClick={expandSide}
+        data-testid="expand-side"
+        aria-label="展开右侧面板"
+        data-tooltip-id="md-tip"
+        data-tooltip-content="展开右侧面板"
+        data-tooltip-place="left"
+      >
+        <PanelRightOpen size={14} />
+      </button>
+    )}
     {newSession && (
       <NewSessionModal
         harnesses={harnesses}

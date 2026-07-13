@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X, Pin, PinOff } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X, Pin, PinOff, PanelLeftClose } from "lucide-react";
 import {
   DndContext,
   PointerSensor,
@@ -33,6 +33,7 @@ interface Props {
   permPendingBySession: Record<string, boolean>;
   draftBySession?: Record<string, string>;
   onReorderProjects: (ids: string[]) => void;
+  onCollapse?: () => void;
 }
 
 // 可拖拽项目行(0007):折叠态整行可拖,展开态 disabled(不可主动拖,但仍可被其他项挤动)。
@@ -258,9 +259,14 @@ export default function Sidebar(props: Props) {
     <aside className="sidebar" data-testid="sidebar">
       <div className="sidebar-header" onDoubleClick={onTitleDoubleClick}>
         <span className="sidebar-title">Monkey Deck</span>
-        <button className="icon-btn" data-testid="add-project" onClick={startAdd} data-tooltip-id="md-tip" data-tooltip-content="添加项目目录" data-tooltip-place="bottom">
-          <Plus size={17} />
-        </button>
+        <span className="sidebar-header-acts">
+          <button className="icon-btn" data-testid="collapse-sidebar" onClick={() => props.onCollapse?.()} data-tooltip-id="md-tip" data-tooltip-content="收起侧栏" data-tooltip-place="bottom">
+            <PanelLeftClose size={16} />
+          </button>
+          <button className="icon-btn" data-testid="add-project" onClick={startAdd} data-tooltip-id="md-tip" data-tooltip-content="添加项目目录" data-tooltip-place="bottom">
+            <Plus size={17} />
+          </button>
+        </span>
       </div>
 
       {adding && (

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Folder, GitBranch } from "lucide-react";
+import { Folder, GitBranch, PanelRightClose } from "lucide-react";
 import FilePanel from "./FilePanel";
 import GitPanel from "./GitPanel";
 import type { FileChange } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
@@ -23,6 +23,7 @@ interface Props {
   onAICommit: () => Promise<void>;
   onDiff: (path: string, staged: boolean) => Promise<string>;
   busy: boolean;
+  onCollapse?: () => void;
 }
 
 type Tab = "files" | "scm";
@@ -59,6 +60,16 @@ export default function SidePanel(props: Props) {
             <span>源代码管理</span>
           </button>
         )}
+        <button
+          className="icon-btn side-collapse-btn"
+          data-testid="collapse-side"
+          onClick={() => props.onCollapse?.()}
+          data-tooltip-id="md-tip"
+          data-tooltip-content="收起右侧面板"
+          data-tooltip-place="bottom"
+        >
+          <PanelRightClose size={15} />
+        </button>
       </div>
       <div className="side-body">
         {tab === "files" ? (

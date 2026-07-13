@@ -138,6 +138,8 @@ input, textarea { font-family: inherit; }
 }
 .icon-btn:hover { background: var(--hover); color: var(--text); }
 .icon-btn.small { width: 22px; height: 22px; }
+.sidebar-header-acts { display: inline-flex; align-items: center; gap: 1px; --wails-draggable: no-drag; }
+.side-collapse-btn { margin-left: auto; flex-shrink: 0; }
 
 .project-list { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
 .sidebar-empty { padding: 16px 12px; color: var(--text-3); font-size: 12px; line-height: 1.5; }
@@ -936,6 +938,31 @@ input, textarea { font-family: inherit; }
 .side-body { flex: 1; min-height: 0; display: flex; }
 .side-body > * { flex: 1; min-width: 0; }
 .side-empty { width: 100%; height: 100%; }
+
+/* ─── 面板收起后的展开把手(细条):贴左/右窗口边,点击展开对应面板 ─── */
+/* 左把手从标题栏下方开始,避开 macOS 红绿灯(原生窗口控件,webview 之上)。 */
+.panel-rail {
+  position: fixed;
+  top: 52px;
+  bottom: 0;
+  width: 14px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 8px;
+  background: var(--sidebar-solid);
+  color: var(--text-3);
+  z-index: 25;
+  --wails-draggable: no-drag;
+  transition: background 0.12s, color 0.12s;
+}
+.panel-rail.left { left: 0; border-right: 1px solid var(--sep); }
+.panel-rail.right { right: 0; top: 0; border-left: 1px solid var(--sep); }
+.panel-rail:hover { background: var(--hover); color: var(--text); }
+.panel-rail svg { pointer-events: none; }
+
+/* 侧栏收起后,红绿灯浮在 chat-header 左上;给标题留出避让空间。 */
+.app[data-sidebar-collapsed="true"] .chat-header { padding-left: 84px; }
 
 /* git-panel 内嵌时去掉顶部留白(tab 已占位) */
 .git-panel.embedded, .side-body .git-panel { padding-top: 12px; }
