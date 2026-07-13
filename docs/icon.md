@@ -8,17 +8,19 @@
 macOS app 图标的实际来源链：
 
 ```
-build/appicon.png  ──wails3 generate icons──▶  build/darwin/icons.icns
-              （build/Taskfile.yml: generate:icons）          │
-                                                                ▼
-                                              bin/monkey-deck.app/Contents/Resources/icons.icns
-                                                                │
-                                              Info.plist: CFBundleIconFile = icons
-                                                                ▼
-                                                    macOS Dock / Launchpad / cmd-tab
+build/appicon.png  ──wails3 generate icons + build/darwin/generate-icons.sh──▶  build/darwin/icons.icns
+               （build/Taskfile.yml: generate:icons）          │
+                                                                 ▼
+                                               bin/monkey-deck.app/Contents/Resources/icons.icns
+                                                                 │
+                                               Info.plist: CFBundleIconFile = icons
+                                                                 ▼
+                                                     macOS Dock / Launchpad / cmd-tab
 ```
 
 **唯一真相来源 = `build/appicon.png`。改它即可。**
+
+> macOS icns 生成:`wails3 generate icons` 产出的 icns 缺 `icon_16x16.png`/`icon_32x32.png`(@1x),只有 8/10 条目。故 `generate:icons` 在 wails3 之后追加 `build/darwin/generate-icons.sh`(sips + `iconutil -c icns`)重生成完整 10 条 iconset(含 1024x1024)。手动重生成:`make icons` 或 `bash build/darwin/generate-icons.sh`。
 
 ## 如何换图标
 
@@ -86,10 +88,11 @@ Wails3 脚手架默认的 `generate:icons` 带这两个参数：
 
 | 文件 | 作用 |
 |---|---|
-| `build/appicon.png` | **图标唯一源**（换图标改这个） |
-| `build/appicon.icon/` | Icon Composer 项目（当前未启用，内含默认 W，保留备用） |
-| `build/darwin/icons.icns` | 由 appicon.png 生成，打入 app bundle |
-| `build/darwin/Assets.car` | 已删除（内含默认 W）；启用现代图标时重生 |
+| `build/appicon.png` | **图标唯一源**(换图标改这个) |
+| `build/appicon.icon/` | Icon Composer 项目(当前未启用,内含默认 W,保留备用) |
+| `build/darwin/generate-icons.sh` | 从 appicon.png 生成完整 iconset + icons.icns(sips + iconutil) |
+| `build/darwin/icons.icns` | 由 generate-icons.sh 生成(10 条 iconset,含 1024x1024),打入 app bundle |
+| `build/darwin/Assets.car` | 已删除(内含默认 W);启用现代图标时重生 |
 | `build/darwin/Info.plist` / `Info.dev.plist` | `CFBundleIconFile = icons` |
 | `build/Taskfile.yml` | `generate:icons` task 定义 |
 > —— macOS Dock / Launchpad / cmd-tab
@@ -172,7 +175,7 @@ EOF
 
 | 平台 | 文件 | 格式 | 尺寸 | 生成方式 |
 |---|---|---|---|---|
-| macOS | `build/darwin/icons.icns` | ICNS | 16~512 @1x/@2x | `iconutil -c icns appicon.iconset` |
+| macOS | `build/darwin/icons.icns` | ICNS | 16~512 @1x/@2x(含 1024) | `bash build/darwin/generate-icons.sh`(sips + iconutil) |
 | Windows | `build/windows/icon.ico` | ICO | 16~256 多帧 | `magick` 或多帧 PIL 脚本 |
 | 通用源 | `build/appicon.png` | PNG | 1024×1024 | 从裁剪图缩放 |
 | Linux | `build/linux/icon.png` | PNG | 512×512 | `sips -Z 512` |
