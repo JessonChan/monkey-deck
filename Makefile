@@ -1,4 +1,4 @@
-.PHONY: all bindings dev dev-frontend build build-frontend app package run test test-integration clean server fmt vet tidy
+.PHONY: all bindings dev dev-frontend build build-frontend app package run test test-integration clean server icons fmt vet tidy
 
 # monkey-deck Makefile(AGENTS.md §0.5)
 WAILS3 ?= wails3
@@ -6,6 +6,10 @@ WAILS3 ?= wails3
 ## 生成 Go 方法 → 前端 TS 类型(改了导出方法签名后必须重新跑,§5.4 #8)
 bindings:
 	$(WAILS3) generate bindings
+
+## 重生成 macOS icons.icns(完整 iconset,含 1024x1024);源 = build/appicon.png
+icons:
+	bash build/darwin/generate-icons.sh
 
 ## 热重载开发(Go + 前端一起);先 regen bindings(bindings 不入库,启动时生成)
 dev: bindings
