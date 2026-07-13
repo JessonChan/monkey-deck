@@ -730,6 +730,24 @@ func (s *ChatService) hasSCM(sessionID string) bool {
 	return worktree.IsRepo(dir)
 }
 
+// SessionCurrentBranch 返回 session 工作目录的当前分支(供源代码管理面板顶部展示)。
+// worktree 模式 = md/<id> 分支;非 worktree 的 git 项目 = 项目目录当前分支(detached HEAD 时为短 commit);
+// 非 git 项目返回空串(前端不展示 SCM,分支位也无意义)。
+//
+// 关键:Branch 字段只在 worktree 模式有值(= md/<id>),非 worktree 恒空 —— 前端若直接读
+// session.Branch 会在非 worktree 的 git 项目里显示空分支。这里读真实 HEAD 修正该展示。
+func (s *ChatService) SessionCurrentBranch(sessionID string) (string, error) {
+	dir, err := s.scmDir(sessionID)
+	if err != nil {
+		return "", nil // 非 git 上下文:静默返回空
+	}
+	br, err := worktree.HeadShort(dir)
+	if err != nil {
+		return "", nil
+	}
+	return br, nil
+}
+
 // SessionListDir 列出 session 工作目录下 rel(相对路径)的直接子项。
 // rel 为空表示根。路径钉在 cwd,防越界;git 仓库尊重 .gitignore。
 func (s *ChatService) SessionListDir(sessionID, rel string) ([]fsview.FileNode, error) {

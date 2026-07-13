@@ -201,6 +201,63 @@ func TestSCMNonWorktreeGitSession(t *testing.T) {
  	}
 }
 
+// TestSessionCurrentBranch:源代码管理面板的分支展示在非 worktree 模式下必须读真实 HEAD,
+// 不能依赖 session.Branch(该字段仅 worktree 模式有值)。复现:非 worktree git 项目的
+// session.Branch 为空,但当前分支应展示项目目录的 HEAD(本地分支 / 远程跟踪分支 / detached 短 commit)。
+func TestSessionCurrentBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+
+	// 1. 非 worktree 的 git 项目(默认分支可能是 master / main,不写死)
+	root := t.TempDir()
+	mustRunGit(t, root, "init", "-q", root)
+	mustWrite(t, filepath.Join(root, "a.txt"), "init")
+	mustRunGit(t, root, "add", ".")
+	mustRunGit(t, root, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init")
+	wantBranch, _ := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	want := strings.TrimSpace(string(wantBranch))
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.New(dbPath)
+	if err != nil { t.Fatal(err) }
+	t.Cleanup(func() { _ = st.Close() })
+	svc := NewChatService(config.TestConfig(t.TempDir()))
+	svc.ctx = context.Background()
+	svc.st = st
+	proj, _ := st.CreateProject(svc.ctx, "p", root, "")
+	seNonWT, _ := st.CreateSession(svc.ctx, proj.ID, "title", "", "")
+	// 非 worktree:session.Branch 空,SessionCurrentBranch 应回退到项目目录真实 HEAD
+	if seNonWT.Branch != "" {
+		t.Fatalf("precondition: non-worktree session.Branch should be empty, got %q", seNonWT.Branch)
+	}
+	got, err := svc.SessionCurrentBranch(seNonWT.ID)
+	if err != nil {
+		t.Fatalf("SessionCurrentBranch non-worktree: %v", err)
+	}
+	if got != want {
+		t.Fatalf("non-worktree branch = %q, want %q", got, want)
+	}
+
+	// 2. worktree 模式:应返回 md/<id> 分支(worktree 的 HEAD)
+	svcWT, sid, _ := newSCMService(t)
+	gotWT, err := svcWT.SessionCurrentBranch(sid)
+	if err != nil {
+		t.Fatalf("SessionCurrentBranch worktree: %v", err)
+	}
+	if gotWT != "md/scmtest" {
+		t.Fatalf("worktree branch = %q, want md/scmtest", gotWT)
+	}
+
+	// 3. 非 git 项目:返回空串,不报错
+	nonGit := t.TempDir()
+	proj2, _ := st.CreateProject(svc.ctx, "nongit", nonGit, "")
+	seNG, _ := st.CreateSession(svc.ctx, proj2.ID, "ng", "", "")
+	if gotNG, err := svc.SessionCurrentBranch(seNG.ID); err != nil || gotNG != "" {
+		t.Fatalf("non-git project: got %q err=%v, want empty", gotNG, err)
+	}
+}
+
 
 // A:MergeSession 不再 auto-commit —— 已提交的内容被合并,未提交的改动不进主仓库且结果给出提示。
 func TestMergeSessionNoAutoCommit(t *testing.T) {

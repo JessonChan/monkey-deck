@@ -32,6 +32,7 @@ const PAGE_SIZE = 30;
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [gitByProject, setGitByProject] = useState<Record<string, boolean>>({});
+  const [branchBySession, setBranchBySession] = useState<Record<string, string>>({});
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [sessionsByProject, setSessionsByProject] = useState<Record<string, Session[]>>({});
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -387,6 +388,12 @@ export default function App() {
       try {
         setSessionChanges(await ChatService.SessionChanges(sessionId));
       } catch { setSessionChanges(null); }
+      // 源代码管理面板的分支展示:读真实 HEAD(worktree 模式 = md/<id>;非 worktree git 项目 = 项目目录当前分支)。
+      // session.Branch 仅 worktree 模式有值,非 worktree 恒空 —— 直接用它会在非 worktree 的 git 项目里显示空分支。
+      try {
+        const br = await ChatService.SessionCurrentBranch(sessionId);
+        setBranchBySession((prev) => ({ ...prev, [sessionId]: br || "" }));
+      } catch { /* 非 git 项目:保持空 */ }
     },
     [messagesToItems, selectedProjectId, sessionsByProject]
   );
@@ -967,7 +974,7 @@ export default function App() {
             isGitProject={gitByProject[selectedProject?.id ?? ""] ?? false}
             changes={sessionChanges}
             status={status}
-            branch={activeSession.branch || ""}
+            branch={branchBySession[selectedSessionId] || activeSession.branch || ""}
             mergeResult={mergeResult}
             onMerge={mergeSession}
             onStage={stageFiles}
