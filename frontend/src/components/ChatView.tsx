@@ -89,6 +89,13 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   const prevFirstIdRef = useRef<string>("");
   const prevHeightRef = useRef(0);
   const loadMoreRef = useRef<HTMLButtonElement>(null);
+  // 滚动掉帧优化:scrollHeight 的缓存值(在 items 变化/容器 resize 时更新)。
+  // onScroll 用它判断「是否贴底」,避免每次滚动事件都读 el.scrollHeight —— 后者会触发同步强制
+  // 布局(layout thrashing),是滚动掉帧主因;content-visibility 下 scrollHeight 解算更贵。
+  // scrollTop/clientHeight 在无 DOM/样式变更时不强制布局,读取廉价。
+  const scrollHeightRef = useRef(0);
+  // onScroll 的 rAF 句柄:一帧内多个 scroll 事件合并处理一次,杜绝布局抖动。
+  const scrollRafRef = useRef(0);
   // Floating scroll-to-bottom button visibility: true = show FAB (user is reading history).
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   // Expose imperative scrollToBottom to parent (used right after user sends a message).
@@ -102,12 +109,25 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     },
   }), []);
   const onScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    // 距底 ≤ 80px 视为贴底(留出阅读余量,避免最后一行差几像素被判为「不在底部」)。
-    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 80;
-    setShowScrollBtn(!stickToBottomRef.current);
-    scrollStateRef.current.set(props.session?.id || "", { top: el.scrollTop, stick: stickToBottomRef.current });
+    // rAF 合批:同一帧内多个 scroll 事件只处理一次,避免与浏览器绘制竞争造成掉帧。
+    if (scrollRafRef.current) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = 0;
+      const el = scrollRef.current;
+      if (!el) return;
+      // 自愈:scrollTop+clientHeight 不可能超过真实 scrollHeight(浏览器会夹住 scrollTop)。
+      // 若超过缓存值,说明内容增长了而缓存未刷新(折叠块展开/图片加载等不触发 items/resize 的场景),
+      // 此时才读真实 scrollHeight 修正。纯滚动(无内容变化)不会触发 → 不在此处付出 content-visibility 解算代价。
+      if (el.scrollTop + el.clientHeight > scrollHeightRef.current) {
+        scrollHeightRef.current = el.scrollHeight;
+      }
+      // 用缓存的 scrollHeight(见 scrollHeightRef 注释),不在此处读 el.scrollHeight 触发强制布局。
+      const nearBottom = scrollHeightRef.current - el.scrollTop - el.clientHeight <= 80;
+      stickToBottomRef.current = nearBottom;
+      // 仅在状态真正翻转时 setState(避免每帧无谓的 setter 调用)。
+      setShowScrollBtn((prev) => (prev === !nearBottom ? prev : !nearBottom));
+      scrollStateRef.current.set(props.session?.id || "", { top: el.scrollTop, stick: nearBottom });
+    });
   };
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -127,7 +147,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         el.scrollTop = el.scrollHeight;
       }
       prevFirstIdRef.current = items.length > 0 ? items[0].id : "";
-      prevHeightRef.current = el.scrollHeight;
+      prevHeightRef.current = scrollHeightRef.current = el.scrollHeight;
       return; // 切换瞬间一次性定位,不走下面的逻辑。
     }
     // 加载更多(prepend):首条 id 变了 → 补偿高度差,保持用户视觉位置不动。
@@ -138,13 +158,13 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 80;
       setShowScrollBtn(!stickToBottomRef.current);
       prevFirstIdRef.current = firstId;
-      prevHeightRef.current = el.scrollHeight;
+      prevHeightRef.current = scrollHeightRef.current = el.scrollHeight;
       return;
     }
     // 同一 session 内 items 变化(流式输出 / 历史加载完成):仅在贴底时跟随。
     if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
     prevFirstIdRef.current = firstId;
-    prevHeightRef.current = el.scrollHeight;
+    prevHeightRef.current = scrollHeightRef.current = el.scrollHeight;
   }, [items, props.session?.id, props.permission]);
   // footer 高度变化(textarea autogrow / usage-bar / queue 面板)会压低 chat-body 可视区。
   // 贴底时最新消息会被抬高的输入框遮挡 → 视觉上像「历史随按键向上滚」。
@@ -154,11 +174,16 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     const el = scrollRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
+      // resize 时刷新 scrollHeight 缓存(供 onScroll 用),贴底则重新对齐到底。
+      scrollHeightRef.current = el.scrollHeight;
       if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
     });
     ro.observe(el);
     return () => ro.disconnect();
   }, [props.sessionId]);
+
+  // 卸载时取消未派发的 scroll rAF,避免回调在组件已卸载后操作失效 ref。
+  useEffect(() => () => { if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current); }, []);
 
   // IntersectionObserver:「加载更多」按钮进入容器视口时自动触发(原生 API,零依赖)。
   // 与 prepend-scroll 补偿/useLayoutEffect 独立协作,后者负责保持视觉位置。
