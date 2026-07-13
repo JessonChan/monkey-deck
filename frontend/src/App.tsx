@@ -698,6 +698,16 @@ export default function App() {
     }
   }, [refreshProjects]);
 
+  // 按路径添加项目(侧栏路径输入框 Enter 提交)。与 addProject(文件选择器)互补。
+  const addProjectByPath = useCallback(async (path: string) => {
+    try {
+      await ChatService.AddProject("", path, "");
+      await refreshProjects();
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [refreshProjects]);
+
 
   const removeProject = useCallback(
     async (projectId: string) => {
@@ -858,6 +868,7 @@ export default function App() {
           onSelectSession={openSession}
           onCreateSession={createSession}
           onAddProject={addProject}
+          onAddProjectByPath={addProjectByPath}
           permPendingBySession={permPendingBySession}
           draftBySession={draftBySession}
           onRemoveProject={removeProject}

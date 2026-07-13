@@ -144,9 +144,9 @@ input, textarea { font-family: inherit; }
 .project-list { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
 .sidebar-empty { padding: 16px 12px; color: var(--text-3); font-size: 12px; line-height: 1.5; }
 
-.add-path-row { padding: 8px; border-bottom: 1px solid var(--sep); }
+.add-path-row { padding: 8px; border-bottom: 1px solid var(--sep); display: flex; gap: 4px; align-items: center; }
 .add-path-input {
-  width: 100%;
+  flex: 1; min-width: 0;
   background: var(--elev);
   border: 1px solid var(--accent);
   border-radius: var(--r-sm);

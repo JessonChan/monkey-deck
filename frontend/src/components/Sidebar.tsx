@@ -148,7 +148,6 @@ export default function Sidebar(props: Props) {
   const startAdd = () => {
     setAdding(true);
     setPathInput("");
-    props.onAddProject();
   };
   const submitPath = () => {
     const p = pathInput.trim();
@@ -284,6 +283,16 @@ export default function Sidebar(props: Props) {
             }}
             onBlur={() => setTimeout(() => setAdding(false), 200)}
           />
+          <button
+            className="icon-btn small"
+            data-testid="browse-project-path"
+            data-tooltip-id="md-tip"
+            data-tooltip-content="浏览目录"
+            data-tooltip-place="bottom"
+            onClick={() => { setAdding(false); props.onAddProject(); }}
+          >
+            <FolderOpen size={13} />
+          </button>
         </div>
       )}
 
