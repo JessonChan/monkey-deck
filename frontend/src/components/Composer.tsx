@@ -5,7 +5,7 @@ import type { ConfigOption } from "../types";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import type { Mention } from "../types";
-import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown } from "lucide-react";
+import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp } from "lucide-react";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -40,6 +40,13 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { cmd: "/stop", desc: "停止生成", action: "stop" },
 ];
 
+// 长文本折叠阈值:超过则折叠成 TUI 风格紧凑块(首尾若干行 + 中间省略),避免撑爆输入区。
+// 折叠仅为展示态,提交内容仍是完整 value(见 submit)。
+const LONG_LINE_THRESHOLD = 8;     // 行数阈值
+const LONG_CHAR_THRESHOLD = 480;   // 字符数阈值(单/双行长文本兜底)
+const COLLAPSE_HEAD_LINES = 4;     // 折叠时展示前 N 行
+const COLLAPSE_TAIL_LINES = 2;     // 折叠时展示后 M 行
+
 // 从光标位置向前找当前 token:若以 @ 开头,返回 @ 的起点 + @ 之后的查询文本。
 function detectMention(text: string, pos: number): { start: number; query: string } | null {
   let i = pos - 1;
@@ -58,6 +65,46 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   // IME 合成追踪:compositionStart/End 手动记录,配合 isComposing + keyCode===229 三重保险,
   // 彻底防中文输入法选词确认的 Enter 被误判为发送(部分 macOS IME 下 isComposing 不可靠)。
   const composingRef = useRef(false);
+
+  // --- 长文本折叠(展示态)---
+  // isLong:超过行/字符阈值即为长文本;collapsed:是否折叠成紧凑预览块。
+  // 折叠时 textarea 不渲染,改渲染首尾预览;展开恢复 textarea(可滚动编辑全文)。
+  const isLong = useMemo(() => {
+    const lineCount = value.split("\n").length;
+    return lineCount > LONG_LINE_THRESHOLD || value.length > LONG_CHAR_THRESHOLD;
+  }, [value]);
+  const [collapsed, setCollapsed] = useState(false);
+  // 预览:行多 → 首尾若干行 + 中间省略;行少但字符超长(单行长文本)→ 全部行逐行截断 + 字符提示。
+  const preview = useMemo(() => {
+    if (!isLong) return null;
+    const all = value.split("\n");
+    if (all.length > COLLAPSE_HEAD_LINES + COLLAPSE_TAIL_LINES) {
+      return {
+        head: all.slice(0, COLLAPSE_HEAD_LINES),
+        tail: all.slice(all.length - COLLAPSE_TAIL_LINES),
+        note: `${all.length - COLLAPSE_HEAD_LINES - COLLAPSE_TAIL_LINES} 行已折叠`,
+      };
+    }
+    return { head: all, tail: [], note: `${value.length} 字符 · 长行已截断` };
+  }, [isLong, value]);
+  // 自动折叠:长文本 + textarea 非聚焦(草稿恢复 / 外部回填 / 粘贴后失焦)→ 折叠;手打中(聚焦)不打扰。
+  useEffect(() => {
+    if (!isLong) { setCollapsed(false); return; }
+    if (document.activeElement !== ref.current) setCollapsed(true);
+  }, [isLong]);
+  const expandInput = () => {
+    setCollapsed(false);
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (el) {
+        el.focus();
+        el.selectionStart = el.selectionEnd = el.value.length;
+        cursorRef.current = el.value.length;
+        autoGrow(el);
+      }
+    });
+  };
+  const collapseInput = () => setCollapsed(true);
 
   // --- 上下键翻历史 ---
   // navIdx = -1:未翻历史(显示当前草稿);否则指向 history 数组的下标(当前展示的那条)。
@@ -88,7 +135,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 220) + "px";
   };
-  useEffect(() => { if (ref.current) autoGrow(ref.current); }, [value]);
+  useEffect(() => { if (ref.current) autoGrow(ref.current); }, [value, collapsed]);
 
   // @ 触发:每次 value 或光标位置变化,据光标位置判定是否在 @ 提及中,拉目录列表过滤。
   const mentionInfo = useMemo(() => detectMention(value, cursorRef.current), [value, cursorPos]);
@@ -342,19 +389,68 @@ export default function Composer({ value, onChange, disabled, prompting, configO
           </div>
         )}
 
-        <textarea
-          ref={ref}
-          className="composer-input"
-          data-testid="composer-input"
-          value={value}
-          placeholder={prompting ? "排队下一条…(Enter 入队 · 本轮结束后自动发)" : "给 monkey-deck 发消息…   (Enter 发送 · Shift+Enter 换行 · @ 提文件 · / 看命令 · ↑↓ 翻历史)"}
-          onChange={handleChange}
-          onSelect={handleSelect}
-          onKeyDown={onKeyDown}
-          onCompositionStart={() => { composingRef.current = true; }}
-          onCompositionEnd={() => { composingRef.current = false; }}
-          rows={2}
-        />
+        {isLong && (
+          <div className="composer-meta-row" data-testid="composer-meta-row">
+            <span className="composer-meta-count">{value.split("\n").length} 行 · {value.length} 字符</span>
+            <button
+              className="composer-collapse-toggle"
+              data-testid="composer-collapse-toggle"
+              onClick={collapsed ? expandInput : collapseInput}
+              onMouseDown={(e) => e.preventDefault()}
+              title={collapsed ? "展开全文编辑" : "收起为预览"}
+            >
+              {collapsed ? <><ChevronDown size={12} /> 展开</> : <><ChevronUp size={12} /> 收起</>}
+            </button>
+          </div>
+        )}
+
+        {isLong && collapsed && preview ? (
+          <div
+            className="composer-collapse"
+            data-testid="composer-collapse"
+            onClick={expandInput}
+            title="点击展开全文编辑"
+          >
+            <pre className="composer-collapse-pre">
+              {preview.head.map((l, i) => <div key={i} className="composer-collapse-line">{l || " "}</div>)}
+            </pre>
+            <button
+              className="composer-collapse-divider"
+              onClick={(e) => { e.stopPropagation(); expandInput(); }}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              ⋯ {preview.note}(点击展开) ⋯
+            </button>
+            {preview.tail.length > 0 && (
+              <pre className="composer-collapse-pre">
+                {preview.tail.map((l, i) => <div key={i} className="composer-collapse-line">{l || " "}</div>)}
+              </pre>
+            )}
+          </div>
+        ) : (
+          <textarea
+            ref={ref}
+            className="composer-input"
+            data-testid="composer-input"
+            value={value}
+            placeholder={prompting ? "排队下一条…(Enter 入队 · 本轮结束后自动发)" : "给 monkey-deck 发消息…   (Enter 发送 · Shift+Enter 换行 · @ 提文件 · / 看命令 · ↑↓ 翻历史)"}
+            onChange={handleChange}
+            onSelect={handleSelect}
+            onKeyDown={onKeyDown}
+            onPaste={(e) => {
+              // 粘贴长文本:折叠成预览(聚焦态下 effect 不会自动折,这里显式触发)。
+              const pasted = e.clipboardData?.getData("text") ?? "";
+              const el = e.currentTarget;
+              const future = value.slice(0, el.selectionStart ?? 0) + pasted + value.slice(el.selectionEnd ?? 0);
+              if (future.split("\n").length > LONG_LINE_THRESHOLD || future.length > LONG_CHAR_THRESHOLD) {
+                requestAnimationFrame(() => setCollapsed(true));
+              }
+            }}
+            onCompositionStart={() => { composingRef.current = true; }}
+            onCompositionEnd={() => { composingRef.current = false; }}
+            rows={2}
+          />
+        )}
 
         <div className="compose-bar">
           <div className="compose-tools">

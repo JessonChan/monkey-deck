@@ -715,6 +715,48 @@ input, textarea { font-family: inherit; }
 .compose-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 4px; }
 .compose-tools { display: flex; gap: 2px; }
 .compose-right { display: flex; align-items: center; gap: 10px; }
+
+/* ─── Composer 长文本折叠(TUI 风格紧凑块)─── */
+.composer-meta-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 5px;
+}
+.composer-meta-count {
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.composer-collapse-toggle {
+  display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0;
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-2);
+  background: var(--elev-2); border: 1px solid var(--sep);
+  padding: 2px 7px; border-radius: 5px; cursor: pointer; height: 20px;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.composer-collapse-toggle:hover { color: var(--accent-2); border-color: var(--accent); background: var(--hover); }
+.composer-collapse {
+  border: 1px dashed var(--sep-strong);
+  border-radius: var(--r-md);
+  background: rgba(0, 0, 0, 0.18);
+  margin: 2px 0 6px;
+  font-family: var(--mono); font-size: 12px; color: var(--text-2);
+  overflow: hidden; cursor: pointer;
+  transition: border-color 0.12s;
+  max-height: 200px;
+}
+.composer-collapse:hover { border-color: var(--accent); }
+.composer-collapse-pre { margin: 0; padding: 6px 9px; line-height: 1.45; }
+.composer-collapse-line {
+  white-space: pre; overflow: hidden; text-overflow: ellipsis;
+  min-height: 1.45em;
+}
+.composer-collapse-divider {
+  display: block; width: 100%; text-align: center;
+  padding: 4px 6px; font-family: var(--mono); font-size: 11px;
+  color: var(--text-3); background: var(--elev);
+  border-top: 1px solid var(--sep); border-bottom: 1px solid var(--sep);
+  cursor: pointer; transition: color 0.1s, background 0.1s;
+}
+.composer-collapse-divider:hover { color: var(--accent-2); background: var(--hover); }
 .send-btn {
   width: 34px; height: 34px; border-radius: 50%;
   background: var(--accent); color: #fff;
