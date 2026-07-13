@@ -1,4 +1,4 @@
-import { forwardRef, Fragment, memo, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from "react";
+import { forwardRef, Fragment, memo, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
@@ -7,7 +7,7 @@ import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem
 import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
-import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ArrowDown } from "lucide-react";
+import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown } from "lucide-react";
 
 interface Usage { used: number; size: number; cost: number; }
 
@@ -331,7 +331,7 @@ const ChatRow = memo(function ChatRow({ item, sessionId }: { item: ChatItem; ses
       <div className="row row-user" data-testid="msg-user">
         <div className="bubble-user-wrap">
           <MessageActions text={item.text} className="user-msg-actions" testId="copy-user-msg" />
-          <div className="bubble-user">{item.text}</div>
+          <UserBubble text={item.text} />
         </div>
       </div>
     );
@@ -359,6 +359,123 @@ const ChatRow = memo(function ChatRow({ item, sessionId }: { item: ChatItem; ses
   }
   return <ToolCard item={item} />;
 });
+
+// ─── 用户消息气泡 ───
+// 长文本(日志/代码/大段文本)默认折叠(首尾若干行 + 中间省略),展开后限高可滚动;
+// 区分内容类型:含 ``` 围栏 → ReactMarkdown(复用 CodeBox 等宽代码块,即「现成方案」);
+// 无围栏但具备代码/日志特征 → 等宽 + 可读换行(避免无差别 <pre> 横向溢出,§4.4);
+// 普通散文 → 可读换行。展开/收起交互 + 折叠预览与 Composer 长文本折叠形态一致。
+const USER_LONG_LINES = 8;        // 行数阈值:超过即判定为长文本
+const USER_LONG_CHARS = 480;      // 字符阈值:单/双行长文本兜底
+const USER_HEAD_LINES = 4;        // 折叠预览展示前 N 行
+const USER_TAIL_LINES = 2;        // 折叠预览展示后 M 行
+
+function UserBubble({ text }: { text: string }) {
+  const lines = useMemo(() => text.split("\n"), [text]);
+  const isLong = lines.length > USER_LONG_LINES || text.length > USER_LONG_CHARS;
+  const hasCodeFence = text.includes("```");
+  // 内容类型:markdown(有围栏)/ mono(代码或日志特征)/ prose(普通散文)。
+  const renderKind: "markdown" | "mono" | "prose" = hasCodeFence
+    ? "markdown"
+    : looksLikeCodeOrLog(lines)
+      ? "mono"
+      : "prose";
+  // 长文本默认折叠;短文本无折叠态。
+  const [collapsed, setCollapsed] = useState(isLong);
+
+  // 折叠预览:行多 → 首尾若干行 + 中间省略条;行少但字符超长 → 全部行(逐行截断)+ 字符提示。
+  const preview = useMemo(() => {
+    if (!isLong) return null;
+    if (lines.length > USER_HEAD_LINES + USER_TAIL_LINES) {
+      return {
+        head: lines.slice(0, USER_HEAD_LINES),
+        tail: lines.slice(lines.length - USER_TAIL_LINES),
+        note: `${lines.length - USER_HEAD_LINES - USER_TAIL_LINES} 行已折叠`,
+      };
+    }
+    return { head: lines, tail: [], note: `${text.length} 字符 · 长行已截断` };
+  }, [isLong, lines, text.length]);
+
+  const expand = () => setCollapsed(false);
+
+  return (
+    <div
+      className={`bubble-user${isLong ? " bubble-user-long" : ""}${isLong ? (collapsed ? " is-collapsed" : " is-expanded") : ""}`}
+    >
+      {isLong && (
+        <div className="bubble-user-meta" data-testid="user-msg-meta">
+          <span className="bubble-user-count">{lines.length} 行 · {text.length} 字符</span>
+          <button
+            className="bubble-user-toggle"
+            type="button"
+            onClick={() => setCollapsed((c) => !c)}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={collapsed ? "展开全文" : "收起"}
+            data-testid="user-msg-toggle"
+          >
+            {collapsed ? <><ChevronDown size={12} /> 展开</> : <><ChevronUp size={12} /> 收起</>}
+          </button>
+        </div>
+      )}
+
+      {isLong && collapsed && preview ? (
+        <div
+          className="bubble-user-preview"
+          data-testid="user-msg-preview"
+          onClick={expand}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); expand(); } }}
+        >
+          <pre className="bubble-user-preview-pre">
+            {preview.head.map((l, i) => <div key={i} className="bubble-user-preview-line">{l || " "}</div>)}
+          </pre>
+          <button
+            className="bubble-user-preview-divider"
+            type="button"
+            onClick={(e) => { e.stopPropagation(); expand(); }}
+          >
+            ⋯ {preview.note}(点击展开) ⋯
+          </button>
+          {preview.tail.length > 0 && (
+            <pre className="bubble-user-preview-pre">
+              {preview.tail.map((l, i) => <div key={i} className="bubble-user-preview-line">{l || " "}</div>)}
+            </pre>
+          )}
+        </div>
+      ) : (
+        <div className={`bubble-user-body bubble-user-${renderKind}`}>
+          {renderKind === "markdown" ? (
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeRenderer, pre: PreRenderer }}>
+              {text}
+            </ReactMarkdown>
+          ) : renderKind === "mono" ? (
+            <pre className="bubble-user-mono">{text}</pre>
+          ) : (
+            text
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 代码/日志特征启发式:非空行中缩进行 / 日志时间戳行 / 代码关键字行 / 超长无标点行 占比 ≥ 40% 判为技术文本。
+// 用于决定是否用等宽字体呈现;判定错也无害(仅字体差异),偏保守(行 < 4 直接 false)。
+function looksLikeCodeOrLog(lines: string[]): boolean {
+  if (lines.length < 4) return false;
+  let tech = 0;
+  let counted = 0;
+  for (const l of lines) {
+    if (/^\s*$/.test(l)) continue;
+    counted++;
+    if (/^\s{2,}\S/.test(l)) tech++;                                                        // 缩进行(代码)
+    else if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}[T ]\d{1,2}:\d{2}/.test(l)) tech++;                // 日志时间戳
+    else if (/[{}();]/.test(l) && /\b(if|for|def|func|fn|const|let|var|return|import|from|class|export|async|await|case|switch|echo|Error|WARN)\b/.test(l)) tech++;
+    else if (l.length > 120 && !/[。！？.!?,;:]/.test(l)) tech++;                            // 超长无标点(日志行)
+  }
+  return counted > 0 && tech / counted >= 0.4;
+}
 
 // ThoughtBlock:思考块默认折叠(含流式中),summary 显示转圈 spinner;用户展开后记住偏好,
 // 后续新思考块也默认展开;底部「收起」按钮方便长文本尾部直接收回(不用滚回顶部)。
