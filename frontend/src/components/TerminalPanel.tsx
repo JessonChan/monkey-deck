@@ -59,6 +59,22 @@ export default function TerminalPanel(props: TerminalPanelProps) {
     return () => { window.removeEventListener("mousedown", onDown); window.removeEventListener("keydown", onKey); };
   }, [menu]);
 
+  // ⌘/Ctrl+1..9 快速切换到第 N 个终端标签(mac 用 metaKey,其它平台 ctrlKey)。
+  // 仅在面板挂载(=可见)时生效;目标序号超出标签数则忽略。处理后 preventDefault 防冲突。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.altKey || e.shiftKey) return; // 避开带修饰键的组合
+      if (e.key < "1" || e.key > "9") return;
+      const idx = Number(e.key) - 1;
+      if (idx >= tabs.length) return; // 超出现有标签数:忽略(不报错)
+      e.preventDefault();
+      onSelectTab(tabs[idx].id);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [tabs, onSelectTab]);
+
   const startRename = (tab: TerminalTab) => {
     setRenamingId(tab.id);
     setRenameValue(tab.userTitle || tab.title);
