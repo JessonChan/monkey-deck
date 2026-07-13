@@ -570,6 +570,82 @@ input, textarea { font-family: inherit; }
   color: var(--text-2); max-height: 280px; overflow-y: auto; user-select: text;
 }
 .tool-term { color: var(--text); border-color: var(--sep-strong); background: #131316; }
+
+/* ─── bash / 命令执行卡片(头:名+状态+exit;体:命令行+折叠输出) ─── */
+.bash-tool-summary .tool-title { flex: 0 1 auto; }
+.bash-exit {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 500;
+  padding: 2px 7px; border-radius: 20px; white-space: nowrap;
+}
+.bash-exit-ok { color: var(--green); background: rgba(48, 209, 88, 0.12); }
+.bash-exit-fail { color: var(--red); background: rgba(255, 69, 58, 0.14); }
+
+/* 命令行:终端风,等宽,保留换行,横向滚动不撑破布局(§4.4 不抛 JSON)。 */
+.bash-cmd { margin: 9px 0 0; }
+.bash-cmd-head {
+  display: flex; align-items: center; gap: 7px; margin-bottom: 4px;
+}
+.bash-cmd-prompt { font-family: var(--mono); font-size: 12px; color: var(--accent-2); font-weight: 600; }
+.bash-cmd-label {
+  font-size: 10.5px; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.06em; flex: 1;
+}
+.bash-cmd-pre {
+  font-family: var(--mono); font-size: 12px; line-height: 1.5; color: #e8e8ed;
+  background: #131316; border: 1px solid var(--sep-strong); border-radius: var(--r-sm);
+  padding: 9px 12px; margin: 0; white-space: pre; overflow-x: auto;
+  user-select: text; tab-size: 4;
+}
+
+/* 输出区:复用 .ctext 折叠件,终端风底色,横向滚动。 */
+.bash-out { margin: 9px 0 0; }
+.bash-out-ctext .ctext-pre,
+.bash-out-ctext .ctext-preview { background: #131316; border-color: var(--sep-strong); }
+.bash-out-pre {
+  color: var(--text); white-space: pre; overflow-x: auto; word-break: normal;
+  max-height: 320px; overflow-y: auto; tab-size: 4;
+}
+.bash-out-note { font-size: 10.5px; color: var(--amber); font-family: var(--mono); margin-top: 4px; }
+
+/* ─── 可复用折叠文本块 CollapsibleText(工具 I/O 共用:bash 现接入,grep/glob/edit 后续) ─── */
+.ctext { font-family: var(--mono); }
+.ctext-meta {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 5px;
+}
+.ctext-count { font-size: 10.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ctext-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.ctext-toggle {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-2);
+  background: var(--elev-2); border: 1px solid var(--sep);
+  padding: 2px 7px; border-radius: 5px; cursor: pointer; height: 20px;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.ctext-toggle:hover { color: var(--accent-2); border-color: var(--accent); background: var(--hover); }
+.ctext-pre {
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.5; color: var(--text-2);
+  background: #161617; border: 1px solid var(--sep); border-radius: var(--r-sm);
+  padding: 9px 12px; margin: 0; white-space: pre; overflow-x: auto;
+  max-height: 320px; overflow-y: auto; user-select: text; tab-size: 4;
+}
+.ctext-short .ctext-pre { max-height: none; }
+/* 折叠预览(首尾 + 省略条):沿用 composer/bubble 的 TUI 紧凑块观感。 */
+.ctext-preview {
+  border: 1px dashed var(--sep-strong); border-radius: var(--r-md);
+  background: rgba(0, 0, 0, 0.18); overflow: hidden; cursor: pointer;
+  transition: border-color 0.12s;
+}
+.ctext-preview:hover { border-color: var(--accent); }
+.ctext-preview-pre { margin: 0; padding: 6px 9px; line-height: 1.5; }
+.ctext-preview-line { white-space: pre; overflow: hidden; text-overflow: ellipsis; min-height: 1.5em; }
+.ctext-preview-divider {
+  display: block; width: 100%; text-align: center; padding: 4px 6px;
+  font-family: var(--mono); font-size: 11px; color: var(--text-3);
+  background: var(--elev); border-top: 1px solid var(--sep); border-bottom: 1px solid var(--sep);
+  cursor: pointer; transition: color 0.1s, background 0.1s;
+}
+.ctext-preview-divider:hover { color: var(--accent-2); background: var(--hover); }
 .cap-hint { text-align: center; font-size: 11px; color: var(--text-3); padding: 6px 0 10px; }
 .load-more-btn { display: block; margin: 0 auto 12px; padding: 6px 20px; font-size: 12px; color: var(--text-2); background: var(--elev); border: 1px solid var(--border); border-radius: 14px; cursor: pointer; transition: background .15s; }
 .load-more-btn:hover:not(:disabled) { background: var(--elev-hover); }

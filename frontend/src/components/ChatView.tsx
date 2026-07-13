@@ -7,7 +7,8 @@ import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem
 import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
-import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown } from "lucide-react";
+import CollapsibleText from "./CollapsibleText";
+import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal } from "lucide-react";
 
 interface Usage { used: number; size: number; cost: number; }
 
@@ -554,6 +555,15 @@ function ToolGroup({ tools }: { tools: Extract<ChatItem, { type: "tool" }>[] }) 
 }
 
 function ToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
+  // bash / 命令执行(ACP ToolKindExecute="execute"):用专门的卡片化布局——
+  // 头(名 + 状态 + exit)+ 体(命令行 + 折叠输出区),长输出默认折叠(首尾+省略)。
+  // edit/grep/glob 等其它工具仍走通用卡片(本 task 只接入 bash)。
+  // 分派层不持有 hook,避免子分支 hook 顺序不一致(React Rules of Hooks)。
+  if (item.kind === "execute") return <BashToolCard item={item} />;
+  return <GenericToolCard item={item} />;
+}
+
+function GenericToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
   const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
   const [copiedIn, setCopiedIn] = useState(false);
   const [copiedOut, setCopiedOut] = useState(false);
@@ -595,6 +605,88 @@ function ToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
       )}
     </Collapsible>
   );
+}
+
+// bash / 命令执行卡片:头(终端图标 + 名 + 状态/exit + 折叠 toggle)+ 体(命令行 + 输出区)。
+// 命令行/输出等宽、保留换行、横向滚动不撑破布局;长输出超阈值默认折叠(首尾+省略),可展开。
+// 输出区复用可折叠组件 CollapsibleText(后续 grep/glob/edit 等可共用)。
+function BashToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
+  const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
+  const running = item.status === "pending" || item.status === "in_progress";
+  const command = extractBashCommand(item.rawInput);
+  const outputR = item.rawOutput != null ? extractToolText(item.rawOutput) : null;
+  const [copiedCmd, setCopiedCmd] = useState(false);
+  const copyCmd = async () => {
+    try { await navigator.clipboard.writeText(command || ""); setCopiedCmd(true); setTimeout(() => setCopiedCmd(false), 1200); } catch { /* noop */ }
+  };
+  return (
+    <Collapsible
+      className="tool-card bash-tool-card"
+      open={false}
+      summaryClassName="tool-summary bash-tool-summary"
+      summary={<>
+        {running ? <span className="thought-spinner" /> : <Terminal size={13} />}
+        <span className="tool-title">{item.title || "命令执行"}</span>
+        {outputR?.exit != null && <span className={`bash-exit ${exitCls(outputR.exit)}`}>exit {outputR.exit}</span>}
+        <span className={`tool-status ${st.cls}`}>{st.label}</span>
+      </>}
+    >
+      {command && (
+        <div className="bash-cmd">
+          <div className="bash-cmd-head">
+            <span className="bash-cmd-prompt">$</span>
+            <span className="bash-cmd-label">命令</span>
+            <button
+              className="msg-action-btn"
+              type="button"
+              onClick={copyCmd}
+              data-tooltip-id="md-tip"
+              data-tooltip-content={copiedCmd ? "已复制" : "复制命令"}
+              data-testid="bash-copy-cmd"
+            >
+              {copiedCmd ? <Check size={11} /> : <Copy size={11} />}
+            </button>
+          </div>
+          <pre className="bash-cmd-pre" data-testid="bash-cmd-pre">{command}</pre>
+        </div>
+      )}
+      {outputR && outputR.text && (
+        <div className="bash-out">
+          <CollapsibleText
+            text={outputR.text}
+            className="bash-out-ctext"
+            preClassName="bash-out-pre"
+            previewClassName="bash-out-preview"
+            lineUnit="行"
+            testId="bash-output"
+          />
+          {outputR.truncated && <div className="bash-out-note">输出已被 agent 截断</div>}
+        </div>
+      )}
+    </Collapsible>
+  );
+}
+
+// exit 状态色:0=成功(绿);非 0=失败(红);仅用于头部小徽章。
+function exitCls(exit: number): string {
+  return exit === 0 ? "bash-exit-ok" : "bash-exit-fail";
+}
+
+// 从 bash 工具的 rawInput 抽出命令文本(等宽呈现,绝不把 {…} JSON 抛给用户,§4.4)。
+// opencode bash 输入形如 {command: "..."};命令可能在 command/cmd/line 等键。找不到回退空。
+function extractBashCommand(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (!isRecord(raw)) return "";
+  for (const k of ["command", "cmd", "line"]) {
+    const v = raw[k];
+    if (typeof v === "string" && v.trim()) return v;
+  }
+  // 兜兜:有 command 数组(部分 harness 把命令拆成 argv)→ 用空格拼回单行。
+  const argv = raw.argv;
+  if (Array.isArray(argv) && argv.length > 0) {
+    return argv.map((a) => (typeof a === "string" ? a : String(a))).join(" ");
+  }
+  return "";
 }
 
 function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRespond: (id: string) => void }) {
