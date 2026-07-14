@@ -12,7 +12,7 @@ import CollapsibleText from "./CollapsibleText";
 import FilePreviewOverlay, { type PreviewTarget } from "./FilePreviewOverlay";
 import PathLinkified from "./PathLinkified";
 import { countDiffLines, diffLineCls } from "../lib/diff";
-import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks } from "lucide-react";
+import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, RefreshCw } from "lucide-react";
 
 interface Usage { used: number; size: number; cost: number; }
 
@@ -32,6 +32,8 @@ interface Props {
   onAction: (action: "clear" | "new" | "stop") => void;
   onRespondPermission: (optionId: string) => void;
   onToggleTerminal: () => void;
+  onRefreshConfig: () => void;
+  refreshingConfig: boolean;
   onMerge: () => void;
   queue: QueueItem[];
   onInterruptQueue: (id: string) => void;
@@ -239,6 +241,18 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         </div>
         <div className="chat-header-actions">
           {s.key && <span className={`status-badge ${s.cls}`}>{t(s.key)}</span>}
+          <button
+            className="icon-btn small"
+            onClick={props.onRefreshConfig}
+            disabled={props.refreshingConfig}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={props.refreshingConfig ? t("chat.refreshingConfig") : t("chat.refreshConfigTip")}
+            data-tooltip-place="bottom"
+            aria-label={t("chat.refreshConfigTip")}
+            data-testid="refresh-config-btn"
+          >
+            <RefreshCw size={15} className={props.refreshingConfig ? "spin" : undefined} />
+          </button>
           <button className="icon-btn small" onClick={props.onToggleTerminal} data-tooltip-id="md-tip" data-tooltip-content={t("chat.toggleTerminalTip")} aria-label={t("chat.toggleTerminal")}>
             <SquareTerminal size={15} />
           </button>
