@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem, Mention, PlanEntry } from "../types";
+import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem, Mention, ImageAttachment, PlanEntry } from "../types";
 import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
@@ -26,7 +26,7 @@ interface Props {
   permission: PermissionPrompt | null;
   mergeResult: string | null;
   sessionDiff: string | null;
-  onSend: (text: string, mentions: Mention[]) => void;
+  onSend: (text: string, mentions: Mention[], images?: ImageAttachment[]) => void;
   onStop: () => void;
   onAction: (action: "clear" | "new" | "stop") => void;
   onRespondPermission: (optionId: string) => void;
@@ -41,6 +41,9 @@ interface Props {
   onAttachmentsChange: (next: string[]) => void;
   mentions: Mention[];
   onMentionsChange: (next: Mention[]) => void;
+  images: ImageAttachment[];
+  onImagesChange: (next: ImageAttachment[]) => void;
+  imageSupported: boolean;
   history: string[];
   sessionId: string;
   configOptions: ConfigOption[];
@@ -322,6 +325,10 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           onAttachmentsChange={props.onAttachmentsChange}
           mentions={props.mentions}
           onMentionsChange={props.onMentionsChange}
+          images={props.images}
+          onImagesChange={props.onImagesChange}
+          imageSupported={props.imageSupported}
+          usage={props.usage}
           disabled={!props.session}
           prompting={props.status === "prompting"}
           configOptions={props.configOptions}

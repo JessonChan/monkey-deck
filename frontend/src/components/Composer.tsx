@@ -4,8 +4,8 @@ import { Command } from "cmdk";
 import type { ConfigOption } from "../types";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
-import type { Mention } from "../types";
-import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp } from "lucide-react";
+import type { Mention, ImageAttachment } from "../types";
+import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ImageIcon } from "lucide-react";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -20,7 +20,11 @@ interface Props {
   onAttachmentsChange: (next: string[]) => void;
   mentions: Mention[];        // @autocomplete 选中项 — 按 session 隔离(App 持有)
   onMentionsChange: (next: Mention[]) => void;
-  onSend: (text: string, mentions: Mention[]) => void;
+  images: ImageAttachment[];  // 内联图片附件 — 按 session 隔离(App 持有)
+  onImagesChange: (next: ImageAttachment[]) => void;
+  imageSupported: boolean;    // agent 是否声明 image prompt 能力(门控图片输入入口)
+  usage: { used: number; size: number; cost: number };  // 上下文用量(展示已用/上限)
+  onSend: (text: string, mentions: Mention[], images?: ImageAttachment[]) => void;
   onStop: () => void;
   onAction: (action: "clear" | "new" | "stop") => void;
 }
@@ -56,7 +60,39 @@ function detectMention(text: string, pos: number): { start: number; query: strin
   return { start: wordStart, query: text.slice(wordStart + 1, pos) };
 }
 
-export default function Composer({ value, onChange, disabled, prompting, configOptions, onSetConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, onSend, onStop, onAction }: Props) {
+// 草稿文本 token 预估:无后端精确分词器,用「字符数/4」近似(GPT 系经验比值,CJK 偏高、英文偏低,
+// 取中间值做占位提示,非计费依据)。展示在输入区附近给用户「这条大概多少 token」的直觉。
+function estimateTokens(text: string): number {
+  if (!text) return 0;
+  return Math.max(1, Math.round(text.length / 4));
+}
+
+// 格式化 token 数为可读短串(<1k 显示原数,≥1k 用 k 单位)。
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : `${n}`;
+}
+
+// 读 File 为 base64(去 data: 前缀)。用于把粘贴/选择的图片转成 ACP ContentBlock::Image 的 Data。
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const res = r.result;
+      if (typeof res !== "string") { reject(new Error("read failed")); return; }
+      const comma = res.indexOf(",");
+      resolve(comma >= 0 ? res.slice(comma + 1) : res);
+    };
+    r.onerror = () => reject(r.error || new Error("read failed"));
+    r.readAsDataURL(file);
+  });
+}
+
+// 接受的图片 mime 白名单(ACP ContentBlock::Image 常见类型)。
+const IMAGE_MIME_ALLOWED = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+// 单图大小上限(base64 前,字节):10MB。过大发不出去且占上下文,超过则拒收并提示。
+const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+
+export default function Composer({ value, onChange, disabled, prompting, configOptions, onSetConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, usage, onSend, onStop, onAction }: Props) {
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -165,7 +201,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   }, [mentionInfo, sessionId, slashOpen]);
 
   const baseName = (p: string) => p.split(/[/\\]/).pop() || p;
-  const empty = !value.trim() && attachments.length === 0 && mentions.length === 0;
+  const empty = !value.trim() && attachments.length === 0 && mentions.length === 0 && images.length === 0;
 
   const submit = (finalText?: string) => {
     if (disabled) return;
@@ -180,11 +216,13 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     });
     const clips = attachments.map((p) => ({ path: p, name: baseName(p) }));
     const all = [...inline, ...clips];
-    if (!t && all.length === 0) return;
-    onSend(t, all);
+    const imgs = images.length > 0 ? images : undefined;
+    if (!t && all.length === 0 && images.length === 0) return;
+    onSend(t, all, imgs);
     onChange("");
     onAttachmentsChange([]);
     onMentionsChange([]);
+    onImagesChange([]);
     navRef.current = -1;
     setMentionOpen(false);
     setSlashOpen(false);
@@ -332,6 +370,39 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     } catch { /* 取消静默 */ }
   };
 
+  // 把若干 File(粘贴/选择)转成 ImageAttachment 并入 images。能力门控 + mime/大小校验。
+  // imageSupported=false 时静默丢弃(入口本身已禁用,这里是兜底:防 paste 绕过)。
+  const addImageFiles = async (files: File[]) => {
+    if (!imageSupported || disabled) return;
+    const accepted: ImageAttachment[] = [];
+    for (const f of files) {
+      if (!IMAGE_MIME_ALLOWED.includes(f.type)) continue;
+      if (f.size > IMAGE_MAX_BYTES) continue;
+      try {
+        const data = await fileToBase64(f);
+        const ext = (f.name.split(".").pop() || "png").toLowerCase();
+        accepted.push({ name: f.name || `paste-${Date.now()}.${ext}`, data, mimeType: f.type });
+      } catch { /* 单张失败跳过,不阻断其余 */ }
+    }
+    if (accepted.length) onImagesChange([...images, ...accepted]);
+  };
+
+  // 图片选择入口:原生文件对话框(过滤图片)。能力门控:imageSupported=false 时按钮不渲染。
+  const addImages = async () => {
+    if (!imageSupported) return;
+    try {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = IMAGE_MIME_ALLOWED.join(",");
+      input.multiple = true;
+      const chosen: File[] = await new Promise((resolve) => {
+        input.onchange = () => resolve(input.files ? Array.from(input.files) : []);
+        input.click();
+      });
+      if (chosen.length) await addImageFiles(chosen);
+    } catch { /* 取消静默 */ }
+  };
+
   return (
     <div className="composer" data-testid="composer">
       {slashOpen && (
@@ -363,7 +434,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
       )}
 
       <div className="compose-card">
-        {(attachments.length > 0 || mentions.length > 0) && (
+        {(attachments.length > 0 || mentions.length > 0 || images.length > 0) && (
           <div className="att-chips" data-testid="att-chips">
             {attachments.map((p) => (
               <span key={p} className="att-chip" title={p}>
@@ -373,7 +444,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
             ))}
             {mentions.map((m) => (
               <span key={m.path} className="att-chip att-chip-mention" title={"@" + m.path}>
-                <span className="att-chip-name"><File size={11} /> {m.name}</span>
+                <span className="att-chip-name"><span className="att-chip-at">@</span>{m.name}</span>
                 <button className="att-chip-x" onClick={() => {
                   const token = "@" + m.path;
                   const idx = value.indexOf(token);
@@ -384,6 +455,15 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                   }
                   onMentionsChange(mentions.filter((x) => x.path !== m.path));
                 }}><X size={11} /></button>
+              </span>
+            ))}
+            {images.map((im, i) => (
+              <span key={im.name + i} className="att-chip att-chip-image" title={im.name}>
+                <span className="att-chip-name">
+                  <img className="att-chip-thumb" src={`data:${im.mimeType};base64,${im.data}`} alt={im.name} />
+                  {im.name}
+                </span>
+                <button className="att-chip-x" onClick={() => onImagesChange(images.filter((_, j) => j !== i))}><X size={11} /></button>
               </span>
             ))}
           </div>
@@ -438,6 +518,26 @@ export default function Composer({ value, onChange, disabled, prompting, configO
             onSelect={handleSelect}
             onKeyDown={onKeyDown}
             onPaste={(e) => {
+              // 粘贴图片(剪贴板含图片):能力门控下转 ImageAttachment,并阻止图片被当文本插入。
+              // 兼容两种入口:files(截图 / 从文件管理器拷贝)与 items(网页拷贝图片,部分 webview 仅经 items 暴露)。
+              if (imageSupported) {
+                const cd = e.clipboardData;
+                const imgFiles: File[] = [];
+                if (cd) {
+                  for (const f of Array.from(cd.files || [])) if (IMAGE_MIME_ALLOWED.includes(f.type)) imgFiles.push(f);
+                  for (const it of Array.from(cd.items || [])) {
+                    if (it.kind === "file" && IMAGE_MIME_ALLOWED.includes(it.type)) {
+                      const f = it.getAsFile();
+                      if (f) imgFiles.push(f);
+                    }
+                  }
+                }
+                if (imgFiles.length > 0) {
+                  e.preventDefault();
+                  void addImageFiles(imgFiles);
+                  return;
+                }
+              }
               // 粘贴长文本:折叠成预览(聚焦态下 effect 不会自动折,这里显式触发)。
               const pasted = e.clipboardData?.getData("text") ?? "";
               const el = e.currentTarget;
@@ -457,6 +557,17 @@ export default function Composer({ value, onChange, disabled, prompting, configO
             <button className="tool-btn" data-testid="attach-btn" onClick={addFiles} disabled={disabled} title="附加文件(经 ACP ResourceLink 发送)">
               <Paperclip size={17} />
             </button>
+            {imageSupported && (
+              <button
+                className="tool-btn"
+                data-testid="image-btn"
+                onClick={addImages}
+                disabled={disabled}
+                title="添加图片(经 ACP Image 块发送 · 也可直接粘贴)"
+              >
+                <ImageIcon size={17} />
+              </button>
+            )}
             <button
               className="tool-btn"
               onClick={() => { onChange(value.startsWith("/") ? value : "/" + value); requestAnimationFrame(() => ref.current?.focus()); }}
@@ -468,7 +579,10 @@ export default function Composer({ value, onChange, disabled, prompting, configO
           </div>
           <div className="compose-right">
             <ModelSelect configOptions={configOptions} disabled={disabled} onSetConfig={onSetConfig} />
-            {(attachments.length > 0 || mentions.length > 0) && <span className="composer-count">{attachments.length + mentions.length} 引用</span>}
+            <ComposerUsage usage={usage} draftTokens={estimateTokens(value)} />
+            {(attachments.length > 0 || mentions.length > 0 || images.length > 0) && (
+              <span className="composer-count">{attachments.length + mentions.length + images.length} 引用</span>
+            )}
             {prompting && (
               <button className="send-btn stop" data-testid="stop-btn" onClick={onStop} title="停止当前生成(不清理队列)">
                 <Square size={15} />
@@ -489,6 +603,34 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     </div>
   );
 }
+
+// ComposerUsage:输入区附近的紧凑 token 用量(§1.6/§4.4)。
+// 两段信息,都是「人话」,不抛原始 JSON/字段名:
+//  - 草稿预估:当前输入框文本的近似 token 数(字符数/4 经验比值,非计费依据)。
+//  - 上下文:session 已用 / 上限(数据源 ACP SessionUsageUpdate,见 usage-bar);无数据则不显示。
+// 仅在有内容可报时渲染(全空则返回 null,不占位)。
+function ComposerUsage({ usage, draftTokens }: {
+  usage: { used: number; size: number; cost: number };
+  draftTokens: number;
+}) {
+  const hasDraft = draftTokens > 0;
+  const hasCtx = usage.used > 0 || usage.size > 0;
+  if (!hasDraft && !hasCtx) return null;
+  const pct = usage.size > 0 ? Math.min(100, Math.round((usage.used / usage.size) * 100)) : 0;
+  const level = pct >= 85 ? "crit" : pct >= 60 ? "high" : pct >= 30 ? "mid" : "low";
+  return (
+    <span className={`composer-usage composer-usage-${level}`} data-testid="composer-usage">
+      {hasDraft && <span className="cu-draft" title="当前输入的近似 token 数(字符数/4 估算,非计费)">~{fmtTokens(draftTokens)}</span>}
+      {hasDraft && hasCtx && <span className="cu-sep">·</span>}
+      {hasCtx && (
+        <span className="cu-ctx" title="本会话上下文已用 / 上限">
+          {fmtTokens(usage.used)}{usage.size > 0 ? ` / ${fmtTokens(usage.size)}` : ""}{usage.size > 0 ? ` · ${pct}%` : ""}
+        </span>
+      )}
+    </span>
+  );
+}
+
 // ModelSelect 渲染 configOptions 里的 model/effort/mode 控件(发送按钮左侧)。
 // 用 cmdk(Command) + @radix-ui/react-popover:Radix 管开合/定位/焦点/ARIA,cmdk 管搜索/分组/键盘导航。
 // model 按 value 的 provider 前缀("provider/model")分组;大量选项时 cmdk 内置搜索 + List 滚动。

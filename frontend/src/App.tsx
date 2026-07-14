@@ -3,7 +3,7 @@ import { Events } from "@wailsio/runtime";
 import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import * as TerminalService from "../bindings/github.com/jessonchan/monkey-deck/internal/terminal/terminalservice";
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention, PlanEntry } from "./types";
+import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention, ImageAttachment, PlanEntry } from "./types";
 import Sidebar from "./components/Sidebar";
 import ChatView, { type ChatViewHandle } from "./components/ChatView";
 import { Sparkles } from "lucide-react";
@@ -53,6 +53,8 @@ export default function App() {
   const [historyBySession, setHistoryBySession] = useState<Record<string, string[]>>({});  // 输入框历史(上下键翻):按 session 隔离,seed 自 DB + 每次发送追加
   const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, string[]>>({});  // composer 回形针附件(按 session 隔离,切走保留)
   const [mentionsBySession, setMentionsBySession] = useState<Record<string, Mention[]>>({});  // composer @提及(按 session 隔离,切走保留)
+  const [imagesBySession, setImagesBySession] = useState<Record<string, ImageAttachment[]>>({});  // composer 内联图片附件(按 session 隔离,需 agent 支持 image 能力)
+  const [imageSupportedBySession, setImageSupportedBySession] = useState<Record<string, boolean>>({});  // agent 是否声明 image prompt 能力(门控图片输入入口)
   const [configOptionsBySession, setConfigOptionsBySession] = useState<Record<string, ConfigOption[]>>({}); // model/mode/effort(agent 自报)
   const [planBySession, setPlanBySession] = useState<Record<string, PlanEntry[]>>({}); // agent 执行计划(整表替换,ACP protocol)
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
@@ -136,6 +138,8 @@ export default function App() {
     if (ev.kind === "config_option") {
       // agent 自报的 config options(model/mode/effort),前端渲染下拉;切 model/effort 经 SetSessionConfigOption 回写。
       setConfigOptionsBySession((prev) => ({ ...prev, [ev.sessionId]: ev.configOptions ?? [] }));
+      // 附带的 image prompt 能力门控(前端据此决定是否展示图片输入入口,§3.5)。
+      setImageSupportedBySession((prev) => (prev[ev.sessionId] === ev.imageSupported ? prev : { ...prev, [ev.sessionId]: !!ev.imageSupported }));
       return;
     }
     if (ev.kind === "plan") {
@@ -172,6 +176,8 @@ export default function App() {
   const composerValue = (selectedSessionId ? draftBySession[selectedSessionId] : undefined) ?? "";
   const attachments = (selectedSessionId ? attachmentsBySession[selectedSessionId] : undefined) ?? [];
   const mentions = (selectedSessionId ? mentionsBySession[selectedSessionId] : undefined) ?? [];
+  const images = (selectedSessionId ? imagesBySession[selectedSessionId] : undefined) ?? [];
+  const imageSupported = !!(selectedSessionId && imageSupportedBySession[selectedSessionId]);
   const configOptions = (selectedSessionId ? configOptionsBySession[selectedSessionId] : undefined) ?? [];
   const plan = (selectedSessionId ? planBySession[selectedSessionId] : undefined) ?? [];
   const onComposerChange = useCallback((text: string) => {
@@ -188,6 +194,11 @@ export default function App() {
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
     setMentionsBySession((prev) => ({ ...prev, [sid]: next }));
+  }, []);
+  const onImagesChange = useCallback((next: ImageAttachment[]) => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    setImagesBySession((prev) => ({ ...prev, [sid]: next }));
   }, []);
 
   // 启动:加载项目 + 订阅事件。
@@ -302,7 +313,10 @@ export default function App() {
     setError(null);
     setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
     try {
-      await ChatService.SendMessage(sid, next.text, (next.mentions || []).map((m) => ({ path: m.path, name: m.name })));
+      await ChatService.SendMessage(sid, next.text, [
+        ...(next.mentions || []).map((m) => ({ path: m.path, name: m.name })),
+        ...(next.images || []).map((im) => ({ name: im.name, data: im.data, mimeType: im.mimeType })),
+      ]);
     } catch (e) {
  setError(String(e));
       setStatusBySession((prev) => ({ ...prev, [sid]: "idle" }));
@@ -462,10 +476,11 @@ export default function App() {
   }, [newSession, selectedProjectId, refreshSessions, openSession, selectProject]);
 
   // 发送消息:idle 直发;prompting(一轮进行中)入前端队列,回合结束自动续发(§5.4 协议无 queue)。
-  // mentions(@提及)经 ACP ContentBlock::ResourceLink 发给 agent;入队时随 QueueItem 携带。
+  // mentions(@提及)经 ACP ContentBlock::ResourceLink 发给 agent;images(内联图片)经
+  // ContentBlock::Image 发(需 agent 声明 image 能力)。入队时随 QueueItem 携带。
   // 只要按过发送键就记进输入框历史(上下键翻历史),无论后端是否成功/排队。
   const sendMessage = useCallback(
-    async (text: string, mentions: Mention[]) => {
+    async (text: string, mentions: Mention[], imgs?: ImageAttachment[]) => {
       if (!selectedSessionId || !text.trim()) return;
       // 立即滚到底让用户看到自己发的消息(即使是排队消息也要滚,用户需要看当前对话末尾)。
       chatViewRef.current?.scrollToBottom();
@@ -475,11 +490,15 @@ export default function App() {
         if (cur[cur.length - 1] === text) return prev; // 与最后一条相同则不重复
         return { ...prev, [selectedSessionId]: [...cur, text] };
       });
-      const attachments = mentions.map((m) => ({ path: m.path, name: m.name }));
+      // 后端 attachments:@提及 + 回形针文件 → ResourceLink;内联图片 → Image 块(后端按 Data 字段分流)。
+      const attachments = [
+        ...mentions.map((m) => ({ path: m.path, name: m.name })),
+        ...(imgs || []).map((im) => ({ name: im.name, data: im.data, mimeType: im.mimeType })),
+      ];
       // 回合进行中(statusRef 防 stale closure):入队而非直发,避免后端 busy 报错。
       // statusRef.current 始终反映最新 status,闭包锁的 status 可能在 re-render 前仍为旧值。
       if (statusRef.current === "prompting") {
-        const item: QueueItem = { id: `q-${Date.now()}-${selectedSessionId}`, text, mentions };
+        const item: QueueItem = { id: `q-${Date.now()}-${selectedSessionId}`, text, mentions, images: imgs };
         queueBySessionRef.current = {
           ...queueBySessionRef.current,
           [selectedSessionId]: [...(queueBySessionRef.current[selectedSessionId] || []), item],
@@ -521,7 +540,10 @@ export default function App() {
     userStoppedRef.current = false;
     setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
     try {
-      await ChatService.InterruptAndSend(sid, item.text, (item.mentions || []).map((m) => ({ path: m.path, name: m.name })));
+      await ChatService.InterruptAndSend(sid, item.text, [
+        ...(item.mentions || []).map((m) => ({ path: m.path, name: m.name })),
+        ...(item.images || []).map((im) => ({ name: im.name, data: im.data, mimeType: im.mimeType })),
+      ]);
     } catch (e) {
       setError(String(e));
     }
@@ -784,6 +806,8 @@ export default function App() {
       setHistoryBySession(drop);
       setAttachmentsBySession(drop);
       setMentionsBySession(drop);
+      setImagesBySession(drop);
+      setImageSupportedBySession(drop);
       setConfigOptionsBySession(drop);
       queueBySessionRef.current = drop(queueBySessionRef.current);
       delete oldestSeqRef.current[sessionId];
@@ -932,6 +956,9 @@ export default function App() {
               onAttachmentsChange={onAttachmentsChange}
               mentions={mentions}
               onMentionsChange={onMentionsChange}
+              images={images}
+              onImagesChange={onImagesChange}
+              imageSupported={imageSupported}
               history={history}
               activity={activityBySession[selectedSessionId]}
               sessionId={selectedSessionId}

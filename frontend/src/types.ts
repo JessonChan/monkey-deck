@@ -27,6 +27,7 @@ export interface SessionEvent {
   cost?: number; // 累积成本 USD
   title?: string; // session_info 标题
   configOptions?: ConfigOption[]; // config_option:model/mode/effort(agent 自报)
+  imageSupported?: boolean; // config_option 附带:agent 是否支持 image prompt 能力(门控图片输入)
   planEntries?: PlanEntry[]; // plan:agent 执行计划(整表替换,ACP protocol)
 }
 
@@ -80,11 +81,20 @@ export interface Mention {
   name: string;  // 显示名
 }
 
+// 内联图片附件,经 ACP ContentBlock::Image 发给 agent(需 agent 声明 image prompt 能力)。
+// data 是 base64(无 data: 前缀);mimeType 如 image/png。与后端 internal/acp.Attachment 的 Data/MimeType 对齐。
+export interface ImageAttachment {
+  name: string;      // 显示名(如 paste-<ts>.png)
+  data: string;      // base64 编码(无前缀)
+  mimeType: string;  // image/png | image/jpeg | image/webp | image/gif
+}
+
 // 排队消息(前端队列:ACP 协议无 queue,turn 进行中的消息先入前端队列,回合结束自动续发)。
 export interface QueueItem {
   id: string;
   text: string;
   mentions?: Mention[];
+  images?: ImageAttachment[];
 }
 
 // 前端展示用的对话条目(由持久化历史 + 实时流式合并而来)。
