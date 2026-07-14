@@ -1,4 +1,5 @@
 import React, { forwardRef, Fragment, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef } from "react";
+import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
@@ -54,29 +55,30 @@ interface Props {
   onLoadMore: () => void;
   activity?: "thinking" | "executing" | "replying";
 }
-const STATUS_MAP: Record<string, { label: string; cls: string }> = {
-  idle: { label: "空闲", cls: "st-idle" },
-  started: { label: "就绪", cls: "st-idle" },
-  error: { label: "出错", cls: "st-error" },
-  closed: { label: "已关闭", cls: "st-closed" },
-  empty: { label: "", cls: "" },
+// 状态 → i18n key + 样式。label 在渲染处用 t() 解析(支持语言切换)。
+const STATUS_MAP: Record<string, { key: string; cls: string }> = {
+  idle: { key: "chat.status.idle", cls: "st-idle" },
+  started: { key: "chat.status.ready", cls: "st-idle" },
+  error: { key: "chat.status.error", cls: "st-error" },
+  closed: { key: "chat.status.closed", cls: "st-closed" },
+  empty: { key: "", cls: "" },
 };
-const statusLabel = (status: string, activity?: string): { label: string; cls: string } => {
+const statusInfo = (status: string, activity?: string): { key: string; cls: string } => {
   if (status === "prompting") {
     switch (activity) {
-      case "executing": return { label: "执行中", cls: "st-executing" };
-      case "replying": return { label: "回复中", cls: "st-replying" };
-      case "thinking": return { label: "思考中", cls: "st-thinking" };
-      default: return { label: "生成中", cls: "st-busy" };
+      case "executing": return { key: "chat.status.executing", cls: "st-executing" };
+      case "replying": return { key: "chat.status.replying", cls: "st-replying" };
+      case "thinking": return { key: "chat.status.thinking", cls: "st-thinking" };
+      default: return { key: "chat.status.generating", cls: "st-busy" };
     }
   }
-  return STATUS_MAP[status] || { label: status, cls: "" };
+  return STATUS_MAP[status] || { key: "", cls: "" };
 };
-const TOOL_STATUS_MAP: Record<string, { label: string; cls: string }> = {
-  pending: { label: "等待", cls: "tc-pending" },
-  in_progress: { label: "执行中", cls: "tc-running" },
-  completed: { label: "完成", cls: "tc-done" },
-  failed: { label: "失败", cls: "tc-fail" },
+const TOOL_STATUS_MAP: Record<string, { key: string; cls: string }> = {
+  pending: { key: "chat.toolStatus.pending", cls: "tc-pending" },
+  in_progress: { key: "chat.toolStatus.in_progress", cls: "tc-running" },
+  completed: { key: "chat.toolStatus.completed", cls: "tc-done" },
+  failed: { key: "chat.toolStatus.failed", cls: "tc-fail" },
 };
 export interface ChatViewHandle {
   scrollToBottom: () => void;
@@ -85,6 +87,7 @@ export interface ChatViewHandle {
 
 
 export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props, ref) {
+  const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const { items } = props;
   // 用户是否贴底:记最近一次滚动的「贴底」状态。新消息到来时只在贴底才自动滚,
@@ -218,7 +221,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   // 分级配色:上下文越满越警示(绿 → 琥珀 → 红),让占比一眼可读。
   const usageLevel = pct >= 85 ? "crit" : pct >= 60 ? "high" : pct >= 30 ? "mid" : "low";
   const hasUsage = props.usage.used > 0 || props.usage.size > 0 || props.usage.cost > 0;
-  const s = statusLabel(props.status, props.activity);
+  const s = statusInfo(props.status, props.activity);
 
   const onTitleDoubleClick = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("button, input, a")) return;
@@ -231,22 +234,22 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         <div className="chat-header-info">
           <span className="chat-project" title={props.project?.path || ""}>{props.project?.name || ""}</span>
           <span className="chat-sep">/</span>
-          <span className="chat-session-title">{props.session?.title || "新对话"}</span>
+          <span className="chat-session-title">{props.session?.title || t("chat.newSessionTitle")}</span>
           {props.session?.model && <span className="chat-model">{props.session.model}</span>}
         </div>
         <div className="chat-header-actions">
-          {s.label && <span className={`status-badge ${s.cls}`}>{s.label}</span>}
-          <button className="icon-btn small" onClick={props.onToggleTerminal} data-tooltip-id="md-tip" data-tooltip-content="终端 (⌘J)" aria-label="切换终端">
+          {s.key && <span className={`status-badge ${s.cls}`}>{t(s.key)}</span>}
+          <button className="icon-btn small" onClick={props.onToggleTerminal} data-tooltip-id="md-tip" data-tooltip-content={t("chat.toggleTerminalTip")} aria-label={t("chat.toggleTerminal")}>
             <SquareTerminal size={15} />
           </button>
         </div>
       </header>
 
       <div className="chat-body" key={props.sessionId} ref={scrollRef} onScroll={onScroll} data-testid="chat-body">
-        {items.length === 0 && <div className="chat-placeholder">发一条消息开始对话…</div>}
+        {items.length === 0 && <div className="chat-placeholder">{t("chat.placeholder")}</div>}
         {props.hasMore && (
           <button ref={loadMoreRef} className="load-more-btn" onClick={props.onLoadMore} disabled={props.loadingMore} data-testid="load-more">
-            {props.loadingMore ? "加载中…" : "加载更多"}
+            {props.loadingMore ? t("common.loading") : t("chat.loadMore")}
           </button>
         )}
         {items.map((item, i) => {
@@ -290,7 +293,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
                 setShowScrollBtn(false);
               }}
               data-tooltip-id="md-tip"
-              data-tooltip-content="滚到最新消息"
+              data-tooltip-content={t("chat.scrollToBottom")}
               data-testid="scroll-bottom-btn"
             >
               <ArrowDown size={16} />
@@ -303,7 +306,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       <FilePreviewOverlay sessionId={props.sessionId} target={previewTarget} onClose={closeFilePreview} />
       <footer className="chat-footer">
         {hasUsage && (
-          <div className={`usage-bar usage-${usageLevel}`} title="上下文用量" data-testid="usage-bar">
+          <div className={`usage-bar usage-${usageLevel}`} title={t("chat.usageTitle")} data-testid="usage-bar">
             <div className="usage-track"><div className="usage-fill" style={{ width: `${pct}%` }} /></div>
             <span className="usage-text">
               {formatTokens(props.usage.used)}
@@ -389,6 +392,7 @@ const USER_HEAD_LINES = 4;        // 折叠预览展示前 N 行
 const USER_TAIL_LINES = 2;        // 折叠预览展示后 M 行
 
 function UserBubble({ text, onOpenFilePreview }: { text: string; onOpenFilePreview: (path: string, line?: number) => void }) {
+  const { t } = useTranslation();
   const lines = useMemo(() => text.split("\n"), [text]);
   const isLong = lines.length > USER_LONG_LINES || text.length > USER_LONG_CHARS;
   const hasCodeFence = text.includes("```");
@@ -408,11 +412,11 @@ function UserBubble({ text, onOpenFilePreview }: { text: string; onOpenFilePrevi
       return {
         head: lines.slice(0, USER_HEAD_LINES),
         tail: lines.slice(lines.length - USER_TAIL_LINES),
-        note: `${lines.length - USER_HEAD_LINES - USER_TAIL_LINES} 行已折叠`,
+        note: t("composer.linesFolded", { count: lines.length - USER_HEAD_LINES - USER_TAIL_LINES }),
       };
     }
-    return { head: lines, tail: [], note: `${text.length} 字符 · 长行已截断` };
-  }, [isLong, lines, text.length]);
+    return { head: lines, tail: [], note: t("composer.longLineTruncated", { count: text.length }) };
+  }, [isLong, lines, text.length, t]);
 
   const expand = () => setCollapsed(false);
 
@@ -422,16 +426,16 @@ function UserBubble({ text, onOpenFilePreview }: { text: string; onOpenFilePrevi
     >
       {isLong && (
         <div className="bubble-user-meta" data-testid="user-msg-meta">
-          <span className="bubble-user-count">{lines.length} 行 · {text.length} 字符</span>
+          <span className="bubble-user-count">{t("composer.lineCharCount", { lines: lines.length, chars: text.length })}</span>
           <button
             className="bubble-user-toggle"
             type="button"
             onClick={() => setCollapsed((c) => !c)}
             data-tooltip-id="md-tip"
-            data-tooltip-content={collapsed ? "展开全文" : "收起"}
+            data-tooltip-content={collapsed ? t("collapsibleText.expandFull") : t("common.collapse")}
             data-testid="user-msg-toggle"
           >
-            {collapsed ? <><ChevronDown size={12} /> 展开</> : <><ChevronUp size={12} /> 收起</>}
+            {collapsed ? <><ChevronDown size={12} /> {t("common.expand")}</> : <><ChevronUp size={12} /> {t("common.collapse")}</>}
           </button>
         </div>
       )}
@@ -453,7 +457,7 @@ function UserBubble({ text, onOpenFilePreview }: { text: string; onOpenFilePrevi
             type="button"
             onClick={(e) => { e.stopPropagation(); expand(); }}
           >
-            ⋯ {preview.note}(点击展开) ⋯
+            {t("composer.collapsePreviewDivider", { note: preview.note })}
           </button>
           {preview.tail.length > 0 && (
             <pre className="bubble-user-preview-pre">
@@ -498,6 +502,7 @@ function looksLikeCodeOrLog(lines: string[]): boolean {
 // ThoughtBlock:思考块默认折叠(含流式中),summary 显示转圈 spinner;用户展开后记住偏好,
 // 后续新思考块也默认展开;底部「收起」按钮方便长文本尾部直接收回(不用滚回顶部)。
 function ThoughtBlock({ item, sessionId, onOpenFilePreview }: { item: Extract<ChatItem, { type: "thought" }>; sessionId: string; onOpenFilePreview: (path: string, line?: number) => void }) {
+  const { t } = useTranslation();
   // 展开状态:per-item(按 item.id),不跨 thought 共享。
   // 旧实现按 sessionId 共享 localStorage 键 → 同 session 多个 thought 互相干扰,
   // 且 id 变化重挂载时新实例从共享键读 open,覆盖用户当前点击 → 「点不开」。
@@ -511,7 +516,7 @@ function ThoughtBlock({ item, sessionId, onOpenFilePreview }: { item: Extract<Ch
     <div className="thought-block">
       <button className={`thought-summary ${open ? "open" : ""}`} onClick={toggle} type="button">
         {item.streaming ? <span className="thought-spinner" /> : <Brain size={13} />}
-        <span className="thought-summary-label">{item.streaming ? "思考中" : "思考过程"}</span>
+        <span className="thought-summary-label">{item.streaming ? t("chat.thinkingLive") : t("chat.thought")}</span>
         <ChevronRight size={13} className="thought-chevron" />
       </button>
       <div className={`collapse-body ${open ? "open" : ""}`}>
@@ -521,7 +526,7 @@ function ThoughtBlock({ item, sessionId, onOpenFilePreview }: { item: Extract<Ch
               <div className="thought-text">
                 <PathLinkified text={item.text} onOpen={onOpenFilePreview} />
               </div>
-              <button className="thought-collapse-btn" onClick={toggle}>收起</button>
+              <button className="thought-collapse-btn" onClick={toggle}>{t("chat.collapseThought")}</button>
             </>
           )}
         </div>
@@ -531,6 +536,7 @@ function ThoughtBlock({ item, sessionId, onOpenFilePreview }: { item: Extract<Ch
 }
 
 function MessageActions({ text, className = "", testId = "copy-msg" }: { text: string; className?: string; testId?: string }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* noop */ }
@@ -543,9 +549,9 @@ function MessageActions({ text, className = "", testId = "copy-msg" }: { text: s
         onClick={copy}
         data-testid={testId}
         data-tooltip-id="md-tip"
-        data-tooltip-content={copied ? "消息已复制" : "复制消息"}
+        data-tooltip-content={copied ? t("chat.messageCopiedTip") : t("chat.copyMessageTip")}
       >
-        {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "已复制" : "复制"}
+        {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? t("common.copied") : t("common.copy")}
       </button>
     </div>
   );
@@ -554,7 +560,8 @@ function MessageActions({ text, className = "", testId = "copy-msg" }: { text: s
 // 连续工具调用折叠组:2 个以上连续 tool 包进一个 Collapsible,summary 显示数量 + 执行状态。
 // 展开后内部各 tool 仍是独立 ToolCard(各自可再展开看 I/O)。
 function ToolGroup({ tools, onOpenFilePreview }: { tools: Extract<ChatItem, { type: "tool" }>[]; onOpenFilePreview: (path: string, line?: number) => void }) {
-  const anyRunning = tools.some(t => t.status === "pending" || t.status === "in_progress");
+  const { t } = useTranslation();
+  const anyRunning = tools.some(tc => tc.status === "pending" || tc.status === "in_progress");
   return (
     <Collapsible
       className="tool-group"
@@ -562,13 +569,13 @@ function ToolGroup({ tools, onOpenFilePreview }: { tools: Extract<ChatItem, { ty
       summaryClassName="tool-group-summary"
       summary={<>
         {anyRunning ? <span className="thought-spinner" /> : <Wrench size={13} />}
-        <span className="tool-group-count">{tools.length} 个工具调用</span>
+        <span className="tool-group-count">{t("chat.groupToolsCount", { count: tools.length })}</span>
         <span className={`tool-group-status ${anyRunning ? "tg-running" : "tg-done"}`}>
-          {anyRunning ? "执行中…" : "已完成"}
+          {anyRunning ? t("chat.groupRunning") : t("chat.groupDone")}
         </span>
       </>}
     >
-      {tools.map(t => <ToolCard key={t.id} item={t} onOpenFilePreview={onOpenFilePreview} />)}
+      {tools.map(tc => <ToolCard key={tc.id} item={tc} onOpenFilePreview={onOpenFilePreview} />)}
     </Collapsible>
   );
 }
@@ -595,7 +602,9 @@ function ToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { type:
 //   - 都没有 → 回退 extractToolText。
 // 失败时额外展示 output(通常含错误信息)。
 function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { type: "tool" }>; onOpenFilePreview: (path: string, line?: number) => void }) {
-  const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
+  const { t } = useTranslation();
+  const stInfo = TOOL_STATUS_MAP[item.status] || { key: null, cls: "tc-unknown" };
+  const stLabel = stInfo.key ? t(stInfo.key) : (item.status || t("chat.toolStatus.unknown"));
   const running = item.status === "pending" || item.status === "in_progress";
   const path = extractFilePath(item.rawInput);
   const parts = extractEditParts(item.rawInput);
@@ -617,16 +626,16 @@ function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
       summaryClassName="tool-summary file-tool-summary"
       summary={<>
         {running ? <span className="thought-spinner" /> : <FilePen size={13} />}
-        <span className="tool-title">{item.title || "编辑文件"}</span>
+        <span className="tool-title">{item.title || t("chat.toolTitle.edit")}</span>
         {path && <span className="tool-badge" title={path}>{shortPath(path)}</span>}
-        <span className={`tool-status ${st.cls}`}>{st.label}</span>
+        <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
       </>}
     >
-      {path && renderTarget("目标文件", path)}
+      {path && renderTarget(t("chat.targetFile"), path)}
       {diffText && (
         <div className="file-section">
           <div className="file-section-head">
-            <span className="file-section-label">改动{parts.kind === "patch" ? " · patch" : ""}</span>
+            <span className="file-section-label">{parts.kind === "patch" ? t("chat.changesPatch") : t("chat.changes")}</span>
             <span className="file-section-meta">
               <span className="diff-stat diff-stat-add">+{parts.added}</span>
               <span className="diff-stat diff-stat-del">−{parts.removed}</span>
@@ -637,7 +646,7 @@ function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
             className="diff-ctext"
             preClassName="diff-pre"
             previewClassName="diff-preview"
-            lineUnit="行"
+            lineUnit={t("collapsibleText.lineUnit")}
             testId="edit-diff"
             lineClassName={diffLineCls}
             onPath={onOpenFilePreview}
@@ -646,11 +655,11 @@ function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
       )}
       {!diffText && plainText && (
         <div className="file-section">
-          <div className="file-section-head"><span className="file-section-label">写入内容</span></div>
+          <div className="file-section-head"><span className="file-section-label">{t("chat.writeContent")}</span></div>
           <CollapsibleText
             text={plainText}
             preClassName="file-content-pre"
-            lineUnit="行"
+            lineUnit={t("collapsibleText.lineUnit")}
             testId="edit-content"
             onPath={onOpenFilePreview}
           />
@@ -658,8 +667,8 @@ function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
       )}
       {outputR && outputR.text && (
         <div className="file-section">
-          <div className="file-section-head"><span className="file-section-label">输出</span></div>
-          <CollapsibleText text={outputR.text} preClassName="file-content-pre" lineUnit="行" testId="edit-output" copyable onPath={onOpenFilePreview} />
+          <div className="file-section-head"><span className="file-section-label">{t("chat.output")}</span></div>
+          <CollapsibleText text={outputR.text} preClassName="file-content-pre" lineUnit={t("collapsibleText.lineUnit")} testId="edit-output" copyable onPath={onOpenFilePreview} />
         </div>
       )}
     </Collapsible>
@@ -670,7 +679,9 @@ function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
 // 头(FileText + 标题 + 状态 + 路径徽章)+ 体(目标文件 + 内容片段,长内容折叠)。
 // 内容来自 rawOutput(文件正文);输入仅给路径。
 function ReadToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { type: "tool" }>; onOpenFilePreview: (path: string, line?: number) => void }) {
-  const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
+  const { t } = useTranslation();
+  const stInfo = TOOL_STATUS_MAP[item.status] || { key: null, cls: "tc-unknown" };
+  const stLabel = stInfo.key ? t(stInfo.key) : (item.status || t("chat.toolStatus.unknown"));
   const running = item.status === "pending" || item.status === "in_progress";
   const path = extractFilePath(item.rawInput) || extractFilePath(item.rawOutput);
   const outputR = item.rawOutput != null ? extractToolText(item.rawOutput) : null;
@@ -682,34 +693,34 @@ function ReadToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
       summaryClassName="tool-summary file-tool-summary"
       summary={<>
         {running ? <span className="thought-spinner" /> : <FileText size={13} />}
-        <span className="tool-title">{item.title || "读取文件"}</span>
+        <span className="tool-title">{item.title || t("chat.toolTitle.read")}</span>
         {path && <span className="tool-badge" title={path}>{shortPath(path)}</span>}
-        <span className={`tool-status ${st.cls}`}>{st.label}</span>
+        <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
       </>}
     >
       {path && (
         <div className="file-target" data-testid="read-target">
-          <span className="file-target-label">目标文件</span>
+          <span className="file-target-label">{t("chat.targetFile")}</span>
           <span className="file-target-path" title={path}>{path}</span>
         </div>
       )}
       {outputR && outputR.text ? (
         <div className="file-section">
           <div className="file-section-head">
-            <span className="file-section-label">内容</span>
-            {outputR.truncated && <span className="file-section-meta">已截断</span>}
+            <span className="file-section-label">{t("chat.content")}</span>
+            {outputR.truncated && <span className="file-section-meta">{t("chat.truncated")}</span>}
           </div>
           <CollapsibleText
             text={outputR.text}
             preClassName="file-content-pre"
             previewClassName="file-content-preview"
-            lineUnit="行"
+            lineUnit={t("collapsibleText.lineUnit")}
             testId="read-content"
             onPath={onOpenFilePreview}
           />
         </div>
       ) : (
-        <div className="file-empty">无内容</div>
+        <div className="file-empty">{t("chat.noContent")}</div>
       )}
     </Collapsible>
   );
@@ -719,7 +730,9 @@ function ReadToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
 // 头(Search + 标题 + 状态 + pattern 徽章)+ 体(检索范围 + 结果列表)。
 // 结果来自 rawOutput(grep 多为「路径:行:内容」、glob 多为路径列表),长列表复用 CollapsibleText 折叠。
 function SearchToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { type: "tool" }>; onOpenFilePreview: (path: string, line?: number) => void }) {
-  const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
+  const { t } = useTranslation();
+  const stInfo = TOOL_STATUS_MAP[item.status] || { key: null, cls: "tc-unknown" };
+  const stLabel = stInfo.key ? t(stInfo.key) : (item.status || t("chat.toolStatus.unknown"));
   const running = item.status === "pending" || item.status === "in_progress";
   const pattern = extractSearchPattern(item.rawInput);
   const scope = extractFilePath(item.rawInput);
@@ -733,48 +746,50 @@ function SearchToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, {
       summaryClassName="tool-summary file-tool-summary"
       summary={<>
         {running ? <span className="thought-spinner" /> : <Search size={13} />}
-        <span className="tool-title">{item.title || "检索"}</span>
+        <span className="tool-title">{item.title || t("chat.toolTitle.search")}</span>
         {pattern && <span className="tool-badge tool-badge-pattern" title={pattern}>{pattern}</span>}
-        {!running && matchCount > 0 && <span className="tool-badge tool-badge-count">{matchCount} 项</span>}
-        <span className={`tool-status ${st.cls}`}>{st.label}</span>
+        {!running && matchCount > 0 && <span className="tool-badge tool-badge-count">{t("chat.resultsCount", { count: matchCount })}</span>}
+        <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
       </>}
     >
       {pattern && (
         <div className="file-target" data-testid="search-pattern-row">
-          <span className="file-target-label">模式</span>
+          <span className="file-target-label">{t("chat.pattern")}</span>
           <span className="file-target-path search-pattern-text" title={pattern}>{pattern}</span>
         </div>
       )}
       {scope && (
         <div className="file-target">
-          <span className="file-target-label">范围</span>
+          <span className="file-target-label">{t("chat.scope")}</span>
           <span className="file-target-path" title={scope}>{scope}</span>
         </div>
       )}
       {outputR && outputR.text ? (
         <div className="file-section">
           <div className="file-section-head">
-            <span className="file-section-label">结果</span>
-            <span className="file-section-meta">{matchCount} 项</span>
+            <span className="file-section-label">{t("chat.results")}</span>
+            <span className="file-section-meta">{t("chat.resultsCount", { count: matchCount })}</span>
           </div>
           <CollapsibleText
             text={outputR.text}
             preClassName="search-results-pre"
             previewClassName="search-results-preview"
-            lineUnit="行"
+            lineUnit={t("collapsibleText.lineUnit")}
             testId="search-results"
             onPath={onOpenFilePreview}
           />
         </div>
       ) : (
-        <div className="file-empty">{running ? "检索中…" : "无匹配"}</div>
+        <div className="file-empty">{running ? t("chat.searching") : t("chat.noMatch")}</div>
       )}
     </Collapsible>
   );
 }
 
 function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { type: "tool" }>; onOpenFilePreview: (path: string, line?: number) => void }) {
-  const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
+  const { t } = useTranslation();
+  const stInfo = TOOL_STATUS_MAP[item.status] || { key: null, cls: "tc-unknown" };
+  const stLabel = stInfo.key ? t(stInfo.key) : (item.status || t("chat.toolStatus.unknown"));
   const [copiedIn, setCopiedIn] = useState(false);
   const [copiedOut, setCopiedOut] = useState(false);
   const inputR = item.rawInput != null ? extractToolText(item.rawInput) : null;
@@ -788,15 +803,15 @@ function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, 
       summaryClassName="tool-summary"
       summary={<>
         <Wrench size={13} />
-        <span className="tool-title">{item.title || "工具调用"}</span>
+        <span className="tool-title">{item.title || t("chat.toolTitle.generic")}</span>
         {item.kind && <span className="tool-kind">{item.kind}</span>}
-        <span className={`tool-status ${st.cls}`}>{st.label}</span>
+        <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
       </>}
     >
       {inputR && (
         <div className="tool-section">
           <div className="tool-section-head">
-            <span className="tool-section-label">输入</span>
+            <span className="tool-section-label">{t("chat.input")}</span>
             <button className="msg-action-btn" onClick={copyIn}>{copiedIn ? <Check size={11} /> : <Copy size={11} />}</button>
           </div>
           <pre className={inputR.fallback ? "tool-pre" : "tool-pre tool-term"}>
@@ -808,7 +823,7 @@ function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, 
         <div className="tool-section">
           <div className="tool-section-head">
             <span className="tool-section-label">
-              输出{outputR.exit != null ? ` · exit ${outputR.exit}` : ""}{outputR.truncated ? " · 截断" : ""}
+              {t("chat.output")}{outputR.exit != null ? t("chat.exitSuffix", { code: outputR.exit }) : ""}{outputR.truncated ? t("chat.truncatedSuffix") : ""}
             </span>
             <button className="msg-action-btn" onClick={copyOut}>{copiedOut ? <Check size={11} /> : <Copy size={11} />}</button>
           </div>
@@ -825,7 +840,9 @@ function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, 
 // 命令行/输出等宽、保留换行、横向滚动不撑破布局;长输出超阈值默认折叠(首尾+省略),可展开。
 // 输出区复用可折叠组件 CollapsibleText(后续 grep/glob/edit 等可共用)。
 function BashToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { type: "tool" }>; onOpenFilePreview: (path: string, line?: number) => void }) {
-  const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
+  const { t } = useTranslation();
+  const stInfo = TOOL_STATUS_MAP[item.status] || { key: null, cls: "tc-unknown" };
+  const stLabel = stInfo.key ? t(stInfo.key) : (item.status || t("chat.toolStatus.unknown"));
   const running = item.status === "pending" || item.status === "in_progress";
   const command = extractBashCommand(item.rawInput);
   const outputR = item.rawOutput != null ? extractToolText(item.rawOutput) : null;
@@ -840,22 +857,22 @@ function BashToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
       summaryClassName="tool-summary bash-tool-summary"
       summary={<>
         {running ? <span className="thought-spinner" /> : <Terminal size={13} />}
-        <span className="tool-title">{item.title || "命令执行"}</span>
+        <span className="tool-title">{item.title || t("chat.toolTitle.bash")}</span>
         {outputR?.exit != null && <span className={`bash-exit ${exitCls(outputR.exit)}`}>exit {outputR.exit}</span>}
-        <span className={`tool-status ${st.cls}`}>{st.label}</span>
+        <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
       </>}
     >
       {command && (
         <div className="bash-cmd">
           <div className="bash-cmd-head">
             <span className="bash-cmd-prompt">$</span>
-            <span className="bash-cmd-label">命令</span>
+            <span className="bash-cmd-label">{t("chat.command")}</span>
             <button
               className="msg-action-btn"
               type="button"
               onClick={copyCmd}
               data-tooltip-id="md-tip"
-              data-tooltip-content={copiedCmd ? "已复制" : "复制命令"}
+              data-tooltip-content={copiedCmd ? t("common.copied") : t("chat.copyCommandTip")}
               data-testid="bash-copy-cmd"
             >
               {copiedCmd ? <Check size={11} /> : <Copy size={11} />}
@@ -871,11 +888,11 @@ function BashToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
             className="bash-out-ctext"
             preClassName="bash-out-pre"
             previewClassName="bash-out-preview"
-            lineUnit="行"
+            lineUnit={t("collapsibleText.lineUnit")}
             testId="bash-output"
             onPath={onOpenFilePreview}
           />
-          {outputR.truncated && <div className="bash-out-note">输出已被 agent 截断</div>}
+          {outputR.truncated && <div className="bash-out-note">{t("chat.outputTruncated")}</div>}
         </div>
       )}
     </Collapsible>
@@ -994,20 +1011,21 @@ function countNonEmpty(text: string): number {
 }
 
 function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRespond: (id: string) => void }) {
+  const { t } = useTranslation();
   return (
     <div className="permission-card" data-testid="permission-card">
       <div className="permission-head">
         <ShieldAlert size={18} />
         <div>
-          <div className="permission-title">{prompt.title || "权限请求"}</div>
+          <div className="permission-title">{prompt.title || t("chat.permissionTitleFallback")}</div>
           {prompt.toolName && <div className="permission-tool">{prompt.toolName}</div>}
         </div>
       </div>
       <div className="permission-actions">
-        <button className="perm-btn perm-allow" data-testid="perm-once" onClick={() => onRespond("once")}>允许本次</button>
-        <button className="perm-btn perm-allow" data-testid="perm-session" onClick={() => onRespond("session")}>本会话允许</button>
-        <button className="perm-btn perm-allow" data-testid="perm-project" onClick={() => onRespond("project")}>本项目允许</button>
-        <button className="perm-btn perm-deny" data-testid="perm-deny" onClick={() => onRespond("deny")}>本次拒绝</button>
+        <button className="perm-btn perm-allow" data-testid="perm-once" onClick={() => onRespond("once")}>{t("chat.permAllowOnce")}</button>
+        <button className="perm-btn perm-allow" data-testid="perm-session" onClick={() => onRespond("session")}>{t("chat.permAllowSession")}</button>
+        <button className="perm-btn perm-allow" data-testid="perm-project" onClick={() => onRespond("project")}>{t("chat.permAllowProject")}</button>
+        <button className="perm-btn perm-deny" data-testid="perm-deny" onClick={() => onRespond("deny")}>{t("chat.permDeny")}</button>
       </div>
     </div>
   );
@@ -1017,12 +1035,13 @@ function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRes
 // 每项一行(状态图标 + 内容),头部带进度条 + 已完成/总数。进行中高亮、完成打勾、新增/变化即时反映。
 // plan 是 session 级实时状态(非消息项),回合开始清空,由 agent 的 plan_update 整表刷新。
 const PLAN_STATUS_ICON = {
-  completed: { cls: "pe-done", label: "已完成" },
-  in_progress: { cls: "pe-running", label: "进行中" },
-  pending: { cls: "pe-pending", label: "待处理" },
+  completed: { cls: "pe-done", key: "chat.planStatus.completed" },
+  in_progress: { cls: "pe-running", key: "chat.planStatus.in_progress" },
+  pending: { cls: "pe-pending", key: "chat.planStatus.pending" },
 } as const;
 
 function PlanTimeline({ entries, prompting }: { entries: PlanEntry[]; prompting: boolean }) {
+  const { t } = useTranslation();
   const total = entries.length;
   const done = entries.filter((e) => e.status === "completed").length;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
@@ -1037,9 +1056,9 @@ function PlanTimeline({ entries, prompting }: { entries: PlanEntry[]; prompting:
     <div className="plan-timeline" data-testid="plan-timeline">
       <button className="plan-summary" onClick={toggle} type="button" aria-expanded={isOpen}>
         {anyRunning ? <span className="thought-spinner" /> : allDone ? <Check size={13} /> : <ListChecks size={13} />}
-        <span className="plan-summary-label">执行计划</span>
+        <span className="plan-summary-label">{t("chat.planTitle")}</span>
         <span className="plan-summary-count">{done}/{total}</span>
-        <span className="plan-progress" aria-label={`已完成 ${pct}%`}>
+        <span className="plan-progress" aria-label={t("chat.planProgressAria", { pct })}>
           <span className="plan-progress-fill" style={{ width: `${pct}%` }} />
         </span>
         <span className="plan-summary-pct">{pct}%</span>
@@ -1058,7 +1077,7 @@ function PlanTimeline({ entries, prompting }: { entries: PlanEntry[]; prompting:
                       {e.status === "completed" ? <Check size={12} /> : running ? <span className="thought-spinner" /> : <span className="plan-entry-dot" />}
                     </span>
                     <span className="plan-entry-content">{e.content}</span>
-                    {e.priority === "high" && <span className="plan-entry-prio pe-prio-high">高</span>}
+                    {e.priority === "high" && <span className="plan-entry-prio pe-prio-high">{t("chat.planPriorityHigh")}</span>}
                   </li>
                 );
               })}
@@ -1134,6 +1153,7 @@ function CodeRenderer(props: ComponentPropsWithoutRef<"code">) {
 }
 
 function CodeBox({ language, raw }: { language: string; raw: string }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try { await navigator.clipboard.writeText(raw); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* noop */ }
@@ -1143,7 +1163,7 @@ function CodeBox({ language, raw }: { language: string; raw: string }) {
       <div className="code-box-head">
         <span className="code-lang">{language}</span>
         <button className="msg-action-btn" onClick={copy} data-testid="copy-code">
-          {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "已复制" : "复制"}
+          {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? t("common.copied") : t("common.copy")}
         </button>
       </div>
       <pre className="code-box-pre"><code>{raw}</code></pre>
