@@ -14,6 +14,7 @@ import type { TerminalTab } from "./lib/terminalTypes";
 import { disposeTerminal } from "./lib/termRegistry";
 import NewSessionModal from "./components/NewSessionModal";
 import PermissionSettings from "./components/PermissionSettings";
+import HarnessSettings from "./components/HarnessSettings";
 import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import { Group, Panel, Separator, useDefaultLayout, usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
 import { Tooltip } from "react-tooltip";
@@ -65,6 +66,7 @@ export default function App() {
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
   const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean } | null>(null);  // 新建对话弹窗
   const [permSettingsOpen, setPermSettingsOpen] = useState(false); // 分级权限规则设置弹窗(§3.4)
+  const [harnessSettingsOpen, setHarnessSettingsOpen] = useState(false); // harness 管理弹窗(发现/版本/升级)
   // 集成终端(per-session,与 agent ACP 通道完全分离;§1.1 agent 永远走 ACP)。
   // 终端面板开关也 per-session:session A 开着,切到 B 时 B 按自己的状态显示(各自独立)。
   const [termTabsBySession, setTermTabsBySession] = useState<Record<string, TerminalTab[]>>({});
@@ -211,6 +213,10 @@ export default function App() {
   useEffect(() => {
     void refreshProjects();
     ChatService.ListHarnesses().then((h) => setHarnesses(h ?? [])).catch(() => {});
+    // 后端异步发现 harness 完成后推 chat:harnesses 事件,据此重拉 enriched 列表(含版本/可升级)。
+    const offHarnesses = Events.On("chat:harnesses", () => {
+      ChatService.ListHarnesses().then((h) => setHarnesses(h ?? [])).catch(() => {});
+    });
     const offUpdate = Events.On("chat:event", (e: { data: SessionEvent }) => {
       if (!e.data) return;
       applyEvent(e.data);
@@ -296,6 +302,7 @@ export default function App() {
       offPerm();
       offStatus();
       offMeta();
+      offHarnesses();
     };
   }, [refreshProjects, applyEvent, refreshSessions]);
 
@@ -947,6 +954,7 @@ export default function App() {
           onReorderProjects={reorderProjects}
           onCollapse={collapseSidebar}
           onOpenPermissionSettings={() => setPermSettingsOpen(true)}
+          onOpenHarnessSettings={() => setHarnessSettingsOpen(true)}
         />
       </Panel>
       {!leftCollapsed && <Separator className="resize-handle" />}
@@ -1096,6 +1104,9 @@ export default function App() {
     )}
     {permSettingsOpen && (
       <PermissionSettings onClose={() => setPermSettingsOpen(false)} />
+    )}
+    {harnessSettingsOpen && (
+      <HarnessSettings onClose={() => setHarnessSettingsOpen(false)} />
     )}
     <Tooltip id="md-tip" delayShow={isMac ? 1500 : 500} />
     </>

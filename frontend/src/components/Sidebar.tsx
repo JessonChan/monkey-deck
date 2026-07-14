@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import * as Popover from "@radix-ui/react-popover";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X, Pin, PinOff, PanelLeftClose, Globe, ShieldCheck } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X, Pin, PinOff, PanelLeftClose, Globe, ShieldCheck, Boxes } from "lucide-react";
 import {
   DndContext,
   PointerSensor,
@@ -39,6 +39,7 @@ interface Props {
   onReorderProjects: (ids: string[]) => void;
   onCollapse?: () => void;
   onOpenPermissionSettings: () => void;
+  onOpenHarnessSettings: () => void;
 }
 
 // 可拖拽项目行(0007):折叠态整行可拖,展开态 disabled(不可主动拖,但仍可被其他项挤动)。
@@ -293,6 +294,9 @@ export default function Sidebar(props: Props) {
           </Popover.Root>
           <button className="icon-btn" data-testid="open-perm-settings" onClick={props.onOpenPermissionSettings} data-tooltip-id="md-tip" data-tooltip-content={t("settings.perm.openTip")} data-tooltip-place="bottom">
             <ShieldCheck size={16} />
+          </button>
+          <button className="icon-btn" data-testid="open-harness-settings" onClick={props.onOpenHarnessSettings} data-tooltip-id="md-tip" data-tooltip-content={t("settings.harness.openTip")} data-tooltip-place="bottom">
+            <Boxes size={16} />
           </button>
           <button className="icon-btn" data-testid="add-project" onClick={startAdd} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.addProject")} data-tooltip-place="bottom">
             <Plus size={17} />

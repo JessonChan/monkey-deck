@@ -1525,6 +1525,50 @@ input, textarea { font-family: inherit; }
 .perm-del:hover { color: var(--red); background: rgba(255, 69, 58, 0.10); }
 .perm-settings-actions { justify-content: space-between; }
 
+/* ─── harness 管理面板(发现/版本/升级) ─── */
+.harness-settings-card { max-width: 580px; max-height: 80vh; gap: 10px; }
+.harness-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 80px; padding: 2px; }
+.harness-row {
+  display: flex; align-items: flex-start; gap: 10px; padding: 11px;
+  background: var(--bg); border: 1px solid var(--sep); border-radius: 8px;
+}
+.harness-row.not-installed { opacity: 0.78; }
+.harness-row-main { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.harness-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.harness-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.harness-id {
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
+  background: var(--elev); border: 1px solid var(--sep); border-radius: 4px; padding: 1px 5px;
+}
+.harness-badge {
+  display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; font-weight: 500;
+  padding: 1px 6px; border-radius: 10px;
+}
+.harness-badge.ok { color: #34c759; background: rgba(52, 199, 89, 0.10); }
+.harness-badge.warn { color: #ff9f0a; background: rgba(255, 159, 10, 0.10); }
+.harness-row-meta { display: flex; gap: 14px; flex-wrap: wrap; }
+.harness-cmd, .harness-ver {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11px;
+  color: var(--text-3); cursor: help;
+}
+.harness-cmd code, .harness-ver code {
+  font-family: var(--mono); font-size: 11px; color: var(--text);
+  background: var(--elev); border: 1px solid var(--sep); border-radius: 4px; padding: 1px 5px;
+}
+.harness-cmd-label { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.03em; }
+.harness-path {
+  display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--text-3);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.harness-path-code {
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis;
+}
+.harness-err { font-size: 11px; color: var(--red); background: rgba(255, 69, 58, 0.08); padding: 5px 7px; border-radius: 5px; }
+.harness-row-acts { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.harness-status-ok { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: #34c759; }
+.harness-status-err { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--red); }
+
 /* ─── 新建对话弹窗(harness 选择 + worktree 二选一) ─── */
 .new-session-card { max-width: 380px; gap: 14px; }
 .ns-field { display: flex; flex-direction: column; gap: 7px; }

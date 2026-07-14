@@ -317,6 +317,29 @@
       "moveUp": "Higher priority",
       "moveDown": "Lower priority",
       "delete": "Delete rule"
+    },
+    "harness": {
+      "openTip": "Manage agent harnesses",
+      "title": "Agent harnesses",
+      "desc": "Auto-discovered ACP harnesses installed on this machine. Versions are detected locally and checked against their upstream release.",
+      "refresh": "Re-scan",
+      "refreshTip": "Re-scan PATH and re-check upstream releases",
+      "loading": "Scanning…",
+      "empty": "No harnesses known.",
+      "installed": "Installed",
+      "notInstalled": "Not installed",
+      "cmd": "Command",
+      "cmdTip": "stdio ACP startup command",
+      "current": "Current",
+      "latest": "Latest",
+      "path": "Path",
+      "upgrade": "Upgrade",
+      "install": "Install",
+      "upgrading": "Upgrading…",
+      "upgradeTip": "Run this harness's official installer to fetch the latest version",
+      "upgradeDone": "Upgraded",
+      "upgradeFailed": "Upgrade failed",
+      "upToDate": "Up to date"
     }
   }
 }
