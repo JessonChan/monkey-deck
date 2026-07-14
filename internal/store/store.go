@@ -66,6 +66,9 @@ type Session struct {
 	OutputTokens      int64 `json:"outputTokens"`
 	ThoughtTokens     int64 `json:"thoughtTokens"`
 	TotalTokens       int64 `json:"totalTokens"`
+	// ConfigOptionsCache:持久化的 config options 快照(懒 spawn:只读态渲染 ModelSelect 用)。
+	// JSON 序列化的扁平化 []acp.ConfigOption。spawn/config_option_update/set_config_option 时回写。
+	ConfigOptionsCache string `json:"configOptionsCache,omitempty"`
 	CreatedAt  int64   `json:"createdAt"`
 	UpdatedAt  int64   `json:"updatedAt"`
 	PromptedAt int64   `json:"promptedAt"` // 用户最后一次发消息的时刻,专用于侧栏排序(后台活动不刷新它)

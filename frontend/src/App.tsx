@@ -84,6 +84,9 @@ export default function App() {
   const loadedSessionsRef = useRef<Set<string>>(new Set());
   // 输入框历史 seed 标记:避免 openSession 读 historyBySession(state)产生 stale closure,重开 session 误覆盖内存追加。
   const historySeededRef = useRef<Set<string>>(new Set());
+  // config options 缓存 seed 标记:懒 spawn 只读态用持久化缓存渲染 ModelSelect,仅首次打开 seed
+  // (活跃 session 的 config_option 事件会覆盖;切走再切回不重读 DB,保留内存中的直播值)。
+  const configSeededRef = useRef<Set<string>>(new Set());
   // 选中 session 的 ref:仅用于 status 事件的「错误只弹当前查看会话」过滤,不进 effect 依赖(避免每次切换都重订阅)。
   const selectedSessionIdRef = useRef<string | null>(null);
   const chatViewRef = useRef<ChatViewHandle>(null);
@@ -446,6 +449,21 @@ export default function App() {
           const hist = await ChatService.ListUserMessages(sessionId);
           setHistoryBySession((prev) => ({ ...prev, [sessionId]: hist || [] }));
         } catch { setHistoryBySession((prev) => ({ ...prev, [sessionId]: [] })); }
+      }
+      // 懒 spawn config options 缓存 seed:只读态(懒 spawn 未活跃)用持久化缓存渲染 ModelSelect,
+      // 避免 configOptions 为空 → ModelSelect return null(§3.x)。仅首次打开 seed;活跃 session 的
+      // config_option 事件会覆盖此缓存(spawn 后推送最新全量)。
+      if (!configSeededRef.current.has(sessionId)) {
+        configSeededRef.current.add(sessionId);
+        try {
+          const cached = await ChatService.GetSessionCachedConfigOptions(sessionId);
+          // bindings 的 ConfigOption.options 是 `[] | null`(Go nil slice → JSON null),
+          // 本地 types.ts 的 ConfigOption.options 是非空数组(渲染层假设非空)。此处归一化:null → []。
+          if (cached && cached.length > 0) {
+            const normalized: ConfigOption[] = cached.map((c) => ({ ...c, options: c.options ?? [] }));
+            setConfigOptionsBySession((prev) => (prev[sessionId] ? prev : { ...prev, [sessionId]: normalized }));
+          }
+        } catch { /* 无缓存或读取失败:静默,等 spawn 推送 */ }
       }
       try {
         const diff = await ChatService.SessionDiff(sessionId);
@@ -887,6 +905,7 @@ export default function App() {
       delete oldestSeqRef.current[sessionId];
       loadedSessionsRef.current.delete(sessionId);
       historySeededRef.current.delete(sessionId);
+      configSeededRef.current.delete(sessionId);
       if (selectedSessionId === sessionId) setSelectedSessionId(null);
     },
     [selectedSessionId]

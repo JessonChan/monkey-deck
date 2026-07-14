@@ -9,16 +9,16 @@ import (
 )
 
 // sessionColumns / scanSession:统一 session 的列与扫描,避免多处 SELECT/Scan 漂移(§1.5)。
-const sessionColumns = `id,project_id,acp_session_id,title,model,harness,worktree_path,branch,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned`
+const sessionColumns = `id,project_id,acp_session_id,title,model,harness,worktree_path,branch,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,config_options_cache`
 
-func scanSession(r interface {
+func scanSession(r interface{
 	Scan(dest ...any) error
 }, se *Session) error {
 	return r.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model, &se.Harness,
 		&se.WorktreePath, &se.Branch,
 		&se.UsedTokens, &se.SizeTokens, &se.Cost,
 		&se.CachedReadTokens, &se.CachedWriteTokens, &se.InputTokens, &se.OutputTokens, &se.ThoughtTokens, &se.TotalTokens,
-		&se.CreatedAt, &se.UpdatedAt, &se.PromptedAt, &se.Pinned)
+		&se.CreatedAt, &se.UpdatedAt, &se.PromptedAt, &se.Pinned, &se.ConfigOptionsCache)
 }
 
 // --- Sessions ---
@@ -83,6 +83,15 @@ func (s *Store) UpdateSessionTokens(ctx context.Context, id string, cachedRead, 
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE sessions SET cached_read_tokens=?, cached_write_tokens=?, input_tokens=?, output_tokens=?, thought_tokens=?, total_tokens=? WHERE id=?`,
 		cachedRead, cachedWrite, input, output, thought, total, id)
+	return err
+}
+
+// UpdateSessionConfigOptionsCache 回写 config options 快照(懒 spawn:只读态渲染 ModelSelect 用)。
+// cacheJSON 为扁平化 []acp.ConfigOption 的 JSON。空串清空缓存。
+func (s *Store) UpdateSessionConfigOptionsCache(ctx context.Context, id, cacheJSON string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET config_options_cache=?, updated_at=? WHERE id=?`,
+		cacheJSON, now(), id)
 	return err
 }
 

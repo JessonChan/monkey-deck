@@ -9,6 +9,7 @@ package chat
 //  4. SendMessage 在只读态触发 ensureLive → spawn 并接上。
 //  5. CloseSession 只读态(未 spawn)→ no-op,不调 Close(无需回收)。
 //  6. CloseSession 已 spawn → 回收(调 Close)。
+//  7. SetSessionConfigOption 在只读态触发 ensureLive → spawn,spawn 后应用配置(语义统一:切换 = 先 spawn 再应用)。
 
 import (
 	"context"
@@ -245,5 +246,40 @@ func TestCloseSessionActiveReclaims(t *testing.T) {
 	}
 	if svc.isActive(sid) {
 		t.Fatal("session should be removed from active after close")
+	}
+}
+
+// TestSetConfigOptionOnReadOnlyTriggersSpawn:只读态切换 config option 触发 ensureLive → spawn,
+// spawn 完成后应用用户选的配置(SetConfigOption 被调,语义统一:切换 = 先 spawn 再应用,与发消息触发 spawn 一致)。
+func TestSetConfigOptionOnReadOnlyTriggersSpawn(t *testing.T) {
+	svc, _, sid := newLazyTestService(t)
+	if _, err := svc.st.AppendMessage(svc.ctx, sid, "user", "", "hi", ""); err != nil {
+		t.Fatal(err)
+	}
+	spawnFn, calls, fc := recordingSpawn(svc, t)
+	svc.spawnFn = spawnFn
+
+	if err := svc.OpenSession(sid); err != nil { // 只读打开
+		t.Fatal(err)
+	}
+	if atomic.LoadInt32(calls) != 0 {
+		t.Fatalf("lazy open should not spawn, got %d", atomic.LoadInt32(calls))
+	}
+	// 只读态切换 config option → 先 spawn 再应用(语义统一)。
+	if err := svc.SetSessionConfigOption(sid, "model", "provider/foo"); err != nil {
+		t.Fatalf("SetSessionConfigOption: %v", err)
+	}
+	if atomic.LoadInt32(calls) != 1 {
+		t.Fatalf("SetSessionConfigOption on readonly should spawn once, got %d", atomic.LoadInt32(calls))
+	}
+	if !svc.isActive(sid) {
+		t.Fatal("session should be active after SetSessionConfigOption triggered spawn")
+	}
+	// spawn 后应用用户选的配置(SetConfigOption 被调一次,记录 "model=provider/foo")。
+	fc.mu.Lock()
+	sets := append([]string{}, fc.configSets...)
+	fc.mu.Unlock()
+	if len(sets) != 1 || sets[0] != "model=provider/foo" {
+		t.Fatalf("expected SetConfigOption model=provider/foo after spawn, got %v", sets)
 	}
 }

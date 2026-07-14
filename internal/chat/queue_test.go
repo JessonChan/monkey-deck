@@ -24,13 +24,14 @@ import (
 // fakeChat 实现 chatConn:Prompt 阻塞到 ctx 取消(返回 ctx.Err,模拟 SDK 取消行为)
 // 或 release 被调用(返回 end_turn)。记录所有 prompt 消息与取消次数。
 type fakeChat struct {
-	mu        sync.Mutex
-	prompts   []string
-	cancelled int
-	block     chan struct{} // 关闭则所有阻塞 Prompt 返回 end_turn
-	started   chan struct{} // 每次 Prompt 进入时发信号(buffered,防丢)
-	title     string        // SessionTitle 返回值(模拟 harness 经 session/list 给的标题)
-	emitHook  func(msg string) // 成功返回前回调(模拟 agent 产出一条消息,避免空 turn)
+	mu         sync.Mutex
+	prompts    []string
+	cancelled  int
+	block      chan struct{} // 关闭则所有阻塞 Prompt 返回 end_turn
+	started    chan struct{} // 每次 Prompt 进入时发信号(buffered,防丢)
+	title      string        // SessionTitle 返回值(模拟 harness 经 session/list 给的标题)
+	emitHook   func(msg string) // 成功返回前回调(模拟 agent 产出一条消息,避免空 turn)
+	configSets []string      // 记录 SetConfigOption 调用("configId=value")
 }
 
 func newFakeChat() *fakeChat {
@@ -68,7 +69,12 @@ func (f *fakeChat) RespondPermission(_, _ string) bool                   { retur
 func (f *fakeChat) SessionTitle(_ context.Context) (string, error)       { return f.title, nil }
 func (f *fakeChat) FlatConfigOptions() []acp.ConfigOption                { return nil }
 func (f *fakeChat) SupportsImage() bool                                  { return false }
-func (f *fakeChat) SetConfigOption(_ context.Context, _, _ string) error { return nil }
+func (f *fakeChat) SetConfigOption(_ context.Context, configId, value string) error {
+	f.mu.Lock()
+	f.configSets = append(f.configSets, configId+"="+value)
+	f.mu.Unlock()
+	return nil
+}
 func (f *fakeChat) RefreshConfig(_ context.Context) ([]acp.ConfigOption, error) {
 	return nil, nil
 }

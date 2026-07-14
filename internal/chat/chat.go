@@ -970,12 +970,15 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 	// 推送 agent 自报的 config options(model/mode/effort),前端据此渲染下拉。
 	// 同时附带 image prompt 能力门控(前端据此决定是否展示图片输入入口,§3.5)。
 	// 即使无 config options 也要发,以投递 imageSupported(去掉 len>0 守卫)。
+	flatOpts := chat.FlatConfigOptions()
 	s.emit(EventUpdate, acp.SessionEvent{
 		SessionID:      se.ID,
 		Kind:           "config_option",
-		ConfigOptions:  chat.FlatConfigOptions(),
+		ConfigOptions:  flatOpts,
 		ImageSupported: chat.SupportsImage(),
 	})
+	// 持久化 config options 快照(懒 spawn:只读态用缓存渲染 ModelSelect,§3.x)。
+	s.persistConfigCache(se.ID, flatOpts)
 	slog.Info("session live", "id", se.ID, "resume", resume, "cwd", proj.Path, "model", se.Model)
 	return nil
 }
@@ -1376,6 +1379,23 @@ func (s *ChatService) persistTurn(sessionID string, timeline []*turnEntry) {
 	}
 }
 
+// persistConfigCache 把最新的扁平化 config options 序列化写库(懒 spawn:只读态渲染 ModelSelect 用)。
+// 在 spawn 完成(startLive)/ config_option_update(handleEvent) / set_config_option / refresh config 时调用。
+// 空切片不写(避免清空有效缓存)。写失败只记日志,不影响主流程。
+func (s *ChatService) persistConfigCache(sessionID string, opts []acp.ConfigOption) {
+	if len(opts) == 0 {
+		return
+	}
+	b, err := json.Marshal(opts)
+	if err != nil {
+		slog.Warn("marshal config options cache", "err", err)
+		return
+	}
+	if err := s.st.UpdateSessionConfigOptionsCache(s.ctx, sessionID, string(b)); err != nil {
+		slog.Warn("persist config options cache", "err", err)
+	}
+}
+
 // handleEvent 处理一条 SessionUpdate:按稳定标识归并进 timeline + 推前端(§5.4 #11/#12)。
 //
 // 归并主键(对标 omp/opencode 的"对象归并"):
@@ -1465,6 +1485,11 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 			}
 		}
 	}
+	if e.Kind == "config_option" && len(e.ConfigOptions) > 0 {
+		// 持久化 config options 快照(懒 spawn:只读态用缓存渲染 ModelSelect)。
+		// agent 经 config_option_update 主动推的最新全量(config_option_update)。
+		s.persistConfigCache(sessionID, e.ConfigOptions)
+	}
 	s.emit(EventUpdate, e)
 }
 
@@ -1540,19 +1565,48 @@ func (s *ChatService) GetSessionConfigOptions(sessionID string) ([]acp.ConfigOpt
 }
 
 // SetSessionConfigOption 切换 session 的某个 config option(model/mode/effort),热切、即时生效。
-// 懒 spawn:需 session 已活跃(只读态无 config options 可切)。
+// 懒 spawn:只读态(未活跃)下切换视为「继续会话」触发 spawn,spawn 完成后应用用户选的配置
+// (语义统一:切换 = 先 spawn 再应用,与发消息触发 spawn 一致)。已活跃则直接热切。
 func (s *ChatService) SetSessionConfigOption(sessionID, configId, value string) error {
 	s.mu.RLock()
 	ls := s.active[sessionID]
 	s.mu.RUnlock()
 	if ls == nil {
-		return fmt.Errorf("session not active: %s", sessionID)
+		// 懒 spawn:只读态切换 config option → ensureLive(spawn harness)→ 再应用配置。
+		if err := s.ensureLive(sessionID); err != nil {
+			return err
+		}
+		s.mu.RLock()
+		ls = s.active[sessionID]
+		s.mu.RUnlock()
+		if ls == nil {
+			return fmt.Errorf("session not active after spawn: %s", sessionID)
+		}
 	}
 	if err := ls.chat.SetConfigOption(s.ctx, configId, value); err != nil {
 		return err
 	}
-	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "config_option", ConfigOptions: ls.chat.FlatConfigOptions()})
+	flat := ls.chat.FlatConfigOptions()
+	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "config_option", ConfigOptions: flat})
+	s.persistConfigCache(sessionID, flat)
 	return nil
+}
+
+// GetSessionCachedConfigOptions 返回 session 持久化的 config options 快照(懒 spawn:只读态渲染用)。
+// 无缓存(空会话 / 从未 spawn 过 / 缓存损坏)返回 nil, nil —— 前端据此决定是否渲染 ModelSelect。
+func (s *ChatService) GetSessionCachedConfigOptions(sessionID string) ([]acp.ConfigOption, error) {
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if se == nil || se.ConfigOptionsCache == "" {
+		return nil, nil
+	}
+	var opts []acp.ConfigOption
+	if err := json.Unmarshal([]byte(se.ConfigOptionsCache), &opts); err != nil {
+		return nil, nil // 损坏的缓存静默忽略,前端走空(下次 spawn 会覆盖)
+	}
+	return opts, nil
 }
 
 // RefreshSessionConfig 重新拉取 session 的最新 configOptions(同步外部配置改动)。
@@ -1579,6 +1633,8 @@ func (s *ChatService) RefreshSessionConfig(sessionID string) ([]acp.ConfigOption
 	if err != nil {
 		return nil, err
 	}
+	// 持久化刷新后的 config options 快照(懒 spawn:只读态用缓存渲染 ModelSelect)。
+	s.persistConfigCache(sessionID, flat)
 	s.emit(EventUpdate, acp.SessionEvent{
 		SessionID:      sessionID,
 		Kind:           "config_option",
