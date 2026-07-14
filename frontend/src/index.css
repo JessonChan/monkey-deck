@@ -1298,6 +1298,49 @@ input, textarea { font-family: inherit; }
   white-space: pre-wrap; word-break: break-word; user-select: text;
 }
 
+/* 行号化预览(Task #15084):每行一行号 + 内容,行号淡色右对齐。 */
+.preview-pre-lined { padding: 8px 0; white-space: pre; }
+.preview-line {
+  display: flex; align-items: flex-start; padding: 0 13px;
+  white-space: pre; min-width: max-content;
+}
+.preview-line-no {
+  display: inline-block; flex-shrink: 0; min-width: 3.5em; padding-right: 14px;
+  text-align: right; color: var(--text-3); user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.preview-line-text { flex: 1; user-select: text; }
+.preview-line-target {
+  background: rgba(255, 214, 10, 0.18);
+  box-shadow: inset 3px 0 0 var(--yellow, #ffd60a);
+}
+.preview-error, .preview-loading {
+  padding: 24px; text-align: center; color: var(--text-3); font-size: 12.5px;
+}
+.preview-error { color: var(--red); }
+
+/* 对话 / 工具 I/O 里的文件路径可点击链接(Task #15084)。
+   内联、mono、accent 色、下划线在 hover 显出,提示可点。 */
+.path-link {
+  color: var(--accent-2);
+  cursor: pointer;
+  border-bottom: 1px dotted rgba(100, 210, 255, 0.55);
+  transition: background 0.1s, color 0.1s;
+}
+.path-link:hover {
+  color: var(--accent);
+  background: rgba(10, 132, 255, 0.12);
+  border-bottom-color: var(--accent);
+}
+.path-link:focus-visible {
+  outline: 1px solid var(--accent);
+  border-radius: 3px;
+}
+/* diff 行内的路径链接:微调对比(避免被 +/- 染色淹没)。 */
+.diff-line .path-link, .ctext-preview-line .path-link {
+  background: rgba(10, 132, 255, 0.10);
+}
+
 /* ─── 通用 modal(新建/重命名/删除) ─── */
 .modal-overlay {
   position: fixed; inset: 0; z-index: 50;

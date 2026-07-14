@@ -1,4 +1,4 @@
-import { forwardRef, Fragment, memo, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef } from "react";
+import React, { forwardRef, Fragment, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
@@ -8,6 +8,8 @@ import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
 import CollapsibleText from "./CollapsibleText";
+import FilePreviewOverlay, { type PreviewTarget } from "./FilePreviewOverlay";
+import PathLinkified from "./PathLinkified";
 import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search } from "lucide-react";
 
 interface Usage { used: number; size: number; cost: number; }
@@ -99,6 +101,12 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   const scrollRafRef = useRef(0);
   // Floating scroll-to-bottom button visibility: true = show FAB (user is reading history).
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  // 文件预览覆盖层(Task #15084):对话/工具卡片里的路径点击 → 弹此覆盖层。
+  const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
+  const openFilePreview = useCallback((path: string, line?: number) => {
+    setPreviewTarget({ path, line });
+  }, []);
+  const closeFilePreview = useCallback(() => setPreviewTarget(null), []);
   // Expose imperative scrollToBottom to parent (used right after user sends a message).
   useImperativeHandle(ref, () => ({
     scrollToBottom: () => {
@@ -248,14 +256,14 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
               if (next.type !== "tool") break;
               group.push(next);
             }
-            if (group.length >= 2) return <ToolGroup key={item.id} tools={group} />;
-            return <ToolCard key={item.id} item={item} />;
+            if (group.length >= 2) return <ToolGroup key={item.id} tools={group} onOpenFilePreview={openFilePreview} />;
+            return <ToolCard key={item.id} item={item} onOpenFilePreview={openFilePreview} />;
           }
           return (
             <Fragment key={item.id}>
               {/* 回合分隔:每条用户消息(首条除外)前插一条带时间的分隔线,让多轮对话边界清晰。 */}
               {item.type === "user" && i > 0 && <TurnDivider ts={item.ts} />}
-              <ChatRow item={item} sessionId={props.sessionId} />
+              <ChatRow item={item} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} />
             </Fragment>
           );
         })}
@@ -286,6 +294,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       </div>
       {props.error && <div className="error-bar">⚠ {props.error}</div>}
       {props.mergeResult && <div className={`merge-result ${props.mergeResult.startsWith("✅") ? "ok" : "fail"}`}>{props.mergeResult}</div>}
+      <FilePreviewOverlay sessionId={props.sessionId} target={previewTarget} onClose={closeFilePreview} />
       <footer className="chat-footer">
         {hasUsage && (
           <div className={`usage-bar usage-${usageLevel}`} title="上下文用量" data-testid="usage-bar">
@@ -326,13 +335,13 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
 });
 
 
-const ChatRow = memo(function ChatRow({ item, sessionId }: { item: ChatItem; sessionId: string }) {
+const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview }: { item: ChatItem; sessionId: string; onOpenFilePreview: (path: string, line?: number) => void }) {
   if (item.type === "user") {
     return (
       <div className="row row-user" data-testid="msg-user">
         <div className="bubble-user-wrap">
           <MessageActions text={item.text} className="user-msg-actions" testId="copy-user-msg" />
-          <UserBubble text={item.text} />
+          <UserBubble text={item.text} onOpenFilePreview={onOpenFilePreview} />
         </div>
       </div>
     );
@@ -343,9 +352,7 @@ const ChatRow = memo(function ChatRow({ item, sessionId }: { item: ChatItem; ses
         <div className="avatar"><Sparkles size={15} /></div>
         <div className="bubble-agent-wrap">
           <div className="bubble-agent">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeRenderer, pre: PreRenderer }}>
-              {item.text + (item.streaming ? " ▋" : "")}
-            </ReactMarkdown>
+            <AgentMarkdown text={item.text + (item.streaming ? " ▋" : "")} onOpenFilePreview={onOpenFilePreview} />
           </div>
           <div className="msg-meta">
             {item.ts && <span className="msg-time">{formatTime(item.ts)}</span>}
@@ -356,9 +363,9 @@ const ChatRow = memo(function ChatRow({ item, sessionId }: { item: ChatItem; ses
     );
   }
   if (item.type === "thought") {
-    return <ThoughtBlock item={item} sessionId={sessionId} />;
+    return <ThoughtBlock item={item} sessionId={sessionId} onOpenFilePreview={onOpenFilePreview} />;
   }
-  return <ToolCard item={item} />;
+  return <ToolCard item={item} onOpenFilePreview={onOpenFilePreview} />;
 });
 
 // ─── 用户消息气泡 ───
@@ -371,7 +378,7 @@ const USER_LONG_CHARS = 480;      // 字符阈值:单/双行长文本兜底
 const USER_HEAD_LINES = 4;        // 折叠预览展示前 N 行
 const USER_TAIL_LINES = 2;        // 折叠预览展示后 M 行
 
-function UserBubble({ text }: { text: string }) {
+function UserBubble({ text, onOpenFilePreview }: { text: string; onOpenFilePreview: (path: string, line?: number) => void }) {
   const lines = useMemo(() => text.split("\n"), [text]);
   const isLong = lines.length > USER_LONG_LINES || text.length > USER_LONG_CHARS;
   const hasCodeFence = text.includes("```");
@@ -447,13 +454,13 @@ function UserBubble({ text }: { text: string }) {
       ) : (
         <div className={`bubble-user-body bubble-user-${renderKind}`}>
           {renderKind === "markdown" ? (
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeRenderer, pre: PreRenderer }}>
-              {text}
-            </ReactMarkdown>
+            <AgentMarkdown text={text} onOpenFilePreview={onOpenFilePreview} />
           ) : renderKind === "mono" ? (
-            <pre className="bubble-user-mono">{text}</pre>
+            <pre className="bubble-user-mono">
+              <PathLinkified text={text} onOpen={onOpenFilePreview} />
+            </pre>
           ) : (
-            text
+            <PathLinkified text={text} onOpen={onOpenFilePreview} />
           )}
         </div>
       )}
@@ -480,7 +487,7 @@ function looksLikeCodeOrLog(lines: string[]): boolean {
 
 // ThoughtBlock:思考块默认折叠(含流式中),summary 显示转圈 spinner;用户展开后记住偏好,
 // 后续新思考块也默认展开;底部「收起」按钮方便长文本尾部直接收回(不用滚回顶部)。
-function ThoughtBlock({ item, sessionId }: { item: Extract<ChatItem, { type: "thought" }>; sessionId: string }) {
+function ThoughtBlock({ item, sessionId, onOpenFilePreview }: { item: Extract<ChatItem, { type: "thought" }>; sessionId: string; onOpenFilePreview: (path: string, line?: number) => void }) {
   // 展开状态:per-item(按 item.id),不跨 thought 共享。
   // 旧实现按 sessionId 共享 localStorage 键 → 同 session 多个 thought 互相干扰,
   // 且 id 变化重挂载时新实例从共享键读 open,覆盖用户当前点击 → 「点不开」。
@@ -501,7 +508,9 @@ function ThoughtBlock({ item, sessionId }: { item: Extract<ChatItem, { type: "th
         <div className="collapse-body-inner">
           {everOpenedRef.current && (
             <>
-              <div className="thought-text">{item.text}</div>
+              <div className="thought-text">
+                <PathLinkified text={item.text} onOpen={onOpenFilePreview} />
+              </div>
               <button className="thought-collapse-btn" onClick={toggle}>收起</button>
             </>
           )}
@@ -534,7 +543,7 @@ function MessageActions({ text, className = "", testId = "copy-msg" }: { text: s
 
 // 连续工具调用折叠组:2 个以上连续 tool 包进一个 Collapsible,summary 显示数量 + 执行状态。
 // 展开后内部各 tool 仍是独立 ToolCard(各自可再展开看 I/O)。
-function ToolGroup({ tools }: { tools: Extract<ChatItem, { type: "tool" }>[] }) {
+function ToolGroup({ tools, onOpenFilePreview }: { tools: Extract<ChatItem, { type: "tool" }>[]; onOpenFilePreview: (path: string, line?: number) => void }) {
   const anyRunning = tools.some(t => t.status === "pending" || t.status === "in_progress");
   return (
     <Collapsible
@@ -549,21 +558,21 @@ function ToolGroup({ tools }: { tools: Extract<ChatItem, { type: "tool" }>[] }) 
         </span>
       </>}
     >
-      {tools.map(t => <ToolCard key={t.id} item={t} />)}
+      {tools.map(t => <ToolCard key={t.id} item={t} onOpenFilePreview={onOpenFilePreview} />)}
     </Collapsible>
   );
 }
 
-function ToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
+function ToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { type: "tool" }>; onOpenFilePreview: (path: string, line?: number) => void }) {
   // 按 ACP ToolKind 分派到专用卡片(execute→bash、edit→文件编辑、read→文件读取、search→检索),
   // 复用 J1 的卡片框架(Collapsible 头 + 折叠 toggle)+ CollapsibleText 折叠体。未覆盖的 kind 走通用卡。
   // 分派层不持有 hook,避免子分支 hook 顺序不一致(React Rules of Hooks)。
   switch (item.kind) {
-    case "execute": return <BashToolCard item={item} />;
-    case "edit": return <EditToolCard item={item} />;
-    case "read": return <ReadToolCard item={item} />;
-    case "search": return <SearchToolCard item={item} />;
-    default: return <GenericToolCard item={item} />;
+    case "execute": return <BashToolCard item={item} onOpenFilePreview={onOpenFilePreview} />;
+    case "edit": return <EditToolCard item={item} onOpenFilePreview={onOpenFilePreview} />;
+    case "read": return <ReadToolCard item={item} onOpenFilePreview={onOpenFilePreview} />;
+    case "search": return <SearchToolCard item={item} onOpenFilePreview={onOpenFilePreview} />;
+    default: return <GenericToolCard item={item} onOpenFilePreview={onOpenFilePreview} />;
   }
 }
 
@@ -575,7 +584,7 @@ function ToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
 //   - patch(apply_patch)→ 原样按 unified diff 染色;
 //   - 都没有 → 回退 extractToolText。
 // 失败时额外展示 output(通常含错误信息)。
-function EditToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
+function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { type: "tool" }>; onOpenFilePreview: (path: string, line?: number) => void }) {
   const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
   const running = item.status === "pending" || item.status === "in_progress";
   const path = extractFilePath(item.rawInput);
@@ -621,6 +630,7 @@ function EditToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
             lineUnit="行"
             testId="edit-diff"
             lineClassName={diffLineCls}
+            onPath={onOpenFilePreview}
           />
         </div>
       )}
@@ -632,13 +642,14 @@ function EditToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
             preClassName="file-content-pre"
             lineUnit="行"
             testId="edit-content"
+            onPath={onOpenFilePreview}
           />
         </div>
       )}
       {outputR && outputR.text && (
         <div className="file-section">
           <div className="file-section-head"><span className="file-section-label">输出</span></div>
-          <CollapsibleText text={outputR.text} preClassName="file-content-pre" lineUnit="行" testId="edit-output" copyable />
+          <CollapsibleText text={outputR.text} preClassName="file-content-pre" lineUnit="行" testId="edit-output" copyable onPath={onOpenFilePreview} />
         </div>
       )}
     </Collapsible>
@@ -648,7 +659,7 @@ function EditToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
 // read / 文件读取卡片(read_file 等 kind=read 工具):
 // 头(FileText + 标题 + 状态 + 路径徽章)+ 体(目标文件 + 内容片段,长内容折叠)。
 // 内容来自 rawOutput(文件正文);输入仅给路径。
-function ReadToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
+function ReadToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { type: "tool" }>; onOpenFilePreview: (path: string, line?: number) => void }) {
   const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
   const running = item.status === "pending" || item.status === "in_progress";
   const path = extractFilePath(item.rawInput) || extractFilePath(item.rawOutput);
@@ -684,6 +695,7 @@ function ReadToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
             previewClassName="file-content-preview"
             lineUnit="行"
             testId="read-content"
+            onPath={onOpenFilePreview}
           />
         </div>
       ) : (
@@ -696,7 +708,7 @@ function ReadToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
 // search / 检索卡片(grep / glob 等 kind=search 工具):
 // 头(Search + 标题 + 状态 + pattern 徽章)+ 体(检索范围 + 结果列表)。
 // 结果来自 rawOutput(grep 多为「路径:行:内容」、glob 多为路径列表),长列表复用 CollapsibleText 折叠。
-function SearchToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
+function SearchToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { type: "tool" }>; onOpenFilePreview: (path: string, line?: number) => void }) {
   const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
   const running = item.status === "pending" || item.status === "in_progress";
   const pattern = extractSearchPattern(item.rawInput);
@@ -741,6 +753,7 @@ function SearchToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> })
             previewClassName="search-results-preview"
             lineUnit="行"
             testId="search-results"
+            onPath={onOpenFilePreview}
           />
         </div>
       ) : (
@@ -750,7 +763,7 @@ function SearchToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> })
   );
 }
 
-function GenericToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
+function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { type: "tool" }>; onOpenFilePreview: (path: string, line?: number) => void }) {
   const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
   const [copiedIn, setCopiedIn] = useState(false);
   const [copiedOut, setCopiedOut] = useState(false);
@@ -776,7 +789,9 @@ function GenericToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }
             <span className="tool-section-label">输入</span>
             <button className="msg-action-btn" onClick={copyIn}>{copiedIn ? <Check size={11} /> : <Copy size={11} />}</button>
           </div>
-          <pre className={inputR.fallback ? "tool-pre" : "tool-pre tool-term"}>{inputR.text}</pre>
+          <pre className={inputR.fallback ? "tool-pre" : "tool-pre tool-term"}>
+            <PathLinkified text={inputR.text} onOpen={onOpenFilePreview} />
+          </pre>
         </div>
       )}
       {outputR && (
@@ -787,7 +802,9 @@ function GenericToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }
             </span>
             <button className="msg-action-btn" onClick={copyOut}>{copiedOut ? <Check size={11} /> : <Copy size={11} />}</button>
           </div>
-          <pre className={outputR.fallback ? "tool-pre" : "tool-pre tool-term"}>{outputR.text}</pre>
+          <pre className={outputR.fallback ? "tool-pre" : "tool-pre tool-term"}>
+            <PathLinkified text={outputR.text} onOpen={onOpenFilePreview} />
+          </pre>
         </div>
       )}
     </Collapsible>
@@ -797,7 +814,7 @@ function GenericToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }
 // bash / 命令执行卡片:头(终端图标 + 名 + 状态/exit + 折叠 toggle)+ 体(命令行 + 输出区)。
 // 命令行/输出等宽、保留换行、横向滚动不撑破布局;长输出超阈值默认折叠(首尾+省略),可展开。
 // 输出区复用可折叠组件 CollapsibleText(后续 grep/glob/edit 等可共用)。
-function BashToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
+function BashToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { type: "tool" }>; onOpenFilePreview: (path: string, line?: number) => void }) {
   const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
   const running = item.status === "pending" || item.status === "in_progress";
   const command = extractBashCommand(item.rawInput);
@@ -846,6 +863,7 @@ function BashToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
             previewClassName="bash-out-preview"
             lineUnit="行"
             testId="bash-output"
+            onPath={onOpenFilePreview}
           />
           {outputR.truncated && <div className="bash-out-note">输出已被 agent 截断</div>}
         </div>
@@ -1006,6 +1024,57 @@ function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRes
 function PreRenderer(props: ComponentPropsWithoutRef<"pre">) {
   const codeEl = extractCodeChild(props.children);
   return <CodeBox language={codeEl?.language || "code"} raw={codeEl?.text || ""} />;
+}
+
+// Agent / user-markdown 渲染器(Task #15084):在 ReactMarkdown 的 p / li / td 文本节点里
+// 把文件路径识别成可点击 .path-link。code / pre / a 等保持原样(不破坏代码语义)。
+function AgentMarkdown({ text, onOpenFilePreview }: { text: string; onOpenFilePreview: (path: string, line?: number) => void }) {
+  const components = useMemo(
+    () => ({
+      code: CodeRenderer,
+      pre: PreRenderer,
+      p: makeTextLinkifyRenderer("p", onOpenFilePreview),
+      li: makeTextLinkifyRenderer("li", onOpenFilePreview),
+      td: makeTextLinkifyRenderer("td", onOpenFilePreview),
+    }),
+    [onOpenFilePreview]
+  );
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      {text}
+    </ReactMarkdown>
+  );
+}
+
+// ReactMarkdown 文本节点(p / li / td)路径链接化工厂(Task #15084)。
+// 这些节点的 children 通常是字符串/数组,把其中纯字符串片段用 PathLinkified 包起来。
+// 行内 code / 链接等子元素保持原样(不识别其中的路径,避免破坏代码语义)。
+function makeTextLinkifyRenderer(
+  tag: "p" | "li" | "td",
+  onOpenFilePreview: (path: string, line?: number) => void
+) {
+  const Comp = (props: ComponentPropsWithoutRef<typeof tag>) => {
+    const { children, ...rest } = props;
+    return React.createElement(tag, rest as Record<string, unknown>, linkifyReactChildren(children, onOpenFilePreview));
+  };
+  return Comp;
+}
+
+// 把 React children 中的纯字符串节点用 PathLinkified 包起来;其他节点(元素/数组)递归处理或保留。
+function linkifyReactChildren(children: React.ReactNode, onOpenFilePreview: (path: string, line?: number) => void): React.ReactNode {
+  if (children == null || children === false) return children;
+  if (typeof children === "string") {
+    return <PathLinkified text={children} onOpen={onOpenFilePreview} />;
+  }
+  if (Array.isArray(children)) {
+    let any = false;
+    const out = children.map((c, i) => {
+      if (typeof c === "string") { any = true; return <PathLinkified key={i} text={c} onOpen={onOpenFilePreview} />; }
+      return c;
+    });
+    return any ? out : children;
+  }
+  return children;
 }
 
 function CodeRenderer(props: ComponentPropsWithoutRef<"code">) {

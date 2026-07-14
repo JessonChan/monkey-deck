@@ -1,5 +1,6 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useMemo, useState, type ReactNode } from "react";
 import { Check, ChevronDown, ChevronUp, Copy } from "lucide-react";
+import { splitByPaths } from "../lib/filePath";
 
 // 可复用的「长文本折叠」块(AGENTS.md §5.3:references 优先参考——形态沿用本项目
 // Composer / 用户气泡的长文本折叠先例,docs/worklog/2026-07-14-composer-long-text-collapse.md)。
@@ -36,6 +37,9 @@ export interface CollapsibleTextProps {
   /** 单行 className 计算回调:提供时把每一行包进 <div className=…>(短/展开/折叠预览三态一致),
    *  用于按行染色(如 diff 的 +/- 高亮)。未提供时维持原 <pre>{text}</pre> 行为(bash 等不动)。 */
   lineClassName?: (line: string, idx: number) => string;
+  /** 路径链接化回调:提供时把每行里的文件路径识别成可点击的 .path-link(点击在文件面板预览)。
+   *  与 lineClassName 可组合(diff 染色 + 路径可点击)。未提供时维持纯文本(默认)。 */
+  onPath?: (path: string, line?: number) => void;
 }
 
 const DEFAULTS = {
@@ -63,6 +67,7 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
     copyable = true,
     testId = DEFAULTS.testId,
     lineClassName,
+    onPath,
   } = props;
 
   const lines = useMemo(() => text.split("\n"), [text]);
@@ -70,13 +75,69 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
   const [collapsed, setCollapsed] = useState(isLong && defaultCollapsed);
   const [copied, setCopied] = useState(false);
 
+  // 把单行渲染成节点:可选行 className(+ path 链接化)。
+  // 短态/展开态/折叠预览态均复用本函数,保持三态一致。
+  const renderLine = useCallback(
+    (line: string, idx: number) => {
+      const cls = lineClassName?.(line, idx);
+      if (!onPath) {
+        // 纯文本行(最常见路径,避免每行都跑 splitByPaths)。
+        return (
+          <div key={idx} className={cls}>
+            {line || " "}
+          </div>
+        );
+      }
+      const parts = splitByPaths(line);
+      if (parts.length === 1 && parts[0].type === "text") {
+        return (
+          <div key={idx} className={cls}>
+            {line || " "}
+          </div>
+        );
+      }
+      return (
+        <div key={idx} className={cls}>
+          {parts.map((p, pi) =>
+            p.type === "text" ? (
+              <Fragment key={pi}>{p.text}</Fragment>
+            ) : (
+              <span
+                key={pi}
+                className="path-link"
+                role="button"
+                tabIndex={0}
+                title={`打开 ${p.raw}`}
+                data-tooltip-id="md-tip"
+                data-tooltip-content={`打开预览 ${p.raw}`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onPath(p.path, p.line);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onPath(p.path, p.line);
+                  }
+                }}
+              >
+                {p.raw}
+              </span>
+            )
+          )}
+        </div>
+      );
+    },
+    [lineClassName, onPath]
+  );
+
   // 按行渲染(供 diff +/- 染色等场景):每行包一个 <div>,空行用「 」占位保留行高。
   const renderPreBody = useMemo(() => {
-    if (!lineClassName) return null;
-    return lines.map((l, i) => (
-      <div key={i} className={lineClassName(l, i)}>{l || " "}</div>
-    ));
-  }, [lines, lineClassName]);
+    if (!lineClassName && !onPath) return null;
+    return lines.map((l, i) => renderLine(l, i));
+  }, [lines, renderLine, lineClassName, onPath]);
 
   // 折叠预览:行多 → 首尾若干行 + 中间省略条;行少但字符超长 → 全部行(逐行截断)+ 字符提示。
   const preview = useMemo(() => {
@@ -164,9 +225,35 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); expand(); } }}
         >
           <pre className="ctext-preview-pre">
-            {preview.head.map((l, i) => (
-              <div key={i} className={`ctext-preview-line${lineClassName ? ` ${lineClassName(l, i)}` : ""}`}>{l || " "}</div>
-            ))}
+            {preview.head.map((l, i) => {
+              const cls = lineClassName ? `ctext-preview-line ${lineClassName(l, i)}` : "ctext-preview-line";
+              if (!onPath) return <div key={i} className={cls}>{l || " "}</div>;
+              const parts = splitByPaths(l);
+              if (parts.length === 1 && parts[0].type === "text") return <div key={i} className={cls}>{l || " "}</div>;
+              return (
+                <div key={i} className={cls}>
+                  {parts.map((p, pi) =>
+                    p.type === "text" ? (
+                      <Fragment key={pi}>{p.text}</Fragment>
+                    ) : (
+                      <span
+                        key={pi}
+                        className="path-link"
+                        role="button"
+                        tabIndex={0}
+                        title={`打开 ${p.raw}`}
+                        data-tooltip-id="md-tip"
+                        data-tooltip-content={`打开预览 ${p.raw}`}
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onPath(p.path, p.line); expand(); }}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onPath(p.path, p.line); expand(); } }}
+                      >
+                        {p.raw}
+                      </span>
+                    )
+                  )}
+                </div>
+              );
+            })}
           </pre>
           <button
             className="ctext-preview-divider"
@@ -179,8 +266,32 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
             <pre className="ctext-preview-pre">
               {preview.tail.map((l, i) => {
                 const tailIdx = lines.length - preview.tail.length + i;
+                const cls = lineClassName ? `ctext-preview-line ${lineClassName(l, tailIdx)}` : "ctext-preview-line";
+                if (!onPath) return <div key={i} className={cls}>{l || " "}</div>;
+                const parts = splitByPaths(l);
+                if (parts.length === 1 && parts[0].type === "text") return <div key={i} className={cls}>{l || " "}</div>;
                 return (
-                  <div key={i} className={`ctext-preview-line${lineClassName ? ` ${lineClassName(l, tailIdx)}` : ""}`}>{l || " "}</div>
+                  <div key={i} className={cls}>
+                    {parts.map((p, pi) =>
+                      p.type === "text" ? (
+                        <Fragment key={pi}>{p.text}</Fragment>
+                      ) : (
+                        <span
+                          key={pi}
+                          className="path-link"
+                          role="button"
+                          tabIndex={0}
+                          title={`打开 ${p.raw}`}
+                          data-tooltip-id="md-tip"
+                          data-tooltip-content={`打开预览 ${p.raw}`}
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onPath(p.path, p.line); expand(); }}
+                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onPath(p.path, p.line); expand(); } }}
+                        >
+                          {p.raw}
+                        </span>
+                      )
+                    )}
+                  </div>
                 );
               })}
             </pre>
