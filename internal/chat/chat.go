@@ -923,9 +923,14 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 	}
 	s.emitStatus(se.ID, "started", "")
 	// 推送 agent 自报的 config options(model/mode/effort),前端据此渲染下拉。
-	if opts := chat.FlatConfigOptions(); len(opts) > 0 {
-		s.emit(EventUpdate, acp.SessionEvent{SessionID: se.ID, Kind: "config_option", ConfigOptions: opts})
-	}
+	// 同时附带 image prompt 能力门控(前端据此决定是否展示图片输入入口,§3.5)。
+	// 即使无 config options 也要发,以投递 imageSupported(去掉 len>0 守卫)。
+	s.emit(EventUpdate, acp.SessionEvent{
+		SessionID:      se.ID,
+		Kind:           "config_option",
+		ConfigOptions:  chat.FlatConfigOptions(),
+		ImageSupported: chat.SupportsImage(),
+	})
 	slog.Info("session live", "id", se.ID, "resume", resume, "cwd", proj.Path, "model", se.Model)
 	return nil
 }

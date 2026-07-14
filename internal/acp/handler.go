@@ -43,6 +43,9 @@ type SessionEvent struct {
 	Title         string          `json:"title,omitempty"`  // session_info 标题
 	ConfigOptions []ConfigOption  `json:"configOptions,omitempty"` // config_option:model/mode/effort 等(agent 自报)
 	PlanEntries   []PlanEntry     `json:"planEntries,omitempty"` // plan:agent 执行计划(整表替换,ACP protocol)
+	// ImageSupported:agent 是否支持 image prompt 能力(Initialize 响应 promptCapabilities.image)。
+	// 随 config_option 事件下发,前端据此门控图片输入入口(不支持则隐藏/禁用,§3.5)。
+	ImageSupported bool `json:"imageSupported,omitempty"`
 }
 
 // PlanEntry 是 agent 执行计划的一项(ACP PlanEntry 的扁平化)。

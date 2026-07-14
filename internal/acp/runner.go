@@ -27,13 +27,19 @@ import (
 // (§2.1:internal/acp 是 ACP 唯一封装层,业务包不直接 import SDK)。
 type StopReason = acp.StopReason
 
-// Attachment 是随 prompt 发给 agent 的文件/目录引用(@提及)。
-// 经 ACP ContentBlock::ResourceLink 发送 —— baseline 能力,所有 agent 必须支持
+// Attachment 是随 prompt 发给 agent 的引用(@提及 / 回形针文件 / 内联图片)。
+// 默认经 ACP ContentBlock::ResourceLink 发送 —— baseline 能力,所有 agent 必须支持
 // (协议:agent MUST support ContentBlock::ResourceLink in prompts)。
 // Path 相对 session cwd 或绝对路径;Name 是显示名(空则取 Path 基名)。
+//
+// Data 非空时改发 ContentBlock::Image(内联 base64 图片)—— 需 agent 声明 image prompt
+// 能力(Initialize 响应的 promptCapabilities.image)。Data 与 Path 互斥:Data 优先。
 type Attachment struct {
 	Path string `json:"path"`
 	Name string `json:"name"`
+	// Data:base64 编码的内联图片数据(设置时发 Image 块,需 image 能力)。
+	Data     string `json:"data,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
 }
 
 // Runner 驱动单个 harness(其 stdio ACP server)。model 不在 spawn 注入:
@@ -71,6 +77,9 @@ type ChatSession struct {
 	// ConfigOptions:agent 在 NewSession/LoadSession 响应里自报的 session config options
 	// (model/mode/effort)。set_config_option 返回时更新为最新全量。FlatConfigOptions 扁平化给前端。
 	ConfigOptions []acp.SessionConfigOption
+	// PromptCapabilities:agent 在 Initialize 响应里声明的 prompt 能力(image/audio/embedded)。
+	// 用于能力门控:前端据此决定是否展示图片输入入口(image=false 时隐藏/禁用,§3.5)。
+	PromptCapabilities acp.PromptCapabilities
 }
 
 // NewChatSession 创建持久对话 session:spawn harness → initialize → newSession(cwd=workDir)。
@@ -93,8 +102,9 @@ func (r *Runner) NewChatSession(ctx context.Context, workDir string, onEvent fun
 	slog.Info("chat session created", "sessionId", sess.SessionId, "cwd", workDir, "agent", initResp.AgentInfo.Name)
 	cs := &ChatSession{
 		Runner: r, Cmd: cmd, Conn: conn, Handler: handler, SessionID: sess.SessionId, WorkDir: workDir,
-		CanListSessions: initResp.AgentCapabilities.SessionCapabilities.List != nil,
-		ConfigOptions:   sess.ConfigOptions,
+		CanListSessions:    initResp.AgentCapabilities.SessionCapabilities.List != nil,
+		ConfigOptions:      sess.ConfigOptions,
+		PromptCapabilities: initResp.AgentCapabilities.PromptCapabilities,
 	}
 	if cmd.Process != nil {
 		registerHarness(cmd.Process.Pid) // §3.2:注册活跃,reaper 保护其逃逸子进程
@@ -127,8 +137,9 @@ func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string,
 	slog.Info("chat session loaded", "sessionId", sessionID, "cwd", workDir)
 	cs := &ChatSession{
 		Runner: r, Cmd: cmd, Conn: conn, Handler: handler, SessionID: acp.SessionId(sessionID), WorkDir: workDir,
-		CanListSessions: initResp.AgentCapabilities.SessionCapabilities.List != nil,
-		ConfigOptions:   resumeResp.ConfigOptions,
+		CanListSessions:    initResp.AgentCapabilities.SessionCapabilities.List != nil,
+		ConfigOptions:      resumeResp.ConfigOptions,
+		PromptCapabilities: initResp.AgentCapabilities.PromptCapabilities,
 	}
 	if cmd.Process != nil {
 		registerHarness(cmd.Process.Pid)
@@ -199,11 +210,20 @@ func (cs *ChatSession) Prompt(ctx context.Context, message string, attachments [
 }
 
 // buildPromptBlocks 构造 session/prompt 的 ContentBlock 序列:
-// 首块是文本(用户输入),其后每个 attachment 一个 ResourceLink(file:// URI)。
-// ResourceLink 是协议 baseline(agent MUST support),无需探测 promptCapabilities。
+// 首块是文本(用户输入),其后每个 attachment 一个块:
+//   - Data 非空 → ContentBlock::Image(内联 base64 图片,需 image 能力,§3.5)
+//   - 否则 → ContentBlock::ResourceLink(file:// URI,协议 baseline,所有 agent MUST support)
 func buildPromptBlocks(message string, attachments []Attachment, workDir string) []acp.ContentBlock {
 	blocks := []acp.ContentBlock{acp.TextBlock(message)}
 	for _, a := range attachments {
+		if a.Data != "" {
+			mt := a.MimeType
+			if mt == "" {
+				mt = "image/png" // 兜底 mime:前端未给则按 png(粘贴图片常见)
+			}
+			blocks = append(blocks, acp.ImageBlock(a.Data, mt))
+			continue
+		}
 		name := a.Name
 		if name == "" {
 			name = filepath.Base(a.Path)
@@ -254,6 +274,13 @@ func (cs *ChatSession) SessionTitle(ctx context.Context) (string, error) {
 // FlatConfigOptions 返回扁平化的 config options(给前端渲染下拉:model/mode/effort)。
 func (cs *ChatSession) FlatConfigOptions() []ConfigOption {
 	return FlattenConfigOptions(cs.ConfigOptions)
+}
+
+// SupportsImage 报告 agent 是否声明了 image prompt 能力(Initialize 响应的
+// promptCapabilities.image)。前端据此门控图片输入入口:不支持则隐藏/禁用 + 提示。
+// 协议:ContentBlock::Image in prompts REQUIRES 'image' prompt capability。
+func (cs *ChatSession) SupportsImage() bool {
+	return cs.PromptCapabilities.Image
 }
 
 // SetConfigOption 切换某个 config option(model/mode/effort),热切、同 session 即时生效。
