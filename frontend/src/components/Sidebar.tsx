@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import * as Popover from "@radix-ui/react-popover";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X, Pin, PinOff, PanelLeftClose, Globe, ShieldCheck, Boxes } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X, Pin, PinOff, PanelLeftClose, Globe, ShieldCheck, Boxes, SquareTerminal } from "lucide-react";
 import {
   DndContext,
   PointerSensor,
@@ -36,6 +36,7 @@ interface Props {
   unreadBySession: Record<string, boolean>;
   permPendingBySession: Record<string, boolean>;
   draftBySession?: Record<string, string>;
+  termOpenBySession?: Record<string, boolean>;
   onReorderProjects: (ids: string[]) => void;
   onCollapse?: () => void;
   onOpenPermissionSettings: () => void;
@@ -417,6 +418,11 @@ export default function Sidebar(props: Props) {
                           {s.pinned && (
                             <span className="session-pin" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.pinnedTip")} data-testid={`pin-${s.id}`}>
                               <Pin size={11} />
+                            </span>
+                          )}
+                          {props.termOpenBySession?.[s.id] && (
+                            <span className="session-terminal-mark" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.terminalOpenTip")} data-testid={`term-open-${s.id}`}>
+                              <SquareTerminal size={12} />
                             </span>
                           )}
                           {props.permPendingBySession[s.id] ? (

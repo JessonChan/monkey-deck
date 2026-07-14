@@ -249,6 +249,9 @@ input, textarea { font-family: inherit; }
    与瞬态活动状态(spinner/unread/time)正交、各占一格;flex-shrink:0 不挤压状态簇。 */
 .session-pin { flex-shrink: 0; display: inline-flex; color: var(--accent); }
 .session-pin svg { color: var(--accent); }
+/* 已开终端标记:终端面板对该 session 打开时显示(与置顶标记同格,弱色常驻,与瞬态活动状态正交)。 */
+.session-terminal-mark { flex-shrink: 0; display: inline-flex; color: var(--accent-2); }
+.session-terminal-mark svg { color: var(--accent-2); }
 /* session 时间:无状态图标(spinner/unread/perm/草稿)时显示在标题尾部(流内,非浮层)。
    尾部永远只有一个元素 → 标题截断点一致,无露出问题。低对比小字 = 次要信息。 */
 .session-time {

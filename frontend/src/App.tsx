@@ -945,6 +945,7 @@ export default function App() {
           onAddProjectByPath={addProjectByPath}
           permPendingBySession={permPendingBySession}
           draftBySession={draftBySession}
+          termOpenBySession={termOpenBySession}
           onRemoveProject={removeProject}
           onRemoveSession={removeSession}
           onTogglePin={toggleSessionPin}

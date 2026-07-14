@@ -45,6 +45,7 @@
     "loadMore": "加载更多（还有 {{count}} 个）",
     "sessionDraftFallback": "新对话",
     "pinnedTip": "已置顶 · 右键可取消",
+    "terminalOpenTip": "已开终端",
     "permPendingTip": "等待授权 · 点击进入裁决",
     "generatingTip": "正在生成…",
     "unreadTip": "有未读回复，点击查看",

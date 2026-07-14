@@ -45,6 +45,7 @@
     "loadMore": "Load more ({{count}} more)",
     "sessionDraftFallback": "New chat",
     "pinnedTip": "Pinned · right-click to unpin",
+    "terminalOpenTip": "Terminal open",
     "permPendingTip": "Awaiting approval · click to decide",
     "generatingTip": "Generating…",
     "unreadTip": "Unread replies, click to view",
