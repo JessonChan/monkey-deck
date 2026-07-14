@@ -55,3 +55,14 @@ func (s *ChatService) RevealPath(path string) error {
 		return exec.Command("xdg-open", path).Start()
 	}
 }
+
+// OpenURL 用系统默认浏览器打开指定 URL。
+// 供前端拦截 markdown 对话里的 http/https 外链点击后调用(Wails3 webview 不承担浏览器导航,
+// 转交给系统浏览器)。仅处理 http/https,mailto/tel/内部锚点放行默认行为(前端判定)。
+func (s *ChatService) OpenURL(url string) error {
+	app := application.Get()
+	if app == nil || app.Browser == nil {
+		return nil
+	}
+	return app.Browser.OpenURL(url)
+}

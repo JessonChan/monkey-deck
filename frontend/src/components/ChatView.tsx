@@ -1176,6 +1176,20 @@ function PreRenderer(props: ComponentPropsWithoutRef<"pre">) {
   return <CodeBox language={codeEl?.language || "code"} raw={codeEl?.text || ""} />;
 }
 
+// 对话外链拦截(Task #15668):markdown 里的 http/https 链接点击 → 调后端 OpenURL
+// 用系统默认浏览器打开(Wails3 webview 不承担浏览器导航)。mailto/tel/相对路径/锚点放行默认行为。
+function AnchorRenderer(props: ComponentPropsWithoutRef<"a">) {
+  const { href, children, ...rest } = props;
+  const onClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (href && /^https?:\/\//i.test(href)) {
+      e.preventDefault();
+      void ChatService.OpenURL(href);
+    }
+  };
+  return <a href={href} onClick={onClick} target="_blank" rel="noopener noreferrer" {...rest}>{children}</a>;
+}
+
 // Agent / user-markdown 渲染器(Task #15084):在 ReactMarkdown 的 p / li / td 文本节点里
 // 把文件路径识别成可点击 .path-link。code / pre / a 等保持原样(不破坏代码语义)。
 function AgentMarkdown({ text, onOpenFilePreview }: { text: string; onOpenFilePreview: (path: string, line?: number) => void }) {
@@ -1183,6 +1197,7 @@ function AgentMarkdown({ text, onOpenFilePreview }: { text: string; onOpenFilePr
     () => ({
       code: CodeRenderer,
       pre: PreRenderer,
+      a: AnchorRenderer,
       p: makeTextLinkifyRenderer("p", onOpenFilePreview),
       li: makeTextLinkifyRenderer("li", onOpenFilePreview),
       td: makeTextLinkifyRenderer("td", onOpenFilePreview),
