@@ -42,6 +42,15 @@ type SessionEvent struct {
 	Used   int64    `json:"used,omitempty"`   // context tokens 已用
 	Size   int64    `json:"size,omitempty"`   // context window 总量
 	Cost   *float64 `json:"cost,omitempty"`   // 累积成本 USD
+	// token 明细(来自 PromptResponse.Usage,UNSTABLE;§1.6/Task #15138)。
+	// streaming UsageUpdate 只含 used/size/cost,明细只能从 Prompt 响应取。
+	// 这些字段已是 session 级累积值(SDK:Total X tokens across all turns),直接覆盖即可。
+	CachedReadTokens  int64 `json:"cachedReadTokens,omitempty"`
+	CachedWriteTokens int64 `json:"cachedWriteTokens,omitempty"`
+	InputTokens       int64 `json:"inputTokens,omitempty"`
+	OutputTokens      int64 `json:"outputTokens,omitempty"`
+	ThoughtTokens     int64 `json:"thoughtTokens,omitempty"`
+	TotalTokens       int64 `json:"totalTokens,omitempty"`
 	Title         string          `json:"title,omitempty"`  // session_info 标题
 	ConfigOptions []ConfigOption  `json:"configOptions,omitempty"` // config_option:model/mode/effort 等(agent 自报)
 	PlanEntries   []PlanEntry     `json:"planEntries,omitempty"` // plan:agent 执行计划(整表替换,ACP protocol)
@@ -190,6 +199,13 @@ type Handler struct {
 	// allow → 自动放行、deny → 自动拒绝,ask/无命中 → 弹前端确认。nil = 无规则(一律走弹窗,
 	// 等价旧行为)。SetPermissionRules 在 service 层 session 启动 / 规则变更时更新。
 	permRules atomic.Pointer[permissions.Engine]
+	// 最近一次 streaming UsageUpdate 的 used/size/cost 快照(§1.6)。Prompt 返回后转发
+	// PromptResponse.Usage 的 token 明细时,需携带这些值 —— 否则前端会用 0 覆盖既有占比
+	// (明细事件本身不含 streaming 的 used/size)。
+	usageMu  sync.RWMutex
+	lastUsed int64
+	lastSize int64
+	lastCost float64
 }
 
 type pendingPermission struct {
@@ -566,9 +582,55 @@ func (h *Handler) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 		return nil
 	}
 	if e, ok := flattenUpdate(string(n.SessionId), n.Update); ok {
+		// 记录最近一次 streaming UsageUpdate 的 used/size/cost,供 EmitTurnUsage 携带转发(§1.6)。
+		if e.Kind == "usage_update" {
+			h.usageMu.Lock()
+			h.lastUsed = e.Used
+			h.lastSize = e.Size
+			if e.Cost != nil {
+				h.lastCost = *e.Cost
+			}
+			h.usageMu.Unlock()
+		}
 		h.OnEvent(e)
 	}
 	return nil
+}
+
+// EmitTurnUsage 在 Prompt 同步返回后转发 PromptResponse.Usage 的 token 明细(§1.6/Task #15138)。
+// streaming UsageUpdate 只含 used/size/cost,明细(CachedRead/Write/Input/Output/Thought/Total)
+// 只能从 Prompt 响应取;此处携带最近一次 streaming 的 used/size/cost,避免前端用 0 覆盖既有占比。
+// 调用方:ChatSession.Prompt(resp.Usage 非 nil 时)。并发安全。
+func (h *Handler) EmitTurnUsage(sessionID string, u *acp.Usage) {
+	if h == nil || h.OnEvent == nil || u == nil {
+		return
+	}
+	h.usageMu.RLock()
+	used, size, cost := h.lastUsed, h.lastSize, h.lastCost
+	h.usageMu.RUnlock()
+	e := SessionEvent{
+		SessionID:    sessionID,
+		Kind:         "usage_update",
+		Used:         used,
+		Size:         size,
+		TotalTokens:  int64(u.TotalTokens),
+		InputTokens:  int64(u.InputTokens),
+		OutputTokens: int64(u.OutputTokens),
+	}
+	if u.CachedReadTokens != nil {
+		e.CachedReadTokens = int64(*u.CachedReadTokens)
+	}
+	if u.CachedWriteTokens != nil {
+		e.CachedWriteTokens = int64(*u.CachedWriteTokens)
+	}
+	if u.ThoughtTokens != nil {
+		e.ThoughtTokens = int64(*u.ThoughtTokens)
+	}
+	if cost > 0 {
+		c := cost
+		e.Cost = &c
+	}
+	h.OnEvent(e)
 }
 
 // flattenUpdate 把 acp.SessionUpdate(union)转成前端友好的 SessionEvent。

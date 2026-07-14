@@ -207,6 +207,12 @@ func (cs *ChatSession) Prompt(ctx context.Context, message string, attachments [
 	if err != nil {
 		return "", fmt.Errorf("prompt: %w", err)
 	}
+	// PromptResponse.Usage 带 token 明细(CachedRead/Write/Input/Output/Total,UNSTABLE,§1.6)。
+	// SDK 注释这些字段已是 session 级累积值,直接覆盖。streaming UsageUpdate 只有 used/size/cost,
+	// 明细只能在此取;多数 harness 不回填(resp.Usage == nil)则无操作。
+	if resp.Usage != nil {
+		cs.Handler.EmitTurnUsage(string(cs.SessionID), resp.Usage)
+	}
 	return resp.StopReason, nil
 }
 
