@@ -296,6 +296,10 @@
     "languageZh": "中文",
     "languageEn": "English",
     "languageTip": "Switch language",
+    "notifySound": {
+      "onTip": "Turn-end sound (on, click to mute)",
+      "offTip": "Turn-end sound (off, click to unmute)"
+    },
     "perm": {
       "openTip": "Permission rules",
       "title": "Permission rules",

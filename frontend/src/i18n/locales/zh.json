@@ -296,6 +296,10 @@
     "languageZh": "中文",
     "languageEn": "English",
     "languageTip": "切换语言",
+    "notifySound": {
+      "onTip": "对话结束提示音(已开启,点击关闭)",
+      "offTip": "对话结束提示音(已关闭,点击开启)"
+    },
     "perm": {
       "openTip": "权限规则",
       "title": "权限规则",

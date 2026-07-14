@@ -21,6 +21,7 @@ import { Tooltip } from "react-tooltip";
 import { PanelLeftOpen, PanelRightOpen } from "lucide-react";
 import type { FileChange } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import { applyEventToItems as applyEventToItemsPure } from "./lib/streamMerge";
+import { isNotifySoundEnabled, playNotifySound } from "./lib/notifySound";
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
 // 按 session 隔离的状态:切走再切回时,进行中的流式输出 / 用量 / 状态 / 权限都保留在各自缓存里,
@@ -279,6 +280,11 @@ export default function App() {
       }
       // 回合结束后刷新 Git 面板的 diff(agent 可能改了文件)
       if (s.status === "idle") {
+        // 对话结束提示音:仅在 agent 自然回合结束(detail 以 stopReason= 开头,§5.3 尊重数据源
+        // —— 区分「回复完成」与「用户取消 cancelled / 兜底空 detail」)且开关开启时播放。
+        if (s.detail && s.detail.startsWith("stopReason=") && isNotifySoundEnabled()) {
+          playNotifySound();
+        }
         // 未读:回合结束但用户没在看的 session → 标记未读(供侧栏尾部小圆点提示)。
         if (s.sessionId !== selectedSessionIdRef.current) setUnreadBySession((p) => ({ ...p, [s.sessionId]: true }));
         const sid = selectedSessionIdRef.current;

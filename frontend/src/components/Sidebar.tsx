@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import * as Popover from "@radix-ui/react-popover";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X, Pin, PinOff, PanelLeftClose, Globe, ShieldCheck, Boxes, SquareTerminal } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X, Pin, PinOff, PanelLeftClose, Globe, ShieldCheck, Boxes, SquareTerminal, Bell, BellOff } from "lucide-react";
 import {
   DndContext,
   PointerSensor,
@@ -17,6 +17,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { timeAgo, formatDateTime } from "../utils";
 import type { AppLanguage } from "../i18n";
 import { setLanguage } from "../i18n";
+import { isNotifySoundEnabled, setNotifySoundEnabled } from "../lib/notifySound";
 
 interface Props {
   projects: Project[];
@@ -102,6 +103,8 @@ export default function Sidebar(props: Props) {
   const [contentHits, setContentHits] = useState<string[] | null>(null); // null=未发起内容搜索
   const [contentLoading, setContentLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // 对话结束提示音开关(本地镜像 localStorage 真相源,点击即时切换 + 持久化)。
+  const [notifySound, setNotifySound] = useState(isNotifySoundEnabled);
   // 拖拽时自动折叠所有项目:展开项虽 disabled 仍占满高度(含 session 列表),拖动需跨越整段 → 距离过长 + 碰撞失准。
   // 开始时记录并全折叠,结束/取消时恢复原展开态,不打断用户原本在看的项目。
   const expandedBeforeDrag = useRef<Set<string>>(new Set());
@@ -298,6 +301,16 @@ export default function Sidebar(props: Props) {
           </button>
           <button className="icon-btn" data-testid="open-harness-settings" onClick={props.onOpenHarnessSettings} data-tooltip-id="md-tip" data-tooltip-content={t("settings.harness.openTip")} data-tooltip-place="bottom">
             <Boxes size={16} />
+          </button>
+          <button
+            className="icon-btn"
+            data-testid="toggle-notify-sound"
+            data-tooltip-id="md-tip"
+            data-tooltip-content={notifySound ? t("settings.notifySound.onTip") : t("settings.notifySound.offTip")}
+            data-tooltip-place="bottom"
+            onClick={() => { const next = !notifySound; setNotifySound(next); setNotifySoundEnabled(next); }}
+          >
+            {notifySound ? <Bell size={16} /> : <BellOff size={16} />}
           </button>
           <button className="icon-btn" data-testid="add-project" onClick={startAdd} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.addProject")} data-tooltip-place="bottom">
             <Plus size={17} />
