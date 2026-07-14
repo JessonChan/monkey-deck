@@ -25,6 +25,14 @@ export interface SessionEvent {
   used?: number; // context tokens 已用
   size?: number; // context window 总量
   cost?: number; // 累积成本 USD
+  // token 明细(来自 PromptResponse.Usage,UNSTABLE;Task #15138)。streaming UsageUpdate 不含明细,
+  // 仅在 Prompt 返回后的事件里填充;未回填则全 0(前端据此决定是否展示明细)。
+  cachedReadTokens?: number;
+  cachedWriteTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  thoughtTokens?: number;
+  totalTokens?: number;
   title?: string; // session_info 标题
   configOptions?: ConfigOption[]; // config_option:model/mode/effort(agent 自报)
   imageSupported?: boolean; // config_option 附带:agent 是否支持 image prompt 能力(门控图片输入)
@@ -90,6 +98,15 @@ export interface ImageAttachment {
   name: string;      // 显示名(如 paste-<ts>.png)
   data: string;      // base64 编码(无前缀)
   mimeType: string;  // image/png | image/jpeg | image/webp | image/gif
+}
+
+// 会话用量:context 占比(streaming UsageUpdate)+ token 明细(PromptResponse.Usage,Task #15138)。
+// 明细字段仅 Prompt 返回后填充,streaming 不含 → 全 0(前端据此决定是否展示明细)。
+export interface Usage {
+  used: number; size: number; cost: number;
+  cachedReadTokens: number; cachedWriteTokens: number;
+  inputTokens: number; outputTokens: number;
+  thoughtTokens: number; totalTokens: number;
 }
 
 // 排队消息(前端队列:ACP 协议无 queue,turn 进行中的消息先入前端队列,回合结束自动续发)。

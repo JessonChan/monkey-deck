@@ -4,7 +4,7 @@ import { Events } from "@wailsio/runtime";
 import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import * as TerminalService from "../bindings/github.com/jessonchan/monkey-deck/internal/terminal/terminalservice";
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention, ImageAttachment, PlanEntry } from "./types";
+import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention, ImageAttachment, PlanEntry, Usage } from "./types";
 import Sidebar from "./components/Sidebar";
 import ChatView, { type ChatViewHandle } from "./components/ChatView";
 import { Sparkles } from "lucide-react";
@@ -26,8 +26,7 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(na
 // 按 session 隔离的状态:切走再切回时,进行中的流式输出 / 用量 / 状态 / 权限都保留在各自缓存里,
 // 不会因「切走→事件被丢弃→切回只剩 DB 已落库内容」而丢失正在输出的内容。
 
-type Usage = { used: number; size: number; cost: number };
-const EMPTY_USAGE: Usage = { used: 0, size: 0, cost: 0 };
+const EMPTY_USAGE: Usage = { used: 0, size: 0, cost: 0, cachedReadTokens: 0, cachedWriteTokens: 0, inputTokens: 0, outputTokens: 0, thoughtTokens: 0, totalTokens: 0 };
 
 // 分页:首次打开只加载最近 PAGE_SIZE 条,滚到顶部点「加载更多」继续往前翻(游标 = 最旧 seq)。
 const PAGE_SIZE = 30;
@@ -138,7 +137,23 @@ export default function App() {
     if (ev.kind === "usage_update") {
       setUsageBySession((prev) => {
         const old = prev[ev.sessionId] ?? EMPTY_USAGE;
-        return { ...prev, [ev.sessionId]: { used: ev.used ?? old.used, size: ev.size ?? old.size, cost: ev.cost ?? old.cost } };
+        // 明细(cachedRead/Write/Input/Output/Thought/Total)仅 Prompt 返回后的事件携带,
+        // streaming UsageUpdate 不含(全 0/undefined)→ 保留旧值,不覆盖(Task #15138)。
+        const hasBreakdown = !!(ev.totalTokens || ev.inputTokens || ev.outputTokens || ev.cachedReadTokens || ev.cachedWriteTokens || ev.thoughtTokens);
+        return {
+          ...prev,
+          [ev.sessionId]: {
+            used: ev.used ?? old.used,
+            size: ev.size ?? old.size,
+            cost: ev.cost ?? old.cost,
+            cachedReadTokens: hasBreakdown ? (ev.cachedReadTokens ?? 0) : old.cachedReadTokens,
+            cachedWriteTokens: hasBreakdown ? (ev.cachedWriteTokens ?? 0) : old.cachedWriteTokens,
+            inputTokens: hasBreakdown ? (ev.inputTokens ?? 0) : old.inputTokens,
+            outputTokens: hasBreakdown ? (ev.outputTokens ?? 0) : old.outputTokens,
+            thoughtTokens: hasBreakdown ? (ev.thoughtTokens ?? 0) : old.thoughtTokens,
+            totalTokens: hasBreakdown ? (ev.totalTokens ?? 0) : old.totalTokens,
+          },
+        };
       });
       return;
     }
@@ -407,7 +422,12 @@ export default function App() {
       const se = (pid ? sessionsByProject[pid] : undefined)?.find((x) => x.id === sessionId);
       setUsageBySession((prev) => {
         if (prev[sessionId]) return prev;
-        return { ...prev, [sessionId]: { used: se?.usedTokens ?? 0, size: se?.sizeTokens ?? 0, cost: se?.cost ?? 0 } };
+        return { ...prev, [sessionId]: {
+          used: se?.usedTokens ?? 0, size: se?.sizeTokens ?? 0, cost: se?.cost ?? 0,
+          cachedReadTokens: se?.cachedReadTokens ?? 0, cachedWriteTokens: se?.cachedWriteTokens ?? 0,
+          inputTokens: se?.inputTokens ?? 0, outputTokens: se?.outputTokens ?? 0,
+          thoughtTokens: se?.thoughtTokens ?? 0, totalTokens: se?.totalTokens ?? 0,
+        } };
       });
       if (!loadedSessionsRef.current.has(sessionId)) {
         loadedSessionsRef.current.add(sessionId);

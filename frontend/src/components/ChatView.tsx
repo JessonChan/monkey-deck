@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem, Mention, ImageAttachment, PlanEntry } from "../types";
+import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem, Mention, ImageAttachment, PlanEntry, Usage } from "../types";
 import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
@@ -13,8 +13,6 @@ import FilePreviewOverlay, { type PreviewTarget } from "./FilePreviewOverlay";
 import PathLinkified from "./PathLinkified";
 import { countDiffLines, diffLineCls } from "../lib/diff";
 import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, RefreshCw, Eye, MessageSquarePlus } from "lucide-react";
-
-interface Usage { used: number; size: number; cost: number; }
 
 interface Props {
   project: Project | null;
@@ -225,6 +223,20 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   // 分级配色:上下文越满越警示(绿 → 琥珀 → 红),让占比一眼可读。
   const usageLevel = pct >= 85 ? "crit" : pct >= 60 ? "high" : pct >= 30 ? "mid" : "low";
   const hasUsage = props.usage.used > 0 || props.usage.size > 0 || props.usage.cost > 0;
+  // token 明细 tooltip(§4.5 react-tooltip):仅在有明细时附加,用 \n 多行(pre-line 渲染)。
+  const hasBreakdown = props.usage.totalTokens > 0 || props.usage.inputTokens > 0 || props.usage.outputTokens > 0
+    || props.usage.cachedReadTokens > 0 || props.usage.cachedWriteTokens > 0 || props.usage.thoughtTokens > 0;
+  const usageTip = hasBreakdown
+    ? [
+        t("chat.usageTitle"),
+        `${t("chat.usageInput")}: ${formatTokens(props.usage.inputTokens)}`,
+        `${t("chat.usageOutput")}: ${formatTokens(props.usage.outputTokens)}`,
+        props.usage.cachedReadTokens > 0 ? `${t("chat.usageCachedRead")}: ${formatTokens(props.usage.cachedReadTokens)}` : "",
+        props.usage.cachedWriteTokens > 0 ? `${t("chat.usageCachedWrite")}: ${formatTokens(props.usage.cachedWriteTokens)}` : "",
+        props.usage.thoughtTokens > 0 ? `${t("chat.usageThought")}: ${formatTokens(props.usage.thoughtTokens)}` : "",
+        `${t("chat.usageTotal")}: ${formatTokens(props.usage.totalTokens)}`,
+      ].filter(Boolean).join("\n")
+    : t("chat.usageTitle");
   const s = statusInfo(props.status, props.activity);
 
   const onTitleDoubleClick = (e: React.MouseEvent) => {
@@ -341,7 +353,13 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       <FilePreviewOverlay sessionId={props.sessionId} target={previewTarget} onClose={closeFilePreview} />
       <footer className="chat-footer">
         {hasUsage && (
-          <div className={`usage-bar usage-${usageLevel}`} title={t("chat.usageTitle")} data-testid="usage-bar">
+          <div
+            className={`usage-bar usage-${usageLevel}`}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={usageTip}
+            data-tooltip-place="top"
+            data-testid="usage-bar"
+          >
             <div className="usage-track"><div className="usage-fill" style={{ width: `${pct}%` }} /></div>
             <span className="usage-text">
               {formatTokens(props.usage.used)}

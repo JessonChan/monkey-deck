@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { useTranslation } from "react-i18next";
 import * as Popover from "@radix-ui/react-popover";
 import { Command } from "cmdk";
-import type { ConfigOption } from "../types";
+import type { ConfigOption, Mention, ImageAttachment, Usage } from "../types";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
-import type { Mention, ImageAttachment } from "../types";
+import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
 import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ImageIcon } from "lucide-react";
 
 interface Props {
@@ -24,7 +24,7 @@ interface Props {
   images: ImageAttachment[];  // 内联图片附件 — 按 session 隔离(App 持有)
   onImagesChange: (next: ImageAttachment[]) => void;
   imageSupported: boolean;    // agent 是否声明 image prompt 能力(门控图片输入入口)
-  usage: { used: number; size: number; cost: number };  // 上下文用量(展示已用/上限)
+  usage: Usage;  // 上下文用量(展示已用/上限 + 明细)
   onSend: (text: string, mentions: Mention[], images?: ImageAttachment[]) => void;
   onStop: () => void;
   onAction: (action: "clear" | "new" | "stop") => void;
@@ -581,7 +581,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
             </button>
           </div>
           <div className="compose-right">
-            <ModelSelect configOptions={configOptions} disabled={disabled} onSetConfig={onSetConfig} />
+            <ModelSelect configOptions={configOptions} disabled={disabled} onSetConfig={onSetConfig} contextTokens={usage.used} />
             <ComposerUsage usage={usage} draftTokens={estimateTokens(value)} />
             {(attachments.length > 0 || mentions.length > 0 || images.length > 0) && (
               <span className="composer-count">{t("composer.referencesCount", { count: attachments.length + mentions.length + images.length })}</span>
@@ -613,7 +613,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
 //  - 上下文:session 已用 / 上限(数据源 ACP SessionUsageUpdate,见 usage-bar);无数据则不显示。
 // 仅在有内容可报时渲染(全空则返回 null,不占位)。
 function ComposerUsage({ usage, draftTokens }: {
-  usage: { used: number; size: number; cost: number };
+  usage: Usage;
   draftTokens: number;
 }) {
   const { t } = useTranslation();
@@ -638,10 +638,11 @@ function ComposerUsage({ usage, draftTokens }: {
 // ModelSelect 渲染 configOptions 里的 model/effort/mode 控件(发送按钮左侧)。
 // 用 cmdk(Command) + @radix-ui/react-popover:Radix 管开合/定位/焦点/ARIA,cmdk 管搜索/分组/键盘导航。
 // model 按 value 的 provider 前缀("provider/model")分组;大量选项时 cmdk 内置搜索 + List 滚动。
-function ModelSelect({ configOptions, disabled, onSetConfig }: {
+function ModelSelect({ configOptions, disabled, onSetConfig, contextTokens }: {
   configOptions: ConfigOption[];
   disabled: boolean;
   onSetConfig: (configId: string, value: string) => void;
+  contextTokens: number;
 }) {
   const { t } = useTranslation();
   const modelOpt = configOptions.find((c) => c.category === "model");
@@ -650,7 +651,7 @@ function ModelSelect({ configOptions, disabled, onSetConfig }: {
   if (!modelOpt) return null;
   return (
     <div className="cfg-group">
-      <ConfigSelect label={t("composer.cfgLabel.model")} currentValue={modelOpt.currentValue} options={modelOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("model", v)} groupByProvider searchable />
+      <ConfigSelect label={t("composer.cfgLabel.model")} currentValue={modelOpt.currentValue} options={modelOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("model", v)} groupByProvider searchable contextTokens={contextTokens} />
       {modeOpt && <ConfigSelect label={t("composer.cfgLabel.mode")} currentValue={modeOpt.currentValue} options={modeOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("mode", v)} />}
       {effortOpt && <ConfigSelect label={t("composer.cfgLabel.thought")} currentValue={effortOpt.currentValue} options={effortOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("effort", v)} />}
     </div>
@@ -667,9 +668,10 @@ interface ConfigSelectProps {
   onSelect: (value: string) => void;
   groupByProvider?: boolean;
   searchable?: boolean;
+  contextTokens?: number; // model 专用:切换成本提示用的当前上下文 token 量(Task #15138)
 }
 
-function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupByProvider, searchable }: ConfigSelectProps) {
+function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupByProvider, searchable, contextTokens }: ConfigSelectProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const currentName = options.find((o) => o.value === currentValue)?.name ?? currentValue ?? label;
@@ -715,6 +717,15 @@ function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupB
     return Object.entries(g).sort(([a], [b]) => a.localeCompare(b));
   }, [options, groupByProvider]);
 
+  // 模型切换成本提示(Task #15138):contextTokens>0 时在 popover 顶部展示当前上下文量级;
+  // 有定价的模型在每个选项右侧附预估单轮成本(无定价则只展示量级,§4.4 人话不抛原始字段)。
+  const showCtxHint = !!groupByProvider && (contextTokens ?? 0) > 0;
+  const fmtCost = (v: string): string | null => {
+    const cost = estimateSwitchCost(contextTokens ?? 0, lookupModelPricing(v));
+    if (cost === null) return null;
+    return cost < 0.01 ? "<$0.01" : `$${cost.toFixed(2)}`;
+  };
+
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
@@ -726,6 +737,11 @@ function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupB
       <Popover.Portal>
         <Popover.Content side="top" align="start" sideOffset={6} className="cfg-popover-content" data-testid={`cfg-popover-${label}`}>
           <Command className="cfg-command" label={label}>
+            {showCtxHint && (
+              <div className="cfg-ctx-hint" data-testid="cfg-ctx-hint">
+                {t("composer.switchCostHint", { tokens: fmtTokens(contextTokens ?? 0) })}
+              </div>
+            )}
             {searchable && (
               <div className="cfg-search-row">
                 <Command.Input placeholder={t("composer.searchPlaceholder")} className="cfg-search-input" />
@@ -744,6 +760,7 @@ function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupB
                       data-testid={`cfg-option-${o.value}`}
                     >
                       <span className="cfg-option-name">{o.name}</span>
+                      {fmtCost(o.value) && <span className="cfg-option-cost" data-testid={`cfg-cost-${o.value}`}>~{fmtCost(o.value)}</span>}
                       {o.value !== o.name && <span className="cfg-option-value">{o.value}</span>}
                     </Command.Item>
                   ))}
@@ -761,6 +778,7 @@ function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupB
                         data-testid={`cfg-option-${o.value}`}
                       >
                         <span className="cfg-option-name">{o.name}</span>
+                        {fmtCost(o.value) && <span className="cfg-option-cost" data-testid={`cfg-cost-${o.value}`}>~{fmtCost(o.value)}</span>}
                         {o.value !== o.name && <span className="cfg-option-value">{o.value}</span>}
                       </Command.Item>
                     ))}
@@ -776,6 +794,7 @@ function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupB
                     data-testid={`cfg-option-${o.value}`}
                   >
                     <span className="cfg-option-name">{o.name}</span>
+                    {fmtCost(o.value) && <span className="cfg-option-cost" data-testid={`cfg-cost-${o.value}`}>~{fmtCost(o.value)}</span>}
                     {o.value !== o.name && <span className="cfg-option-value">{o.value}</span>}
                   </Command.Item>
                 ))
