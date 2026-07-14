@@ -571,6 +571,60 @@ input, textarea { font-family: inherit; }
 }
 .tool-term { color: var(--text); border-color: var(--sep-strong); background: #131316; }
 
+/* ─── 执行计划时间线(ACP plan_update,整表替换) ─── */
+.plan-timeline { max-width: 1080px; margin: 4px auto; padding: 0 28px; width: 100%; }
+.plan-summary {
+  cursor: pointer; display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 7px 11px; background: var(--elev);
+  border: 1px solid var(--sep); border-radius: var(--r-sm);
+  font-size: 12.5px; color: var(--text-2); user-select: none; transition: background 0.1s;
+}
+.plan-summary:hover { background: var(--elev-2); }
+.plan-summary svg { color: var(--text-3); flex-shrink: 0; }
+.plan-summary-label { font-weight: 500; color: var(--text-2); white-space: nowrap; }
+.plan-summary-count { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.plan-progress {
+  flex: 1; min-width: 60px; height: 5px; background: var(--bg);
+  border-radius: 4px; overflow: hidden;
+}
+.plan-progress-fill {
+  display: block; height: 100%; border-radius: 4px;
+  background: var(--green); transition: width 0.3s ease;
+}
+.plan-summary-pct { font-size: 11px; color: var(--text-3); min-width: 32px; text-align: right; }
+.plan-chevron { color: var(--text-3); transition: transform 0.2s ease; }
+.plan-chevron.open { transform: rotate(90deg); }
+.plan-entries {
+  list-style: none; margin: 0; padding: 4px 0 8px;
+  border: 1px solid var(--sep); border-top: none;
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  background: rgba(10, 132, 255, 0.03);
+}
+.plan-entry {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 4px 12px; font-size: 12.5px; line-height: 1.5;
+  color: var(--text-3); transition: color 0.15s;
+}
+.plan-entry-icon { flex-shrink: 0; width: 14px; height: 16px; display: inline-flex; align-items: center; justify-content: center; margin-top: 1px; }
+.plan-entry-icon svg { color: var(--text-3); }
+.plan-entry-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  border: 1.5px solid var(--sep-strong); display: inline-block;
+}
+.plan-entry-content { flex: 1; word-break: break-word; user-select: text; }
+.plan-entry-prio {
+  flex-shrink: 0; font-size: 10px; padding: 1px 6px; border-radius: 20px; font-weight: 500;
+  align-self: center;
+}
+.pe-prio-high { color: var(--red); background: rgba(255, 69, 58, 0.14); }
+/* 状态:进行中高亮(主色)、完成(绿、内容提亮)、待处理(灰) */
+.pe-running { color: var(--text); }
+.pe-running .plan-entry-icon .thought-spinner { border-top-color: var(--accent-2); }
+.pe-done { color: var(--text-2); }
+.pe-done .plan-entry-icon svg { color: var(--green); }
+.pe-done .plan-entry-content { text-decoration: line-through; text-decoration-color: var(--text-3); text-decoration-thickness: 1px; }
+.pe-pending { color: var(--text-3); }
+
 /* ─── bash / 命令执行卡片(头:名+状态+exit;体:命令行+折叠输出) ─── */
 .bash-tool-summary .tool-title { flex: 0 1 auto; }
 .bash-exit {

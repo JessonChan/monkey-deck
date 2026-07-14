@@ -3,7 +3,7 @@ import { Events } from "@wailsio/runtime";
 import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import * as TerminalService from "../bindings/github.com/jessonchan/monkey-deck/internal/terminal/terminalservice";
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention } from "./types";
+import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention, PlanEntry } from "./types";
 import Sidebar from "./components/Sidebar";
 import ChatView, { type ChatViewHandle } from "./components/ChatView";
 import { Sparkles } from "lucide-react";
@@ -54,6 +54,7 @@ export default function App() {
   const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, string[]>>({});  // composer 回形针附件(按 session 隔离,切走保留)
   const [mentionsBySession, setMentionsBySession] = useState<Record<string, Mention[]>>({});  // composer @提及(按 session 隔离,切走保留)
   const [configOptionsBySession, setConfigOptionsBySession] = useState<Record<string, ConfigOption[]>>({}); // model/mode/effort(agent 自报)
+  const [planBySession, setPlanBySession] = useState<Record<string, PlanEntry[]>>({}); // agent 执行计划(整表替换,ACP protocol)
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
   const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean } | null>(null);  // 新建对话弹窗
   // 集成终端(per-session,与 agent ACP 通道完全分离;§1.1 agent 永远走 ACP)。
@@ -137,6 +138,11 @@ export default function App() {
       setConfigOptionsBySession((prev) => ({ ...prev, [ev.sessionId]: ev.configOptions ?? [] }));
       return;
     }
+    if (ev.kind === "plan") {
+      // agent 执行计划(ACP protocol:整表替换)。plan 是 session 级实时状态,不入消息流、不持久化。
+      setPlanBySession((prev) => ({ ...prev, [ev.sessionId]: ev.planEntries ?? [] }));
+      return;
+    }
     setItemsBySession((prev) => ({
       ...prev,
       [ev.sessionId]: applyEventToItems(prev[ev.sessionId] ?? [], ev),
@@ -167,6 +173,7 @@ export default function App() {
   const attachments = (selectedSessionId ? attachmentsBySession[selectedSessionId] : undefined) ?? [];
   const mentions = (selectedSessionId ? mentionsBySession[selectedSessionId] : undefined) ?? [];
   const configOptions = (selectedSessionId ? configOptionsBySession[selectedSessionId] : undefined) ?? [];
+  const plan = (selectedSessionId ? planBySession[selectedSessionId] : undefined) ?? [];
   const onComposerChange = useCallback((text: string) => {
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
@@ -208,6 +215,10 @@ export default function App() {
       if (!s) return;
       setStatusBySession((prev) => ({ ...prev, [s.sessionId]: s.status }));
       setStatusDetailBySession((prev) => ({ ...prev, [s.sessionId]: s.detail || "" }));
+      // 新 turn 开始:清掉上一轮的执行计划(避免旧计划残留;agent 会在本 turn 重发 plan_update)。
+      if (s.status === "prompting") {
+        setPlanBySession((prev) => { if (!prev[s.sessionId]) return prev; const n = { ...prev }; delete n[s.sessionId]; return n; });
+      }
       // 用户发消息(prompting)→ 即时刷新侧栏顺序。后端 startTurn 已把 prompted_at 刷为
       // now(主排序键),这里重拉让该 session 跳到顶部。后台活动(usage_update/标题同步)不
       // 走 status 事件,故侧栏不会被后台 session 抖动。
@@ -925,6 +936,7 @@ export default function App() {
               activity={activityBySession[selectedSessionId]}
               sessionId={selectedSessionId}
               configOptions={configOptions}
+              plan={plan}
               onSetConfig={setSessionConfig}
               hasMore={hasMore}
               loadingMore={loadingMore}

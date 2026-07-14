@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem, Mention } from "../types";
+import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem, Mention, PlanEntry } from "../types";
 import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
@@ -11,7 +11,7 @@ import CollapsibleText from "./CollapsibleText";
 import FilePreviewOverlay, { type PreviewTarget } from "./FilePreviewOverlay";
 import PathLinkified from "./PathLinkified";
 import { countDiffLines, diffLineCls } from "../lib/diff";
-import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search } from "lucide-react";
+import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks } from "lucide-react";
 
 interface Usage { used: number; size: number; cost: number; }
 
@@ -44,6 +44,7 @@ interface Props {
   history: string[];
   sessionId: string;
   configOptions: ConfigOption[];
+  plan: PlanEntry[];
   onSetConfig: (configId: string, value: string) => void;
   hasMore: boolean;
   loadingMore: boolean;
@@ -269,6 +270,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           );
         })}
         {props.permission && <PermissionCard prompt={props.permission} onRespond={props.onRespondPermission} />}
+        {props.plan.length > 0 && <PlanTimeline entries={props.plan} prompting={props.status === "prompting"} />}
         {props.status === "prompting" && items.length > 0 && (
           <div className="typing-indicator"><span /> <span /> <span /></div>
         )}
@@ -999,6 +1001,63 @@ function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRes
         <button className="perm-btn perm-allow" data-testid="perm-session" onClick={() => onRespond("session")}>本会话允许</button>
         <button className="perm-btn perm-allow" data-testid="perm-project" onClick={() => onRespond("project")}>本项目允许</button>
         <button className="perm-btn perm-deny" data-testid="perm-deny" onClick={() => onRespond("deny")}>本次拒绝</button>
+      </div>
+    </div>
+  );
+}
+
+// 执行计划时间线(ACP plan_update):agent 发整表替换的 plan entries,前端渲染为可折叠卡片。
+// 每项一行(状态图标 + 内容),头部带进度条 + 已完成/总数。进行中高亮、完成打勾、新增/变化即时反映。
+// plan 是 session 级实时状态(非消息项),回合开始清空,由 agent 的 plan_update 整表刷新。
+const PLAN_STATUS_ICON = {
+  completed: { cls: "pe-done", label: "已完成" },
+  in_progress: { cls: "pe-running", label: "进行中" },
+  pending: { cls: "pe-pending", label: "待处理" },
+} as const;
+
+function PlanTimeline({ entries, prompting }: { entries: PlanEntry[]; prompting: boolean }) {
+  const total = entries.length;
+  const done = entries.filter((e) => e.status === "completed").length;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const anyRunning = prompting && entries.some((e) => e.status === "in_progress" || e.status === "pending");
+  // 长计划(>8 项)默认折叠,避免占屏;短计划默认展开看进度。
+  const [manual, setManual] = useState<boolean | null>(null);
+  const defaultOpen = total <= 8;
+  const isOpen = manual === null ? defaultOpen : manual;
+  const toggle = () => setManual(!isOpen);
+  const allDone = total > 0 && done === total;
+  return (
+    <div className="plan-timeline" data-testid="plan-timeline">
+      <button className="plan-summary" onClick={toggle} type="button" aria-expanded={isOpen}>
+        {anyRunning ? <span className="thought-spinner" /> : allDone ? <Check size={13} /> : <ListChecks size={13} />}
+        <span className="plan-summary-label">执行计划</span>
+        <span className="plan-summary-count">{done}/{total}</span>
+        <span className="plan-progress" aria-label={`已完成 ${pct}%`}>
+          <span className="plan-progress-fill" style={{ width: `${pct}%` }} />
+        </span>
+        <span className="plan-summary-pct">{pct}%</span>
+        <ChevronRight size={13} className={`plan-chevron ${isOpen ? "open" : ""}`} />
+      </button>
+      <div className={`collapse-body ${isOpen ? "open" : ""}`}>
+        <div className="collapse-body-inner">
+          {isOpen && (
+            <ol className="plan-entries" data-testid="plan-entries">
+              {entries.map((e, i) => {
+                const st = PLAN_STATUS_ICON[e.status as keyof typeof PLAN_STATUS_ICON] || PLAN_STATUS_ICON.pending;
+                const running = e.status === "in_progress";
+                return (
+                  <li key={i} className={`plan-entry ${st.cls}`} data-testid="plan-entry">
+                    <span className="plan-entry-icon">
+                      {e.status === "completed" ? <Check size={12} /> : running ? <span className="thought-spinner" /> : <span className="plan-entry-dot" />}
+                    </span>
+                    <span className="plan-entry-content">{e.content}</span>
+                    {e.priority === "high" && <span className="plan-entry-prio pe-prio-high">高</span>}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -42,6 +42,15 @@ type SessionEvent struct {
 	Cost   *float64 `json:"cost,omitempty"`   // 累积成本 USD
 	Title         string          `json:"title,omitempty"`  // session_info 标题
 	ConfigOptions []ConfigOption  `json:"configOptions,omitempty"` // config_option:model/mode/effort 等(agent 自报)
+	PlanEntries   []PlanEntry     `json:"planEntries,omitempty"` // plan:agent 执行计划(整表替换,ACP protocol)
+}
+
+// PlanEntry 是 agent 执行计划的一项(ACP PlanEntry 的扁平化)。
+// 整表替换模型:harness 每次 plan_update 发全量列表,client 直接替换。
+type PlanEntry struct {
+	Content  string `json:"content"`           // 任务描述
+	Priority string `json:"priority,omitempty"` // high | medium | low
+	Status   string `json:"status"`             // pending | in_progress | completed
 }
 
 // ConfigOption 是给前端用的扁平化 session config option(从 acp.SessionConfigOption union 转换)。
@@ -103,6 +112,23 @@ func cfgEntry(e acp.SessionConfigSelectOption) ConfigOptionEntry {
 		d = *e.Description
 	}
 	return ConfigOptionEntry{Value: string(e.Value), Name: e.Name, Description: d}
+}
+
+// flattenPlanEntries 把 acp.PlanEntry 列表拍平为前端友好的 []PlanEntry。
+// entries 为 nil/空时返回 nil(前端 omitempty 不发该字段)。
+func flattenPlanEntries(entries []acp.PlanEntry) []PlanEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]PlanEntry, 0, len(entries))
+	for _, en := range entries {
+		out = append(out, PlanEntry{
+			Content:  en.Content,
+			Priority: string(en.Priority),
+			Status:   string(en.Status),
+		})
+	}
+	return out
 }
 
 // PermissionPrompt 是发给前端的权限裁决请求(AGENTS.md §3.4)。
@@ -427,6 +453,14 @@ func flattenUpdate(sessionID string, u acp.SessionUpdate) (SessionEvent, bool) {
 		return e, true
 	case u.Plan != nil:
 		e.Kind = "plan"
+		e.PlanEntries = flattenPlanEntries(u.Plan.Entries)
+		return e, true
+	case u.PlanUpdate != nil:
+		// UNSTABLE:plan_update 的 Items 变体带结构化 entries(与 Plan 同形);File/Markdown 无结构化项,忽略。
+		e.Kind = "plan"
+		if u.PlanUpdate.Plan.Items != nil {
+			e.PlanEntries = flattenPlanEntries(u.PlanUpdate.Plan.Items.Entries)
+		}
 		return e, true
 	case u.ConfigOptionUpdate != nil:
 		e.Kind = "config_option"

@@ -27,6 +27,15 @@ export interface SessionEvent {
   cost?: number; // 累积成本 USD
   title?: string; // session_info 标题
   configOptions?: ConfigOption[]; // config_option:model/mode/effort(agent 自报)
+  planEntries?: PlanEntry[]; // plan:agent 执行计划(整表替换,ACP protocol)
+}
+
+// agent 执行计划的一项(与后端 internal/acp.PlanEntry 对齐)。
+// status: pending | in_progress | completed;priority: high | medium | low。
+export interface PlanEntry {
+  content: string;
+  priority?: string;
+  status: string;
 }
 
 // session config option(agent 经 NewSession/config_option_update 自报,前端渲染下拉)。
