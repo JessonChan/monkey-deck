@@ -36,7 +36,7 @@ type StopReason = acp.StopReason
 // Data 非空时改发 ContentBlock::Image(内联 base64 图片)—— 需 agent 声明 image prompt
 // 能力(Initialize 响应的 promptCapabilities.image)。Data 与 Path 互斥:Data 优先。
 type Attachment struct {
-	Path string `json:"path"`
+	Path string `json:"path,omitempty"`
 	Name string `json:"name"`
 	// Data:base64 编码的内联图片数据(设置时发 Image 块,需 image 能力)。
 	Data     string `json:"data,omitempty"`
