@@ -9,14 +9,16 @@ import (
 )
 
 // sessionColumns / scanSession:统一 session 的列与扫描,避免多处 SELECT/Scan 漂移(§1.5)。
-const sessionColumns = `id,project_id,acp_session_id,title,model,harness,worktree_path,branch,used_tokens,size_tokens,cost,created_at,updated_at,prompted_at,pinned`
+const sessionColumns = `id,project_id,acp_session_id,title,model,harness,worktree_path,branch,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned`
 
 func scanSession(r interface {
 	Scan(dest ...any) error
 }, se *Session) error {
 	return r.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model, &se.Harness,
 		&se.WorktreePath, &se.Branch,
-		&se.UsedTokens, &se.SizeTokens, &se.Cost, &se.CreatedAt, &se.UpdatedAt, &se.PromptedAt, &se.Pinned)
+		&se.UsedTokens, &se.SizeTokens, &se.Cost,
+		&se.CachedReadTokens, &se.CachedWriteTokens, &se.InputTokens, &se.OutputTokens, &se.ThoughtTokens, &se.TotalTokens,
+		&se.CreatedAt, &se.UpdatedAt, &se.PromptedAt, &se.Pinned)
 }
 
 // --- Sessions ---
@@ -71,6 +73,16 @@ func (s *Store) UpdateSessionUsage(ctx context.Context, id string, used, size in
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE sessions SET used_tokens=?, size_tokens=?, cost=?, updated_at=? WHERE id=?`,
 		used, size, cost, now(), id)
+	return err
+}
+
+// UpdateSessionTokens 回写 token 明细(来自 PromptResponse.Usage,Task #15138)。
+// 与 UpdateSessionUsage(used/size/cost,streaming)分离:明细只在 Prompt 返回后更新,
+// streaming UsageUpdate 不含明细;两者独立写、互不覆盖。
+func (s *Store) UpdateSessionTokens(ctx context.Context, id string, cachedRead, cachedWrite, input, output, thought, total int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET cached_read_tokens=?, cached_write_tokens=?, input_tokens=?, output_tokens=?, thought_tokens=?, total_tokens=? WHERE id=?`,
+		cachedRead, cachedWrite, input, output, thought, total, id)
 	return err
 }
 

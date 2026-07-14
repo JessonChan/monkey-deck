@@ -131,6 +131,48 @@ func TestSessionUsagePersist(t *testing.T) {
 	}
 }
 
+// TestSessionTokenBreakdownPersist 校验 token 明细(来自 PromptResponse.Usage)的独立写入与读回
+// (Task #15138)。明细与 used/size/cost(streaming)分离写入,互不覆盖。
+func TestSessionTokenBreakdownPersist(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	p, err := s.CreateProject(ctx, "demo", "/tmp/demo3", "zai/glm-4.6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := s.CreateSession(ctx, p.ID, "", "zai/glm-4.6", "opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 先写 streaming 用量(used/size/cost),再写明细(独立)。
+	if err := s.UpdateSessionUsage(ctx, sess.ID, 12345, 200000, 0.0123); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateSessionTokens(ctx, sess.ID, 8000, 1000, 12000, 500, 200, 12500); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetSession(ctx, sess.ID)
+	if got.CachedReadTokens != 8000 || got.CachedWriteTokens != 1000 {
+		t.Fatalf("cached read/write = %d/%d, want 8000/1000", got.CachedReadTokens, got.CachedWriteTokens)
+	}
+	if got.InputTokens != 12000 || got.OutputTokens != 500 {
+		t.Fatalf("input/output = %d/%d, want 12000/500", got.InputTokens, got.OutputTokens)
+	}
+	if got.ThoughtTokens != 200 || got.TotalTokens != 12500 {
+		t.Fatalf("thought/total = %d/%d, want 200/12500", got.ThoughtTokens, got.TotalTokens)
+	}
+	// 明细写入不应覆盖 streaming 的 used/size/cost(独立列)。
+	if got.UsedTokens != 12345 || got.SizeTokens != 200000 || got.Cost != 0.0123 {
+		t.Fatalf("streaming usage corrupted by token write: %+v", got)
+	}
+	// ListSessions 也应读到明细。
+	list, _ := s.ListSessions(ctx, p.ID)
+	if len(list) != 1 || list[0].TotalTokens != 12500 || list[0].CachedReadTokens != 8000 {
+		t.Fatalf("breakdown not persisted via ListSessions: %+v", list)
+	}
+}
+
 // TestListMessagesBefore 校验游标分页:beforeSeq<=0 取最新一页 + hasMore 探测;翻页取更早的。
 func TestListMessagesBefore(t *testing.T) {
 	s := newTestStore(t)

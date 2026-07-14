@@ -58,6 +58,14 @@ type Session struct {
 	UsedTokens int64   `json:"usedTokens"`
 	SizeTokens int64   `json:"sizeTokens"`
 	Cost       float64 `json:"cost"`
+	// token 明细(来自 PromptResponse.Usage,UNSTABLE;Task #15138)。
+	// streaming UsageUpdate 只含 used/size/cost,明细只在 Prompt 返回后回填。多数 harness 不回填则全 0。
+	CachedReadTokens  int64 `json:"cachedReadTokens"`
+	CachedWriteTokens int64 `json:"cachedWriteTokens"`
+	InputTokens       int64 `json:"inputTokens"`
+	OutputTokens      int64 `json:"outputTokens"`
+	ThoughtTokens     int64 `json:"thoughtTokens"`
+	TotalTokens       int64 `json:"totalTokens"`
 	CreatedAt  int64   `json:"createdAt"`
 	UpdatedAt  int64   `json:"updatedAt"`
 	PromptedAt int64   `json:"promptedAt"` // 用户最后一次发消息的时刻,专用于侧栏排序(后台活动不刷新它)
