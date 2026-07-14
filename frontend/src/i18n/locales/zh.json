@@ -94,6 +94,9 @@
     "placeholder": "发一条消息开始对话…",
     "loadMore": "加载更多",
     "scrollToBottom": "滚到最新消息",
+    "readonlyHint": "只读 — 发消息以继续",
+    "continueSession": "继续会话",
+    "continueSessionTip": "启动 agent 接上本次会话",
     "thinkingLive": "思考中",
     "thought": "思考过程",
     "collapseThought": "收起",
@@ -121,6 +124,7 @@
     "status": {
       "idle": "空闲",
       "ready": "就绪",
+      "readonly": "只读",
       "error": "出错",
       "closed": "已关闭",
       "executing": "执行中",

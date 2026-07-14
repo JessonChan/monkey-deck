@@ -39,6 +39,19 @@ func (s *Store) AppendMessage(ctx context.Context, sessionID, role, kind, conten
 	return m, nil
 }
 
+// SessionHasMessages 报告某 session 是否已有消息。
+// 用于懒 spawn 判定:历史会话(有消息)只读打开,不 spawn harness(§3.x 懒 spawn)。
+func (s *Store) SessionHasMessages(ctx context.Context, sessionID string) (bool, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=?)`,
+		sessionID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("session has messages: %w", err)
+	}
+	return exists == 1, nil
+}
+
 // ListMessages 列出某 session 全部消息(按 seq 升序)。
 func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx,

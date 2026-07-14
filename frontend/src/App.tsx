@@ -235,7 +235,13 @@ export default function App() {
     const offStatus = Events.On("chat:status", (e: { data: StatusPayload }) => {
       const s = e.data;
       if (!s) return;
-      setStatusBySession((prev) => ({ ...prev, [s.sessionId]: s.status }));
+      // 懒 spawn:发消息触发的 spawn 会推 started(再紧跟 prompting)。不把活跃 turn 降级回 ready,
+      // 避免「只读态发消息 → started 闪烁 → prompting」的瞬态(§3.x 懒 spawn)。
+      setStatusBySession((prev) => {
+        const cur = prev[s.sessionId];
+        if (s.status === "started" && cur === "prompting") return prev;
+        return { ...prev, [s.sessionId]: s.status };
+      });
       setStatusDetailBySession((prev) => ({ ...prev, [s.sessionId]: s.detail || "" }));
       // 新 turn 开始:清掉上一轮的执行计划(避免旧计划残留;agent 会在本 turn 重发 plan_update)。
       if (s.status === "prompting") {
@@ -542,6 +548,18 @@ export default function App() {
     userStoppedRef.current = true; // 抑制本次 idle 的 auto-continue(用户主动停,不自动续发;队列保留)
     await ChatService.StopSession(selectedSessionId);
   }, [selectedSessionId]);
+
+  // 继续会话:只读态(懒 spawn)下用户点「继续会话」时显式触发 spawn,切为可交互态。
+  // 已活跃则后端 no-op。发新消息也会自动触发 spawn(走 SendMessage→ensureLive)。
+  const continueSession = useCallback(async () => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    try {
+      await ChatService.ContinueSession(sid);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
 
   // 立即发送:打断当前 turn,这条插队先发(其余保留排队)。后端 InterruptAndSend 原子完成
   // (cancel + 等落定 + 发新);被取消的轮不发 idle,故 status 保持 prompting,不会误触发 auto-continue。
@@ -979,6 +997,7 @@ export default function App() {
               permission={permission}
               onSend={sendMessage}
               onStop={stopSession}
+              onContinue={continueSession}
               onAction={handleComposerAction}
               onRespondPermission={respondPermission}
               onToggleTerminal={toggleTerminalPanel}

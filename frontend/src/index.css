@@ -346,9 +346,25 @@ input, textarea { font-family: inherit; }
 .st-busy { background: rgba(10, 132, 255, 0.16); color: var(--accent-2); }
 .st-error { background: rgba(255, 69, 58, 0.16); color: var(--red); }
 .st-closed { background: var(--elev); color: var(--text-3); }
+.st-readonly { background: var(--elev); color: var(--text-3); }
 .st-thinking { background: rgba(255,214,10,0.16); color: var(--amber); }
 .st-executing { background: rgba(10,132,255,0.16); color: var(--accent-2); }
 .st-replying { background: rgba(48,209,88,0.14); color: var(--green); }
+
+/* 只读横幅:懒 spawn 下历史会话只读打开时的视觉提示(§3.x)。轻量 CSS 驱动,无重绘开销。 */
+.readonly-banner {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 6px 12px; background: var(--elev); border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--text-3);
+}
+.readonly-banner-text { display: inline-flex; align-items: center; gap: 6px; }
+.readonly-continue-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; padding: 3px 10px; border-radius: 14px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-1);
+  cursor: pointer; transition: background 0.12s, border-color 0.12s;
+}
+.readonly-continue-btn:hover { background: var(--elev); border-color: var(--accent-2); color: var(--accent-2); }
 
 /* will-change: scroll-position 提示滚动容器把滚动交给合成线程处理(主线程不再每帧跑布局/绘制),
    是滚动顺滑的关键合成层提升。配合 onScroll 不再同步读 scrollHeight(见 ChatView),双管齐下消掉帧。 */

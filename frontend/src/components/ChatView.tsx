@@ -12,7 +12,7 @@ import CollapsibleText from "./CollapsibleText";
 import FilePreviewOverlay, { type PreviewTarget } from "./FilePreviewOverlay";
 import PathLinkified from "./PathLinkified";
 import { countDiffLines, diffLineCls } from "../lib/diff";
-import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, RefreshCw } from "lucide-react";
+import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, RefreshCw, Eye, MessageSquarePlus } from "lucide-react";
 
 interface Usage { used: number; size: number; cost: number; }
 
@@ -29,6 +29,7 @@ interface Props {
   sessionDiff: string | null;
   onSend: (text: string, mentions: Mention[], images?: ImageAttachment[]) => void;
   onStop: () => void;
+  onContinue: () => void;
   onAction: (action: "clear" | "new" | "stop") => void;
   onRespondPermission: (optionId: string) => void;
   onToggleTerminal: () => void;
@@ -61,6 +62,7 @@ interface Props {
 const STATUS_MAP: Record<string, { key: string; cls: string }> = {
   idle: { key: "chat.status.idle", cls: "st-idle" },
   started: { key: "chat.status.ready", cls: "st-idle" },
+  readonly: { key: "chat.status.readonly", cls: "st-readonly" },
   error: { key: "chat.status.error", cls: "st-error" },
   closed: { key: "chat.status.closed", cls: "st-closed" },
   empty: { key: "", cls: "" },
@@ -258,6 +260,25 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           </button>
         </div>
       </header>
+
+      {props.status === "readonly" && (
+        <div className="readonly-banner" data-testid="readonly-banner">
+          <span className="readonly-banner-text">
+            <Eye size={14} />
+            {t("chat.readonlyHint")}
+          </span>
+          <button
+            className="readonly-continue-btn"
+            onClick={props.onContinue}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("chat.continueSessionTip")}
+            data-testid="continue-session-btn"
+          >
+            <MessageSquarePlus size={14} />
+            {t("chat.continueSession")}
+          </button>
+        </div>
+      )}
 
       <div className="chat-body" key={props.sessionId} ref={scrollRef} onScroll={onScroll} data-testid="chat-body">
         {items.length === 0 && <div className="chat-placeholder">{t("chat.placeholder")}</div>}

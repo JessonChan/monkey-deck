@@ -43,7 +43,7 @@ const (
 // StatusPayload 会话状态变更。
 type StatusPayload struct {
 	SessionID string `json:"sessionId"`
-	Status    string `json:"status"` // started | prompting | idle | error | closed
+	Status    string `json:"status"` // started | prompting | idle | error | closed | readonly
 	Detail    string `json:"detail,omitempty"`
 }
 
@@ -204,6 +204,11 @@ type ChatService struct {
 	// 收尾与并发 send 的竞态(§5.4 覆盖竞态)。
 	emitHook    func(name string, data any)
 	persistHook func()
+
+	// spawnFn 启动一个 liveSession(spawn harness + Init + NewSession/LoadSession)。
+	// 默认 = s.startLive;单测注入 mock 以免启真 harness(§5.1)。ensureLive 经它 spawn,
+	// 使懒 spawn(OpenSession/ContinueSession/SendMessage)的触发路径可被单测断言。
+	spawnFn func(se *store.Session, proj *store.Project, acpSessionID string, resume bool) error
 }
 
 // NewChatService 构造(尚未启动;ServiceStartup 时 open store)。
@@ -223,6 +228,7 @@ func (s *ChatService) ServiceStartup(ctx context.Context, options application.Se
 	}
 	s.st = st
 	s.loadPersistedConfig()
+	s.spawnFn = s.startLive // 默认 spawn 实现;单测可注入 mock(§5.1)
 	acp.SetPgidFile(filepath.Join(s.cfg.CachesDir, "harness-pgids.json")) // §3.2:限定回收范围到本应用派生的 harness
 	acp.SetHarnessCommands(harness.Commands())                          // 注入受支持 harness 命令,回收层据此识别 omp/opencode/...(不再写死 opencode)
 	acp.KillAllHarnesses()                                              // 启动时清上轮残留 harness 进程组(§3.2)
@@ -821,8 +827,12 @@ func (s *ChatService) SessionRenamePath(sessionID, rel, newName string) (string,
 	return fsview.RenamePath(root, rel, newName)
 }
 
-// OpenSession 打开已有 session:B 方案,异步 spawn harness(NewSession/LoadSession),
-// 完成后通过 event 推完整 config_option(model/mode/effort)+ started。
+// OpenSession 打开已有 session。懒 spawn(§3.x):
+//   - 历史会话(已有消息):只读打开,不 spawn harness —— 仅从 DB 读历史展示,
+//     推 readonly 状态让前端给「只读 - 发消息以继续」提示。用户发新消息或点「继续会话」
+//     (ContinueSession)时才 spawn 并切为可交互态。避免只读查看浪费一个 harness 进程。
+//   - 新建会话(无消息):保持原行为,立即异步 spawn(B 方案:切过去就绪,首条消息零延迟)。
+//
 // 立即返回(不阻塞前端加载历史,历史从 DB 读,独立于 harness)。ensureLive 的 spawnMu
 // 串行化保证用户在 spawn 完成前发消息不会双 spawn。
 func (s *ChatService) OpenSession(sessionID string) error {
@@ -836,12 +846,27 @@ func (s *ChatService) OpenSession(sessionID string) error {
 	if se == nil {
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
+	// 历史会话:只读,不 spawn。发消息 / ContinueSession 时才 ensureLive。
+	if has, _ := s.st.SessionHasMessages(s.ctx, sessionID); has {
+		s.emitStatus(sessionID, "readonly", "")
+		return nil
+	}
 	go func() {
 		if err := s.ensureLive(sessionID); err != nil {
 			slog.Warn("open session spawn failed", "session", sessionID, "err", err)
 		}
 	}()
 	return nil
+}
+
+// ContinueSession 显式触发懒 spawn:只读态下用户点「继续会话」时调用,
+// spawn harness(LoadSession resume 历史会话 / NewSession 新会话)并切为可交互态。
+// 已活跃则 no-op。与 SendMessage 共用 ensureLive(spawnMu 串行化,不双 spawn)。
+func (s *ChatService) ContinueSession(sessionID string) error {
+	if s.isActive(sessionID) {
+		return nil
+	}
+	return s.ensureLive(sessionID)
 }
 
 // ensureLive 确保 session 的 harness 已启动且仍存活:未活跃则 spawn;活跃但进程已死
@@ -887,7 +912,7 @@ func (s *ChatService) ensureLive(sessionID string) error {
 		return fmt.Errorf("project not found for session")
 	}
 	resume := se.ACPSession != ""
-	return s.startLive(se, proj, se.ACPSession, resume)
+	return s.spawnFn(se, proj, se.ACPSession, resume)
 }
 
 // startLive 启动一个 liveSession(spawn harness + Init + NewSession/LoadSession)。
@@ -1496,7 +1521,7 @@ func (s *ChatService) StopSession(sessionID string) error {
 }
 
 // GetSessionConfigOptions 返回当前 session 的 config options(给前端渲染下拉:model/mode/effort)。
-// B 方案:OpenSession 即异步 spawn,session 始终活跃 → 直接取 live 真相。
+// 懒 spawn:历史会话只读打开时未活跃 → 报错;spawn 后(发消息/继续会话)才可用。
 func (s *ChatService) GetSessionConfigOptions(sessionID string) ([]acp.ConfigOption, error) {
 	s.mu.RLock()
 	ls, ok := s.active[sessionID]
@@ -1508,7 +1533,7 @@ func (s *ChatService) GetSessionConfigOptions(sessionID string) ([]acp.ConfigOpt
 }
 
 // SetSessionConfigOption 切换 session 的某个 config option(model/mode/effort),热切、即时生效。
-// B 方案:session 始终活跃,经 session/set_config_option 热切并推送 live configOptions。
+// 懒 spawn:需 session 已活跃(只读态无 config options 可切)。
 func (s *ChatService) SetSessionConfigOption(sessionID, configId, value string) error {
 	s.mu.RLock()
 	ls := s.active[sessionID]

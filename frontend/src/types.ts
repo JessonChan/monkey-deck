@@ -73,7 +73,7 @@ export interface PermissionPrompt {
 
 export interface StatusPayload {
   sessionId: string;
-  status: "started" | "prompting" | "idle" | "error" | "closed";
+  status: "started" | "prompting" | "idle" | "error" | "closed" | "readonly";
   detail?: string;
 }
 
