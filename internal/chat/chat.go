@@ -1457,6 +1457,13 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 		if err := s.st.UpdateSessionUsage(s.ctx, sessionID, e.Used, e.Size, cost); err != nil {
 			slog.Warn("persist usage", "err", err)
 		}
+		// token 明细(来自 PromptResponse.Usage,Task #15138):仅在事件带明细时回写,
+		// streaming UsageUpdate 不含明细(全 0)则跳过,避免覆盖已有值。
+		if e.TotalTokens > 0 || e.InputTokens > 0 || e.OutputTokens > 0 || e.CachedReadTokens > 0 || e.CachedWriteTokens > 0 || e.ThoughtTokens > 0 {
+			if err := s.st.UpdateSessionTokens(s.ctx, sessionID, e.CachedReadTokens, e.CachedWriteTokens, e.InputTokens, e.OutputTokens, e.ThoughtTokens, e.TotalTokens); err != nil {
+				slog.Warn("persist token breakdown", "err", err)
+			}
+		}
 	}
 	s.emit(EventUpdate, e)
 }
