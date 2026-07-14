@@ -13,6 +13,7 @@ import TerminalPanel from "./components/TerminalPanel";
 import type { TerminalTab } from "./lib/terminalTypes";
 import { disposeTerminal } from "./lib/termRegistry";
 import NewSessionModal from "./components/NewSessionModal";
+import PermissionSettings from "./components/PermissionSettings";
 import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import { Group, Panel, Separator, useDefaultLayout, usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
 import { Tooltip } from "react-tooltip";
@@ -63,6 +64,7 @@ export default function App() {
   const [planBySession, setPlanBySession] = useState<Record<string, PlanEntry[]>>({}); // agent 执行计划(整表替换,ACP protocol)
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
   const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean } | null>(null);  // 新建对话弹窗
+  const [permSettingsOpen, setPermSettingsOpen] = useState(false); // 分级权限规则设置弹窗(§3.4)
   // 集成终端(per-session,与 agent ACP 通道完全分离;§1.1 agent 永远走 ACP)。
   // 终端面板开关也 per-session:session A 开着,切到 B 时 B 按自己的状态显示(各自独立)。
   const [termTabsBySession, setTermTabsBySession] = useState<Record<string, TerminalTab[]>>({});
@@ -944,6 +946,7 @@ export default function App() {
           unreadBySession={unreadBySession}
           onReorderProjects={reorderProjects}
           onCollapse={collapseSidebar}
+          onOpenPermissionSettings={() => setPermSettingsOpen(true)}
         />
       </Panel>
       {!leftCollapsed && <Separator className="resize-handle" />}
@@ -1090,6 +1093,9 @@ export default function App() {
         onConfirm={confirmNewSession}
         onCancel={() => setNewSession(null)}
       />
+    )}
+    {permSettingsOpen && (
+      <PermissionSettings onClose={() => setPermSettingsOpen(false)} />
     )}
     <Tooltip id="md-tip" delayShow={isMac ? 1500 : 500} />
     </>

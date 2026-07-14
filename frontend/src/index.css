@@ -1482,6 +1482,49 @@ input, textarea { font-family: inherit; }
 .modal-btn.danger { background: var(--red); color: #fff; }
 .modal-btn.danger:hover { filter: brightness(1.1); }
 
+/* ─── 分级权限规则设置面板(§3.4) ─── */
+.perm-settings-card { max-width: 560px; max-height: 80vh; gap: 10px; }
+.perm-settings-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.perm-settings-title { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--text); }
+.perm-settings-title svg { color: var(--accent-2); }
+.perm-settings-desc { font-size: 11.5px; color: var(--text-3); line-height: 1.5; }
+.perm-rule-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 80px; padding: 2px; }
+.perm-empty { font-size: 12px; color: var(--text-3); padding: 16px; text-align: center; }
+.perm-rule {
+  display: flex; align-items: flex-start; gap: 9px; padding: 10px;
+  background: var(--bg); border: 1px solid var(--sep); border-radius: 8px;
+}
+.perm-rule.disabled { opacity: 0.55; }
+.perm-toggle { margin-top: 5px; width: 15px; height: 15px; cursor: pointer; accent-color: var(--accent); flex-shrink: 0; }
+.perm-rule-main { flex: 1; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.perm-rule-row { display: flex; gap: 8px; }
+.perm-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.perm-field-grow { flex: 1; }
+.perm-field-label { font-size: 10px; color: var(--text-3); }
+.perm-input {
+  background: var(--elev); border: 1px solid var(--sep); border-radius: 5px;
+  padding: 5px 8px; color: var(--text); font-size: 12px; outline: none; width: 100%; min-width: 0;
+}
+.perm-input:focus { border-color: rgba(10, 132, 255, 0.5); }
+.perm-input-mono { font-family: var(--mono); font-size: 11.5px; }
+.perm-select {
+  background: var(--elev); border: 1px solid var(--sep); border-radius: 5px;
+  padding: 5px 6px; color: var(--text); font-size: 12px; outline: none; width: 100%;
+}
+.perm-select:focus { border-color: rgba(10, 132, 255, 0.5); }
+.perm-level.perm-level-allow { color: #34c759; font-weight: 600; }
+.perm-level.perm-level-ask { color: #ff9f0a; font-weight: 600; }
+.perm-level.perm-level-deny { color: var(--red); font-weight: 600; }
+.perm-rule-acts { display: flex; flex-direction: column; gap: 3px; flex-shrink: 0; }
+.perm-move, .perm-del {
+  display: flex; align-items: center; justify-content: center; width: 24px; height: 22px;
+  border: none; border-radius: 5px; background: transparent; color: var(--text-3); cursor: pointer; transition: background 0.1s, color 0.1s;
+}
+.perm-move:hover:not(:disabled), .perm-del:hover { background: var(--hover); color: var(--text); }
+.perm-move:disabled { opacity: 0.3; cursor: not-allowed; }
+.perm-del:hover { color: var(--red); background: rgba(255, 69, 58, 0.10); }
+.perm-settings-actions { justify-content: space-between; }
+
 /* ─── 新建对话弹窗(harness 选择 + worktree 二选一) ─── */
 .new-session-card { max-width: 380px; gap: 14px; }
 .ns-field { display: flex; flex-direction: column; gap: 7px; }
