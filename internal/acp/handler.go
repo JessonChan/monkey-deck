@@ -137,12 +137,17 @@ func flattenPlanEntries(entries []acp.PlanEntry) []PlanEntry {
 }
 
 // PermissionPrompt 是发给前端的权限裁决请求(AGENTS.md §3.4)。
+// 除标题/工具名外,携带决策上下文(动作分组、命令、涉及路径),让用户明确
+// 「哪个工具/动作/目标、需决策什么、可选什么」,避免泛泛确认(§4.4)。
 type PermissionPrompt struct {
-	ID        string             `json:"id"`
-	SessionID string             `json:"sessionId"`
-	ToolName  string             `json:"toolName"`
-	Title     string             `json:"title"`
-	Options   []PermissionOption `json:"options"`
+	ID         string             `json:"id"`
+	SessionID  string             `json:"sessionId"`
+	ToolName   string             `json:"toolName"`
+	Title      string             `json:"title"`
+	ActionType string             `json:"actionType,omitempty"` // read/write/exec/other(由 ToolKind 派生)
+	Command    string             `json:"command,omitempty"`    // 抽取的命令(exec 类,来自 RawInput)
+	Locations  []string           `json:"locations,omitempty"`  // 涉及路径(ToolCall.Locations)
+	Options    []PermissionOption `json:"options"`
 }
 
 // PermissionOption 一个可选项。
@@ -165,7 +170,14 @@ type Handler struct {
 	mu        sync.Mutex
 	pending   map[string]*pendingPermission // id → 待裁决
 	permSeq   int
-	permTTL   time.Duration // 权限裁决超时(超时后按默认动作放行/拒绝)
+	permTTL   time.Duration // 权限裁决总等待预算(超时后按策略降级,§3.4)
+	// 权限回调失败自动恢复(§3.4 + Task #15115):
+	// permRetries:用户未响应时「重发提示」的额外次数(含首次共 retries+1 轮),
+	//   每轮把总预算 permTTL 均分;0=只发一次(等价旧行为)。应对「提示丢失/用户没看到」。
+	// permTimeoutPolicy:总预算耗尽后的降级策略;"allow"(默认,放行让对话继续)/"deny"(拒绝)。
+	//   空串视作 allow(零值安全:直接 &Handler{} 构造的测试默认放行,不致误拒)。
+	permRetries       int
+	permTimeoutPolicy string
 	// 权限裁决记忆(§3.4):用户曾选「本会话/本项目允许」后,后续 RequestPermission 当场自动放行,
 	// 不弹窗、不等。覆盖所有请求类型(命令执行、外部目录访问等),不止外部目录——见
 	// RequestPermission 命中分支。sessionAllowExternal 内存(随 session 生灭);
@@ -185,19 +197,49 @@ type pendingPermission struct {
 	response chan string // 用户选中的 OptionId
 }
 
+// 权限回调恢复默认(§3.4 + Task #15115)。
+const (
+	defaultPermRetries       = 1              // 用户未响应时额外重发 1 次(共 2 轮通知)
+	defaultPermTimeoutPolicy = "allow"        // 总预算耗尽:放行让对话继续(对齐 §3.4 桌面有人但走开了)
+	permSubIntervalFloor     = 200 * time.Millisecond // 总预算切分下限,防极短 TTL 切出 0
+)
+
+// timeoutPolicyAllow 把策略字符串归一为「是否放行」;空/未知 → allow(零值安全)。
+func timeoutPolicyAllow(policy string) bool {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case "deny", "reject":
+		return false
+	default:
+		return true
+	}
+}
+
 // NewHandler 构造一个 Handler。permTTL=0 时用默认 5 分钟。
 func NewHandler(workDir string, onEvent func(SessionEvent), onPermission func(PermissionPrompt), permTTL time.Duration) *Handler {
 	if permTTL <= 0 {
 		permTTL = 5 * time.Minute
 	}
 	return &Handler{
-		Log:         slog.Default(),
-		WorkDir:     workDir,
-		OnEvent:     onEvent,
-		OnPermission: onPermission,
-		pending:     map[string]*pendingPermission{},
-		permTTL:     permTTL,
+		Log:               slog.Default(),
+		WorkDir:           workDir,
+		OnEvent:           onEvent,
+		OnPermission:      onPermission,
+		pending:           map[string]*pendingPermission{},
+		permTTL:           permTTL,
+		permRetries:       defaultPermRetries,
+		permTimeoutPolicy: defaultPermTimeoutPolicy,
 	}
+}
+
+// SetPermissionRecovery 配置权限回调失败恢复策略(Task #15115)。
+// retries<0 视作 0;timeoutPolicy 为 "allow"/"deny"(空串保留默认)。
+// 并发安全:仅在 session 启动 / 配置变更时调用,不在 RequestPermission 热路径中写。
+func (h *Handler) SetPermissionRecovery(retries int, timeoutPolicy string) {
+	if retries < 0 {
+		retries = 0
+	}
+	h.permRetries = retries
+	h.permTimeoutPolicy = timeoutPolicy
 }
 
 // RespondPermission 由 service 调(前端用户点了某个选项)。非阻塞;返回 ok=false 表示无此待裁决项。
@@ -268,51 +310,133 @@ func (h *Handler) RequestPermission(ctx context.Context, req acp.RequestPermissi
 	h.mu.Lock()
 	h.permSeq++
 	id := fmt.Sprintf("perm-%d-%d", time.Now().UnixNano(), h.permSeq)
-	opts := make([]PermissionOption, 0, len(req.Options))
-	for _, o := range req.Options {
-		opts = append(opts, PermissionOption{OptionID: string(o.OptionId), Name: o.Name, Kind: string(o.Kind)})
-	}
+	prompt := h.buildPermissionPrompt(id, req)
 	p := &pendingPermission{
-		prompt: PermissionPrompt{
-			ID: id, SessionID: string(req.SessionId), ToolName: toolKindStr(req.ToolCall.Kind), Title: title, Options: opts,
-		},
+		prompt:   prompt,
 		response: make(chan string, 1),
 	}
 	h.pending[id] = p
 	h.mu.Unlock()
 
-	// 通知前端弹窗(service → Wails3 event)。
-	if h.OnPermission != nil {
-		h.OnPermission(p.prompt)
+	// 等待用户裁决,带失败自动恢复(Task #15115):
+	//   - 分发异常(OnPermission panic):recover 捕获,不中断主流程(否则会 tear down ACP 连接)。
+	//   - 用户未响应:按 permRetries 额外重发提示(应对「提示丢失/用户没看到」),总预算 permTTL 均分。
+	//   - 总预算耗尽:按 permTimeoutPolicy 降级(allow 放行 / deny 拒绝),不永久卡死(§3.4)。
+	retries := h.permRetries
+	if retries < 0 {
+		retries = 0
+	}
+	attempts := retries + 1
+	sub := h.permTTL
+	if attempts > 1 {
+		sub = h.permTTL / time.Duration(attempts)
+	}
+	if sub < permSubIntervalFloor {
+		sub = permSubIntervalFloor
 	}
 
-	// 等用户响应,带超时兜底(§3.4:超时按默认动作,避免永久卡死)。
-	timer := time.NewTimer(h.permTTL)
-	defer timer.Stop()
-	select {
-	case level := <-p.response:
-		opt := h.applyDecision(level, req.Options)
-		return acp.RequestPermissionResponse{
-			Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: opt}},
-		}, nil
-	case <-timer.C:
-		// 超时:默认动作 —— 取第一个 allow 选项放行(桌面有人但走开了,宁可放行让对话继续)。
-		h.mu.Lock()
-		delete(h.pending, id)
-		h.mu.Unlock()
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt == 0 {
+			slog.Info("permission prompt dispatched", "id", id, "tool", prompt.ToolName, "action", prompt.ActionType, "command", prompt.Command, "locations", len(prompt.Locations))
+		} else {
+			slog.Warn("permission no response, re-notify", "id", id, "attempt", attempt+1, "of", attempts)
+		}
+		h.dispatchPrompt(p.prompt)
+
+		timer := time.NewTimer(sub)
+		select {
+		case level := <-p.response:
+			timer.Stop()
+			h.removePending(id)
+			opt := h.applyDecision(level, req.Options)
+			slog.Info("permission responded", "id", id, "level", level, "option", opt)
+			return acp.RequestPermissionResponse{
+				Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: opt}},
+			}, nil
+		case <-ctx.Done():
+			timer.Stop()
+			h.removePending(id)
+			slog.Warn("permission cancelled by context", "id", id, "err", ctx.Err())
+			return acp.RequestPermissionResponse{
+				Outcome: acp.RequestPermissionOutcome{Cancelled: &acp.RequestPermissionOutcomeCancelled{}},
+			}, ctx.Err()
+		case <-timer.C:
+			// 本轮未响应:继续重试,或耗尽后降级
+		}
+	}
+
+	// 全部尝试耗尽 → 按策略降级(§3.4:桌面有人但走开了,默认放行让对话继续)。
+	h.removePending(id)
+	if timeoutPolicyAllow(h.permTimeoutPolicy) {
 		def := defaultOption(req.Options)
-		slog.Warn("permission request timed out, using default", "title", title, "default", def)
+		slog.Warn("permission timed out, degrade to allow", "id", id, "option", def)
 		return acp.RequestPermissionResponse{
 			Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: def}},
 		}, nil
-	case <-ctx.Done():
-		h.mu.Lock()
-		delete(h.pending, id)
-		h.mu.Unlock()
-		return acp.RequestPermissionResponse{
-			Outcome: acp.RequestPermissionOutcome{Cancelled: &acp.RequestPermissionOutcomeCancelled{}},
-		}, ctx.Err()
 	}
+	// 降级为拒绝:优先取 reject 选项;harness 没给则 cancelled。
+	if rejID := pickRejectOption(req.Options); rejID != "" {
+		slog.Warn("permission timed out, degrade to deny", "id", id, "option", rejID)
+		return acp.RequestPermissionResponse{
+			Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: rejID}},
+		}, nil
+	}
+	slog.Warn("permission timed out, degrade to cancel (no reject option)", "id", id)
+	return acp.RequestPermissionResponse{
+		Outcome: acp.RequestPermissionOutcome{Cancelled: &acp.RequestPermissionOutcomeCancelled{}},
+	}, nil
+}
+
+// buildPermissionPrompt 从 ACP 权限请求构造带决策上下文的前端提示(Task #15115 提示明确化):
+// 动作分组(read/write/exec)、抽取的命令、涉及路径 —— 让用户明确「哪个工具/动作/目标」。
+func (h *Handler) buildPermissionPrompt(id string, req acp.RequestPermissionRequest) PermissionPrompt {
+	title := ""
+	if req.ToolCall.Title != nil {
+		title = *req.ToolCall.Title
+	}
+	kind := toolKindStr(req.ToolCall.Kind)
+	locs := make([]string, 0, len(req.ToolCall.Locations))
+	for _, l := range req.ToolCall.Locations {
+		if l.Path != "" {
+			locs = append(locs, l.Path)
+		}
+	}
+	opts := make([]PermissionOption, 0, len(req.Options))
+	for _, o := range req.Options {
+		opts = append(opts, PermissionOption{OptionID: string(o.OptionId), Name: o.Name, Kind: string(o.Kind)})
+	}
+	return PermissionPrompt{
+		ID:         id,
+		SessionID:  string(req.SessionId),
+		ToolName:   kind,
+		Title:      title,
+		ActionType: permissions.ActionOfKind(kind),
+		Command:    permissions.ExtractCommand(req.ToolCall.RawInput),
+		Locations:  locs,
+		Options:    opts,
+	}
+}
+
+// dispatchPrompt 通知前端弹窗(service → Wails3 event),带 panic 恢复:
+// 事件分发链路上的 panic 不得冒泡到 ACP 调用方(否则连接被 teardown),捕获并记日志(Task #15115)。
+func (h *Handler) dispatchPrompt(prompt PermissionPrompt) (panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+			slog.Error("permission dispatch panic recovered", "id", prompt.ID, "panic", r)
+		}
+	}()
+	if h.OnPermission != nil {
+		h.OnPermission(prompt)
+	}
+	return panicked
+}
+
+// removePending 从待裁决表删除一项(等待循环各分支的公共清理)。
+func (h *Handler) removePending(id string) {
+	h.mu.Lock()
+	delete(h.pending, id)
+	h.mu.Unlock()
 }
 
 // applyDecision 把前端传来的裁决档位(once/session/project/deny)映射成 ACP 选项,
