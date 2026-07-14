@@ -10,6 +10,7 @@ import Collapsible from "./Collapsible";
 import CollapsibleText from "./CollapsibleText";
 import FilePreviewOverlay, { type PreviewTarget } from "./FilePreviewOverlay";
 import PathLinkified from "./PathLinkified";
+import { countDiffLines, diffLineCls } from "../lib/diff";
 import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search } from "lucide-react";
 
 interface Usage { used: number; size: number; cost: number; }
@@ -964,25 +965,7 @@ function buildPlusMinusDiff(oldStr: string, newStr: string): string {
   return parts.join("\n");
 }
 
-// 统计 diff 文本里的增删行数(以「+」「-」开头,但忽略「+++」「---」文件头)。
-function countDiffLines(diff: string): { added: number; removed: number } {
-  let added = 0, removed = 0;
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("+++") || line.startsWith("---")) continue;
-    if (line.startsWith("+")) added++;
-    else if (line.startsWith("-")) removed++;
-  }
-  return { added, removed };
-}
-
-// diff 行 className:首字符判定 +/-/@@ → 增/删/hunk,其余为上下文行。
-function diffLineCls(line: string): string {
-  if (line.startsWith("+++") || line.startsWith("---")) return "diff-line diff-hunk";
-  if (line.startsWith("@@")) return "diff-line diff-hunk";
-  if (line.startsWith("+")) return "diff-line diff-add";
-  if (line.startsWith("-")) return "diff-line diff-del";
-  return "diff-line";
-}
+// 统计 diff 增删行数 + 行染色规则已抽到 lib/diff.ts(供 GitPanel diff 阅读器复用)。
 
 // 把绝对路径截短成「…/<basename>」便于在徽章里展示(避免长路径撑爆头部)。
 function shortPath(p: string): string {
