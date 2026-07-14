@@ -66,9 +66,18 @@ export default function PermissionRulesPane() {
 
   const add = useCallback(async () => {
     try {
-      const created = await ChatService.CreatePermissionRule(
-        { level: "ask", enabled: true, sortOrder: rules.length }
-      );
+      const created = await ChatService.CreatePermissionRule({
+        id: "",
+        toolName: "",
+        actionType: "",
+        pathPattern: "",
+        commandPattern: "",
+        level: "ask",
+        sortOrder: rules.length,
+        enabled: true,
+        createdAt: 0,
+        updatedAt: 0,
+      });
       if (created) setRules((prev) => [...prev, created]);
     } catch (e) {
       setError(String(e));
