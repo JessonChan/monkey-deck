@@ -68,6 +68,115 @@ func TestKillSessionTerminals(t *testing.T) {
 	}
 }
 
+// TestListTerminalsBySession 验证后端查询接口反映活跃终端的真实分布
+// (侧栏图标的权威数据源,§5.3 尊重数据源)。
+func TestListTerminalsBySession(t *testing.T) {
+	skipOnWindows(t)
+	s := NewTerminalService()
+	defer s.killAll()
+
+	a1, _ := s.Start("sess-a", "", 80, 24)
+	_, _ = s.Start("sess-a", "", 80, 24) // 同 session 第二个终端
+	_, _ = s.Start("sess-b", "", 80, 24)
+
+	got := s.ListTerminalsBySession()
+	if !got["sess-a"] || !got["sess-b"] {
+		t.Fatalf("expected sess-a and sess-b present, got %v", got)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(got))
+	}
+
+	_ = s.Kill(a1)
+	// sess-a 还有另一个终端,仍应存在
+	got = s.ListTerminalsBySession()
+	if !got["sess-a"] {
+		t.Fatal("sess-a should still have a terminal")
+	}
+}
+
+// TestEmitStateOnStartAndKill 验证 Start/Kill 都推 terminal:state 事件,
+// 且 HasTerminal 反映该 session 是否仍有终端(图标对账依据)。
+func TestEmitStateOnStartAndKill(t *testing.T) {
+	skipOnWindows(t)
+	s := NewTerminalService()
+	defer s.killAll()
+
+	var mu sync.Mutex
+	var states []StatePayload
+	s.emitHook = func(name string, data any) {
+		if name != EventState {
+			return
+		}
+		mu.Lock()
+		states = append(states, data.(StatePayload))
+		mu.Unlock()
+	}
+
+	// Start → 应推 hasTerminal=true
+	id, _ := s.Start("sess-a", "", 80, 24)
+	if !waitForState(&mu, &states, "sess-a", true, time.Second) {
+		t.Fatal("expected state sess-a=true after Start")
+	}
+
+	// Kill → 应推 hasTerminal=false(归零)
+	_ = s.Kill(id)
+	if !waitForState(&mu, &states, "sess-a", false, time.Second) {
+		t.Fatal("expected state sess-a=false after Kill")
+	}
+}
+
+// TestEmitStateKeepsTrueWhenSiblingAlive 同 session 多终端,杀一个不应误报归零。
+func TestEmitStateKeepsTrueWhenSiblingAlive(t *testing.T) {
+	skipOnWindows(t)
+	s := NewTerminalService()
+	defer s.killAll()
+
+	var mu sync.Mutex
+	var badFalse bool
+	s.emitHook = func(name string, data any) {
+		if name != EventState {
+			return
+		}
+		sp := data.(StatePayload)
+		if sp.SessionID == "sess-a" && !sp.HasTerminal {
+			mu.Lock()
+			badFalse = true
+			mu.Unlock()
+		}
+	}
+
+	a1, _ := s.Start("sess-a", "", 80, 24)
+	a2, _ := s.Start("sess-a", "", 80, 24)
+	_ = s.Kill(a1)
+	// 等待可能的误报窗口
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	bad := badFalse
+	mu.Unlock()
+	if bad {
+		t.Fatal("must not emit sess-a=false while a2 still alive")
+	}
+	_ = a2
+}
+
+// waitForState 轮询 states 直到出现匹配 sessionId/hasTerminal 的条目。
+func waitForState(mu *sync.Mutex, states *[]StatePayload, sessionID string, has bool, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		for _, sp := range *states {
+			if sp.SessionID == sessionID && sp.HasTerminal == has {
+				mu.Unlock()
+				return true
+			}
+		}
+		mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+	}
+	return false
+}
+
 func TestServiceShutdownKillsAll(t *testing.T) {
 	skipOnWindows(t)
 	s := NewTerminalService()

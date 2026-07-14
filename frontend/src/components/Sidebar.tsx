@@ -33,7 +33,7 @@ interface Props {
   unreadBySession: Record<string, boolean>;
   permPendingBySession: Record<string, boolean>;
   draftBySession?: Record<string, string>;
-  termOpenBySession?: Record<string, boolean>;
+  hasTermBySession?: Record<string, boolean>;
   onReorderProjects: (ids: string[]) => void;
   onCollapse?: () => void;
   onOpenSettings: () => void;
@@ -390,7 +390,7 @@ export default function Sidebar(props: Props) {
                               <Pin size={11} />
                             </span>
                           )}
-                          {props.termOpenBySession?.[s.id] && (
+                          {props.hasTermBySession?.[s.id] && (
                             <span className="session-terminal-mark" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.terminalOpenTip")} data-testid={`term-open-${s.id}`}>
                               <SquareTerminal size={12} />
                             </span>

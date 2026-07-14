@@ -70,6 +70,10 @@ export default function App() {
   const [termTabsBySession, setTermTabsBySession] = useState<Record<string, TerminalTab[]>>({});
   const [activeTermBySession, setActiveTermBySession] = useState<Record<string, string | null>>({});
   const [termOpenBySession, setTermOpenBySession] = useState<Record<string, boolean>>({});
+  // 侧栏「已开终端」图标的权威状态:后端驱动(Start/Kill/退出推 terminal:state event,
+  // 启动时查 ListTerminalsBySession 对账)。与 termOpenBySession(面板是否展开,本地 UI 态)
+  // 解耦:面板可收起但终端仍活着(图标应亮);反之面板开着但终端已死(图标应灭)。
+  const [hasTermBySession, setHasTermBySession] = useState<Record<string, boolean>>({});
   const termCwdRef = useRef("");
   const queueBySessionRef = useRef<Record<string, QueueItem[]>>({});
   const userStoppedRef = useRef(false);                    // 用户主动停止:抑制该次 idle 的 auto-continue
@@ -698,6 +702,35 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [toggleTerminalPanel]);
 
+  // 侧栏终端图标 = 后端驱动:启动时拉一次全量对账,后续订阅 terminal:state 实时更新。
+  // 这样应用启动 / 打开历史 session / 跨 session 切换 / 重启后图标都能反映真实终端存在性,
+  // 不依赖纯前端内存 state(重启即丢)。createTerminal/closeTerminal 仍本地乐观更新面板态,
+  // 图标以本事件为权威对账。
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    TerminalService.ListTerminalsBySession()
+      .then((m) => {
+        if (!m) return;
+        // binding 返回 {[k]?: boolean}(可选值),归一为 Record<string, boolean>。
+        const next: Record<string, boolean> = {};
+        for (const [k, v] of Object.entries(m)) if (v) next[k] = true;
+        setHasTermBySession(next);
+      })
+      .catch(() => {});
+    off = Events.On("terminal:state", (e: { data: { sessionId: string; hasTerminal: boolean } }) => {
+      const s = e.data;
+      if (!s) return;
+      setHasTermBySession((prev) => {
+        if (!!prev[s.sessionId] === s.hasTerminal) return prev; // 无变化不触发重渲染
+        const n = { ...prev };
+        if (s.hasTerminal) n[s.sessionId] = true;
+        else delete n[s.sessionId];
+        return n;
+      });
+    });
+    return () => { off?.(); };
+  }, []);
+
   const closeTerminalTab = useCallback(async (tabId: string) => {
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
@@ -1006,7 +1039,7 @@ export default function App() {
           onAddProjectByPath={addProjectByPath}
           permPendingBySession={permPendingBySession}
           draftBySession={draftBySession}
-          termOpenBySession={termOpenBySession}
+          hasTermBySession={hasTermBySession}
           onRemoveProject={removeProject}
           onRemoveSession={removeSession}
           onTogglePin={toggleSessionPin}

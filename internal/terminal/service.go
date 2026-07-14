@@ -29,6 +29,9 @@ import (
 const (
 	EventData = "terminal:data" // DataPayload(PTY 输出,base64)
 	EventExit = "terminal:exit" // ExitPayload(进程退出码)
+	// EventState 推某 session 是否仍有活跃终端(Start/Kill/退出时派发)。
+	// 前端据此驱动侧栏「已开终端」图标(后端为权威,跨重启/跨 session 一致)。
+	EventState = "terminal:state"
 )
 
 // DataPayload 一段 PTY 输出。Data 为 base64(前端 atob 解码后 term.write)。
@@ -43,6 +46,12 @@ type ExitPayload struct {
 	ID        string `json:"id"`
 	SessionID string `json:"sessionId"`
 	Code      int    `json:"code"`
+}
+
+// StatePayload 某 session 的终端存在性(前端 hasTermBySession 的权威数据源)。
+type StatePayload struct {
+	SessionID   string `json:"sessionId"`
+	HasTerminal bool   `json:"hasTerminal"`
 }
 
 // termSession 一个活跃终端(内存态,钉在 sessionId 上)。
@@ -107,6 +116,7 @@ func (s *TerminalService) Start(sessionID, cwd string, cols, rows uint16) (strin
 
 	go s.readLoop(ts)
 	slog.Info("terminal started", "id", id, "session", sessionID, "pid", cmd.Process.Pid, "cwd", cwd)
+	s.emitState(sessionID) // 新终端上线:该 session 现在有终端
 	return id, nil
 }
 
@@ -151,6 +161,7 @@ func (s *TerminalService) Kill(id string) error {
 		return nil
 	}
 	s.kill(ts)
+	s.emitState(ts.sessionID) // 可能归零:图标消失
 	return nil
 }
 
@@ -169,6 +180,21 @@ func (s *TerminalService) KillSessionTerminals(sessionID string) {
 	for _, ts := range doomed {
 		s.kill(ts)
 	}
+	if len(doomed) > 0 {
+		s.emitState(sessionID) // 该 session 终端已全清
+	}
+}
+
+// ListTerminalsBySession 返回当前有 ≥1 活跃终端的 session 集合(sessionId → true)。
+// 供前端启动/打开 session 时同步侧栏图标(后端为权威状态,§5.3 尊重数据源)。
+func (s *TerminalService) ListTerminalsBySession() map[string]bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]bool, len(s.sessions))
+	for _, ts := range s.sessions {
+		out[ts.sessionID] = true
+	}
+	return out
 }
 
 // readLoop 持续读 PTY 输出并推前端;读结束(EOF/出错)即收口:wait 进程、推 exit、清理。
@@ -204,10 +230,18 @@ func (s *TerminalService) readLoop(ts *termSession) {
 		_ = ts.ptmx.Close()
 	}
 	s.emit(EventExit, ExitPayload{ID: ts.id, SessionID: ts.sessionID, Code: code})
+	removed := false
 	s.mu.Lock()
-	delete(s.sessions, ts.id) // 已不在则 no-op(kill 路径已删)
+	if _, ok := s.sessions[ts.id]; ok { // kill 路径已删时这里跳过
+		delete(s.sessions, ts.id)
+		removed = true
+	}
 	s.mu.Unlock()
 	slog.Info("terminal exited", "id", ts.id, "code", code)
+	// 仅当本路径真正移除时才推 state(kill 路径会自己 emitState,避免重复)。
+	if removed {
+		s.emitState(ts.sessionID)
+	}
 }
 
 // kill 关闭 PTY + 杀进程组(§3.2 思路)。幂等:已退出则直接返回。
@@ -266,6 +300,22 @@ func (s *TerminalService) emit(name string, data any) {
 		return
 	}
 	app.Event.Emit(name, data)
+}
+
+// emitState 推某 session 的终端存在性(Start/Kill/退出后调用)。
+// 不变量:锁内计数该 session 的活跃终端数,据此决定 hasTerminal,锁外 emit。
+// 这是侧栏图标的权威数据源(前端据此对账,不再纯靠本地内存 state)。
+func (s *TerminalService) emitState(sessionID string) {
+	s.mu.RLock()
+	has := false
+	for _, ts := range s.sessions {
+		if ts.sessionID == sessionID {
+			has = true
+			break
+		}
+	}
+	s.mu.RUnlock()
+	s.emit(EventState, StatePayload{SessionID: sessionID, HasTerminal: has})
 }
 
 // defaultShell 取系统默认 shell。GUI 应用 $SHELL 可能空,按平台兜底。
