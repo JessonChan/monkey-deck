@@ -17,6 +17,7 @@ import (
 
 	"github.com/jessonchan/monkey-deck/internal/acp"
 	"github.com/jessonchan/monkey-deck/internal/config"
+	"github.com/jessonchan/monkey-deck/internal/permissions"
 	"github.com/jessonchan/monkey-deck/internal/store"
 )
 
@@ -38,6 +39,7 @@ func (m *mockChatConn) SetConfigOption(ctx context.Context, configId, value stri
 func (m *mockChatConn) RefreshConfig(ctx context.Context) ([]acp.ConfigOption, error) {
 	return nil, nil
 }
+func (m *mockChatConn) SetPermissionRules(_ []permissions.Rule) {}
 
 // newIdleTestService 建一个不启 harness 的 svc,注入短 idleTimeout。
 func newIdleTestService(t *testing.T, idleTimeout time.Duration) *ChatService {

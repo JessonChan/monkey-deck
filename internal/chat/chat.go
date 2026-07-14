@@ -23,6 +23,7 @@ import (
 	"github.com/jessonchan/monkey-deck/internal/config"
 	"github.com/jessonchan/monkey-deck/internal/fsview"
 	"github.com/jessonchan/monkey-deck/internal/harness"
+	"github.com/jessonchan/monkey-deck/internal/permissions"
 	"github.com/jessonchan/monkey-deck/internal/store"
 	"github.com/jessonchan/monkey-deck/internal/titlegen"
 	"github.com/jessonchan/monkey-deck/internal/worktree"
@@ -85,6 +86,8 @@ type chatConn interface {
 	// RefreshConfig 重新 spawn probe harness 拉最新 configOptions(同步外部配置改动),
 	// 不影响当前活跃连接、不中断对话流。详见 acp.ChatSession.RefreshConfig。
 	RefreshConfig(ctx context.Context) ([]acp.ConfigOption, error)
+	// SetPermissionRules 更新该 session 的分级权限规则快照(§3.4)。规则变更时由 service 对所有活跃 session 调用。
+	SetPermissionRules(rules []permissions.Rule)
 }
 
 // turnEntry 一轮时序里的一项,由稳定标识驱动(对标 omp/opencode 的"对象归并"模型):
@@ -917,6 +920,9 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 	// 加载项目级权限记忆到 handler:按 project 存、跨 harness 共享,命中即对后续所有
 	// RequestPermission(含命令执行、外部目录)自动放行(§3.4)。
 	chat.Handler.SetProjectAllowExternal(proj.AllowExternal)
+	// 加载分级权限规则快照到 handler(§3.4:allow/ask/deny 路由)。规则是全局的(全应用一份),
+	// 每个 session 启动时拿当前快照;规则变更时由 applyPermissionRulesToAll 刷新全部活跃 session。
+	chat.SetPermissionRules(s.snapshotPermissionRules())
 
 	s.mu.Lock()
 	s.active[se.ID] = ls
@@ -1605,5 +1611,131 @@ func (s *ChatService) SetDefaultModel(model string) error {
 func (s *ChatService) loadPersistedConfig() {
 	if m, _ := s.st.GetSetting(s.ctx, "defaultModel"); m != "" {
 		s.cfg.DefaultModel = m
+	}
+	// 权限规则:表空时写入默认规则(§3.4),否则保留用户已定制。
+	if _, err := s.st.SeedDefaultPermissionRules(s.ctx, defaultPermissionRulesForStore()); err != nil {
+		slog.Warn("seed default permission rules", "err", err)
+	}
+}
+
+// snapshotPermissionRules 从 DB 读权限规则并转成 permissions.Rule(handler 引擎用)。
+func (s *ChatService) snapshotPermissionRules() []permissions.Rule {
+	stored, err := s.st.ListPermissionRules(s.ctx)
+	if err != nil {
+		slog.Warn("list permission rules", "err", err)
+		return nil
+	}
+	out := make([]permissions.Rule, 0, len(stored))
+	for _, r := range stored {
+		out = append(out, permissions.Rule{
+			ID: r.ID, ToolName: r.ToolName, ActionType: r.ActionType,
+			PathPattern: r.PathPattern, CommandPattern: r.CommandPattern,
+			Level: r.Level, SortOrder: r.SortOrder, Enabled: r.Enabled,
+		})
+	}
+	return out
+}
+
+// applyPermissionRulesToAll 把当前规则快照刷进所有活跃 session 的 handler(规则变更后调用)。
+func (s *ChatService) applyPermissionRulesToAll() {
+	rules := s.snapshotPermissionRules()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, ls := range s.active {
+		ls.chat.SetPermissionRules(rules)
+	}
+}
+
+// defaultPermissionRulesForStore 把 permissions.DefaultRules 转成 store.PermissionRule(持久化用)。
+// store 不依赖 internal/permissions(避免反向依赖),故转换在 service 层做。
+func defaultPermissionRulesForStore() []store.PermissionRule {
+	defs := permissions.DefaultRules()
+	out := make([]store.PermissionRule, 0, len(defs))
+	for _, d := range defs {
+		out = append(out, store.PermissionRule{
+			ID: d.ID, ToolName: d.ToolName, ActionType: d.ActionType,
+			PathPattern: d.PathPattern, CommandPattern: d.CommandPattern,
+			Level: d.Level, SortOrder: d.SortOrder, Enabled: d.Enabled,
+		})
+	}
+	return out
+}
+
+// --- 权限规则 CRUD(前端设置面板用,§3.4)---
+
+// ListPermissionRules 返回全部权限规则(按优先级 sort_order ASC)。
+func (s *ChatService) ListPermissionRules() ([]store.PermissionRule, error) {
+	return s.st.ListPermissionRules(s.ctx)
+}
+
+// CreatePermissionRule 新建一条权限规则,并刷新所有活跃 session 的规则快照。
+func (s *ChatService) CreatePermissionRule(rule store.PermissionRule) (*store.PermissionRule, error) {
+	if err := validatePermissionRule(rule); err != nil {
+		return nil, err
+	}
+	r, err := s.st.CreatePermissionRule(s.ctx, rule)
+	if err != nil {
+		return nil, err
+	}
+	s.applyPermissionRulesToAll()
+	return r, nil
+}
+
+// UpdatePermissionRule 更新一条权限规则,并刷新所有活跃 session 的规则快照。
+func (s *ChatService) UpdatePermissionRule(rule store.PermissionRule) error {
+	if err := validatePermissionRule(rule); err != nil {
+		return err
+	}
+	if err := s.st.UpdatePermissionRule(s.ctx, rule); err != nil {
+		return err
+	}
+	s.applyPermissionRulesToAll()
+	return nil
+}
+
+// DeletePermissionRule 按 id 删除一条权限规则,并刷新所有活跃 session 的规则快照。
+func (s *ChatService) DeletePermissionRule(id string) error {
+	if err := s.st.DeletePermissionRule(s.ctx, id); err != nil {
+		return err
+	}
+	s.applyPermissionRulesToAll()
+	return nil
+}
+
+// ReorderPermissionRules 按传入 id 顺序重写优先级,并刷新所有活跃 session 的规则快照。
+func (s *ChatService) ReorderPermissionRules(ids []string) error {
+	if err := s.st.ReorderPermissionRules(s.ctx, ids); err != nil {
+		return err
+	}
+	s.applyPermissionRulesToAll()
+	return nil
+}
+
+// ResetPermissionRules 清空全部规则并重写为默认规则(用户点「恢复默认」)。
+func (s *ChatService) ResetPermissionRules() error {
+	existing, err := s.st.ListPermissionRules(s.ctx)
+	if err != nil {
+		return err
+	}
+	for _, r := range existing {
+		if err := s.st.DeletePermissionRule(s.ctx, r.ID); err != nil {
+			return err
+		}
+	}
+	if _, err := s.st.SeedDefaultPermissionRules(s.ctx, defaultPermissionRulesForStore()); err != nil {
+		return err
+	}
+	s.applyPermissionRulesToAll()
+	return nil
+}
+
+// validatePermissionRule 校验规则基本合法(level 必须是 allow/ask/deny)。
+// 其余字段允许空(空 = 通配),不在此强约束。
+func validatePermissionRule(r store.PermissionRule) error {
+	switch r.Level {
+	case permissions.LevelAllow, permissions.LevelAsk, permissions.LevelDeny:
+		return nil
+	default:
+		return fmt.Errorf("invalid permission level %q (want allow/ask/deny)", r.Level)
 	}
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/jessonchan/monkey-deck/internal/acp"
 	"github.com/jessonchan/monkey-deck/internal/config"
+	"github.com/jessonchan/monkey-deck/internal/permissions"
 	"github.com/jessonchan/monkey-deck/internal/store"
 )
 
@@ -71,6 +72,7 @@ func (f *fakeChat) SetConfigOption(_ context.Context, _, _ string) error { retur
 func (f *fakeChat) RefreshConfig(_ context.Context) ([]acp.ConfigOption, error) {
 	return nil, nil
 }
+func (f *fakeChat) SetPermissionRules(_ []permissions.Rule) {}
 
 // release 放行所有阻塞的 Prompt(幂等),供 t.Cleanup 防止 goroutine 泄漏。
 func (f *fakeChat) release() {

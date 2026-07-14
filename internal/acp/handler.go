@@ -12,12 +12,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/coder/acp-go-sdk"
+	"github.com/jessonchan/monkey-deck/internal/permissions"
 )
 
 // SessionEvent 是给前端用的「扁平化 SessionUpdate」(AGENTS.md §1.6/§4.3)。
@@ -172,6 +174,10 @@ type Handler struct {
 	// 字段名保留历史(曾仅管外部目录);DB 列名同理,见 store/migrations/0004。
 	sessionAllowExternal atomic.Bool
 	projectAllowExternal atomic.Bool
+	// 分级权限规则引擎(§3.4):RequestPermission 在「记忆」之后、「弹窗」之前评估规则,
+	// allow → 自动放行、deny → 自动拒绝,ask/无命中 → 弹前端确认。nil = 无规则(一律走弹窗,
+	// 等价旧行为)。SetPermissionRules 在 service 层 session 启动 / 规则变更时更新。
+	permRules atomic.Pointer[permissions.Engine]
 }
 
 type pendingPermission struct {
@@ -231,6 +237,32 @@ func (h *Handler) RequestPermission(ctx context.Context, req acp.RequestPermissi
 		return acp.RequestPermissionResponse{
 			Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: pickAllowOption(req.Options)}},
 		}, nil
+	}
+
+	// 分级权限规则(§3.4):记忆未命中,评估规则引擎。allow → 放行,deny → 拒绝,
+	// ask/无规则 → 继续走弹窗分支。优先级低于「记忆」(用户显式选过 allow always 最高),
+	// 高于默认弹窗。
+	if eng := h.permRules.Load(); eng != nil {
+		decision := eng.Decide(toMatchRequest(req), permissions.LevelAsk)
+		switch decision {
+		case permissions.LevelAllow:
+			slog.Debug("permission rule allow", "title", title)
+			return acp.RequestPermissionResponse{
+				Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: pickAllowOption(req.Options)}},
+			}, nil
+		case permissions.LevelDeny:
+			slog.Debug("permission rule deny", "title", title)
+			if id := pickRejectOption(req.Options); id != "" {
+				return acp.RequestPermissionResponse{
+					Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: id}},
+				}, nil
+			}
+			// 无 reject 选项(harness 没给):回 cancelled,表示拒绝执行
+			return acp.RequestPermissionResponse{
+				Outcome: acp.RequestPermissionOutcome{Cancelled: &acp.RequestPermissionOutcomeCancelled{}},
+			}, nil
+		}
+		// LevelAsk → 落到下方弹窗分支
 	}
 
 	h.mu.Lock()
@@ -305,6 +337,35 @@ func (h *Handler) applyDecision(level string, opts []acp.PermissionOption) acp.P
 // 使「本项目曾允许外部目录」的 session 命中即自动放行。
 func (h *Handler) SetProjectAllowExternal(allow bool) {
 	h.projectAllowExternal.Store(allow)
+}
+
+// SetPermissionRules 更新分级权限规则引擎快照(§3.4)。service 在 session 启动 / 规则变更时调用。
+// 传入 nil / 空切片 = 清除规则(RequestPermission 一律走弹窗)。并发安全:atomic.Pointer 替换。
+func (h *Handler) SetPermissionRules(rules []permissions.Rule) {
+	if len(rules) == 0 {
+		h.permRules.Store(nil)
+		return
+	}
+	// 按 SortOrder 升序拷贝后构造引擎(引擎按给定顺序逐条判定,首条命中者决定裁决)
+	sorted := make([]permissions.Rule, len(rules))
+	copy(sorted, rules)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].SortOrder < sorted[j].SortOrder })
+	h.permRules.Store(permissions.NewEngine(sorted))
+}
+
+// toMatchRequest 从 ACP 权限请求提取规则匹配所需输入(ToolKind / 路径 / 命令)。
+func toMatchRequest(req acp.RequestPermissionRequest) permissions.MatchRequest {
+	kind := ""
+	if req.ToolCall.Kind != nil {
+		kind = string(*req.ToolCall.Kind)
+	}
+	locs := make([]string, 0, len(req.ToolCall.Locations))
+	for _, l := range req.ToolCall.Locations {
+		if l.Path != "" {
+			locs = append(locs, l.Path)
+		}
+	}
+	return permissions.MatchRequest{ToolKind: kind, Locations: locs, RawInput: req.ToolCall.RawInput}
 }
 
 // isExternalAccess 判断请求是否访问 cwd 之外的路径(= 外部目录读取)。

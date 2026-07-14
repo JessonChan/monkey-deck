@@ -21,6 +21,7 @@ import (
 	"syscall"
 
 	"github.com/coder/acp-go-sdk"
+	"github.com/jessonchan/monkey-deck/internal/permissions"
 )
 
 // StopReason 透传 SDK 的 StopReason,供 internal/chat 等业务包引用
@@ -248,6 +249,11 @@ func fileURI(workDir, path string) string {
 // RespondPermission 透传给 handler(前端用户裁决权限请求,§3.4)。
 func (cs *ChatSession) RespondPermission(id, optionID string) bool {
 	return cs.Handler.RespondPermission(id, optionID)
+}
+
+// SetPermissionRules 更新该 session 的分级权限规则快照(§3.4)。透传给 handler。
+func (cs *ChatSession) SetPermissionRules(rules []permissions.Rule) {
+	cs.Handler.SetPermissionRules(rules)
 }
 
 // SessionTitle 通过 session/list 拉 harness 为本 session 生成的权威标题(§5.4 #14)。
