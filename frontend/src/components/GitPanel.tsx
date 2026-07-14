@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Folder,
   GitBranch,
@@ -58,6 +59,7 @@ export default function GitPanel({
   busy,
   embedded,
 }: Props) {
+  const { t } = useTranslation();
   const [message, setMessage] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [openStaged, setOpenStaged] = useState(true);
@@ -122,7 +124,7 @@ export default function GitPanel({
     try {
       setDiffText(await onDiff(path, staged));
     } catch (e) {
-      setDiffText("加载失败:" + String(e));
+      setDiffText(t("gitPanel.diffFailed", { error: String(e) }));
     } finally {
       setDiffLoading(false);
     }
@@ -142,7 +144,7 @@ export default function GitPanel({
           <span className={`git-status-badge ${st.cls}`}>{st.label}</span>
           <button
             className="git-file-name-btn"
-            title="查看改动"
+            title={t("gitPanel.viewChanges")}
             data-testid="file-toggle"
             onClick={() => toggleDiff(key, f.path, f.staged)}
           >
@@ -154,14 +156,14 @@ export default function GitPanel({
         {expanded && (
           <div className="git-file-diff-wrap" data-testid="file-diff">
             {diffLoading ? (
-              <div className="git-file-diff-msg">加载中…</div>
+              <div className="git-file-diff-msg">{t("gitPanel.diffLoading")}</div>
             ) : diffText ? (
               <CollapsibleText
                 text={diffText}
                 lineClassName={diffLineCls}
                 preClassName="git-diff-pre"
                 testId="file-diff"
-                lineUnit="行"
+                lineUnit={t("collapsibleText.lineUnit")}
                 extra={(() => { const s = countDiffLines(diffText); return (
                   <span className="git-diff-stat">
                     {s.added > 0 && <span className="diff-stat diff-stat-add">+{s.added}</span>}
@@ -170,7 +172,7 @@ export default function GitPanel({
                 ); })()}
               />
             ) : (
-              <div className="git-file-diff-msg">无差异</div>
+              <div className="git-file-diff-msg">{t("gitPanel.noDiff")}</div>
             )}
           </div>
         )}
@@ -183,8 +185,8 @@ export default function GitPanel({
       {!embedded && (
         <div className="git-panel-head">
           <Folder size={13} />
-          <span className="git-panel-title">源代码管理</span>
-          {busy && <span className="git-panel-busy-tag">对话中</span>}
+          <span className="git-panel-title">{t("gitPanel.title")}</span>
+          {busy && <span className="git-panel-busy-tag">{t("gitPanel.busyTag")}</span>}
         </div>
       )}
 
@@ -196,7 +198,7 @@ export default function GitPanel({
       <textarea
         className="git-commit-msg"
         data-testid="commit-message"
-        placeholder={busy ? "对话进行中,结束后可提交…" : "提交信息(Cmd / Ctrl + Enter 提交)"}
+        placeholder={busy ? t("gitPanel.commitPlaceholderBusy") : t("gitPanel.commitPlaceholder")}
         value={message}
         onChange={(e) => setMessage(e.target.value)}
         onKeyDown={(e) => {
@@ -214,29 +216,29 @@ export default function GitPanel({
         disabled={busy || staged.length === 0 || message.trim() === ""}
         onClick={commit}
       >
-        <Check size={14} /> 提交{staged.length > 0 ? ` (${staged.length})` : ""}
+        <Check size={14} /> {staged.length > 0 ? t("gitPanel.commitBtnCount", { count: staged.length }) : t("gitPanel.commitBtn")}
       </button>
       <button
         className="git-ai-btn"
         data-testid="ai-commit-btn"
-        title="让当前会话的 AI 审视改动、生成提交信息并提交"
+        title={t("gitPanel.aiCommitTip")}
         disabled={busy || (changes != null && changes.length === 0)}
         onClick={aiCommit}
       >
-        <Sparkles size={14} /> AI 提交
+        <Sparkles size={14} /> {t("gitPanel.aiCommit")}
       </button>
 
       {err && <div className="git-commit-err" data-testid="commit-error">{err}</div>}
 
       <Group
-        title="暂存的更改"
+        title={t("gitPanel.stagedChanges")}
         count={staged.length}
         open={openStaged}
         loading={loading}
         onToggle={() => setOpenStaged((v) => !v)}
         allAction={
           staged.length > 0 ? (
-            <button className="git-row-act" title="全部取消暂存" disabled={busy} onClick={() => onUnstage([])}>
+            <button className="git-row-act" title={t("gitPanel.unstageAll")} disabled={busy} onClick={() => onUnstage([])}>
               <Minus size={14} />
             </button>
           ) : null
@@ -244,7 +246,7 @@ export default function GitPanel({
       >
         {staged.map((f) =>
           row(f, "s", (
-            <button className="git-row-act" title="取消暂存" disabled={busy} onClick={() => onUnstage([f.path])}>
+            <button className="git-row-act" title={t("gitPanel.unstage")} disabled={busy} onClick={() => onUnstage([f.path])}>
               <Minus size={14} />
             </button>
           ))
@@ -252,14 +254,14 @@ export default function GitPanel({
       </Group>
 
       <Group
-        title="更改"
+        title={t("gitPanel.unstagedChanges")}
         count={unstaged.length}
         open={openChanges}
         loading={loading}
         onToggle={() => setOpenChanges((v) => !v)}
         allAction={
           unstaged.length > 0 ? (
-            <button className="git-row-act" title="全部暂存" disabled={busy} onClick={() => onStage([])}>
+            <button className="git-row-act" title={t("gitPanel.stageAll")} disabled={busy} onClick={() => onStage([])}>
               <Plus size={14} />
             </button>
           ) : null
@@ -270,7 +272,7 @@ export default function GitPanel({
             <>
               <button
                 className="git-row-act"
-                title="暂存"
+                title={t("gitPanel.stage")}
                 data-testid="stage-one"
                 disabled={busy}
                 onClick={() => onStage([f.path])}
@@ -279,7 +281,7 @@ export default function GitPanel({
               </button>
               <button
                 className="git-row-act git-row-discard"
-                title="丢弃改动 · 不可撤销"
+                title={t("gitPanel.discardTip")}
                 data-testid="discard-one"
                 disabled={busy}
                 onClick={() => discard([f.path])}
@@ -292,7 +294,7 @@ export default function GitPanel({
       </Group>
 
       <button className="merge-btn-full" onClick={onMerge} disabled={busy} data-testid="merge-btn">
-        合并进主仓库
+        {t("gitPanel.mergeBtn")}
       </button>
 
       {mergeResult && (
@@ -322,6 +324,7 @@ function Group({
   allAction: ReactNode;
   children: ReactNode;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="git-section git-changes">
       <div className="git-section-label">
@@ -332,7 +335,7 @@ function Group({
         </button>
         {allAction}
       </div>
-      {open && count === 0 && !loading && <div className="git-no-changes">无</div>}
+      {open && count === 0 && !loading && <div className="git-no-changes">{t("gitPanel.noChanges")}</div>}
       {open && children}
     </div>
   );

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
 import * as Popover from "@radix-ui/react-popover";
 import { Command } from "cmdk";
 import type { ConfigOption } from "../types";
@@ -30,18 +31,19 @@ interface Props {
 }
 
 // 斜杠命令(wesight 风格)。insert=插入模板;action=执行动作。
-interface SlashCommand { cmd: string; desc: string; insert?: string; action?: "clear" | "new" | "stop"; }
+// desc/insert 经 i18n key 在渲染/插入时翻译(支持语言切换)。
+interface SlashCommand { cmd: string; descKey: string; insertKey?: string; action?: "clear" | "new" | "stop"; }
 const SLASH_COMMANDS: SlashCommand[] = [
-  { cmd: "/explain", desc: "解释代码", insert: "请解释这段代码,讲清逻辑与关键点:" },
-  { cmd: "/review", desc: "代码审查", insert: "请 review 这段代码,指出问题、风险与改进建议:" },
-  { cmd: "/tests", desc: "生成测试", insert: "请为这段代码编写单元测试,覆盖边界:" },
-  { cmd: "/refactor", desc: "重构", insert: "请重构这段代码,提升可读性与可维护性,保持行为不变:" },
-  { cmd: "/fix", desc: "修复 bug", insert: "请找出并修复这里的 bug,说明根因:" },
-  { cmd: "/doc", desc: "写文档", insert: "请为这段代码编写清晰的文档/注释:" },
-  { cmd: "/summary", desc: "总结文件", insert: "请总结这个文件的作用、结构与关键逻辑:" },
-  { cmd: "/new", desc: "新对话", action: "new" },
-  { cmd: "/clear", desc: "清空(新会话)", action: "clear" },
-  { cmd: "/stop", desc: "停止生成", action: "stop" },
+  { cmd: "/explain", descKey: "composer.slash.explainDesc", insertKey: "composer.slash.explainInsert" },
+  { cmd: "/review", descKey: "composer.slash.reviewDesc", insertKey: "composer.slash.reviewInsert" },
+  { cmd: "/tests", descKey: "composer.slash.testsDesc", insertKey: "composer.slash.testsInsert" },
+  { cmd: "/refactor", descKey: "composer.slash.refactorDesc", insertKey: "composer.slash.refactorInsert" },
+  { cmd: "/fix", descKey: "composer.slash.fixDesc", insertKey: "composer.slash.fixInsert" },
+  { cmd: "/doc", descKey: "composer.slash.docDesc", insertKey: "composer.slash.docInsert" },
+  { cmd: "/summary", descKey: "composer.slash.summaryDesc", insertKey: "composer.slash.summaryInsert" },
+  { cmd: "/new", descKey: "composer.slash.newDesc", action: "new" },
+  { cmd: "/clear", descKey: "composer.slash.clearDesc", action: "clear" },
+  { cmd: "/stop", descKey: "composer.slash.stopDesc", action: "stop" },
 ];
 
 // 长文本折叠阈值:超过则折叠成 TUI 风格紧凑块(首尾若干行 + 中间省略),避免撑爆输入区。
@@ -93,6 +95,7 @@ const IMAGE_MIME_ALLOWED = ["image/png", "image/jpeg", "image/webp", "image/gif"
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
 export default function Composer({ value, onChange, disabled, prompting, configOptions, onSetConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, usage, onSend, onStop, onAction }: Props) {
+  const { t } = useTranslation();
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -118,11 +121,11 @@ export default function Composer({ value, onChange, disabled, prompting, configO
       return {
         head: all.slice(0, COLLAPSE_HEAD_LINES),
         tail: all.slice(all.length - COLLAPSE_TAIL_LINES),
-        note: `${all.length - COLLAPSE_HEAD_LINES - COLLAPSE_TAIL_LINES} 行已折叠`,
+        note: t("composer.linesFolded", { count: all.length - COLLAPSE_HEAD_LINES - COLLAPSE_TAIL_LINES }),
       };
     }
-    return { head: all, tail: [], note: `${value.length} 字符 · 长行已截断` };
-  }, [isLong, value]);
+    return { head: all, tail: [], note: t("composer.longLineTruncated", { count: value.length }) };
+  }, [isLong, value, t]);
   // 自动折叠:长文本 + textarea 非聚焦(草稿恢复 / 外部回填 / 粘贴后失焦)→ 折叠;手打中(聚焦)不打扰。
   useEffect(() => {
     if (!isLong) { setCollapsed(false); return; }
@@ -230,7 +233,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   };
   const pickSlash = (c: SlashCommand) => {
     if (c.action) onAction(c.action);
-    else if (c.insert) onChange(c.insert);
+    else if (c.insertKey) onChange(t(c.insertKey));
     setSlashOpen(false);
     requestAnimationFrame(() => ref.current?.focus());
   };
@@ -410,7 +413,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
           {filtered.map((c, i) => (
             <button key={c.cmd} className={`slash-item ${i === slashIdx ? "active" : ""}`} onMouseEnter={() => setSlashIdx(i)} onClick={() => pickSlash(c)}>
               <span className="slash-cmd">{c.cmd}</span>
-              <span className="slash-desc">{c.desc}</span>
+              <span className="slash-desc">{t(c.descKey)}</span>
             </button>
           ))}
         </div>
@@ -421,13 +424,13 @@ export default function Composer({ value, onChange, disabled, prompting, configO
             const q = mentionInfo?.query ?? "";
             const s = q.lastIndexOf("/");
             const dir = s >= 0 ? q.slice(0, s) : "";
-            return dir ? <div className="mention-cwd">📁 {dir}/ <span className="mention-hint">← 返回</span></div> : null;
+            return dir ? <div className="mention-cwd">📁 {dir}/ <span className="mention-hint">{t("composer.mentionBack")}</span></div> : null;
           })()}
           {mentionItems.map((n, i) => (
             <button key={n.path} className={`slash-item ${i === mentionIdx ? "active" : ""}`} onMouseEnter={() => setMentionIdx(i)} onClick={() => (n.isDir ? descendMention(n) : pickMention(n))}>
               {n.isDir ? <Folder size={13} /> : <File size={13} />}
               <span className="slash-cmd">{n.name}</span>
-              <span className="slash-desc">{n.isDir ? "→ 进入" : ""}</span>
+              <span className="slash-desc">{n.isDir ? t("composer.mentionEnter") : ""}</span>
             </button>
           ))}
         </div>
@@ -471,15 +474,15 @@ export default function Composer({ value, onChange, disabled, prompting, configO
 
         {isLong && (
           <div className="composer-meta-row" data-testid="composer-meta-row">
-            <span className="composer-meta-count">{value.split("\n").length} 行 · {value.length} 字符</span>
+            <span className="composer-meta-count">{t("composer.lineCharCount", { lines: value.split("\n").length, chars: value.length })}</span>
             <button
               className="composer-collapse-toggle"
               data-testid="composer-collapse-toggle"
               onClick={collapsed ? expandInput : collapseInput}
               onMouseDown={(e) => e.preventDefault()}
-              title={collapsed ? "展开全文编辑" : "收起为预览"}
+              title={collapsed ? t("composer.expandFull") : t("composer.collapseToPreview")}
             >
-              {collapsed ? <><ChevronDown size={12} /> 展开</> : <><ChevronUp size={12} /> 收起</>}
+              {collapsed ? <><ChevronDown size={12} /> {t("common.expand")}</> : <><ChevronUp size={12} /> {t("common.collapse")}</>}
             </button>
           </div>
         )}
@@ -489,7 +492,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
             className="composer-collapse"
             data-testid="composer-collapse"
             onClick={expandInput}
-            title="点击展开全文编辑"
+            title={t("composer.collapsePreviewHint")}
           >
             <pre className="composer-collapse-pre">
               {preview.head.map((l, i) => <div key={i} className="composer-collapse-line">{l || " "}</div>)}
@@ -499,7 +502,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
               onClick={(e) => { e.stopPropagation(); expandInput(); }}
               onMouseDown={(e) => e.preventDefault()}
             >
-              ⋯ {preview.note}(点击展开) ⋯
+              {t("composer.collapsePreviewDivider", { note: preview.note })}
             </button>
             {preview.tail.length > 0 && (
               <pre className="composer-collapse-pre">
@@ -513,7 +516,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
             className="composer-input"
             data-testid="composer-input"
             value={value}
-            placeholder={prompting ? "排队下一条…(Enter 入队 · 本轮结束后自动发)" : "给 monkey-deck 发消息…   (Enter 发送 · Shift+Enter 换行 · @ 提文件 · / 看命令 · ↑↓ 翻历史)"}
+            placeholder={prompting ? t("composer.placeholderQueued") : t("composer.placeholderNormal")}
             onChange={handleChange}
             onSelect={handleSelect}
             onKeyDown={onKeyDown}
@@ -554,7 +557,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
 
         <div className="compose-bar">
           <div className="compose-tools">
-            <button className="tool-btn" data-testid="attach-btn" onClick={addFiles} disabled={disabled} title="附加文件(经 ACP ResourceLink 发送)">
+            <button className="tool-btn" data-testid="attach-btn" onClick={addFiles} disabled={disabled} title={t("composer.attachFilesTip")}>
               <Paperclip size={17} />
             </button>
             {imageSupported && (
@@ -563,7 +566,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                 data-testid="image-btn"
                 onClick={addImages}
                 disabled={disabled}
-                title="添加图片(经 ACP Image 块发送 · 也可直接粘贴)"
+                title={t("composer.addImageTip")}
               >
                 <ImageIcon size={17} />
               </button>
@@ -572,7 +575,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
               className="tool-btn"
               onClick={() => { onChange(value.startsWith("/") ? value : "/" + value); requestAnimationFrame(() => ref.current?.focus()); }}
               disabled={disabled}
-              title="输入 / 召出命令菜单"
+              title={t("composer.slashMenuTip")}
             >
               <Slash size={17} />
             </button>
@@ -581,10 +584,10 @@ export default function Composer({ value, onChange, disabled, prompting, configO
             <ModelSelect configOptions={configOptions} disabled={disabled} onSetConfig={onSetConfig} />
             <ComposerUsage usage={usage} draftTokens={estimateTokens(value)} />
             {(attachments.length > 0 || mentions.length > 0 || images.length > 0) && (
-              <span className="composer-count">{attachments.length + mentions.length + images.length} 引用</span>
+              <span className="composer-count">{t("composer.referencesCount", { count: attachments.length + mentions.length + images.length })}</span>
             )}
             {prompting && (
-              <button className="send-btn stop" data-testid="stop-btn" onClick={onStop} title="停止当前生成(不清理队列)">
+              <button className="send-btn stop" data-testid="stop-btn" onClick={onStop} title={t("composer.stopTip")}>
                 <Square size={15} />
               </button>
             )}
@@ -593,7 +596,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
               data-testid="send-btn"
               onClick={() => submit()}
               disabled={disabled || empty}
-              title={prompting ? "排队发送(本轮结束后自动发)" : "发送"}
+              title={prompting ? t("composer.queueSendTip") : t("composer.sendTip")}
             >
               <ArrowUp size={17} />
             </button>
@@ -613,6 +616,7 @@ function ComposerUsage({ usage, draftTokens }: {
   usage: { used: number; size: number; cost: number };
   draftTokens: number;
 }) {
+  const { t } = useTranslation();
   const hasDraft = draftTokens > 0;
   const hasCtx = usage.used > 0 || usage.size > 0;
   if (!hasDraft && !hasCtx) return null;
@@ -620,10 +624,10 @@ function ComposerUsage({ usage, draftTokens }: {
   const level = pct >= 85 ? "crit" : pct >= 60 ? "high" : pct >= 30 ? "mid" : "low";
   return (
     <span className={`composer-usage composer-usage-${level}`} data-testid="composer-usage">
-      {hasDraft && <span className="cu-draft" title="当前输入的近似 token 数(字符数/4 估算,非计费)">~{fmtTokens(draftTokens)}</span>}
+      {hasDraft && <span className="cu-draft" title={t("composer.draftTokensTip")}>~{fmtTokens(draftTokens)}</span>}
       {hasDraft && hasCtx && <span className="cu-sep">·</span>}
       {hasCtx && (
-        <span className="cu-ctx" title="本会话上下文已用 / 上限">
+        <span className="cu-ctx" title={t("composer.contextTokensTip")}>
           {fmtTokens(usage.used)}{usage.size > 0 ? ` / ${fmtTokens(usage.size)}` : ""}{usage.size > 0 ? ` · ${pct}%` : ""}
         </span>
       )}
@@ -639,15 +643,16 @@ function ModelSelect({ configOptions, disabled, onSetConfig }: {
   disabled: boolean;
   onSetConfig: (configId: string, value: string) => void;
 }) {
+  const { t } = useTranslation();
   const modelOpt = configOptions.find((c) => c.category === "model");
   const effortOpt = configOptions.find((c) => c.category === "thought_level");
   const modeOpt = configOptions.find((c) => c.category === "mode");
   if (!modelOpt) return null;
   return (
     <div className="cfg-group">
-      <ConfigSelect label="模型" currentValue={modelOpt.currentValue} options={modelOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("model", v)} groupByProvider searchable />
-      {modeOpt && <ConfigSelect label="模式" currentValue={modeOpt.currentValue} options={modeOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("mode", v)} />}
-      {effortOpt && <ConfigSelect label="思考" currentValue={effortOpt.currentValue} options={effortOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("effort", v)} />}
+      <ConfigSelect label={t("composer.cfgLabel.model")} currentValue={modelOpt.currentValue} options={modelOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("model", v)} groupByProvider searchable />
+      {modeOpt && <ConfigSelect label={t("composer.cfgLabel.mode")} currentValue={modeOpt.currentValue} options={modeOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("mode", v)} />}
+      {effortOpt && <ConfigSelect label={t("composer.cfgLabel.thought")} currentValue={effortOpt.currentValue} options={effortOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("effort", v)} />}
     </div>
   );
 }
@@ -665,6 +670,7 @@ interface ConfigSelectProps {
 }
 
 function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupByProvider, searchable }: ConfigSelectProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const currentName = options.find((o) => o.value === currentValue)?.name ?? currentValue ?? label;
 
@@ -722,13 +728,13 @@ function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupB
           <Command className="cfg-command" label={label}>
             {searchable && (
               <div className="cfg-search-row">
-                <Command.Input placeholder="搜索…" className="cfg-search-input" />
+                <Command.Input placeholder={t("composer.searchPlaceholder")} className="cfg-search-input" />
               </div>
             )}
             <Command.List className="cfg-list">
-              <Command.Empty className="cfg-empty">无匹配</Command.Empty>
+              <Command.Empty className="cfg-empty">{t("composer.noMatch")}</Command.Empty>
               {recentOpts.length > 0 && (
-                <Command.Group key="recent" heading="最近使用" className="cfg-group-block">
+                <Command.Group key="recent" heading={t("composer.recentUsed")} className="cfg-group-block">
                   {recentOpts.map((o) => (
                     <Command.Item
                       key={o.value}

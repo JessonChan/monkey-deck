@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { File as FileIcon, Copy, X } from "lucide-react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import CodeViewer from "./CodeViewer";
@@ -24,6 +25,7 @@ export default function FilePreviewOverlay({
   const [content, setContent] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   // 切换目标:重新加载。
@@ -91,8 +93,8 @@ export default function FilePreviewOverlay({
             className="tool-btn"
             onClick={copy}
             data-tooltip-id="md-tip"
-            data-tooltip-content={copied ? "已复制" : "复制内容"}
-            aria-label="复制内容"
+            data-tooltip-content={copied ? t("common.copied") : t("filePreview.copyTip")}
+            aria-label={t("filePreview.copyTip")}
           >
             {copied ? <span style={{ fontSize: 11 }}>✓</span> : <Copy size={14} />}
           </button>
@@ -100,16 +102,16 @@ export default function FilePreviewOverlay({
             className="tool-btn"
             onClick={onClose}
             data-tooltip-id="md-tip"
-            data-tooltip-content="关闭 (Esc)"
-            aria-label="关闭"
+            data-tooltip-content={t("filePreview.closeTip")}
+            aria-label={t("common.close")}
           >
             <X size={16} />
           </button>
         </div>
         {error ? (
-          <div className="preview-error">读取失败:{error}</div>
+          <div className="preview-error">{t("filePreview.readFailed", { error })}</div>
         ) : loading ? (
-          <div className="preview-loading">加载中…</div>
+          <div className="preview-loading">{t("filePreview.loading")}</div>
         ) : (
           <CodeViewer
             content={content}

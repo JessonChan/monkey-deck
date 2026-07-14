@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Folder, GitBranch, PanelRightClose } from "lucide-react";
 import FilePanel from "./FilePanel";
 import GitPanel from "./GitPanel";
@@ -31,6 +32,7 @@ type Tab = "files" | "scm";
 // 右侧面板:仿 VSCode 侧栏「文件 / 源代码管理」两个视图切换。
 // isGitProject=true 时显示「源代码管理」tab,否则只有「文件」。
 export default function SidePanel(props: Props) {
+  const { t } = useTranslation();
   const hasSCM = props.isGitProject;
   const [tab, setTab] = useState<Tab>("files");
 
@@ -45,19 +47,19 @@ export default function SidePanel(props: Props) {
         <button
           className={`side-tab ${tab === "files" ? "active" : ""}`}
           onClick={() => setTab("files")}
-          title="文件"
+          title={t("sidePanel.filesTitle")}
         >
           <Folder size={15} />
-          <span>文件</span>
+          <span>{t("sidePanel.files")}</span>
         </button>
         {hasSCM && (
           <button
             className={`side-tab ${tab === "scm" ? "active" : ""}`}
             onClick={() => setTab("scm")}
-            title="源代码管理"
+            title={t("sidePanel.scmTitle")}
           >
             <GitBranch size={15} />
-            <span>源代码管理</span>
+            <span>{t("sidePanel.scm")}</span>
           </button>
         )}
         <button
@@ -65,7 +67,7 @@ export default function SidePanel(props: Props) {
           data-testid="collapse-side"
           onClick={() => props.onCollapse?.()}
           data-tooltip-id="md-tip"
-          data-tooltip-content="收起右侧面板"
+          data-tooltip-content={t("sidePanel.collapse")}
           data-tooltip-place="bottom"
         >
           <PanelRightClose size={15} />

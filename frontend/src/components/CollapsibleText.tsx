@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useMemo, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { Check, ChevronDown, ChevronUp, Copy } from "lucide-react";
 import { splitByPaths } from "../lib/filePath";
 
@@ -28,7 +29,7 @@ export interface CollapsibleTextProps {
   previewClassName?: string;
   /** 完整文本(短文本态 / 展开态)的 <pre> className */
   preClassName?: string;
-  /** 行计数单位文案(默认「行」) */
+  /** 行计数单位文案(省略时取 i18n collapsibleText.lineUnit) */
   lineUnit?: string;
   /** 是否显示复制按钮(默认 true) */
   copyable?: boolean;
@@ -47,7 +48,6 @@ const DEFAULTS = {
   longCharThreshold: 1000,
   headLines: 8,
   tailLines: 6,
-  lineUnit: "行",
   testId: "collapsible-text",
 } as const;
 
@@ -63,12 +63,15 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
     className = "",
     previewClassName = "",
     preClassName = "",
-    lineUnit = DEFAULTS.lineUnit,
+    lineUnit,
     copyable = true,
     testId = DEFAULTS.testId,
     lineClassName,
     onPath,
   } = props;
+
+  const { t } = useTranslation();
+  const lineUnitText = lineUnit ?? t("collapsibleText.lineUnit");
 
   const lines = useMemo(() => text.split("\n"), [text]);
   const isLong = lines.length > longLineThreshold || text.length > longCharThreshold;
@@ -107,9 +110,9 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
                 className="path-link"
                 role="button"
                 tabIndex={0}
-                title={`打开 ${p.raw}`}
+                title={t("collapsibleText.openPathTip", { raw: p.raw })}
                 data-tooltip-id="md-tip"
-                data-tooltip-content={`打开预览 ${p.raw}`}
+                data-tooltip-content={t("collapsibleText.previewPathTip", { raw: p.raw })}
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -130,7 +133,7 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
         </div>
       );
     },
-    [lineClassName, onPath]
+    [lineClassName, onPath, t]
   );
 
   // 按行渲染(供 diff +/- 染色等场景):每行包一个 <div>,空行用「 」占位保留行高。
@@ -146,11 +149,11 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
       return {
         head: lines.slice(0, headLines),
         tail: lines.slice(lines.length - tailLines),
-        note: `${lines.length - headLines - tailLines} ${lineUnit}已折叠`,
+        note: t("collapsibleText.linesFolded", { count: lines.length - headLines - tailLines, unit: lineUnitText }),
       };
     }
-    return { head: lines, tail: [], note: `${text.length} 字符 · 长行已截断` };
-  }, [isLong, lines, text.length, headLines, tailLines, lineUnit]);
+    return { head: lines, tail: [], note: t("collapsibleText.longLineTruncated", { count: text.length }) };
+  }, [isLong, lines, text.length, headLines, tailLines, lineUnitText, t]);
 
   const copy = async () => {
     try {
@@ -167,13 +170,13 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
       <div className={`ctext ctext-short ${className}`} data-testid={testId}>
         {copyable && (
           <div className="ctext-meta">
-            <span className="ctext-count">{lines.length} {lineUnit} · {text.length} 字符</span>
+            <span className="ctext-count">{t("collapsibleText.lineCharCount", { lines: lines.length, unit: lineUnitText, chars: text.length })}</span>
             <button
               className="msg-action-btn"
               type="button"
               onClick={copy}
               data-tooltip-id="md-tip"
-              data-tooltip-content={copied ? "已复制" : "复制"}
+              data-tooltip-content={copied ? t("common.copied") : t("common.copy")}
             >
               {copied ? <Check size={11} /> : <Copy size={11} />}
             </button>
@@ -188,7 +191,7 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
   return (
     <div className={`ctext ${collapsed ? "is-collapsed" : "is-expanded"} ${className}`} data-testid={testId}>
       <div className="ctext-meta" data-testid={`${testId}-meta`}>
-        <span className="ctext-count">{lines.length} {lineUnit} · {text.length} 字符</span>
+        <span className="ctext-count">{t("collapsibleText.lineCharCount", { lines: lines.length, unit: lineUnitText, chars: text.length })}</span>
         <div className="ctext-actions">
           {copyable && (
             <button
@@ -196,7 +199,7 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
               type="button"
               onClick={copy}
               data-tooltip-id="md-tip"
-              data-tooltip-content={copied ? "已复制" : "复制"}
+              data-tooltip-content={copied ? t("common.copied") : t("common.copy")}
             >
               {copied ? <Check size={11} /> : <Copy size={11} />}
             </button>
@@ -207,10 +210,10 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
             type="button"
             onClick={() => setCollapsed((c) => !c)}
             data-tooltip-id="md-tip"
-            data-tooltip-content={collapsed ? "展开全文" : "收起"}
+            data-tooltip-content={collapsed ? t("collapsibleText.expandFull") : t("common.collapse")}
             data-testid={`${testId}-toggle`}
           >
-            {collapsed ? <><ChevronDown size={12} /> 展开</> : <><ChevronUp size={12} /> 收起</>}
+            {collapsed ? <><ChevronDown size={12} /> {t("common.expand")}</> : <><ChevronUp size={12} /> {t("common.collapse")}</>}
           </button>
         </div>
       </div>
@@ -241,9 +244,9 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
                         className="path-link"
                         role="button"
                         tabIndex={0}
-                        title={`打开 ${p.raw}`}
+                        title={t("collapsibleText.openPathTip", { raw: p.raw })}
                         data-tooltip-id="md-tip"
-                        data-tooltip-content={`打开预览 ${p.raw}`}
+                        data-tooltip-content={t("collapsibleText.previewPathTip", { raw: p.raw })}
                         onClick={(e) => { e.preventDefault(); e.stopPropagation(); onPath(p.path, p.line); expand(); }}
                         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onPath(p.path, p.line); expand(); } }}
                       >
@@ -260,7 +263,7 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
             type="button"
             onClick={(e) => { e.stopPropagation(); expand(); }}
           >
-            ⋯ {preview.note}(点击展开) ⋯
+            {t("collapsibleText.collapsePreviewDivider", { note: preview.note })}
           </button>
           {preview.tail.length > 0 && (
             <pre className="ctext-preview-pre">
@@ -281,9 +284,9 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
                           className="path-link"
                           role="button"
                           tabIndex={0}
-                          title={`打开 ${p.raw}`}
+                          title={t("collapsibleText.openPathTip", { raw: p.raw })}
                           data-tooltip-id="md-tip"
-                          data-tooltip-content={`打开预览 ${p.raw}`}
+                          data-tooltip-content={t("collapsibleText.previewPathTip", { raw: p.raw })}
                           onClick={(e) => { e.preventDefault(); e.stopPropagation(); onPath(p.path, p.line); expand(); }}
                           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onPath(p.path, p.line); expand(); } }}
                         >

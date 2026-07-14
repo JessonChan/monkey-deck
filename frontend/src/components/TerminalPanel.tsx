@@ -2,6 +2,7 @@
 // tab 交互:单击切换、hover × / 中键 kill、右键菜单(改名/Kill)、+ 新建。
 // 与 agent 的 ACP 工具卡片完全分离:agent 走对话流,这里纯粹是给人敲命令的 PTY。
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Plus, X, ChevronDown, Terminal as TerminalIcon } from "lucide-react";
 import { useTerminal, type TerminalHandle } from "../hooks/useTerminal";
 import type { TerminalTab } from "../lib/terminalTypes";
@@ -44,6 +45,7 @@ export interface TerminalPanelProps {
 }
 
 export default function TerminalPanel(props: TerminalPanelProps) {
+  const { t } = useTranslation();
   const { tabs, activeTabId, onSelectTab, onCloseTab, onNewTab, onRenameTab, onClosePanel } = props;
   const [menu, setMenu] = useState<ContextMenu | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -121,7 +123,7 @@ export default function TerminalPanel(props: TerminalPanelProps) {
                 className="terminal-tab-close"
                 onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
                 data-tooltip-id="md-tip"
-                data-tooltip-content="关闭终端"
+                data-tooltip-content={t("terminal.closeTabTip")}
               ><X size={13} /></button>
             </div>
           ))}
@@ -129,20 +131,20 @@ export default function TerminalPanel(props: TerminalPanelProps) {
             className="terminal-icon-btn"
             onClick={onNewTab}
             data-tooltip-id="md-tip"
-            data-tooltip-content="新建终端"
+            data-tooltip-content={t("terminal.newTabTip")}
           ><Plus size={16} /></button>
         </div>
         <button
           className="terminal-icon-btn"
           onClick={onClosePanel}
           data-tooltip-id="md-tip"
-          data-tooltip-content="收起终端面板 (⌘J)"
+          data-tooltip-content={t("terminal.collapseTip")}
         ><ChevronDown size={16} /></button>
       </div>
 
       <div className="terminal-views">
         {tabs.length === 0 ? (
-          <div className="terminal-empty">点击 + 或空白处新建终端</div>
+          <div className="terminal-empty">{t("terminal.empty")}</div>
         ) : (
           tabs.map((tab) => (
             <TerminalView
@@ -163,12 +165,12 @@ export default function TerminalPanel(props: TerminalPanelProps) {
         >
           <button
             className="terminal-context-item"
-            onClick={() => { const t = tabs.find((x) => x.id === menu.tabId); if (t) startRename(t); }}
-          >重命名</button>
+            onClick={() => { const tab = tabs.find((x) => x.id === menu.tabId); if (tab) startRename(tab); }}
+          >{t("terminal.rename")}</button>
           <button
             className="terminal-context-item danger"
             onClick={() => { onCloseTab(menu.tabId); setMenu(null); }}
-          >关闭终端</button>
+          >{t("terminal.closeTab")}</button>
         </div>
       )}
     </div>
