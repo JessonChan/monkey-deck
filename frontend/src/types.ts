@@ -65,6 +65,9 @@ export interface PermissionPrompt {
   sessionId: string;
   toolName: string;
   title: string;
+  actionType?: string; // read/write/exec/other(决策上下文:动作分组)
+  command?: string; // 决策上下文:exec 类抽取的命令
+  locations?: string[]; // 决策上下文:涉及路径
   options: PermissionOption[];
 }
 

@@ -779,7 +779,23 @@ input, textarea { font-family: inherit; }
 .permission-head { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 11px; }
 .permission-head svg { color: var(--amber); margin-top: 1px; }
 .permission-title { font-weight: 600; font-size: 13px; word-break: break-word; }
-.permission-tool { font-family: var(--mono); font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.permission-sub { display: flex; gap: 8px; align-items: center; margin-top: 3px; }
+.permission-action {
+  font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 999px;
+  background: rgba(255, 214, 10, 0.16); color: var(--amber); text-transform: uppercase; letter-spacing: 0.02em;
+}
+.permission-tool { font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+.permission-context {
+  margin-bottom: 11px; padding: 8px 10px; border-radius: var(--r-sm);
+  background: var(--bg); border: 1px solid var(--sep); display: flex; flex-direction: column; gap: 5px;
+}
+.permission-row { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; }
+.permission-label { color: var(--text-3); flex: 0 0 auto; min-width: 3.2em; }
+.permission-command {
+  font-family: var(--mono); font-size: 11.5px; color: var(--text-1);
+  background: var(--elev); padding: 1px 6px; border-radius: var(--r-sm); word-break: break-all; white-space: pre-wrap;
+}
+.permission-paths { font-family: var(--mono); font-size: 11px; color: var(--text-2); white-space: pre-wrap; word-break: break-all; }
 .permission-actions { display: flex; gap: 7px; flex-wrap: wrap; }
 .perm-btn {
   font-size: 12.5px; padding: 6px 14px; border-radius: var(--r-sm); font-weight: 500;

@@ -1026,15 +1026,44 @@ function countNonEmpty(text: string): number {
 
 function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRespond: (id: string) => void }) {
   const { t } = useTranslation();
+  const actionLabel =
+    prompt.actionType === "read"
+      ? t("chat.permActionRead")
+      : prompt.actionType === "write"
+        ? t("chat.permActionWrite")
+        : prompt.actionType === "exec"
+          ? t("chat.permActionExec")
+          : prompt.actionType === "other"
+            ? t("chat.permActionOther")
+            : "";
   return (
     <div className="permission-card" data-testid="permission-card">
       <div className="permission-head">
         <ShieldAlert size={18} />
         <div>
           <div className="permission-title">{prompt.title || t("chat.permissionTitleFallback")}</div>
-          {prompt.toolName && <div className="permission-tool">{prompt.toolName}</div>}
+          <div className="permission-sub">
+            {actionLabel && <span className="permission-action" data-testid="perm-action">{actionLabel}</span>}
+            {prompt.toolName && <span className="permission-tool">{prompt.toolName}</span>}
+          </div>
         </div>
       </div>
+      {(prompt.command || (prompt.locations && prompt.locations.length > 0)) && (
+        <div className="permission-context" data-testid="perm-context">
+          {prompt.command && (
+            <div className="permission-row">
+              <span className="permission-label">{t("chat.permCommandLabel")}</span>
+              <code className="permission-command" data-testid="perm-command">{prompt.command}</code>
+            </div>
+          )}
+          {prompt.locations && prompt.locations.length > 0 && (
+            <div className="permission-row">
+              <span className="permission-label">{t("chat.permPathsLabel")}</span>
+              <span className="permission-paths" data-testid="perm-paths">{prompt.locations.join("\n")}</span>
+            </div>
+          )}
+        </div>
+      )}
       <div className="permission-actions">
         <button className="perm-btn perm-allow" data-testid="perm-once" onClick={() => onRespond("once")}>{t("chat.permAllowOnce")}</button>
         <button className="perm-btn perm-allow" data-testid="perm-session" onClick={() => onRespond("session")}>{t("chat.permAllowSession")}</button>
