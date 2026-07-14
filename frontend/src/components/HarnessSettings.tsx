@@ -2,16 +2,13 @@ import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { Boxes, RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download } from "lucide-react";
+import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download } from "lucide-react";
 
-interface Props {
-  onClose: () => void;
-}
-
-// harness 管理面板(发现 / 版本检测 / 升级)。
+// harness 管理 pane(发现 / 版本检测 / 升级)。
 // 展示每个已知 harness 的:名称 + 启动命令 + 本地版本 + 上游最新版本 + 升级按钮 / 状态。
 // 数据来自后端 Discover(扫 PATH + 跑 --version + 查 GitHub Releases)。
-export default function HarnessSettings({ onClose }: Props) {
+// 本组件只渲染 pane 内容,由设置中心面板承载。
+export default function HarnessPane() {
   const { t } = useTranslation();
   const [list, setList] = useState<Harness[]>([]);
   const [loading, setLoading] = useState(true);
@@ -33,13 +30,6 @@ export default function HarnessSettings({ onClose }: Props) {
   }, []);
 
   useEffect(() => { void reload(); }, [reload]);
-
-  // Esc 关闭(§4.2)。
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -71,46 +61,36 @@ export default function HarnessSettings({ onClose }: Props) {
   }, []);
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-card harness-settings-card" onClick={(e) => e.stopPropagation()}>
-        <div className="perm-settings-head">
-          <div className="perm-settings-title">
-            <Boxes size={16} />
-            <span>{t("settings.harness.title")}</span>
-          </div>
-          <button
-            className="modal-btn ghost"
-            data-testid="harness-refresh"
-            disabled={refreshing}
-            data-tooltip-id="md-tip"
-            data-tooltip-content={t("settings.harness.refreshTip")}
-            onClick={() => void refresh()}
-          >
-            <RefreshCw size={13} className={refreshing ? "spin" : ""} /> {t("settings.harness.refresh")}
-          </button>
-        </div>
-        <div className="perm-settings-desc">{t("settings.harness.desc")}</div>
+    <div className="settings-pane" data-testid="harness-pane">
+      <div className="pane-head">
+        <div className="pane-desc">{t("settings.harness.desc")}</div>
+        <button
+          className="modal-btn ghost"
+          data-testid="harness-refresh"
+          disabled={refreshing}
+          data-tooltip-id="md-tip"
+          data-tooltip-content={t("settings.harness.refreshTip")}
+          onClick={() => void refresh()}
+        >
+          <RefreshCw size={13} className={refreshing ? "spin" : ""} /> {t("settings.harness.refresh")}
+        </button>
+      </div>
 
-        {error && <div className="modal-del-err">{error}</div>}
+      {error && <div className="modal-del-err">{error}</div>}
 
-        <div className="harness-list" data-testid="harness-list">
-          {loading && <div className="perm-empty">{t("settings.harness.loading")}</div>}
-          {!loading && list.length === 0 && (
-            <div className="perm-empty">{t("settings.harness.empty")}</div>
-          )}
-          {list.map((h) => (
-            <HarnessRow
-              key={h.id}
-              h={h}
-              upgrading={upgrading[h.id]}
-              onUpgrade={() => void upgrade(h.id)}
-            />
-          ))}
-        </div>
-
-        <div className="modal-actions perm-settings-actions">
-          <button className="modal-btn primary" onClick={onClose}>{t("common.done")}</button>
-        </div>
+      <div className="harness-list" data-testid="harness-list">
+        {loading && <div className="perm-empty">{t("settings.harness.loading")}</div>}
+        {!loading && list.length === 0 && (
+          <div className="perm-empty">{t("settings.harness.empty")}</div>
+        )}
+        {list.map((h) => (
+          <HarnessRow
+            key={h.id}
+            h={h}
+            upgrading={upgrading[h.id]}
+            onUpgrade={() => void upgrade(h.id)}
+          />
+        ))}
       </div>
     </div>
   );

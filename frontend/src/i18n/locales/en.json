@@ -292,17 +292,40 @@
     "previewPathTip": "Open preview {{raw}}"
   },
   "settings": {
+    "center": {
+      "openTip": "Settings",
+      "title": "Settings",
+      "cat": {
+        "general": "General",
+        "appearance": "Appearance",
+        "language": "Language",
+        "conversation": "Conversation",
+        "permissions": "Permissions",
+        "models": "Models & harness",
+        "sound": "Sound"
+      },
+      "general": {
+        "desc": "App basics.",
+        "version": "Version",
+        "versionDesc": "Current app version (injected from git tag on release builds)"
+      },
+      "language": {
+        "desc": "Switch the UI language, takes effect immediately."
+      },
+      "sound": {
+        "desc": "Audible alerts.",
+        "notifyTitle": "Turn-end sound",
+        "notifyDesc": "Play a short chime when an agent turn ends naturally (on by default)."
+      },
+      "empty": {
+        "appearance": "No appearance settings yet; they will be added here later.",
+        "conversation": "No conversation settings yet; they will be added here later."
+      }
+    },
     "language": "Language",
     "languageZh": "中文",
     "languageEn": "English",
-    "languageTip": "Switch language",
-    "notifySound": {
-      "onTip": "Turn-end sound (on, click to mute)",
-      "offTip": "Turn-end sound (off, click to unmute)"
-    },
     "perm": {
-      "openTip": "Permission rules",
-      "title": "Permission rules",
       "desc": "Rules route each tool request before asking: allow auto-approves, deny auto-rejects, ask prompts. First match wins; empty field = wildcard.",
       "reset": "Reset to defaults",
       "resetTip": "Restore the built-in default rules (replaces your custom rules)",
@@ -330,8 +353,6 @@
       "delete": "Delete rule"
     },
     "harness": {
-      "openTip": "Manage agent harnesses",
-      "title": "Agent harnesses",
       "desc": "Auto-discovered ACP harnesses installed on this machine. Versions are detected locally and checked against their upstream release.",
       "refresh": "Re-scan",
       "refreshTip": "Re-scan PATH and re-check upstream releases",

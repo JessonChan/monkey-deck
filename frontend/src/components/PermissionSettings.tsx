@@ -2,15 +2,14 @@ import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import { PermissionRule } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import { ShieldCheck, Plus, Trash2, RotateCcw, ChevronUp, ChevronDown } from "lucide-react";
+import { Plus, Trash2, RotateCcw, ChevronUp, ChevronDown } from "lucide-react";
 
-interface Props {
-  onClose: () => void;
-}
-
-// 分级权限规则设置面板(§3.4)。规则按优先级(sort_order ASC)逐条判定,首条命中者决定裁决。
+// 分级权限规则设置 pane(§3.4)。规则按优先级(sort_order ASC)逐条判定,首条命中者决定裁决。
 // 每条规则的约束(工具名/动作/路径/命令)AND 语义,空约束 = 通配。
 // 默认规则:危险命令 deny > 只读 allow > 写/执行 ask。
+//
+// 本组件只渲染 pane 内容(规则列表 + 增删改 + 恢复默认),由设置中心面板承载;
+// 数据读写经 ChatService → SQLite permission_rules 表,变更后端即时刷进活跃 session handler。
 const ACTION_OPTIONS = [
   { value: "any", labelKey: "settings.perm.actionAny" },
   { value: "read", labelKey: "settings.perm.actionRead" },
@@ -25,7 +24,7 @@ const LEVEL_OPTIONS = [
   { value: "deny", labelKey: "settings.perm.levelDeny", cls: "perm-level-deny" },
 ];
 
-export default function PermissionSettings({ onClose }: Props) {
+export default function PermissionRulesPane() {
   const { t } = useTranslation();
   const [rules, setRules] = useState<PermissionRule[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,14 +42,8 @@ export default function PermissionSettings({ onClose }: Props) {
     }
   }, []);
 
+  // 懒加载:设置中心切到本 pane 时才挂载并拉取,避免无谓请求。
   useEffect(() => { void reload(); }, [reload]);
-
-  // Esc 关闭(§4.2)。
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   const update = useCallback(async (rule: PermissionRule) => {
     try {
@@ -107,51 +100,44 @@ export default function PermissionSettings({ onClose }: Props) {
   }, [reload]);
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-card perm-settings-card" onClick={(e) => e.stopPropagation()}>
-        <div className="perm-settings-head">
-          <div className="perm-settings-title">
-            <ShieldCheck size={16} />
-            <span>{t("settings.perm.title")}</span>
-          </div>
-          <button
-            className="modal-btn ghost"
-            data-testid="perm-reset"
-            data-tooltip-id="md-tip"
-            data-tooltip-content={t("settings.perm.resetTip")}
-            onClick={() => void reset()}
-          >
-            <RotateCcw size={13} /> {t("settings.perm.reset")}
-          </button>
-        </div>
-        <div className="perm-settings-desc">{t("settings.perm.desc")}</div>
+    <div className="settings-pane" data-testid="perm-pane">
+      <div className="pane-head">
+        <div className="pane-desc">{t("settings.perm.desc")}</div>
+        <button
+          className="modal-btn ghost"
+          data-testid="perm-reset"
+          data-tooltip-id="md-tip"
+          data-tooltip-content={t("settings.perm.resetTip")}
+          onClick={() => void reset()}
+        >
+          <RotateCcw size={13} /> {t("settings.perm.reset")}
+        </button>
+      </div>
 
-        {error && <div className="modal-del-err">{error}</div>}
+      {error && <div className="modal-del-err">{error}</div>}
 
-        <div className="perm-rule-list" data-testid="perm-rule-list">
-          {loading && <div className="perm-empty">{t("settings.perm.loading")}</div>}
-          {!loading && rules.length === 0 && (
-            <div className="perm-empty">{t("settings.perm.empty")}</div>
-          )}
-          {rules.map((rule, i) => (
-            <RuleRow
-              key={rule.id}
-              rule={rule}
-              first={i === 0}
-              last={i === rules.length - 1}
-              onChange={update}
-              onRemove={remove}
-              onMove={move}
-            />
-          ))}
-        </div>
+      <div className="perm-rule-list" data-testid="perm-rule-list">
+        {loading && <div className="perm-empty">{t("settings.perm.loading")}</div>}
+        {!loading && rules.length === 0 && (
+          <div className="perm-empty">{t("settings.perm.empty")}</div>
+        )}
+        {rules.map((rule, i) => (
+          <RuleRow
+            key={rule.id}
+            rule={rule}
+            first={i === 0}
+            last={i === rules.length - 1}
+            onChange={update}
+            onRemove={remove}
+            onMove={move}
+          />
+        ))}
+      </div>
 
-        <div className="modal-actions perm-settings-actions">
-          <button className="modal-btn ghost" data-testid="perm-add" onClick={() => void add()}>
-            <Plus size={13} /> {t("settings.perm.add")}
-          </button>
-          <button className="modal-btn primary" onClick={onClose}>{t("common.done")}</button>
-        </div>
+      <div className="pane-actions">
+        <button className="modal-btn ghost" data-testid="perm-add" onClick={() => void add()}>
+          <Plus size={13} /> {t("settings.perm.add")}
+        </button>
       </div>
     </div>
   );

@@ -292,17 +292,40 @@
     "previewPathTip": "打开预览 {{raw}}"
   },
   "settings": {
+    "center": {
+      "openTip": "设置",
+      "title": "设置",
+      "cat": {
+        "general": "通用",
+        "appearance": "外观",
+        "language": "语言",
+        "conversation": "对话",
+        "permissions": "权限",
+        "models": "模型与 harness",
+        "sound": "声音"
+      },
+      "general": {
+        "desc": "应用基本信息。",
+        "version": "版本",
+        "versionDesc": "当前应用版本(发布构建时由 git tag 注入)"
+      },
+      "language": {
+        "desc": "切换界面语言,即时生效。"
+      },
+      "sound": {
+        "desc": "听觉提醒。",
+        "notifyTitle": "对话结束提示音",
+        "notifyDesc": "agent 回合自然结束时播放短促提示音(默认开启)。"
+      },
+      "empty": {
+        "appearance": "外观设置暂未提供,后续将在此补充。",
+        "conversation": "对话相关设置暂未提供,后续将在此补充。"
+      }
+    },
     "language": "语言",
     "languageZh": "中文",
     "languageEn": "English",
-    "languageTip": "切换语言",
-    "notifySound": {
-      "onTip": "对话结束提示音(已开启,点击关闭)",
-      "offTip": "对话结束提示音(已关闭,点击开启)"
-    },
     "perm": {
-      "openTip": "权限规则",
-      "title": "权限规则",
       "desc": "工具执行前按规则路由:allow 自动放行、deny 自动拒绝、ask 弹窗确认。首条命中者生效,空字段 = 通配。",
       "reset": "恢复默认",
       "resetTip": "重置为内置默认规则(会覆盖你的自定义规则)",
@@ -330,8 +353,6 @@
       "delete": "删除规则"
     },
     "harness": {
-      "openTip": "管理 agent harness",
-      "title": "Agent harness",
       "desc": "本机自动发现的 ACP harness。版本号取自本地可执行文件,并对照上游发布源检查是否有新版。",
       "refresh": "重新扫描",
       "refreshTip": "重新扫描 PATH 并对照上游发布源",
