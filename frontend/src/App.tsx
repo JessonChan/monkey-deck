@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useTranslation } from "react-i18next";
 import { Events } from "@wailsio/runtime";
 import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import * as TerminalService from "../bindings/github.com/jessonchan/monkey-deck/internal/terminal/terminalservice";
@@ -30,6 +31,7 @@ const EMPTY_USAGE: Usage = { used: 0, size: 0, cost: 0 };
 const PAGE_SIZE = 30;
 
 export default function App() {
+  const { t } = useTranslation();
   const [projects, setProjects] = useState<Project[]>([]);
   const [gitByProject, setGitByProject] = useState<Record<string, boolean>>({});
   const [branchBySession, setBranchBySession] = useState<Record<string, string>>({});
@@ -244,7 +246,7 @@ export default function App() {
         }
       }
       // 错误提示只对当前查看的 session 弹(切走时不在意别的 session 的错误条)。
-      if (s.status === "error" && s.sessionId === selectedSessionIdRef.current) setError(s.detail || "出错");
+      if (s.status === "error" && s.sessionId === selectedSessionIdRef.current) setError(s.detail || t("app.errorFallback"));
       // 回合结束:清掉该 session 最后 agent/thought 的 streaming 标志(去光标 + 显复制按钮);
       // 同时把残留的中间态 tool(in_progress/pending)收口到终态 —— Prompt 正常返回(idle)
       // 意味着所有 tool 必然已完成;若最后的 tool_call_update(completed) 因时序/投递未到前端,
@@ -594,7 +596,8 @@ export default function App() {
     try {
       const cwd = termCwdRef.current;
       const id = await TerminalService.Start(sid, cwd, 80, 24);
-      const title = cwd ? (cwd.replace(/\/$/, "").split("/").pop() || "终端") : "终端";
+      const defaultTermTitle = t("terminal.defaultTitle");
+      const title = cwd ? (cwd.replace(/\/$/, "").split("/").pop() || defaultTermTitle) : defaultTermTitle;
       setTermTabsBySession((prev) => ({ ...prev, [sid]: [...(prev[sid] ?? []), { id, sessionId: sid, title, status: "running" }] }));
       setActiveTermBySession((prev) => ({ ...prev, [sid]: id }));
       setTermOpenBySession((prev) => ({ ...prev, [sid]: true }));
@@ -675,12 +678,12 @@ export default function App() {
     try {
       const result = await ChatService.MergeSession(selectedSessionId);
       setError(null);
-      setMergeResult(result || "✅ 合并完成");
+      setMergeResult(result || t("app.mergeDone"));
       setTimeout(() => setMergeResult(null), 6000);
       // 合并后刷新 diff(变为"无变更")
       try { setSessionDiff(await ChatService.SessionDiff(selectedSessionId) || ""); } catch {}
     } catch (e) {
-      const msg = "❌ 合并失败: " + String(e);
+      const msg = t("app.mergeFailed", { error: String(e) });
       setError(msg);
       setMergeResult(msg);
       setTimeout(() => setMergeResult(null), 8000);
@@ -708,7 +711,7 @@ export default function App() {
   }, [selectedSessionId]);
   // 提交:失败时 rethrow,让 GitPanel 保留提交信息 + 显示内联错误。
   const commitSession = useCallback(async (message: string) => {
-    if (!selectedSessionId) throw new Error("无活动 session");
+    if (!selectedSessionId) throw new Error(t("app.noActiveSession"));
     try { await ChatService.SessionCommit(selectedSessionId, message); setError(null); }
     catch (e) { setError(String(e)); throw e; }
     finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
@@ -716,7 +719,7 @@ export default function App() {
   // AI 提交:让当前 session 的 agent 自动提交。触发一轮 turn;turn 结束(idle)时
   // 已有 effect 自动刷新 sessionChanges,故无需手动 finally 刷新。
   const aiCommit = useCallback(async () => {
-    if (!selectedSessionId) throw new Error("无活动 session");
+    if (!selectedSessionId) throw new Error(t("app.noActiveSession"));
     try { await ChatService.SessionAICommit(selectedSessionId); setError(null); }
     catch (e) { setError(String(e)); throw e; }
   }, [selectedSessionId]);
@@ -1036,9 +1039,9 @@ export default function App() {
         className="panel-rail left"
         onClick={expandSidebar}
         data-testid="expand-sidebar"
-        aria-label="展开侧栏"
+        aria-label={t("app.expandSidebar")}
         data-tooltip-id="md-tip"
-        data-tooltip-content="展开侧栏"
+        data-tooltip-content={t("app.expandSidebar")}
         data-tooltip-place="right"
       >
         <PanelLeftOpen size={14} />
@@ -1050,9 +1053,9 @@ export default function App() {
         className="panel-rail right"
         onClick={expandSide}
         data-testid="expand-side"
-        aria-label="展开右侧面板"
+        aria-label={t("app.expandSidePanel")}
         data-tooltip-id="md-tip"
-        data-tooltip-content="展开右侧面板"
+        data-tooltip-content={t("app.expandSidePanel")}
         data-tooltip-place="left"
       >
         <PanelRightOpen size={14} />
@@ -1072,12 +1075,13 @@ export default function App() {
 }
 
 function EmptyState() {
+  const { t } = useTranslation();
   return (
     <div className="empty-state">
       <div className="empty-logo"><Sparkles size={30} /></div>
-      <h2>Monkey Deck</h2>
-      <p>ACP 桌面客户端 · 以项目目录为锚点管理编码 agent 对话</p>
-      <p className="empty-hint">← 在左侧添加一个项目目录开始</p>
+      <h2>{t("app.emptyTitle")}</h2>
+      <p>{t("app.emptyTagline")}</p>
+      <p className="empty-hint">{t("app.emptyHint")}</p>
     </div>
   );
 }

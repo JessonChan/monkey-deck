@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 
 interface Props {
@@ -13,6 +14,7 @@ interface Props {
 // git 项目下 worktree 必须显式二选一(新建分支 / 使用项目目录),无默认,未选时「新建」按钮禁用。
 // 非 git 项目不展示 worktree 选项(无法建分支)。
 export default function NewSessionModal({ harnesses, isGit, onConfirm, onCancel }: Props) {
+  const { t } = useTranslation();
   const [harness, setHarness] = useState(harnesses[0]?.id || "omp");
   // worktree 必须显式选择:null = 未选(默认),true = 新建,false = 使用项目目录。
   const [worktree, setWorktree] = useState<boolean | null>(isGit ? null : false);
@@ -31,10 +33,10 @@ export default function NewSessionModal({ harnesses, isGit, onConfirm, onCancel 
   return (
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal-card new-session-card" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-title">新建对话</div>
+        <div className="modal-title">{t("newSession.title")}</div>
 
         <div className="ns-field">
-          <div className="ns-label">选择 agent</div>
+          <div className="ns-label">{t("newSession.selectAgent")}</div>
           <div className="ns-harness-list">
             {harnesses.map((h) => (
               <button
@@ -54,8 +56,8 @@ export default function NewSessionModal({ harnesses, isGit, onConfirm, onCancel 
         {isGit && (
           <div className="ns-field">
             <div className="ns-label">
-              工作目录
-              {worktree === null && <span className="ns-required">（请选择）</span>}
+              {t("newSession.workdir")}
+              {worktree === null && <span className="ns-required">{t("newSession.required")}</span>}
             </div>
             <div className="ns-worktree-group">
               <button
@@ -65,9 +67,9 @@ export default function NewSessionModal({ harnesses, isGit, onConfirm, onCancel 
               >
                 <span className={`ns-radio ${worktree === false ? "on" : ""}`} />
                 <span className="ns-worktree-text">
-                  <span className="ns-worktree-title">使用项目当前目录</span>
+                  <span className="ns-worktree-title">{t("newSession.shareTitle")}</span>
                   <span className="ns-worktree-desc">
-                    多个会话共享同一目录，修改彼此可见，适合在同一上下文上继续对话
+                    {t("newSession.shareDesc")}
                   </span>
                 </span>
               </button>
@@ -78,9 +80,9 @@ export default function NewSessionModal({ harnesses, isGit, onConfirm, onCancel 
               >
                 <span className={`ns-radio ${worktree === true ? "on" : ""}`} />
                 <span className="ns-worktree-text">
-                  <span className="ns-worktree-title">新建独立分支（worktree）</span>
+                  <span className="ns-worktree-title">{t("newSession.worktreeTitle")}</span>
                   <span className="ns-worktree-desc">
-                    为本次对话创建独立的 git 工作树与分支，多会话互不污染，可合并回主仓库
+                    {t("newSession.worktreeDesc")}
                   </span>
                 </span>
               </button>
@@ -89,14 +91,14 @@ export default function NewSessionModal({ harnesses, isGit, onConfirm, onCancel 
         )}
 
         <div className="modal-actions">
-          <button className="modal-btn ghost" onClick={onCancel}>取消</button>
+          <button className="modal-btn ghost" onClick={onCancel}>{t("common.cancel")}</button>
           <button
             className="modal-btn primary"
             disabled={!canConfirm}
             onClick={() => canConfirm && onConfirm(harness, worktree === true)}
             data-testid="ns-confirm"
           >
-            新建
+            {t("newSession.createBtn")}
           </button>
         </div>
       </div>

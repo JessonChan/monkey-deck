@@ -1,7 +1,9 @@
 import { useState, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import * as Popover from "@radix-ui/react-popover";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X, Pin, PinOff, PanelLeftClose } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X, Pin, PinOff, PanelLeftClose, Globe } from "lucide-react";
 import {
   DndContext,
   PointerSensor,
@@ -13,6 +15,8 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { timeAgo, formatDateTime } from "../utils";
+import type { AppLanguage } from "../i18n";
+import { setLanguage } from "../i18n";
 
 interface Props {
   projects: Project[];
@@ -78,6 +82,7 @@ type ConfirmTarget =
 const SESSION_PAGE = 25;
 
 export default function Sidebar(props: Props) {
+  const { t, i18n } = useTranslation();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
   const [pathInput, setPathInput] = useState("");
@@ -257,12 +262,35 @@ export default function Sidebar(props: Props) {
   return (
     <aside className="sidebar" data-testid="sidebar">
       <div className="sidebar-header" onDoubleClick={onTitleDoubleClick}>
-        <span className="sidebar-title">Monkey Deck</span>
+        <span className="sidebar-title">{t("app.brand")}</span>
         <span className="sidebar-header-acts">
-          <button className="icon-btn" data-testid="collapse-sidebar" onClick={() => props.onCollapse?.()} data-tooltip-id="md-tip" data-tooltip-content="收起侧栏" data-tooltip-place="bottom">
+          <button className="icon-btn" data-testid="collapse-sidebar" onClick={() => props.onCollapse?.()} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.collapse")} data-tooltip-place="bottom">
             <PanelLeftClose size={16} />
           </button>
-          <button className="icon-btn" data-testid="add-project" onClick={startAdd} data-tooltip-id="md-tip" data-tooltip-content="添加项目目录" data-tooltip-place="bottom">
+          <Popover.Root>
+            <Popover.Trigger asChild>
+              <button className="icon-btn" data-testid="lang-switch" data-tooltip-id="md-tip" data-tooltip-content={t("settings.languageTip")} data-tooltip-place="bottom">
+                <Globe size={16} />
+              </button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content sideOffset={6} align="end" className="lang-popover-content" data-testid="lang-popover">
+                <div className="lang-popover-label">{t("settings.language")}</div>
+                {(["zh", "en"] as AppLanguage[]).map((lng) => (
+                  <button
+                    key={lng}
+                    className={`lang-option ${i18n.language === lng ? "active" : ""}`}
+                    data-testid={`lang-${lng}`}
+                    onClick={() => { setLanguage(lng); }}
+                  >
+                    <span className={`lang-radio ${i18n.language === lng ? "on" : ""}`} />
+                    <span className="lang-option-name">{lng === "zh" ? t("settings.languageZh") : t("settings.languageEn")}</span>
+                  </button>
+                ))}
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
+          <button className="icon-btn" data-testid="add-project" onClick={startAdd} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.addProject")} data-tooltip-place="bottom">
             <Plus size={17} />
           </button>
         </span>
@@ -274,7 +302,7 @@ export default function Sidebar(props: Props) {
             className="add-path-input"
             data-testid="add-path-input"
             autoFocus
-            placeholder="粘贴项目目录路径…"
+            placeholder={t("sidebar.pastePathPlaceholder")}
             value={pathInput}
             onChange={(e) => setPathInput(e.target.value)}
             onKeyDown={(e) => {
@@ -287,7 +315,7 @@ export default function Sidebar(props: Props) {
             className="icon-btn small"
             data-testid="browse-project-path"
             data-tooltip-id="md-tip"
-            data-tooltip-content="浏览目录"
+            data-tooltip-content={t("sidebar.browseDirectory")}
             data-tooltip-place="bottom"
             onClick={() => { setAdding(false); props.onAddProject(); }}
           >
@@ -300,7 +328,7 @@ export default function Sidebar(props: Props) {
       <SortableContext items={props.projects.map((p) => p.id)} strategy={verticalListSortingStrategy}>
       <div className="project-list">
         {props.projects.length === 0 && !adding && (
-          <div className="sidebar-empty">还没有项目。点右上角 + 添加一个代码目录。</div>
+          <div className="sidebar-empty">{t("sidebar.noProjects")}</div>
         )}
         {props.projects.map((p) => {
           const isOpen = expanded.has(p.id);
@@ -327,10 +355,10 @@ export default function Sidebar(props: Props) {
                   <Folder size={15} />
                   <span className="project-name" data-tooltip-id="md-tip" data-tooltip-content={p.path}>{p.name}</span>
                 </button>
-                <button className="icon-btn small" onClick={() => toggleSearch(p.id)} data-tooltip-id="md-tip" data-tooltip-content={searchProj === p.id ? "关闭搜索" : "搜索会话"} data-tooltip-place="bottom" data-testid={`search-sessions-${p.id}`}>
+                <button className="icon-btn small" onClick={() => toggleSearch(p.id)} data-tooltip-id="md-tip" data-tooltip-content={searchProj === p.id ? t("sidebar.searchOn") : t("sidebar.searchOff")} data-tooltip-place="bottom" data-testid={`search-sessions-${p.id}`}>
                   <Search size={12} />
                 </button>
-                <button className="icon-btn small" onClick={() => props.onCreateSession(p.id)} data-tooltip-id="md-tip" data-tooltip-content="新对话" data-testid={`new-session-${p.id}`}>
+                <button className="icon-btn small" onClick={() => props.onCreateSession(p.id)} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.newSession")} data-testid={`new-session-${p.id}`}>
                   <Plus size={13} />
                 </button>
               </div>
@@ -343,14 +371,14 @@ export default function Sidebar(props: Props) {
                         ref={searchInputRef}
                         className="session-search-input"
                         data-testid={`session-search-${p.id}`}
-                        placeholder="搜索标题或内容…"
+                        placeholder={t("sidebar.searchPlaceholder")}
                         value={searchQ}
                         onChange={(e) => setSearchQ(e.target.value)}
                         onKeyDown={(e) => { if (e.key === "Escape") toggleSearch(p.id); }}
                       />
-                      {contentLoading && <span className="search-spinner" data-tooltip-id="md-tip" data-tooltip-content="正在搜索内容…" />}
+                      {contentLoading && <span className="search-spinner" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.searchingContent")} />}
                       {searchQ && (
-                        <button className="icon-btn small" data-tooltip-id="md-tip" data-tooltip-content="清空" onClick={() => setSearchQ("")}>
+                        <button className="icon-btn small" data-tooltip-id="md-tip" data-tooltip-content={t("common.clear")} onClick={() => setSearchQ("")}>
                           <X size={11} />
                         </button>
                       )}
@@ -361,9 +389,9 @@ export default function Sidebar(props: Props) {
                     const active = st === "prompting";
                     const act = props.activityBySession[s.id];
                     const cls = st === "error" ? "error" : active ? act ?? "running" : "";
-                    const dotTip = st === "error" ? "出错"
-                      : active ? ({ thinking: "思考中", executing: "执行中", replying: "回复中" } as Record<string, string>)[act ?? ""] ?? "生成中"
-                      : "空闲";
+                    const dotTip = st === "error" ? t("sidebar.status.error")
+                      : active ? ({ thinking: t("sidebar.status.thinking"), executing: t("sidebar.status.executing"), replying: t("sidebar.status.replying") } as Record<string, string>)[act ?? ""] ?? t("sidebar.status.generating")
+                      : t("sidebar.status.idle");
                     const unread = !active && props.unreadBySession[s.id];
                     return (
                       <div
@@ -377,22 +405,22 @@ export default function Sidebar(props: Props) {
                           onClick={() => props.onSelectSession(s.id, p.id)}
                         >
                           <span className={`session-dot ${cls}`} data-tooltip-id="md-tip" data-tooltip-content={dotTip} />
-                          <span className="session-label">{s.title || "新对话"}</span>
+                          <span className="session-label">{s.title || t("sidebar.sessionDraftFallback")}</span>
                           {s.pinned && (
-                            <span className="session-pin" data-tooltip-id="md-tip" data-tooltip-content="已置顶 · 右键可取消" data-testid={`pin-${s.id}`}>
+                            <span className="session-pin" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.pinnedTip")} data-testid={`pin-${s.id}`}>
                               <Pin size={11} />
                             </span>
                           )}
                           {props.permPendingBySession[s.id] ? (
-                            <span className="perm-dot" data-tooltip-id="md-tip" data-tooltip-content="等待授权 · 点击进入裁决" data-testid={`perm-dot-${s.id}`} />
+                            <span className="perm-dot" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.permPendingTip")} data-testid={`perm-dot-${s.id}`} />
                           ) : active ? (
-                            <span className="tail-spinner" data-tooltip-id="md-tip" data-tooltip-content="正在生成…" />
+                            <span className="tail-spinner" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.generatingTip")} />
                           ) : unread ? (
-                            <span className="unread-dot" data-tooltip-id="md-tip" data-tooltip-content="有未读回复，点击查看" />
+                            <span className="unread-dot" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.unreadTip")} />
                           ) : (() => {
                             const dh = props.draftBySession?.[s.id];
                             return dh && dh.trim() ? (
-                              <span className="draft-indicator" data-tooltip-id="md-tip" data-tooltip-content={`草稿: ${dh.slice(0, 40)}${dh.length > 40 ? "…" : ""}`} data-testid={`draft-${s.id}`}>
+                              <span className="draft-indicator" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.draftTip", { text: dh.slice(0, 40) + (dh.length > 40 ? "…" : "") })} data-testid={`draft-${s.id}`}>
                                 <Pencil size={6} />
                               </span>
                             ) : <span className="session-time" data-tooltip-id="md-tip" data-tooltip-content={formatDateTime(s.updatedAt)}>{timeAgo(s.updatedAt)}</span>;
@@ -402,7 +430,7 @@ export default function Sidebar(props: Props) {
                     );
                   })}
                   {searching && list.length === 0 && (
-                    <div className="session-search-empty">无匹配的会话</div>
+                    <div className="session-search-empty">{t("sidebar.noMatch")}</div>
                   )}
                   {!searching && hiddenCount > 0 && (
                     <button
@@ -410,7 +438,7 @@ export default function Sidebar(props: Props) {
                       data-testid={`load-more-sessions-${p.id}`}
                       onClick={() => setSessionLimit((prev) => ({ ...prev, [p.id]: (prev[p.id] ?? SESSION_PAGE) + SESSION_PAGE }))}
                     >
-                      加载更多（还有 {hiddenCount} 个）
+                      {t("sidebar.loadMore", { count: hiddenCount })}
                     </button>
                   )}
                 </div>
@@ -425,14 +453,14 @@ export default function Sidebar(props: Props) {
       {ctx?.kind === "project" && (
         <div ref={menuRef} className="ctx-menu" style={{ left: ctx.x, top: ctx.y }} onMouseDown={(e) => e.stopPropagation()}>
           <button className="ctx-item" onClick={() => { void navigator.clipboard?.writeText(ctx.project.path); closeCtx(); }}>
-            <Copy size={13} /> 复制工作目录
+            <Copy size={13} /> {t("sidebar.copyWorkdir")}
           </button>
           <button className="ctx-item" onClick={() => { void ChatService.RevealPath(ctx.project.path); closeCtx(); }}>
-            <FolderOpen size={13} /> 在 Finder 打开
+            <FolderOpen size={13} /> {t("sidebar.revealInFinder")}
           </button>
           <div className="ctx-sep" />
           <button className="ctx-item danger" onClick={() => { setConfirm({ kind: "project", project: ctx.project }); setCtx(null); setDeleteErr(null); }}>
-            <Trash2 size={13} /> 移除项目
+            <Trash2 size={13} /> {t("sidebar.removeProject")}
           </button>
         </div>
       )}
@@ -444,22 +472,22 @@ export default function Sidebar(props: Props) {
             disabled={props.selectedSessionId === ctx.session.id}
             onClick={() => { if (props.selectedSessionId !== ctx.session.id) void props.onSelectSession(ctx.session.id, ctx.session.projectId); closeCtx(); }}
           >
-            <Folder size={13} /> 激活对话
+            <Folder size={13} /> {t("sidebar.activateSession")}
           </button>
           <button className="ctx-item" onClick={() => { void props.onTogglePin(ctx.session.id, !ctx.session.pinned); closeCtx(); }}>
-            {ctx.session.pinned ? <><PinOff size={13} /> 取消置顶</> : <><Pin size={13} /> 置顶对话</>}
+            {ctx.session.pinned ? <><PinOff size={13} /> {t("sidebar.unpin")}</> : <><Pin size={13} /> {t("sidebar.pin")}</>}
           </button>
           <button className="ctx-item" onClick={() => { void navigator.clipboard?.writeText(ctx.session.id); closeCtx(); }}>
-            <Copy size={13} /> 复制会话 ID
+            <Copy size={13} /> {t("sidebar.copySessionId")}
           </button>
           {ctx.session.worktreePath && (
             <button className="ctx-item" onClick={() => { void ChatService.RevealPath(ctx.session.worktreePath); closeCtx(); }}>
-              <FolderOpen size={13} /> 在 Finder 打开 Worktree
+              <FolderOpen size={13} /> {t("sidebar.revealWorktree")}
             </button>
           )}
           <div className="ctx-sep" />
           <button className="ctx-item danger" onClick={() => { setConfirm({ kind: "session", session: ctx.session }); setCtx(null); setDeleteErr(null); }}>
-            <Trash2 size={13} /> 删除会话
+            <Trash2 size={13} /> {t("sidebar.deleteSession")}
           </button>
         </div>
       )}
@@ -467,11 +495,11 @@ export default function Sidebar(props: Props) {
       {confirm?.kind === "project" && (
         <div className="modal-overlay" onClick={() => setConfirm(null)} onMouseDown={(e) => e.stopPropagation()}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
-            <div className="modal-title">移除项目?</div>
+            <div className="modal-title">{t("sidebar.removeProjectTitle")}</div>
             <div className="modal-del-target" data-tooltip-id="md-tip" data-tooltip-content={confirm.project.path}>{confirm.project.name} · {confirm.project.path}</div>
             <div className="modal-actions">
-              <button className="modal-btn ghost" onClick={() => setConfirm(null)}>取消</button>
-              <button className="modal-btn danger" disabled={deleting} onClick={() => void onConfirmRemoveProject(confirm.project.id)}>移除</button>
+              <button className="modal-btn ghost" onClick={() => setConfirm(null)}>{t("common.cancel")}</button>
+              <button className="modal-btn danger" disabled={deleting} onClick={() => void onConfirmRemoveProject(confirm.project.id)}>{t("sidebar.removeBtn")}</button>
             </div>
           </div>
         </div>
@@ -480,12 +508,12 @@ export default function Sidebar(props: Props) {
       {confirm?.kind === "session" && (
         <div className="modal-overlay" onClick={() => setConfirm(null)} onMouseDown={(e) => e.stopPropagation()}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
-            <div className="modal-title">删除会话?</div>
-            <div className="modal-del-target">{confirm.session.title || "新对话"} · {confirm.session.id.slice(0, 8)}</div>
+            <div className="modal-title">{t("sidebar.deleteSessionTitle")}</div>
+            <div className="modal-del-target">{confirm.session.title || t("sidebar.sessionDraftFallback")} · {confirm.session.id.slice(0, 8)}</div>
             {deleteErr && <div className="modal-del-err">⚠ {deleteErr}</div>}
             <div className="modal-actions">
-              <button className="modal-btn ghost" onClick={() => setConfirm(null)}>取消</button>
-              <button className="modal-btn danger" disabled={deleting} onClick={() => void onConfirmRemoveSession(confirm.session.id)}>删除</button>
+              <button className="modal-btn ghost" onClick={() => setConfirm(null)}>{t("common.cancel")}</button>
+              <button className="modal-btn danger" disabled={deleting} onClick={() => void onConfirmRemoveSession(confirm.session.id)}>{t("common.delete")}</button>
             </div>
           </div>
         </div>
