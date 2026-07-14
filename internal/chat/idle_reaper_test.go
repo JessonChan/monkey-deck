@@ -33,7 +33,11 @@ func (m *mockChatConn) IsAlive() bool                                { return !m
 func (m *mockChatConn) RespondPermission(id, optionID string) bool   { return false }
 func (m *mockChatConn) SessionTitle(ctx context.Context) (string, error) { return "", nil }
 func (m *mockChatConn) FlatConfigOptions() []acp.ConfigOption         { return nil }
+func (m *mockChatConn) SupportsImage() bool                           { return false }
 func (m *mockChatConn) SetConfigOption(ctx context.Context, configId, value string) error { return nil }
+func (m *mockChatConn) RefreshConfig(ctx context.Context) ([]acp.ConfigOption, error) {
+	return nil, nil
+}
 
 // newIdleTestService 建一个不启 harness 的 svc,注入短 idleTimeout。
 func newIdleTestService(t *testing.T, idleTimeout time.Duration) *ChatService {
@@ -173,4 +177,45 @@ func TestCloseIdleConcurrentSafe(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// RefreshSessionConfig 对非活跃 session 必须返回错误(不 panic、不调 RefreshConfig)。
+func TestRefreshSessionConfigNotActive(t *testing.T) {
+	svc := newIdleTestService(t, 10*time.Minute)
+	_, err := svc.RefreshSessionConfig("nope")
+	if err == nil {
+		t.Fatal("expected error for inactive session")
+	}
+}
+
+// RefreshSessionConfig 对活跃 session(mockChatConn.RefreshConfig 返回 nil,nil)
+// 成功返回 + emit 一条 config_option event(无 Wails3 app 时 emit 静默,不 panic)。
+func TestRefreshSessionConfigActiveEmitsConfigOption(t *testing.T) {
+	svc := newIdleTestService(t, 10*time.Minute)
+	addMockLive(svc, "s1", time.Now().UnixMilli(), false)
+
+	var emitted []string
+	var emittedPayloads []any
+	svc.emitHook = func(name string, data any) {
+		emitted = append(emitted, name)
+		emittedPayloads = append(emittedPayloads, data)
+	}
+
+	flat, err := svc.RefreshSessionConfig("s1")
+	if err != nil {
+		t.Fatalf("expected success on active session, got %v", err)
+	}
+	if flat != nil {
+		t.Fatalf("mockChatConn returns nil config options, got %v", flat)
+	}
+	if len(emitted) != 1 || emitted[0] != EventUpdate {
+		t.Fatalf("expected one %s event, got %v", EventUpdate, emitted)
+	}
+	ev, ok := emittedPayloads[0].(acp.SessionEvent)
+	if !ok {
+		t.Fatalf("expected SessionEvent payload, got %T", emittedPayloads[0])
+	}
+	if ev.Kind != "config_option" {
+		t.Fatalf("expected config_option kind, got %q", ev.Kind)
+	}
 }

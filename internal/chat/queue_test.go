@@ -66,7 +66,11 @@ func (f *fakeChat) IsAlive() bool                                        { retur
 func (f *fakeChat) RespondPermission(_, _ string) bool                   { return true }
 func (f *fakeChat) SessionTitle(_ context.Context) (string, error)       { return f.title, nil }
 func (f *fakeChat) FlatConfigOptions() []acp.ConfigOption                { return nil }
+func (f *fakeChat) SupportsImage() bool                                  { return false }
 func (f *fakeChat) SetConfigOption(_ context.Context, _, _ string) error { return nil }
+func (f *fakeChat) RefreshConfig(_ context.Context) ([]acp.ConfigOption, error) {
+	return nil, nil
+}
 
 // release 放行所有阻塞的 Prompt(幂等),供 t.Cleanup 防止 goroutine 泄漏。
 func (f *fakeChat) release() {

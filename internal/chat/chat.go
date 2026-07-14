@@ -78,8 +78,13 @@ type chatConn interface {
 	SessionTitle(ctx context.Context) (string, error)
 	// FlatConfigOptions 返回扁平化的 config options(给前端渲染下拉)。
 	FlatConfigOptions() []acp.ConfigOption
+	// SupportsImage 报告 agent 是否声明了 image prompt 能力(前端据此门控图片输入入口)。
+	SupportsImage() bool
 	// SetConfigOption 切换 config option(model/mode/effort),热切同 session 即时生效。
 	SetConfigOption(ctx context.Context, configId, value string) error
+	// RefreshConfig 重新 spawn probe harness 拉最新 configOptions(同步外部配置改动),
+	// 不影响当前活跃连接、不中断对话流。详见 acp.ChatSession.RefreshConfig。
+	RefreshConfig(ctx context.Context) ([]acp.ConfigOption, error)
 }
 
 // turnEntry 一轮时序里的一项,由稳定标识驱动(对标 omp/opencode 的"对象归并"模型):
@@ -1501,6 +1506,39 @@ func (s *ChatService) SetSessionConfigOption(sessionID, configId, value string) 
 	}
 	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "config_option", ConfigOptions: ls.chat.FlatConfigOptions()})
 	return nil
+}
+
+// RefreshSessionConfig 重新拉取 session 的最新 configOptions(同步外部配置改动)。
+//
+// 用户在 harness 配置(如 opencode config)外部加了新 provider/model 后,点聊天界面的
+// 「刷新」按钮触发此方法。后端 spawn 一个临时 probe harness(同 cwd + 同 harness 命令)
+// 拉取最新 configOptions,更新到活跃 session 内存,并推 config_option event 让前端
+// 模型下拉立即看到新选项。详见 acp.ChatSession.RefreshConfig。
+//
+// probe 完全独立:不影响当前活跃连接、不中断进行中的对话流(哪怕 turn 正在跑)。
+// 调用方应配超时(spawn harness 可能慢),失败返回错误供前端提示。
+func (s *ChatService) RefreshSessionConfig(sessionID string) ([]acp.ConfigOption, error) {
+	s.mu.RLock()
+	ls, ok := s.active[sessionID]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("session not active: %s", sessionID)
+	}
+	// probe 用独立 context + 超时兜底(spawn harness 卡死时避免无限等待)。
+	// 不挂 s.ctx:probe 不应被应用退出以外的取消打断;这里用 60s 足够覆盖 spawn。
+	ctx, cancel := context.WithTimeout(s.ctx, 60*time.Second)
+	defer cancel()
+	flat, err := ls.chat.RefreshConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.emit(EventUpdate, acp.SessionEvent{
+		SessionID:      sessionID,
+		Kind:           "config_option",
+		ConfigOptions:  flat,
+		ImageSupported: ls.chat.SupportsImage(),
+	})
+	return flat, nil
 }
 
 func (s *ChatService) isActive(sessionID string) bool {

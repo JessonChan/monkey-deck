@@ -283,6 +283,46 @@ func (cs *ChatSession) SupportsImage() bool {
 	return cs.PromptCapabilities.Image
 }
 
+// RefreshConfig 重新拉取最新 configOptions + prompt capabilities(同步外部配置改动)。
+//
+// 用途:用户在 harness 自己的配置(如 opencode config)外部改动了 provider/model 列表
+// (加了新模型 / 新 provider),当前活跃 session 的 harness 进程是改动前 spawn 的,内存里
+// 的 ConfigOptions 已过期。点「刷新」让模型下拉看到新选项。
+//
+// ACP 协议没有「重新拉 configOptions」的标准方法(configOptions 只在 NewSession/LoadSession/
+// set_config_option 响应 + config_option_update 通知里出现)。唯一能拿到最新配置的路径是
+// 新 spawn 一个 harness:新进程会读最新 harness 配置 → NewSession 响应带最新 configOptions。
+//
+// 实现为「probe harness」:用当前 session 的 cwd + 同一 harness 命令临时 spawn 一个独立
+// harness(独立进程组),Initialize + NewSession 拿到最新 configOptions,然后立即
+// CloseSession(清理 harness 持久化的 session 记录)+ kill 进程组回收。
+// probe 完全独立:不影响当前活跃连接、不中断进行中的对话流。
+//
+// 成功后覆盖 cs.ConfigOptions / cs.PromptCapabilities 为最新全量,返回扁平化结果。
+func (cs *ChatSession) RefreshConfig(ctx context.Context) ([]ConfigOption, error) {
+	handler := NewHandler(cs.WorkDir, func(SessionEvent) {}, func(PermissionPrompt) {}, 0)
+	cmd, conn, initResp, err := cs.Runner.spawnAndInit(ctx, cs.WorkDir, handler)
+	if err != nil {
+		return nil, fmt.Errorf("refresh config: spawn probe: %w", err)
+	}
+	// probe 拿到结果或出错都要 kill 进程组回收(防泄漏,§3.2)。
+	defer killProcessGroup(cmd)
+	sess, err := conn.NewSession(ctx, acp.NewSessionRequest{
+		Cwd:        cs.WorkDir,
+		McpServers: []acp.McpServer{},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("refresh config: probe new session: %w", err)
+	}
+	// 清理 probe 创建的 session:harness 可能持久化 session 记录,CloseSession 收尾。
+	// 失败不致命(harness 可能已随 kill 退出),忽略错误。
+	_, _ = conn.CloseSession(ctx, acp.CloseSessionRequest{SessionId: sess.SessionId})
+	cs.ConfigOptions = sess.ConfigOptions
+	cs.PromptCapabilities = initResp.AgentCapabilities.PromptCapabilities
+	slog.Info("refreshed config options", "sessionId", cs.SessionID, "cwd", cs.WorkDir, "options", len(cs.ConfigOptions))
+	return FlattenConfigOptions(cs.ConfigOptions), nil
+}
+
 // SetConfigOption 切换某个 config option(model/mode/effort),热切、同 session 即时生效。
 // 成功后更新 cs.ConfigOptions 为 agent 返回的最新全量。configId 如 "model"/"mode"/"effort"。
 func (cs *ChatSession) SetConfigOption(ctx context.Context, configId, value string) error {

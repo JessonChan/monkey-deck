@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/coder/acp-go-sdk"
@@ -50,5 +51,23 @@ func TestIsPeerDisconnectedDoesNotOvermatch(t *testing.T) {
 	}
 	if IsPeerDisconnected(nil) {
 		t.Fatal("nil 不应判为 peer disconnected")
+	}
+}
+
+// TestRefreshConfigSpawnFailure 验证 probe harness spawn 失败时的错误路径:
+// harness 命令不存在 → spawnAndInit 返回 exec 错误 → RefreshConfig 包成
+// "spawn probe" 错误返回,不 panic、不留孤儿进程(killProcessGroup 幂等处理 nil cmd)。
+// 复现 §3.2 回收安全性:probe 失败也要干净退出。
+func TestRefreshConfigSpawnFailure(t *testing.T) {
+	cs := &ChatSession{
+		Runner:  NewRunner("/nonexistent/harness-binary", nil),
+		WorkDir: t.TempDir(),
+	}
+	_, err := cs.RefreshConfig(context.Background())
+	if err == nil {
+		t.Fatal("expected error when harness command does not exist")
+	}
+	if !strings.Contains(err.Error(), "spawn probe") {
+		t.Fatalf("expected spawn probe error, got %v", err)
 	}
 }
