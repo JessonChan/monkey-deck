@@ -8,7 +8,7 @@ import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
 import CollapsibleText from "./CollapsibleText";
-import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal } from "lucide-react";
+import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search } from "lucide-react";
 
 interface Usage { used: number; size: number; cost: number; }
 
@@ -555,12 +555,199 @@ function ToolGroup({ tools }: { tools: Extract<ChatItem, { type: "tool" }>[] }) 
 }
 
 function ToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
-  // bash / 命令执行(ACP ToolKindExecute="execute"):用专门的卡片化布局——
-  // 头(名 + 状态 + exit)+ 体(命令行 + 折叠输出区),长输出默认折叠(首尾+省略)。
-  // edit/grep/glob 等其它工具仍走通用卡片(本 task 只接入 bash)。
+  // 按 ACP ToolKind 分派到专用卡片(execute→bash、edit→文件编辑、read→文件读取、search→检索),
+  // 复用 J1 的卡片框架(Collapsible 头 + 折叠 toggle)+ CollapsibleText 折叠体。未覆盖的 kind 走通用卡。
   // 分派层不持有 hook,避免子分支 hook 顺序不一致(React Rules of Hooks)。
-  if (item.kind === "execute") return <BashToolCard item={item} />;
-  return <GenericToolCard item={item} />;
+  switch (item.kind) {
+    case "execute": return <BashToolCard item={item} />;
+    case "edit": return <EditToolCard item={item} />;
+    case "read": return <ReadToolCard item={item} />;
+    case "search": return <SearchToolCard item={item} />;
+    default: return <GenericToolCard item={item} />;
+  }
+}
+
+// edit / 文件编辑卡片(edit/apply_patch/write_file 等 kind=edit 工具):
+// 头(FilePen + 标题 + 状态)+ 体(目标文件 + 改动片段)。改动以 +/- diff 呈现(增删行高亮),
+// 长内容复用 CollapsibleText 折叠(短/展开/折叠预览三态均按行染色)。
+//   - old_string/new_string 都有 → 拼 -/+ diff;
+//   - 只有 content/newText(write_file 新写)→ 纯内容、标「写入内容」;
+//   - patch(apply_patch)→ 原样按 unified diff 染色;
+//   - 都没有 → 回退 extractToolText。
+// 失败时额外展示 output(通常含错误信息)。
+function EditToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
+  const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
+  const running = item.status === "pending" || item.status === "in_progress";
+  const path = extractFilePath(item.rawInput);
+  const parts = extractEditParts(item.rawInput);
+  const diffText = parts.diff; // 非 undefined 时按 diff 染色
+  const plainText = parts.plain; // 非 diff 的纯内容
+  const outputR = item.status === "failed" && item.rawOutput != null ? extractToolText(item.rawOutput) : null;
+
+  const renderTarget = (label: string, p: string) => (
+    <div className="file-target" data-testid="edit-target">
+      <span className="file-target-label">{label}</span>
+      <span className="file-target-path" title={p}>{p}</span>
+    </div>
+  );
+
+  return (
+    <Collapsible
+      className="tool-card file-tool-card edit-tool-card"
+      open={false}
+      summaryClassName="tool-summary file-tool-summary"
+      summary={<>
+        {running ? <span className="thought-spinner" /> : <FilePen size={13} />}
+        <span className="tool-title">{item.title || "编辑文件"}</span>
+        {path && <span className="tool-badge" title={path}>{shortPath(path)}</span>}
+        <span className={`tool-status ${st.cls}`}>{st.label}</span>
+      </>}
+    >
+      {path && renderTarget("目标文件", path)}
+      {diffText && (
+        <div className="file-section">
+          <div className="file-section-head">
+            <span className="file-section-label">改动{parts.kind === "patch" ? " · patch" : ""}</span>
+            <span className="file-section-meta">
+              <span className="diff-stat diff-stat-add">+{parts.added}</span>
+              <span className="diff-stat diff-stat-del">−{parts.removed}</span>
+            </span>
+          </div>
+          <CollapsibleText
+            text={diffText}
+            className="diff-ctext"
+            preClassName="diff-pre"
+            previewClassName="diff-preview"
+            lineUnit="行"
+            testId="edit-diff"
+            lineClassName={diffLineCls}
+          />
+        </div>
+      )}
+      {!diffText && plainText && (
+        <div className="file-section">
+          <div className="file-section-head"><span className="file-section-label">写入内容</span></div>
+          <CollapsibleText
+            text={plainText}
+            preClassName="file-content-pre"
+            lineUnit="行"
+            testId="edit-content"
+          />
+        </div>
+      )}
+      {outputR && outputR.text && (
+        <div className="file-section">
+          <div className="file-section-head"><span className="file-section-label">输出</span></div>
+          <CollapsibleText text={outputR.text} preClassName="file-content-pre" lineUnit="行" testId="edit-output" copyable />
+        </div>
+      )}
+    </Collapsible>
+  );
+}
+
+// read / 文件读取卡片(read_file 等 kind=read 工具):
+// 头(FileText + 标题 + 状态 + 路径徽章)+ 体(目标文件 + 内容片段,长内容折叠)。
+// 内容来自 rawOutput(文件正文);输入仅给路径。
+function ReadToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
+  const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
+  const running = item.status === "pending" || item.status === "in_progress";
+  const path = extractFilePath(item.rawInput) || extractFilePath(item.rawOutput);
+  const outputR = item.rawOutput != null ? extractToolText(item.rawOutput) : null;
+
+  return (
+    <Collapsible
+      className="tool-card file-tool-card read-tool-card"
+      open={false}
+      summaryClassName="tool-summary file-tool-summary"
+      summary={<>
+        {running ? <span className="thought-spinner" /> : <FileText size={13} />}
+        <span className="tool-title">{item.title || "读取文件"}</span>
+        {path && <span className="tool-badge" title={path}>{shortPath(path)}</span>}
+        <span className={`tool-status ${st.cls}`}>{st.label}</span>
+      </>}
+    >
+      {path && (
+        <div className="file-target" data-testid="read-target">
+          <span className="file-target-label">目标文件</span>
+          <span className="file-target-path" title={path}>{path}</span>
+        </div>
+      )}
+      {outputR && outputR.text ? (
+        <div className="file-section">
+          <div className="file-section-head">
+            <span className="file-section-label">内容</span>
+            {outputR.truncated && <span className="file-section-meta">已截断</span>}
+          </div>
+          <CollapsibleText
+            text={outputR.text}
+            preClassName="file-content-pre"
+            previewClassName="file-content-preview"
+            lineUnit="行"
+            testId="read-content"
+          />
+        </div>
+      ) : (
+        <div className="file-empty">无内容</div>
+      )}
+    </Collapsible>
+  );
+}
+
+// search / 检索卡片(grep / glob 等 kind=search 工具):
+// 头(Search + 标题 + 状态 + pattern 徽章)+ 体(检索范围 + 结果列表)。
+// 结果来自 rawOutput(grep 多为「路径:行:内容」、glob 多为路径列表),长列表复用 CollapsibleText 折叠。
+function SearchToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
+  const st = TOOL_STATUS_MAP[item.status] || { label: item.status || "未知", cls: "tc-unknown" };
+  const running = item.status === "pending" || item.status === "in_progress";
+  const pattern = extractSearchPattern(item.rawInput);
+  const scope = extractFilePath(item.rawInput);
+  const outputR = item.rawOutput != null ? extractToolText(item.rawOutput) : null;
+  const matchCount = outputR?.text ? countNonEmpty(outputR.text) : 0;
+
+  return (
+    <Collapsible
+      className="tool-card file-tool-card search-tool-card"
+      open={false}
+      summaryClassName="tool-summary file-tool-summary"
+      summary={<>
+        {running ? <span className="thought-spinner" /> : <Search size={13} />}
+        <span className="tool-title">{item.title || "检索"}</span>
+        {pattern && <span className="tool-badge tool-badge-pattern" title={pattern}>{pattern}</span>}
+        {!running && matchCount > 0 && <span className="tool-badge tool-badge-count">{matchCount} 项</span>}
+        <span className={`tool-status ${st.cls}`}>{st.label}</span>
+      </>}
+    >
+      {pattern && (
+        <div className="file-target" data-testid="search-pattern-row">
+          <span className="file-target-label">模式</span>
+          <span className="file-target-path search-pattern-text" title={pattern}>{pattern}</span>
+        </div>
+      )}
+      {scope && (
+        <div className="file-target">
+          <span className="file-target-label">范围</span>
+          <span className="file-target-path" title={scope}>{scope}</span>
+        </div>
+      )}
+      {outputR && outputR.text ? (
+        <div className="file-section">
+          <div className="file-section-head">
+            <span className="file-section-label">结果</span>
+            <span className="file-section-meta">{matchCount} 项</span>
+          </div>
+          <CollapsibleText
+            text={outputR.text}
+            preClassName="search-results-pre"
+            previewClassName="search-results-preview"
+            lineUnit="行"
+            testId="search-results"
+          />
+        </div>
+      ) : (
+        <div className="file-empty">{running ? "检索中…" : "无匹配"}</div>
+      )}
+    </Collapsible>
+  );
 }
 
 function GenericToolCard({ item }: { item: Extract<ChatItem, { type: "tool" }> }) {
@@ -687,6 +874,113 @@ function extractBashCommand(raw: unknown): string {
     return argv.map((a) => (typeof a === "string" ? a : String(a))).join(" ");
   }
   return "";
+}
+
+// 从工具 rawInput/rawOutput 抽出文件路径(兼容各 harness 的字段命名,§4.4 不裸露 JSON)。
+// 仅处理对象(record);字符串可能是文件正文(read_file 的 rawOutput),对它跑正则会误匹配,
+// 故字符串一律返回空(路径徽章缺失不影响 diff/内容展示)。
+// 优先级:path / file / filepath / fileName / filePath / dir。第一个非空字符串胜出。
+function extractFilePath(raw: unknown): string {
+  if (!isRecord(raw)) return "";
+  for (const k of ["path", "file", "filepath", "filePath", "fileName", "filename", "dir", "directory", "cwd"]) {
+    const v = raw[k];
+    if (typeof v === "string" && v.trim()) return v;
+  }
+  return "";
+}
+
+// 从检索工具 rawInput 抽出检索模式(grep 的 pattern/regex、glob 的 pattern/glob/include)。
+function extractSearchPattern(raw: unknown): string {
+  if (!isRecord(raw)) return "";
+  for (const k of ["pattern", "regex", "query", "glob", "include", "search", "q"]) {
+    const v = raw[k];
+    if (typeof v === "string" && v.trim()) return v;
+  }
+  return "";
+}
+
+// 从编辑工具 rawInput 抽出改动内容,归一成「带 +/- 染色的 diff 文本」或「纯内容」。
+// 覆盖:edit(old_string/new_string)、write_file(content/newText/text)、apply_patch(patch)。
+// 返回 { diff?, plain?, kind, added, removed }:diff 非空则按行染色;否则 plain 兜底。
+function extractEditParts(raw: unknown): { diff?: string; plain?: string; kind: "diff" | "patch" | "content" | "none"; added: number; removed: number } {
+  const empty = { kind: "none" as const, added: 0, removed: 0 };
+  if (!isRecord(raw)) return empty;
+  const oldStr = pickStr(raw, ["old_string", "oldString", "old_str", "old_text", "oldText", "search", "find"]);
+  const newStr = pickStr(raw, ["new_string", "newString", "new_str", "new_text", "newText", "replace", "replacement"]);
+  const patch = pickStr(raw, ["patch"]);
+  const content = pickStr(raw, ["content", "newText", "text", "file_text", "fileText"]);
+  // apply_patch:unified diff 原样染色(它自带 +/-/@@ 格式)。
+  if (patch) {
+    const { added, removed } = countDiffLines(patch);
+    return { diff: patch, kind: "patch", added, removed };
+  }
+  // edit(old→new):自构 -/+ diff(删除行在前、新增行在后,清晰呈现增删)。
+  if (oldStr && newStr) {
+    const diff = buildPlusMinusDiff(oldStr, newStr);
+    const { added, removed } = countDiffLines(diff);
+    return { diff, kind: "diff", added, removed };
+  }
+  // write_file / 新建文件:只有内容 → 纯内容展示,不强加全绿底(大文件视觉过重)。
+  if (content) return { plain: content, kind: "content", added: 0, removed: 0 };
+  return empty;
+}
+
+// 从 raw 中按候选键取首个非空字符串值。
+function pickStr(raw: Record<string, unknown>, keys: string[]): string {
+  for (const k of keys) {
+    const v = raw[k];
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return "";
+}
+
+// 由 old/new 两段文本构造简单 -/+ diff:旧文本行前缀「-」、新文本行前缀「+」,各自成段。
+// 不是最小化 diff(不做行对齐),但诚实地呈现「删了什么 / 加了什么」,且与 unified patch 的
+// +/- 前缀约定一致,可复用同一套染色规则。
+function buildPlusMinusDiff(oldStr: string, newStr: string): string {
+  const oldLines = oldStr.split("\n");
+  const newLines = newStr.split("\n");
+  const parts: string[] = [];
+  for (const l of oldLines) parts.push(`-${l}`);
+  for (const l of newLines) parts.push(`+${l}`);
+  return parts.join("\n");
+}
+
+// 统计 diff 文本里的增删行数(以「+」「-」开头,但忽略「+++」「---」文件头)。
+function countDiffLines(diff: string): { added: number; removed: number } {
+  let added = 0, removed = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) added++;
+    else if (line.startsWith("-")) removed++;
+  }
+  return { added, removed };
+}
+
+// diff 行 className:首字符判定 +/-/@@ → 增/删/hunk,其余为上下文行。
+function diffLineCls(line: string): string {
+  if (line.startsWith("+++") || line.startsWith("---")) return "diff-line diff-hunk";
+  if (line.startsWith("@@")) return "diff-line diff-hunk";
+  if (line.startsWith("+")) return "diff-line diff-add";
+  if (line.startsWith("-")) return "diff-line diff-del";
+  return "diff-line";
+}
+
+// 把绝对路径截短成「…/<basename>」便于在徽章里展示(避免长路径撑爆头部)。
+function shortPath(p: string): string {
+  if (p.length <= 40) return p;
+  const slash = p.lastIndexOf("/");
+  const base = slash >= 0 ? p.slice(slash + 1) : p;
+  const dir = slash >= 0 ? p.slice(0, slash) : "";
+  if (!dir) return base;
+  return `…/${base}`;
+}
+
+// 统计文本中非空行数(用于 grep/glob 结果项数)。
+function countNonEmpty(text: string): number {
+  let n = 0;
+  for (const line of text.split("\n")) if (line.trim()) n++;
+  return n;
 }
 
 function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRespond: (id: string) => void }) {

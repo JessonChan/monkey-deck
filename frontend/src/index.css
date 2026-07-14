@@ -607,6 +607,70 @@ input, textarea { font-family: inherit; }
 }
 .bash-out-note { font-size: 10.5px; color: var(--amber); font-family: var(--mono); margin-top: 4px; }
 
+/* ─── 文件类工具卡片(edit / read / search,复用 Collapsible 头 + CollapsibleText 体) ─── */
+/* 头部徽章:路径 / pattern / 结果数,mono、压缩、不撑破头部布局。 */
+.tool-badge {
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
+  background: var(--bg); border: 1px solid var(--sep);
+  padding: 1px 7px; border-radius: 4px; max-width: 260px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex-shrink: 1; min-width: 0;
+}
+.tool-badge-pattern { color: var(--accent-2); border-color: rgba(10, 132, 255, 0.28); background: rgba(10, 132, 255, 0.08); }
+.tool-badge-count { color: var(--green); border-color: rgba(48, 209, 88, 0.22); background: rgba(48, 209, 88, 0.08); }
+/* 文件类卡片头标题不再吃满 flex(给徽章让位)。 */
+.file-tool-summary .tool-title { flex: 0 1 auto; min-width: 0; }
+.file-tool-summary { gap: 7px; }
+
+/* 目标文件 / 检索范围行:label + 路径,mono、可选中、长路径省略。 */
+.file-target {
+  display: flex; align-items: center; gap: 8px; margin: 9px 0 0;
+  font-size: 11.5px;
+}
+.file-target-label {
+  font-size: 10.5px; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0;
+}
+.file-target-path {
+  font-family: var(--mono); font-size: 11.5px; color: var(--text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0; flex: 1; user-select: text;
+}
+.search-pattern-text { color: var(--accent-2); }
+
+/* 卡片内分区(改动 / 内容 / 结果 / 输出):标题行 + 折叠正文。 */
+.file-section { margin: 10px 0 0; }
+.file-section-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px;
+}
+.file-section-label {
+  font-size: 10.5px; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.file-section-meta {
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.file-empty { font-size: 11.5px; color: var(--text-3); font-family: var(--mono); margin: 9px 0 0; }
+.file-content-pre { color: var(--text); }
+
+/* diff 增删行染色:红底/绿底 + 对应字色,与前缀 +/- 对应;hunk 头灰底。 */
+.diff-line { display: block; }
+.diff-add { color: #5ce08a; background: rgba(48, 209, 88, 0.10); }
+.diff-del { color: #ff7a72; background: rgba(255, 69, 58, 0.10); }
+.diff-hunk { color: var(--accent-2); background: rgba(10, 132, 255, 0.08); }
+/* 折叠预览里的 diff 行:背景更淡(预览区本身已有底色),避免叠加过深。 */
+.ctext-preview-line.diff-add { background: rgba(48, 209, 88, 0.06); }
+.ctext-preview-line.diff-del { background: rgba(255, 69, 58, 0.06); }
+.diff-pre { color: var(--text); }
+/* 头部 +N / −N 统计徽章(改动量一眼可读)。 */
+.diff-stat { font-family: var(--mono); font-size: 10.5px; font-weight: 600; }
+.diff-stat-add { color: var(--green); }
+.diff-stat-del { color: var(--red); }
+
+/* 检索结果:稍偏冷底色,与文件内容区分;每行一条结果(路径:行:内容 或 路径)。 */
+.search-results-pre { color: var(--text); }
+
 /* ─── 可复用折叠文本块 CollapsibleText(工具 I/O 共用:bash 现接入,grep/glob/edit 后续) ─── */
 .ctext { font-family: var(--mono); }
 .ctext-meta {

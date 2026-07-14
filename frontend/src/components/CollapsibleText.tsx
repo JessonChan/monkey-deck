@@ -33,6 +33,9 @@ export interface CollapsibleTextProps {
   copyable?: boolean;
   /** data-testid 前缀(默认「collapsible-text」) */
   testId?: string;
+  /** 单行 className 计算回调:提供时把每一行包进 <div className=…>(短/展开/折叠预览三态一致),
+   *  用于按行染色(如 diff 的 +/- 高亮)。未提供时维持原 <pre>{text}</pre> 行为(bash 等不动)。 */
+  lineClassName?: (line: string, idx: number) => string;
 }
 
 const DEFAULTS = {
@@ -59,12 +62,21 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
     lineUnit = DEFAULTS.lineUnit,
     copyable = true,
     testId = DEFAULTS.testId,
+    lineClassName,
   } = props;
 
   const lines = useMemo(() => text.split("\n"), [text]);
   const isLong = lines.length > longLineThreshold || text.length > longCharThreshold;
   const [collapsed, setCollapsed] = useState(isLong && defaultCollapsed);
   const [copied, setCopied] = useState(false);
+
+  // 按行渲染(供 diff +/- 染色等场景):每行包一个 <div>,空行用「 」占位保留行高。
+  const renderPreBody = useMemo(() => {
+    if (!lineClassName) return null;
+    return lines.map((l, i) => (
+      <div key={i} className={lineClassName(l, i)}>{l || " "}</div>
+    ));
+  }, [lines, lineClassName]);
 
   // 折叠预览:行多 → 首尾若干行 + 中间省略条;行少但字符超长 → 全部行(逐行截断)+ 字符提示。
   const preview = useMemo(() => {
@@ -107,7 +119,7 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
             {extra}
           </div>
         )}
-        <pre className={`ctext-pre ${preClassName}`}>{text}</pre>
+        <pre className={`ctext-pre ${preClassName}`}>{renderPreBody ?? text}</pre>
       </div>
     );
   }
@@ -152,7 +164,9 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); expand(); } }}
         >
           <pre className="ctext-preview-pre">
-            {preview.head.map((l, i) => <div key={i} className="ctext-preview-line">{l || " "}</div>)}
+            {preview.head.map((l, i) => (
+              <div key={i} className={`ctext-preview-line${lineClassName ? ` ${lineClassName(l, i)}` : ""}`}>{l || " "}</div>
+            ))}
           </pre>
           <button
             className="ctext-preview-divider"
@@ -163,12 +177,17 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
           </button>
           {preview.tail.length > 0 && (
             <pre className="ctext-preview-pre">
-              {preview.tail.map((l, i) => <div key={i} className="ctext-preview-line">{l || " "}</div>)}
+              {preview.tail.map((l, i) => {
+                const tailIdx = lines.length - preview.tail.length + i;
+                return (
+                  <div key={i} className={`ctext-preview-line${lineClassName ? ` ${lineClassName(l, tailIdx)}` : ""}`}>{l || " "}</div>
+                );
+              })}
             </pre>
           )}
         </div>
       ) : (
-        <pre className={`ctext-pre ${preClassName}`}>{text}</pre>
+        <pre className={`ctext-pre ${preClassName}`}>{renderPreBody ?? text}</pre>
       )}
     </div>
   );
