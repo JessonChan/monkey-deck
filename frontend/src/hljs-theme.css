@@ -1,0 +1,22 @@
+/* highlight.js 主题(Task #15088):引入 github-dark 配色,并在本应用里收口样式。
+   github-dark 默认会给 .hljs 加 background/padding/margin(它是为独立 <pre><code> 设计),
+   我们按行渲染(.cv-line),不需要块级背景与内边距,故覆盖回透明 + 零边距,仅保留 token 配色。
+   token 颜色(.hljs-keyword 等)沿用主题定义,跨平台 webview 一致(§4.6)。 */
+@import "highlight.js/styles/github-dark.css";
+
+/* 基类去块化:只取配色,不取块级外观。 */
+.cv .hljs,
+.cv-code.hljs {
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+/* 代码正文底色沿用主题前景(github-dark 的正文色),保证未命中 token 的纯文本也协调。 */
+.cv-body.hljs {
+  background: transparent;
+  color: inherit;
+}
+.cv-code.hljs {
+  color: #c9d1d9;
+}

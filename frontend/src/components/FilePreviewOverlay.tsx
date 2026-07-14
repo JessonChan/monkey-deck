@@ -1,12 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { File as FileIcon, Copy, X } from "lucide-react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
+import CodeViewer from "./CodeViewer";
 
-// 文件预览覆盖层(Task #15084)。
+// 文件预览覆盖层(Task #15084;Task #15088 升级为 CodeViewer —— 语法高亮 + 行号 + 目标行)。
 // 由对话/工具卡片里的路径点击触发:加载文件内容,展示;有行号则定位/滚动/高亮该行。
-// 与 FilePanel 的预览形态对齐(同样的覆盖层 + 等宽 <pre>),复用同一套 CSS(.preview-*)。
-//
-// 定位行号:把内容按行渲染成 <div data-line="n">,高亮目标行并 scrollIntoView。
+// 高亮 / 行号对齐 / 目标行滚入视野 / 大文件虚拟化均由 CodeViewer 统一负责,这里只管加载与外壳。
 // 行号是 1-based。
 export interface PreviewTarget {
   path: string;
@@ -26,9 +25,8 @@ export default function FilePreviewOverlay({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const targetLineRef = useRef<HTMLDivElement | null>(null);
 
-  // 切换目标:重新加载 + 切到目标行后 scrollIntoView。
+  // 切换目标:重新加载。
   useEffect(() => {
     if (!target) {
       setContent("");
@@ -55,16 +53,6 @@ export default function FilePreviewOverlay({
       cancelled = true;
     };
   }, [target, sessionId]);
-
-  // 内容/目标行变化后:scrollIntoView 目标行(等渲染完成)。
-  useEffect(() => {
-    if (!target?.line || loading || error) return;
-    // rAF 等 DOM 更新后定位。
-    const id = requestAnimationFrame(() => {
-      targetLineRef.current?.scrollIntoView({ block: "center", behavior: "auto" });
-    });
-    return () => cancelAnimationFrame(id);
-  }, [target, content, loading, error]);
 
   // Esc 关闭(§4.2)。
   useEffect(() => {
@@ -123,25 +111,15 @@ export default function FilePreviewOverlay({
         ) : loading ? (
           <div className="preview-loading">加载中…</div>
         ) : (
-          <pre className="preview-pre preview-pre-lined">
-            {content.split("\n").map((l, i) => {
-              const ln = i + 1;
-              const isTarget = lineNum === ln;
-              return (
-                <div
-                  key={i}
-                  ref={isTarget ? targetLineRef : undefined}
-                  data-line={ln}
-                  className={isTarget ? "preview-line preview-line-target" : "preview-line"}
-                >
-                  <span className="preview-line-no">{ln}</span>
-                  <span className="preview-line-text">{l || " "}</span>
-                </div>
-              );
-            })}
-          </pre>
+          <CodeViewer
+            content={content}
+            filename={target.path}
+            highlightLine={lineNum}
+            testId="file-preview-viewer"
+          />
         )}
       </div>
     </div>
   );
 }
+

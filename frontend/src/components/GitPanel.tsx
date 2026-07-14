@@ -11,6 +11,8 @@ import {
   Sparkles,
 } from "lucide-react";
 import type { FileChange } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
+import CollapsibleText from "./CollapsibleText";
+import { countDiffLines, diffLineCls } from "../lib/diff";
 
 interface Props {
   branch: string;
@@ -150,9 +152,27 @@ export default function GitPanel({
           <span className="git-file-actions">{actions}</span>
         </div>
         {expanded && (
-          <pre className="git-file-diff" data-testid="file-diff">
-            {diffLoading ? "加载中…" : diffText || "无差异"}
-          </pre>
+          <div className="git-file-diff-wrap" data-testid="file-diff">
+            {diffLoading ? (
+              <div className="git-file-diff-msg">加载中…</div>
+            ) : diffText ? (
+              <CollapsibleText
+                text={diffText}
+                lineClassName={diffLineCls}
+                preClassName="git-diff-pre"
+                testId="file-diff"
+                lineUnit="行"
+                extra={(() => { const s = countDiffLines(diffText); return (
+                  <span className="git-diff-stat">
+                    {s.added > 0 && <span className="diff-stat diff-stat-add">+{s.added}</span>}
+                    {s.removed > 0 && <span className="diff-stat diff-stat-del">−{s.removed}</span>}
+                  </span>
+                ); })()}
+              />
+            ) : (
+              <div className="git-file-diff-msg">无差异</div>
+            )}
+          </div>
         )}
       </div>
     );

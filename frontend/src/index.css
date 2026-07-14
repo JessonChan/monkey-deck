@@ -1054,13 +1054,12 @@ input, textarea { font-family: inherit; }
   background: var(--sel-accent); padding: 4px 10px; border-radius: 6px;
   border: 1px solid rgba(10, 132, 255, 0.3); word-break: break-all;
 }
-.git-diff-pre {
-  font-family: var(--mono); font-size: 11px; line-height: 1.5;
-  color: var(--text-2); background: #161617; border: 1px solid var(--sep);
-  border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word;
-  max-height: 120px; overflow-y: auto; cursor: pointer;
-}
-.git-diff-pre.expanded { max-height: none; }
+/* git diff 阅读器(Task #15088):复用 CollapsibleText —— 逐行 +/- 染色 + 长 diff 折叠。
+   .ctext-pre 提供等宽块 + 横向滚动;git-diff-pre 仅作形态标记(放宽行高上限便于阅读)。 */
+.git-diff-pre { max-height: 320px; }
+.git-file-diff-wrap { margin: 2px 6px 4px; }
+.git-file-diff-msg { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); padding: 8px 10px; }
+.git-diff-stat { display: inline-flex; gap: 6px; }
 .git-diff-loading { font-size: 11.5px; color: var(--text-3); }
 .git-no-changes { font-size: 11.5px; color: var(--text-3); }
 .git-no-merge { font-size: 11.5px; color: var(--text-3); text-align: center; padding: 8px; }
@@ -1152,12 +1151,6 @@ input, textarea { font-family: inherit; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
 }
 .git-file-name-btn:hover { color: var(--accent); text-decoration: underline; }
-.git-file-diff {
-  font-family: var(--mono); font-size: 11px; line-height: 1.5; color: var(--text-2);
-  background: var(--bg); border: 1px solid var(--sep); border-radius: 4px;
-  margin: 2px 6px 4px; padding: 6px 8px;
-  max-height: 240px; overflow: auto; white-space: pre; word-break: normal;
-}
 /* busy 态(E):turn 进行中禁用写操作 */
 .git-panel-busy-tag {
   font-size: 10px; color: var(--accent-2, var(--text-3));
@@ -1318,6 +1311,37 @@ input, textarea { font-family: inherit; }
   padding: 24px; text-align: center; color: var(--text-3); font-size: 12.5px;
 }
 .preview-error { color: var(--red); }
+
+/* ─── 代码阅读器 CodeViewer(语法高亮 + 行号 + 虚拟化,Task #15088) ─── */
+/* 行号槽与代码同行 flex,共用 .cv-scroll 滚动容器 → 天然对齐、同步滚动。 */
+.cv { position: relative; display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.cv-lang {
+  position: absolute; top: 6px; right: 10px; z-index: 2;
+  font-family: var(--mono); font-size: 10px; color: var(--text-3);
+  background: var(--elev-2); border: 1px solid var(--sep); border-radius: 4px;
+  padding: 1px 6px; pointer-events: none; opacity: 0.85;
+}
+.cv-scroll {
+  flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain;
+  font-family: var(--mono); font-size: 12px; color: var(--text);
+}
+.cv-body { margin: 0; padding: 8px 0; white-space: pre; user-select: text; }
+/* 定高行:与 CodeViewer 的 LINE_HEIGHT 严格一致(虚拟化按此换算像素)。 */
+.cv-line {
+  display: flex; align-items: flex-start; height: 19px; line-height: 19px;
+  padding: 0 13px; white-space: pre; min-width: max-content;
+}
+.cv-no {
+  flex-shrink: 0; min-width: 4em; padding-right: 14px;
+  text-align: right; color: var(--text-3); user-select: none;
+  font-variant-numeric: tabular-nums; opacity: 0.7;
+}
+.cv-code { flex: 1; user-select: text; white-space: pre; }
+.cv-target {
+  background: rgba(255, 214, 10, 0.16);
+  box-shadow: inset 3px 0 0 var(--yellow, #ffd60a);
+}
+.cv-target .cv-no { color: var(--yellow, #ffd60a); opacity: 1; }
 
 /* 对话 / 工具 I/O 里的文件路径可点击链接(Task #15084)。
    内联、mono、accent 色、下划线在 hover 显出,提示可点。 */

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import type { FileChange } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
+import CodeViewer from "./CodeViewer";
 import {
   ChevronRight,
   ChevronDown,
@@ -248,7 +249,7 @@ export default function FilePanel({ sessionId, rootName, changes, status }: Prop
               <button className="tool-btn" title="复制内容" onClick={() => { void navigator.clipboard?.writeText(preview.content); }}><Copy size={14} /></button>
               <button className="tool-btn" title="关闭 (Esc)" onClick={() => setPreview(null)}><X size={16} /></button>
             </div>
-            <pre className="preview-pre">{preview.content}</pre>
+            <CodeViewer content={preview.content} filename={preview.name} testId="file-panel-viewer" />
           </div>
         </div>
       )}
