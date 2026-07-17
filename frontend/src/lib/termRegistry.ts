@@ -37,7 +37,10 @@ export function acquireTerminal(id: string, onExit?: () => void): TermEntry {
     fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace",
     fontSize: 13,
     cursorBlink: true,
-    scrollback: 5000,
+    // scrollback = 终端 buffer 行数上限(内存随行数×列数线性增长)。
+    // 取 1000(xterm/VS Code 默认):集成终端够用,且把单终端 buffer 内存
+    // 相比早期 5000 的设定收敛 5×(见 docs/worklog/2026-07-17-terminal-scrollback-shrink.md)。
+    scrollback: 1000,
     theme: {
       background: "#1e1e1e",
       foreground: "#f5f5f7",
