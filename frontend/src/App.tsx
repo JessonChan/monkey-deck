@@ -20,6 +20,7 @@ import { Tooltip } from "react-tooltip";
 import { PanelLeftOpen, PanelRightOpen } from "lucide-react";
 import type { FileChange } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import { applyEventToItems as applyEventToItemsPure } from "./lib/streamMerge";
+import { shouldDropOnSwitch } from "./lib/sessionDrop";
 import { isNotifySoundEnabled, playNotifySound } from "./lib/notifySound";
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
@@ -419,6 +420,29 @@ export default function App() {
   const openSession = useCallback(
     async (sessionId: string, projectId?: string) => {
       const pid = projectId ?? selectedProjectId;
+      // 切走丢弃(内存优化,docs/worklog/2026-07-18-drop-session-items-on-switch.md):
+      // 从 old 切到 new 时,若 old 空闲(非 prompting),丢掉 old 的 items 缓存,让 WebKit heap
+      // 可回收。活跃(prompting)session 保护——流式事件还在往 itemsBySession[old] 灌,丢了会丢内容。
+      // 切回时 loadedSessionsRef 已删 → 走下方重载分支从 DB 拉回(idx_messages_session 索引,毫秒级)。
+      // 滚动位置在 ChatView 的 scrollStateRef(按 sessionId 记忆),与 itemsBySession 解耦,不丢。
+      // composer 状态(draft/history/attachments/mentions/images/queue)本就是"切走保留",不动。
+      const oldSession = selectedSessionIdRef.current;
+      if (oldSession && shouldDropOnSwitch(oldSession, sessionId, statusRef.current)) {
+        loadedSessionsRef.current.delete(oldSession);
+        delete oldestSeqRef.current[oldSession];
+        setItemsBySession((prev) => {
+          if (!prev[oldSession]) return prev;
+          const next = { ...prev };
+          delete next[oldSession];
+          return next;
+        });
+        setHasMoreBySession((prev) => {
+          if (!(oldSession in prev)) return prev;
+          const next = { ...prev };
+          delete next[oldSession];
+          return next;
+        });
+      }
       if (projectId && projectId !== selectedProjectId) setSelectedProjectId(projectId);
       setSelectedSessionId(sessionId);
       setUnreadBySession((prev) => { if (!prev[sessionId]) return prev; const n = { ...prev }; delete n[sessionId]; return n; });
