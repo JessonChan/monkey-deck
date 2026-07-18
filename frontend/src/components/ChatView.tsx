@@ -148,6 +148,11 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       scrollStateRef.current.set(props.session?.id || "", { top: el.scrollTop, stick: nearBottom });
     });
   };
+  // pendingScrollRef:切走丢弃后切回的 session 要从 DB 异步重载,切换瞬间 items 仍为空。
+  // 若此时按既有逻辑算 scrollHeight/saved.top 定位,会落到错位(空容物下值无意义),
+  // 等 items 到达时切换分支已不再触发 → 卡在错位。故 items 为空时推迟定位,记下待定 session,
+  // items 首次非空时补做(见 useLayoutEffect)。切走丢弃前 items 缓存同步在,不触发推迟。
+  const pendingScrollRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -155,6 +160,30 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     // 切 session:瞬间定位(不动画,避免「乱滚」)。有记忆且不在底部 → 恢复原位;否则贴底(看最新)。
     if (prevSessionIdRef.current !== sessionId) {
       prevSessionIdRef.current = sessionId;
+      if (items.length > 0) {
+        // items 已在(切走丢弃未丢此 session / 已加载过):立刻定位。
+        pendingScrollRef.current = null;
+        const saved = scrollStateRef.current.get(sessionId);
+        if (saved && !saved.stick) {
+          stickToBottomRef.current = false;
+          setShowScrollBtn(true);
+          el.scrollTop = saved.top;
+        } else {
+          stickToBottomRef.current = true;
+          setShowScrollBtn(false);
+          el.scrollTop = el.scrollHeight;
+        }
+      } else {
+        // items 还没到(切走丢弃重载中 / 首次加载中):推迟定位,等 items 到来再补做,否则错位。
+        pendingScrollRef.current = sessionId;
+      }
+      prevFirstIdRef.current = items.length > 0 ? items[0].id : "";
+      prevHeightRef.current = scrollHeightRef.current = el.scrollHeight;
+      return; // 切换瞬间一次性定位,不走下面的逻辑。
+    }
+    // 待定位 session 的 items 到达(DB 重载完成 / 首次加载完成):补做定位。
+    if (pendingScrollRef.current === sessionId && items.length > 0) {
+      pendingScrollRef.current = null;
       const saved = scrollStateRef.current.get(sessionId);
       if (saved && !saved.stick) {
         stickToBottomRef.current = false;
@@ -165,9 +194,9 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         setShowScrollBtn(false);
         el.scrollTop = el.scrollHeight;
       }
-      prevFirstIdRef.current = items.length > 0 ? items[0].id : "";
+      prevFirstIdRef.current = items[0].id;
       prevHeightRef.current = scrollHeightRef.current = el.scrollHeight;
-      return; // 切换瞬间一次性定位,不走下面的逻辑。
+      return;
     }
     // 加载更多(prepend):首条 id 变了 → 补偿高度差,保持用户视觉位置不动。
     const firstId = items.length > 0 ? items[0].id : "";
