@@ -10,13 +10,16 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import i18n, { setLanguage as setI18nLanguage, type AppLanguage } from "../i18n";
+import { isMemorySaverEnabled, setMemorySaverEnabled } from "./memorySaver";
 import { isNotifySoundEnabled, setNotifySoundEnabled } from "./notifySound";
 
 export interface FrontendSettings {
   language: AppLanguage;
   notifySound: boolean;
+  memorySaver: boolean;
   setLanguage: (lang: AppLanguage) => void;
   setNotifySound: (on: boolean) => void;
+  setMemorySaver: (on: boolean) => void;
 }
 
 const Ctx = createContext<FrontendSettings | null>(null);
@@ -26,6 +29,7 @@ export function FrontendSettingsProvider({ children }: { children: ReactNode }) 
   // (setLanguage 调 i18n.changeLanguage 后,事件回灌保证 store 与 i18n 不分叉)。
   const [language, setLang] = useState<AppLanguage>((i18n.language === "en" ? "en" : "zh"));
   const [notifySound, setNotify] = useState<boolean>(isNotifySoundEnabled);
+  const [memorySaver, setMemorySaverState] = useState<boolean>(isMemorySaverEnabled);
 
   useEffect(() => {
     const handler = (lng: string) => setLang(lng === "en" ? "en" : "zh");
@@ -38,10 +42,14 @@ export function FrontendSettingsProvider({ children }: { children: ReactNode }) 
     setNotifySoundEnabled(on);
     setNotify(on);
   }, []);
+  const setMemorySaver = useCallback((on: boolean) => {
+    setMemorySaverEnabled(on);
+    setMemorySaverState(on);
+  }, []);
 
   const value = useMemo<FrontendSettings>(
-    () => ({ language, notifySound, setLanguage, setNotifySound }),
-    [language, notifySound, setLanguage, setNotifySound],
+    () => ({ language, notifySound, memorySaver, setLanguage, setNotifySound, setMemorySaver }),
+    [language, notifySound, memorySaver, setLanguage, setNotifySound, setMemorySaver],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

@@ -269,6 +269,35 @@ monkey-deck/
 
 > 具体项目踩坑与修复记录(根因/修法/验证)统一落在 `docs/worklog/YYYY-MM-DD-<slug>.md`,本文只保留原则性规则。流式合并按主键归并的原则见 §5.3。
 
+### 5.5 浏览器驱动集成测试:Wails3 server 模式(真后端 + 真数据,无 GUI)
+
+> 场景:单测(mock)覆盖不了「真实 React UI × 真实 SQLite 数据 × 真实 binding/event 流」的集成行为(session 切换的内存累积、流式渲染、权限弹窗交互等)。Wails3 的 **server 模式** 专门解这个问题。
+
+**关键架构事实(先搞清楚,否则白费劲)**:
+- `@wailsio/runtime` 的 binding 调用走 `fetch(origin + "/wails/runtime")`(`node_modules/@wailsio/runtime/dist/runtime.js`)。
+- **桌面 / dev 模式下**,`/wails/runtime` 由 webview 内部的 URL scheme handler 拦截处理(WKWebView 的 WKURLSchemeHandler / WebView2 的 WebResourceRequested),**不是 TCP 端口**。所以把 `wails3 dev` 的 Vite URL(`localhost:<WAILS_VITE_PORT>`)直接开到普通浏览器里:**只渲染 app 外壳,binding 全部失败**(空态:"No projects yet")。这条路只能做纯视觉 / 布局冒烟,做不了功能 / 集成测试。
+- **server 模式(`-tags server`)下**,`app.Run()` 起一个**真 HTTP server**(默认 `:8080`,env `WAILS_SERVER_PORT` 可配),同时 serve 前端 embed 资源 + `/wails/runtime` binding 端点 + WebSocket(后端 → 前端事件广播)。浏览器直连即得**真后端 + 真数据**。
+
+**用法**:
+```bash
+go build -tags server -o bin/monkey-deck-server .   # 或 wails3 task build:server
+WAILS_SERVER_PORT=9246 ./bin/monkey-deck-server      # 或 wails3 task run:server(默认 8080)
+# 浏览器开 http://localhost:9246 —— 真项目 / session / 对话,可点、可测、可拍堆快照
+```
+
+**适合测什么**:
+- session 切换的内存行为(`performance.memory.usedJSHeapSize` 量 V8 heap delta;Chromium DevTools 拍堆快照看对象分布)。
+- 真实事件流的 UI 反应(流式渲染、权限弹窗、用量面板)。
+- 任何"mock 测不了、要真数据"的端到端路径。
+
+**约束 / 已知坑**:
+- **共享数据目录**:server 模式用同一个 SQLite(`~/Library/Application Support/monkey-deck/`)。WAL 模式允许并发读,但避免与桌面实例并发写(尤其别同时跑 agent turn)。测试期最好停掉桌面 app,或接受只读测试。
+- **无 GUI**:server 模式不起菜单 / 窗口 / 应用更新(`runDesktop` 在 `-tags server` 下是 no-op,见 `server.go`)。测不了原生菜单 / 窗口行为。
+- **引擎差异**:浏览器是 Chromium / V8,数字 ≠ macOS WebKit / JSC 的绝对值;但**相对趋势**(累积 vs 平台期)可信,足够判断内存优化是否生效。绝对 WebKit 数字仍需在桌面 app 上量(`vmmap` / `top`)。
+- **`main.go` 必须做 server 拆分**:GUI 代码(菜单 `application.DefaultApplicationMenu`、窗口 `app.Window.NewWithOptions`、窗口事件)在 `-tags server` 下符号不存在,必须隔离到 `//go:build !server` 文件。本项目已拆:`main.go`(共享:config / log / services / `app.New` / `runDesktop` / `app.Run`)+ `desktop.go`(`!server`,GUI)+ `server.go`(`server`,`runDesktop` no-op)。**新增 GUI 启动代码务必进 `desktop.go`,别塞回 `main.go`**(否则 `-tags server` 又编不过)。
+
+**优先级**:能在单测(mock)里覆盖的逻辑,不上升到 server 模式(慢、要起进程)。server 模式留给"必须真数据 / 真 UI"的集成与内存测试。
+
 ---
 
 ## 6. 文档与 Git 纪律

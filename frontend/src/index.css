@@ -367,15 +367,21 @@ input, textarea { font-family: inherit; }
 .readonly-continue-btn:hover { background: var(--elev); border-color: var(--accent-2); color: var(--accent-2); }
 
 /* will-change: scroll-position 提示滚动容器把滚动交给合成线程处理(主线程不再每帧跑布局/绘制),
-   是滚动顺滑的关键合成层提升。配合 onScroll 不再同步读 scrollHeight(见 ChatView),双管齐下消掉帧。 */
-.chat-body { flex: 1; overflow-y: auto; padding: 22px 0; will-change: scroll-position; }
+   是滚动顺滑的关键合成层提升。配合 onScroll 不再同步读 scrollHeight(见 ChatView),双管齐下消掉帧。
+   position:relative 使它成为 .chat-content 的 offsetParent —— 锚点定位(offsetTop 与 scrollTop
+   同坐标系)依赖这一层,见 ChatView 滚动锚点逻辑。 */
+.chat-body { flex: 1; overflow-y: auto; padding: 22px 0; will-change: scroll-position; position: relative; }
+/* 内容层:滚动锚点与内容 ResizeObserver 的基准。relative 使 .cv-item 的 offsetTop 以它为原点。 */
+.chat-content { position: relative; }
 .chat-placeholder { text-align: center; color: var(--text-3); padding: 64px 0; font-size: 13px; }
 
-/* content-visibility:屏幕外的行自动跳过 layout/paint(浏览器原生"虚拟化"),大幅提升长会话渲染速度。
-   不卸载 DOM(内存收益不如 JS 虚拟化),但渲染提速显著且零副作用:不碰滚动逻辑、无高度跳动。
-   contain-intrinsic-size:auto 让浏览器记住元素上次实际高度,跳过渲染时用记忆值 → 滚动条不跳。
+/* content-visibility:屏幕外的条目自动跳过 layout/paint(浏览器原生"虚拟化"),大幅提升长会话渲染速度。
+   不卸载 DOM(内存收益不如 JS 虚拟化),但渲染提速显著。以 .cv-item(每条消息/工具组一层包装)为估算单位。
+   contain-intrinsic-size:auto 让浏览器记住条目本次挂载内的实际高度,跳过渲染时用记忆值 → 滚动条不跳。
+   注意:估算值 ≠ 真实高度,未渲染过的条目按 120px 估,scrollHeight 会随真实渲染变化——
+   所以滚动定位不记像素(不稳定),记「条目 id + 条内偏移」并靠内容层 ResizeObserver 收敛(见 ChatView)。
    (Baseline 2024:Safari 18+/Chrome/Firefox 全支持) */
-.row, .thought-block, .tool-card, .tool-group {
+.cv-item {
   content-visibility: auto;
   contain-intrinsic-size: auto 120px;
 }
