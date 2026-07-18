@@ -1,4 +1,4 @@
-import React, { forwardRef, Fragment, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef } from "react";
+import React, { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef } from "react";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -12,6 +12,7 @@ import CollapsibleText from "./CollapsibleText";
 import FilePreviewOverlay, { type PreviewTarget } from "./FilePreviewOverlay";
 import PathLinkified from "./PathLinkified";
 import { countDiffLines, diffLineCls } from "../lib/diff";
+import { findTopAnchor, type AnchorProbe } from "../lib/scrollAnchor";
 import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, RefreshCw, Eye, MessageSquarePlus } from "lucide-react";
 
 interface Props {
@@ -91,12 +92,39 @@ export interface ChatViewHandle {
 export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props, ref) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
+  // 内容层(items 的容器):ResizeObserver 观察它拿「内容高度变化」,与观察容器(clientHeight)互补。
+  // content-visibility 估算→真实渲染、图片晚载等「内容长个但 items 没变」的场景都靠它重新贴底。
+  const contentRef = useRef<HTMLDivElement>(null);
   const { items } = props;
   // 用户是否贴底:记最近一次滚动的「贴底」状态。新消息到来时只在贴底才自动滚,
   // 用户向上翻阅历史时不打断(避免每条新消息强制拽回底部)。
   const stickToBottomRef = useRef(true);
-  // 按 session 记忆滚动位置:切走时存 {top, stick},切回时恢复——用户读到哪里就从哪里继续。
-  const scrollStateRef = useRef<Map<string, { top: number; stick: boolean }>>(new Map());
+  // 按 session 记忆滚动位置:锚点 = 视口顶部条目的 id + 条内偏移,stick = 是否贴底。
+  // 切走时存、切回时恢复——用户读到哪里就从哪里继续;贴底的恢复到底部(看最新)。
+  // 不记像素 scrollTop:content-visibility 估算下像素坐标不稳定(见 lib/scrollAnchor.ts)。
+  const scrollStateRef = useRef<Map<string, { iid: string; off: number; stick: boolean }>>(new Map());
+  // sessionId 的实时镜像:onScroll 的 rAF 回调读它而不是闭包里的 props——
+  // 否则切换瞬间挂起的 rAF 会把新 session 的几何信息记到旧 session 名下(触控板惯性滚动必现)。
+  const sessionIdLiveRef = useRef("");
+  sessionIdLiveRef.current = props.session?.id || "";
+  // 锚点钉住:恢复位置后内容高度还会变(content-visibility 估算→真实,多数回落),settle 期间
+  // 在内容 RO 回调里反复重对齐到锚点;实测不加这层时 scrollTop 被回落的 maxScroll 夹到底部、
+  // 位置记忆被改写成 stick=true(2026-07-18 实测 trace)。解除 = 用户表达滚动意图(wheel/
+  // touch/key/pointer 输入事件,见 RO effect);位置比较仅作兜底(滚动条拖动可能不发 pointer事件)。
+  const pinRef = useRef<{ iid: string; off: number } | null>(null);
+  // 最近一次「钉住重对齐」实际写入的 scrollTop(浏览器夹取后的回读值)。兜底判据用它区分
+  // 「锚点自己动了」(scrollTop 仍等于上次写入)与「用户滚了」(与上次写入/当前目标都偏离)。
+  const lastPinAppliedRef = useRef<number | null>(null);
+  // 钉住目标位的当前像素值:锚点条目 offsetTop + 条内偏移(off = scrollTop - 条目 top,见
+  // findTopAnchor;恢复时 scrollTop = 条目 top + off)。估算回落时该值跟着变,所以能追踪。
+  const pinTopOf = (): number | null => {
+    const pin = pinRef.current;
+    const contentEl = contentRef.current;
+    if (!pin || !contentEl) return null;
+    const a = contentEl.querySelector<HTMLElement>(`:scope > .cv-item[data-iid="${CSS.escape(pin.iid)}"]`);
+    if (!a) return null;
+    return contentEl.offsetTop + a.offsetTop + pin.off;
+  };
   const prevSessionIdRef = useRef<string>("");
   // prepend(加载更多)检测:记录上一轮的首条 id + 容器高度,比较后算高度差补偿 scrollTop。
   const prevFirstIdRef = useRef<string>("");
@@ -122,6 +150,8 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     scrollToBottom: () => {
       const el = scrollRef.current;
       if (!el) return;
+      pinRef.current = null; // 用户/父级明确要到底 → 解除钉住
+      lastPinAppliedRef.current = null;
       el.scrollTop = el.scrollHeight;
       stickToBottomRef.current = true;
       setShowScrollBtn(false);
@@ -140,12 +170,41 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       if (el.scrollTop + el.clientHeight > scrollHeightRef.current) {
         scrollHeightRef.current = el.scrollHeight;
       }
+      // 钉住期(主解除路径是输入事件,见 RO effect):与「当前锚点目标」和「上次重对齐写入值」
+      // 都偏离 → 兜底判定为用户接管(滚动条拖动等),解除钉住;否则保持钉住,只重存锚点语义
+      // (stick=false),不让 settle 期被夹取的几何把记忆改写成贴底。
+      if (pinRef.current) {
+        const pinTop = pinTopOf();
+        const expected = pinTop === null ? null : Math.min(Math.max(0, pinTop), Math.max(0, el.scrollHeight - el.clientHeight));
+        const deviates = (v: number | null) => v === null || Math.abs(el.scrollTop - v) > 2;
+        if (expected === null || (deviates(expected) && deviates(lastPinAppliedRef.current))) {
+          pinRef.current = null;
+        } else {
+          stickToBottomRef.current = false;
+          setShowScrollBtn((prev) => (prev === true ? prev : true));
+          scrollStateRef.current.set(sessionIdLiveRef.current, { iid: pinRef.current.iid, off: pinRef.current.off, stick: false });
+          return;
+        }
+      }
       // 用缓存的 scrollHeight(见 scrollHeightRef 注释),不在此处读 el.scrollHeight 触发强制布局。
       const nearBottom = scrollHeightRef.current - el.scrollTop - el.clientHeight <= 80;
       stickToBottomRef.current = nearBottom;
       // 仅在状态真正翻转时 setState(避免每帧无谓的 setter 调用)。
       setShowScrollBtn((prev) => (prev === !nearBottom ? prev : !nearBottom));
-      scrollStateRef.current.set(props.session?.id || "", { top: el.scrollTop, stick: nearBottom });
+      // 锚点 = 视口顶部命中的条目(.cv-item 按文档序 = top 升序,二分)。布局干净时 offsetTop/
+      // offsetHeight 读取不强制布局,廉价;流式脏布局的首读与既有 scrollHeight 自愈读同价。
+      const contentEl = contentRef.current;
+      let anchor: { id: string; off: number } | null = null;
+      if (contentEl) {
+        const base = contentEl.offsetTop;
+        const probes: AnchorProbe[] = [];
+        contentEl.querySelectorAll<HTMLElement>(":scope > .cv-item").forEach((k) => {
+          if (k.dataset.iid) probes.push({ id: k.dataset.iid, top: base + k.offsetTop, height: k.offsetHeight });
+        });
+        anchor = findTopAnchor(probes, el.scrollTop);
+      }
+      // sessionId 读实时镜像(见 sessionIdLiveRef),不用本闭包的 props.session。
+      scrollStateRef.current.set(sessionIdLiveRef.current, { iid: anchor?.id ?? "", off: anchor?.off ?? 0, stick: nearBottom });
     });
   };
   // pendingScrollRef:切走丢弃后切回的 session 要从 DB 异步重载,切换瞬间 items 仍为空。
@@ -153,6 +212,29 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   // 等 items 到达时切换分支已不再触发 → 卡在错位。故 items 为空时推迟定位,记下待定 session,
   // items 首次非空时补做(见 useLayoutEffect)。切走丢弃前 items 缓存同步在,不触发推迟。
   const pendingScrollRef = useRef<string | null>(null);
+  // 切换/重载后的一次性定位:有锚点记忆且非贴底 → 恢复到该条目原位;否则贴底(看最新)。
+  // 此刻内容高度仍是 content-visibility 估算值:锚点恢复自洽(条目估算位就是它当前的位
+  // 置);贴底则是「估算底部」,之后由内容层 ResizeObserver 随真实渲染持续收敛到真底部。
+  const applyInitialPosition = (el: HTMLDivElement, sessionId: string) => {
+    const saved = scrollStateRef.current.get(sessionId);
+    const contentEl = contentRef.current;
+    const anchorEl = saved && !saved.stick && saved.iid && contentEl
+      ? contentEl.querySelector<HTMLElement>(`:scope > .cv-item[data-iid="${CSS.escape(saved.iid)}"]`)
+      : null;
+    if (anchorEl && contentEl && saved) {
+      stickToBottomRef.current = false;
+      setShowScrollBtn(true);
+      pinRef.current = { iid: saved.iid, off: saved.off }; // 钉住锚点直到用户接管(见 pinRef 注释)
+      el.scrollTop = Math.max(0, contentEl.offsetTop + anchorEl.offsetTop + saved.off);
+      lastPinAppliedRef.current = el.scrollTop; // 回读浏览器夹取后的实际值(兜底判据用)
+    } else {
+      stickToBottomRef.current = true;
+      setShowScrollBtn(false);
+      pinRef.current = null;
+      lastPinAppliedRef.current = null;
+      el.scrollTop = el.scrollHeight;
+    }
+  };
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -163,19 +245,12 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       if (items.length > 0) {
         // items 已在(切走丢弃未丢此 session / 已加载过):立刻定位。
         pendingScrollRef.current = null;
-        const saved = scrollStateRef.current.get(sessionId);
-        if (saved && !saved.stick) {
-          stickToBottomRef.current = false;
-          setShowScrollBtn(true);
-          el.scrollTop = saved.top;
-        } else {
-          stickToBottomRef.current = true;
-          setShowScrollBtn(false);
-          el.scrollTop = el.scrollHeight;
-        }
+        applyInitialPosition(el, sessionId);
       } else {
         // items 还没到(切走丢弃重载中 / 首次加载中):推迟定位,等 items 到来再补做,否则错位。
         pendingScrollRef.current = sessionId;
+        pinRef.current = null; // 旧 session 的钉住不带过切换
+        lastPinAppliedRef.current = null;
       }
       prevFirstIdRef.current = items.length > 0 ? items[0].id : "";
       prevHeightRef.current = scrollHeightRef.current = el.scrollHeight;
@@ -184,16 +259,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     // 待定位 session 的 items 到达(DB 重载完成 / 首次加载完成):补做定位。
     if (pendingScrollRef.current === sessionId && items.length > 0) {
       pendingScrollRef.current = null;
-      const saved = scrollStateRef.current.get(sessionId);
-      if (saved && !saved.stick) {
-        stickToBottomRef.current = false;
-        setShowScrollBtn(true);
-        el.scrollTop = saved.top;
-      } else {
-        stickToBottomRef.current = true;
-        setShowScrollBtn(false);
-        el.scrollTop = el.scrollHeight;
-      }
+      applyInitialPosition(el, sessionId);
       prevFirstIdRef.current = items[0].id;
       prevHeightRef.current = scrollHeightRef.current = el.scrollHeight;
       return;
@@ -218,16 +284,46 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   // 贴底时最新消息会被抬高的输入框遮挡 → 视觉上像「历史随按键向上滚」。
   // onScroll 只在 scrollTop 变化时触发,而这里改的是 clientHeight,故用 ResizeObserver 补偿:
   // 贴底则重新对齐到底;非贴底(用户在翻历史)不动,不打扰。
+  // 观察对象 = 容器(clientHeight 变化)+ 内容层(内容高度变化:content-visibility 估算→真实、
+  // 图片晚载、折叠展开)。内容层观察是贴底定位的收敛机制:初次贴底落在「估算底部」上,随真实
+  // 渲染逐次回调重新对齐,最终停在真底部。
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
-      // resize 时刷新 scrollHeight 缓存(供 onScroll 用),贴底则重新对齐到底。
+      // resize 时刷新 scrollHeight 缓存(供 onScroll 用)。
       scrollHeightRef.current = el.scrollHeight;
+      // 钉住期:内容高度一变就重对齐到锚点(settle 回落追踪);锚点消失则解除。
+      if (pinRef.current) {
+        const pinTop = pinTopOf();
+        if (pinTop === null) {
+          pinRef.current = null;
+          lastPinAppliedRef.current = null;
+        } else {
+          el.scrollTop = Math.max(0, pinTop);
+          lastPinAppliedRef.current = el.scrollTop; // 回读夹取后实际值
+        }
+        return;
+      }
+      // 贴底则重新对齐到底;非贴底(用户在翻历史)不动,不打扰。
       if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    if (contentRef.current) ro.observe(contentRef.current);
+    // 钉住的主解除路径 = 用户滚动意图(输入事件);程序写 scrollTop 不触发这些,不会误伤。
+    // wheel=滚轮/触控板;touchmove=触屏;pointerdown=点滚动条/点按;keydown=P↑P↓/方向键。
+    const releasePin = () => { pinRef.current = null; lastPinAppliedRef.current = null; };
+    el.addEventListener("wheel", releasePin, { passive: true });
+    el.addEventListener("touchmove", releasePin, { passive: true });
+    el.addEventListener("pointerdown", releasePin, { passive: true });
+    el.addEventListener("keydown", releasePin);
+    return () => {
+      ro.disconnect();
+      el.removeEventListener("wheel", releasePin);
+      el.removeEventListener("touchmove", releasePin);
+      el.removeEventListener("pointerdown", releasePin);
+      el.removeEventListener("keydown", releasePin);
+    };
   }, [props.sessionId]);
 
   // 卸载时取消未派发的 scroll rAF,避免回调在组件已卸载后操作失效 ref。
@@ -322,40 +418,49 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       )}
 
       <div className="chat-body" key={props.sessionId} ref={scrollRef} onScroll={onScroll} data-testid="chat-body">
-        {items.length === 0 && <div className="chat-placeholder">{t("chat.placeholder")}</div>}
-        {props.hasMore && (
-          <button ref={loadMoreRef} className="load-more-btn" onClick={props.onLoadMore} disabled={props.loadingMore} data-testid="load-more">
-            {props.loadingMore ? t("common.loading") : t("chat.loadMore")}
-          </button>
-        )}
-        {items.map((item, i) => {
-          // 连续工具调用折叠:遇到 tool 时,若前一个也是 tool 则跳过(已被组首个处理);
-          // 组首个负责收集后续连续 tool,2 个以上渲染为 ToolGroup,单个仍用 ToolCard。
-          if (item.type === "tool") {
-            const prevIsTool = i > 0 && items[i - 1].type === "tool";
-            if (prevIsTool) return null;
-            const group = [item];
-            for (let j = i + 1; j < items.length; j++) {
-              const next = items[j];
-              if (next.type !== "tool") break;
-              group.push(next);
+        {/* 内容层:滚动定位/锚点/内容 ResizeObserver 都以它为基准(offsetTop 坐标系,见 .chat-content)。 */}
+        <div className="chat-content" ref={contentRef}>
+          {items.length === 0 && <div className="chat-placeholder">{t("chat.placeholder")}</div>}
+          {props.hasMore && (
+            <button ref={loadMoreRef} className="load-more-btn" onClick={props.onLoadMore} disabled={props.loadingMore} data-testid="load-more">
+              {props.loadingMore ? t("common.loading") : t("chat.loadMore")}
+            </button>
+          )}
+          {items.map((item, i) => {
+            // 每条(组)包一层 .cv-item:content-visibility 的估算单位 + 锚点定位单元(data-iid)。
+            // 连续工具调用折叠:遇到 tool 时,若前一个也是 tool 则跳过(已被组首个处理);
+            // 组首个负责收集后续连续 tool,2 个以上渲染为 ToolGroup,单个仍用 ToolCard。
+            if (item.type === "tool") {
+              const prevIsTool = i > 0 && items[i - 1].type === "tool";
+              if (prevIsTool) return null;
+              const group = [item];
+              for (let j = i + 1; j < items.length; j++) {
+                const next = items[j];
+                if (next.type !== "tool") break;
+                group.push(next);
+              }
+              return (
+                <div className="cv-item" data-iid={item.id} key={item.id}>
+                  {group.length >= 2
+                    ? <ToolGroup tools={group} onOpenFilePreview={openFilePreview} />
+                    : <ToolCard item={item} onOpenFilePreview={openFilePreview} />}
+                </div>
+              );
             }
-            if (group.length >= 2) return <ToolGroup key={item.id} tools={group} onOpenFilePreview={openFilePreview} />;
-            return <ToolCard key={item.id} item={item} onOpenFilePreview={openFilePreview} />;
-          }
-          return (
-            <Fragment key={item.id}>
-              {/* 回合分隔:每条用户消息(首条除外)前插一条带时间的分隔线,让多轮对话边界清晰。 */}
-              {item.type === "user" && i > 0 && <TurnDivider ts={item.ts} />}
-              <ChatRow item={item} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} />
-            </Fragment>
-          );
-        })}
-        {props.permission && <PermissionCard prompt={props.permission} onRespond={props.onRespondPermission} />}
-        {props.plan.length > 0 && <PlanTimeline entries={props.plan} prompting={props.status === "prompting"} />}
-        {props.status === "prompting" && items.length > 0 && (
-          <div className="typing-indicator"><span /> <span /> <span /></div>
-        )}
+            return (
+              <div className="cv-item" data-iid={item.id} key={item.id}>
+                {/* 回合分隔:每条用户消息(首条除外)前插一条带时间的分隔线,让多轮对话边界清晰。 */}
+                {item.type === "user" && i > 0 && <TurnDivider ts={item.ts} />}
+                <ChatRow item={item} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} />
+              </div>
+            );
+          })}
+          {props.permission && <PermissionCard prompt={props.permission} onRespond={props.onRespondPermission} />}
+          {props.plan.length > 0 && <PlanTimeline entries={props.plan} prompting={props.status === "prompting"} />}
+          {props.status === "prompting" && items.length > 0 && (
+            <div className="typing-indicator"><span /> <span /> <span /></div>
+          )}
+        </div>
         {/* Floating scroll-to-bottom FAB: sticky 粘在 chat-body 底部,不破坏 flex/overflow 滚动布局。 */}
         {showScrollBtn && (
           <div className="scroll-bottom-wrap">
@@ -364,6 +469,8 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
               onClick={() => {
                 const el = scrollRef.current;
                 if (!el) return;
+                pinRef.current = null; // 用户明确回到底部 → 解除钉住
+                lastPinAppliedRef.current = null;
                 el.scrollTop = el.scrollHeight;
                 stickToBottomRef.current = true;
                 setShowScrollBtn(false);
