@@ -328,6 +328,11 @@
         "notifyTitle": "Turn-end sound",
         "notifyDesc": "Play a short chime when an agent turn ends naturally (on by default)."
       },
+      "conversation": {
+        "desc": "Conversation & session behavior.",
+        "memorySaverTitle": "Memory saver (drop cache on switch)",
+        "memorySaverDesc": "Clear a conversation's cache when you switch away from it to reduce memory use; reload from local on return (on by default). Off keeps every opened conversation cached — faster switching but memory grows with session count."
+      },
       "empty": {
         "appearance": "No appearance settings yet; they will be added here later.",
         "conversation": "No conversation settings yet; they will be added here later."

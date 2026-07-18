@@ -86,7 +86,7 @@ export default function SettingsPanel({ onClose, initialCategory = "general" }: 
             {active === "general" && <GeneralPane />}
             {active === "appearance" && <EmptyPane hintKey="settings.center.empty.appearance" />}
             {active === "language" && <LanguagePane />}
-            {active === "conversation" && <EmptyPane hintKey="settings.center.empty.conversation" />}
+            {active === "conversation" && <ConversationPane />}
             {active === "permissions" && <PermissionRulesPane />}
             {active === "models" && <HarnessPane />}
             {active === "sound" && <SoundPane />}
@@ -154,6 +154,30 @@ function SoundPane() {
           aria-checked={notifySound}
           data-testid="settings-notify-sound"
           onClick={() => setNotifySound(!notifySound)}
+        >
+          <span className="settings-switch-thumb" />
+        </button>
+      </div>
+    </div>
+  );
+}
+function ConversationPane() {
+  const { t } = useTranslation();
+  const { memorySaver, setMemorySaver } = useFrontendSettings();
+  return (
+    <div className="settings-pane" data-testid="conversation-pane">
+      <div className="pane-desc">{t("settings.center.conversation.desc")}</div>
+      <div className="settings-row">
+        <div className="settings-row-text">
+          <div className="settings-row-title">{t("settings.center.conversation.memorySaverTitle")}</div>
+          <div className="settings-row-sub">{t("settings.center.conversation.memorySaverDesc")}</div>
+        </div>
+        <button
+          className={`settings-switch ${memorySaver ? "on" : ""}`}
+          role="switch"
+          aria-checked={memorySaver}
+          data-testid="settings-memory-saver"
+          onClick={() => setMemorySaver(!memorySaver)}
         >
           <span className="settings-switch-thumb" />
         </button>

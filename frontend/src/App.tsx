@@ -22,6 +22,7 @@ import type { FileChange } from "../bindings/github.com/jessonchan/monkey-deck/i
 import { applyEventToItems as applyEventToItemsPure } from "./lib/streamMerge";
 import { shouldDropOnSwitch } from "./lib/sessionDrop";
 import { isNotifySoundEnabled, playNotifySound } from "./lib/notifySound";
+import { isMemorySaverEnabled } from "./lib/memorySaver";
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
 // 按 session 隔离的状态:切走再切回时,进行中的流式输出 / 用量 / 状态 / 权限都保留在各自缓存里,
@@ -421,13 +422,15 @@ export default function App() {
     async (sessionId: string, projectId?: string) => {
       const pid = projectId ?? selectedProjectId;
       // 切走丢弃(内存优化,docs/worklog/2026-07-18-drop-session-items-on-switch.md):
-      // 从 old 切到 new 时,若 old 空闲(非 prompting),丢掉 old 的 items 缓存,让 WebKit heap
-      // 可回收。活跃(prompting)session 保护——流式事件还在往 itemsBySession[old] 灌,丢了会丢内容。
+      // 由「节省内存」设置开关控制(isMemorySaverEnabled,默认开)——内存不敏感的用户可在
+      // 设置中心 → 对话 里关掉,关闭后保留所有已开会话缓存(切换瞬开,但内存随 session 数累积)。
+      // 开启时:从 old 切到 new 若 old 空闲(非 prompting),丢掉 old 的 items 缓存,让 WebKit heap 可回收。
+      // 活跃(prompting)session 保护——流式事件还在往 itemsBySession[old] 灌,丢了会丢内容。
       // 切回时 loadedSessionsRef 已删 → 走下方重载分支从 DB 拉回(idx_messages_session 索引,毫秒级)。
       // 滚动位置在 ChatView 的 scrollStateRef(按 sessionId 记忆),与 itemsBySession 解耦,不丢。
       // composer 状态(draft/history/attachments/mentions/images/queue)本就是"切走保留",不动。
       const oldSession = selectedSessionIdRef.current;
-      if (oldSession && shouldDropOnSwitch(oldSession, sessionId, statusRef.current)) {
+      if (isMemorySaverEnabled() && oldSession && shouldDropOnSwitch(oldSession, sessionId, statusRef.current)) {
         loadedSessionsRef.current.delete(oldSession);
         delete oldestSeqRef.current[oldSession];
         setItemsBySession((prev) => {

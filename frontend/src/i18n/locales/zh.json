@@ -328,6 +328,11 @@
         "notifyTitle": "对话结束提示音",
         "notifyDesc": "agent 回合自然结束时播放短促提示音(默认开启)。"
       },
+      "conversation": {
+        "desc": "对话与 session 行为。",
+        "memorySaverTitle": "节省内存(切走清缓存)",
+        "memorySaverDesc": "切走空闲会话时清空其缓存以降低内存占用,切回时从本地重新加载(默认开启)。关闭则保留所有已开会话,切换更快但内存随会话数累积。"
+      },
       "empty": {
         "appearance": "外观设置暂未提供,后续将在此补充。",
         "conversation": "对话相关设置暂未提供,后续将在此补充。"
