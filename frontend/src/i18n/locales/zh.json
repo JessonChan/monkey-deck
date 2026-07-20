@@ -384,7 +384,7 @@
       "upgrade": "升级",
       "install": "安装",
       "upgrading": "升级中…",
-      "upgradeTip": "调用此 harness 的官方安装脚本拉取最新版本",
+      "upgradeTip": "调用此 harness 自己的升级命令拉取最新版本"
       "upgradeDone": "已升级",
       "upgradeFailed": "升级失败",
       "upToDate": "已是最新"
