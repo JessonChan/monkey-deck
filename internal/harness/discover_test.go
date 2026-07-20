@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -285,5 +287,81 @@ func TestGitHubSource_HTTPErrorNonOK(t *testing.T) {
 	g := &GitHubSource{Repo: "sst/opencode"}
 	if _, err := g.Latest(context.Background()); err == nil {
 		t.Fatalf("expect error on HTTP 403")
+	}
+}
+
+// TestCommandSource_PatternExtract 跑命令 + Pattern 锚定提取版本号(模拟 omp update --check 输出)。
+//
+// 关键不变量(§5.3):Pattern 锚定 "New version available:" 关键词,与输出顺序 / stderr 混入
+// 无关 —— 测试里故意把 stderr perf 日志("Wall time: ...")混在末尾,Pattern 仍稳定命中。
+func TestCommandSource_PatternExtract(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh-based echo; Windows CI only compiles (-run xxx_none)")
+	}
+	// 直接在 sh 里 printf 多行字面量:故意把 "Wall time" 行混在末尾模拟 oclif perf 日志
+	// (实际在 stderr,这里合并到同一输出验证「Pattern 与位置无关」)。
+	src := CommandSource{
+		Cmd:     []string{"sh", "-c", "printf '%s\\n' 'Current version: 17.0.3' 'New version available: 17.0.5' 'Wall time: 1.88 seconds'"},
+		Pattern: regexp.MustCompile(`New version available:\s*(\S+)`),
+	}
+	rel, err := src.Latest(context.Background())
+	if err != nil {
+		t.Fatalf("Latest err=%v, want nil", err)
+	}
+	if rel.Version != "17.0.5" {
+		t.Fatalf("Latest.Version=%q, want 17.0.5 (must NOT grab Current 17.0.3)", rel.Version)
+	}
+}
+
+// TestCommandSource_PatternNoMatch_VersionMissing Pattern 不匹配(如「已是最新」无 New version 行)
+// → 返 error,Discover 据此把 LatestVersion 留空 → 前端显示「已是最新」。这是关键自洽性。
+func TestCommandSource_PatternNoMatch_VersionMissing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh-based echo; Windows CI only compiles (-run xxx_none)")
+	}
+	// 模拟「已是最新」:只有 Current version 行,没有 New version 行。
+	src := CommandSource{
+		Cmd:     []string{"sh", "-c", "echo 'Current version: 17.0.3'"},
+		Pattern: regexp.MustCompile(`New version available:\s*(\S+)`),
+	}
+	if _, err := src.Latest(context.Background()); err == nil {
+		t.Fatalf("Latest: expect error when Pattern misses (up-to-date case)")
+	}
+}
+
+// TestCommandSource_FallbackExtractVersion Pattern=nil 时回退 extractVersion(取首行首个含数字 token),
+// 用于简单 `<bin> --version` 风格命令。
+func TestCommandSource_FallbackExtractVersion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh-based echo; Windows CI only compiles (-run xxx_none)")
+	}
+	src := CommandSource{
+		Cmd: []string{"sh", "-c", "echo 'mypkg 1.2.3'"},
+		// Pattern nil:回退 extractVersion
+	}
+	rel, err := src.Latest(context.Background())
+	if err != nil {
+		t.Fatalf("Latest err=%v, want nil", err)
+	}
+	if rel.Version != "1.2.3" {
+		t.Fatalf("Latest.Version=%q, want 1.2.3 (extractVersion fallback)", rel.Version)
+	}
+}
+
+// TestCommandSource_CmdFailure 命令非 0 退出 → wrapped error(不假装成功)。
+func TestCommandSource_CmdFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh-based exit; Windows CI only compiles (-run xxx_none)")
+	}
+	src := CommandSource{Cmd: []string{"sh", "-c", "exit 3"}}
+	if _, err := src.Latest(context.Background()); err == nil {
+		t.Fatalf("Latest: expect error on cmd exit 3")
+	}
+}
+
+// TestCommandSource_EmptyCmd 空 Cmd 配置直接报错(不静默成功)。
+func TestCommandSource_EmptyCmd(t *testing.T) {
+	if _, err := (CommandSource{}).Latest(context.Background()); err == nil {
+		t.Fatalf("Latest(empty cmd): expect error")
 	}
 }

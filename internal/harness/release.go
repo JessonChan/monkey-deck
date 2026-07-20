@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -81,4 +83,51 @@ func trimLeadingV(v string) string {
 		return v[1:]
 	}
 	return v
+}
+
+// CommandSource 跑一条外部命令查 harness 最新版本(委派给 harness 自己的 update --check 之类命令)。
+//
+// 为什么优先委派(§5.3 外部事实先验证 + §5.3 成熟库优先):harness 自己最清楚发布渠道
+// (npm/brew/curl/自建 CDN 等),我们替它操心会做不全 —— opencode 自带 `opencode upgrade
+// --method npm|bun|brew|curl|...`,omp 自带 `omp update --check`(原生 check-only)。
+// 绕开它们手搓 GitHub API 会与包管理器打架(写死 curl 在用户 npm 全局装的 opencode 旁再装一份)
+// 或干脆漏接(omp 之前 Source=nil,永远查不到最新版本)。
+//
+// 解析策略(§5.3 找不变量,禁用「输出第几行」启发式):
+//   - Pattern 非 nil:用其**单 capture group** 锚定提取(如 `New version available:\s*(\S+)`)。
+//     协议稳定标识是关键词本身,与输出顺序、stderr 混入(oclif perf 日志)无关。
+//   - Pattern nil:回退 extractVersion(取首行首个含数字 token,与本地版本同形),向后兼容简单命令。
+//
+// 「已是最新」时 omp 输出无 "New version" 行,Pattern 不匹配 → 返 error
+// → Discover 把 LatestVersion 留空 → 前端显示「已是最新」徽章(自然自洽)。
+type CommandSource struct {
+	Cmd     []string         // [name, args...] 形如 {"omp","update","--check"}
+	Pattern *regexp.Regexp   // 可选:单 capture group 提取最新版本号;空 = 回退 extractVersion
+}
+
+// Latest 跑配置的命令,按 Pattern(或 extractVersion 回退)解析输出里的最新版本号。
+// 命令非 0 退出、或解析不到版本号,都返 error(不假装成功)。
+func (c CommandSource) Latest(ctx context.Context) (Release, error) {
+	if len(c.Cmd) == 0 {
+		return Release{}, fmt.Errorf("command source: empty cmd")
+	}
+	cmd := exec.CommandContext(ctx, c.Cmd[0], c.Cmd[1:]...)
+	cmd.Stdin = nil // 不连 stdin(否则 hang)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return Release{}, fmt.Errorf("command source(%s): %w: %s", c.Cmd[0], err, string(out))
+	}
+	s := string(out)
+	var v string
+	if c.Pattern != nil {
+		if m := c.Pattern.FindStringSubmatch(s); len(m) >= 2 {
+			v = strings.TrimSpace(m[1])
+		}
+	} else {
+		v = extractVersion(s)
+	}
+	if v == "" {
+		return Release{}, fmt.Errorf("command source(%s): no version in output", c.Cmd[0])
+	}
+	return Release{Version: v}, nil
 }

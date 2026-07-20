@@ -6,7 +6,13 @@
 //
 // 不硬编码可执行文件路径:实际路径由 Discover 在运行时经 PATH + ExtraDirs 解析得到(§3.2
 // 进程回收 harness 无关化的同源思想:此处也对 harness 安装方式不作假设)。
+//
+// 委派优先原则(§5.3 外部事实先验证):harness 自己最清楚发布渠道(npm/brew/curl/自建 CDN),
+// 我们替它操心会做不全。因此 Source/Upgrader 优先委派给 harness 自带的 update/upgrade 子命令,
+// 仅当 harness 无此能力时才回退到外部源(如 GitHubSource)。
 package harness
+
+import "regexp"
 
 // Spec 单个已知 harness 的发现 + 版本 + 升级配置。
 type Spec struct {
@@ -30,24 +36,29 @@ func (s Spec) versionArgs() []string {
 }
 
 // Registry 已知 harness 的 Spec 列表,顺序与 Supported 对齐(DefaultID 在首位)。
-// Discovered 遍历此表生成运行时 Harness 列表。
 //
 // 当前配置:
-//   - opencode:GitHub Releases(sst/opencode)查最新版本;升级走官方安装脚本(幂等,
-//     已装则升级到最新)。opencode 官方安装/升级方式见 https://opencode.ai/docs。
-//   - omp:暂无公开发布源(Source=nil);Upgrader 暂缺。装了就显示版本,没装就标未安装。
-//     后续确定发布源/包管理器后在此处补 Source/Upgrader 即可,无需改其它代码。
+//   - opencode:无纯 check 命令(opencode upgrade 只装不查)→ Source 继续走 GitHub Releases;
+//     Upgrader 委派给 `opencode upgrade`(它自带 --method 选 curl/npm/bun/brew/...,按用户原安装
+//     方式升级,避免我们写死 curl 与 npm 全局副本打架)。官方文档 https://opencode.ai/docs。
+//   - omp:自带 `omp update --check`(check-only,输出 "New version available: <ver>")→ Source 委派,
+//     Pattern 锚定关键词提取(无匹配 = 已是最新 → Latest 空 → 前端显示「已是最新」);
+//     Upgrader 委派给 `omp update`(幂等,与 omp 自身升级逻辑一致)。
 var Registry = []Spec{
 	{
 		ID:         "opencode",
 		BinaryName: "opencode",
 		Source:     &GitHubSource{Repo: "sst/opencode"},
-		Upgrader:   CommandUpgrader{Cmd: []string{"bash", "-c", "curl -fsSL https://opencode.ai/install | bash"}},
+		Upgrader:   CommandUpgrader{Cmd: []string{"opencode", "upgrade"}},
 	},
 	{
 		ID:         "omp",
 		BinaryName: "omp",
-		// Source/Upgrader 暂缺 —— 待 omp 的发布源确定后补(见上方注释)。
+		Source: &CommandSource{
+			Cmd:     []string{"omp", "update", "--check"},
+			Pattern: regexp.MustCompile(`New version available:\s*(\S+)`),
+		},
+		Upgrader: CommandUpgrader{Cmd: []string{"omp", "update"}},
 	},
 }
 
