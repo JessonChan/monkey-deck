@@ -651,9 +651,9 @@ function ModelSelect({ configOptions, disabled, onSetConfig, contextTokens }: {
   if (!modelOpt) return null;
   return (
     <div className="cfg-group">
-      <ConfigSelect label={t("composer.cfgLabel.model")} currentValue={modelOpt.currentValue} options={modelOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("model", v)} groupByProvider searchable contextTokens={contextTokens} />
-      {modeOpt && <ConfigSelect label={t("composer.cfgLabel.mode")} currentValue={modeOpt.currentValue} options={modeOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("mode", v)} />}
-      {effortOpt && <ConfigSelect label={t("composer.cfgLabel.thought")} currentValue={effortOpt.currentValue} options={effortOpt.options} disabled={disabled} onSelect={(v) => onSetConfig("effort", v)} />}
+      <ConfigSelect label={t("composer.cfgLabel.model")} currentValue={modelOpt.currentValue} options={modelOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(modelOpt.id, v)} groupByProvider searchable contextTokens={contextTokens} />
+      {modeOpt && <ConfigSelect label={t("composer.cfgLabel.mode")} currentValue={modeOpt.currentValue} options={modeOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(modeOpt.id, v)} />}
+      {effortOpt && <ConfigSelect label={t("composer.cfgLabel.thought")} currentValue={effortOpt.currentValue} options={effortOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(effortOpt.id, v)} />}
     </div>
   );
 }
