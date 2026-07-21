@@ -60,6 +60,30 @@ SOFTWARE.
 - **仓库路径**:`build/linux/appimage/build.sh`
 - **改动**:无(原样随脚手架引入)
 
+### 2.2 `assets/harness-icons/opencode.svg`(MIT)
+
+- **来源 / 版权**:[opencode](https://github.com/anomalyco/opencode)
+  —— `packages/identity/mark.svg`(Copyright (c) 2025 opencode)
+- **协议**:MIT([LICENSE](https://github.com/anomalyco/opencode/blob/main/LICENSE))
+- **借用方式**:原样拷贝(官方品牌 mark,未改绘——上层需求 #42 明确复用官方 logo、不自研)
+- **仓库路径**:`assets/harness-icons/opencode.svg`(文件名对齐 harness ID `opencode`,
+  供前端按 harness ID 归并取图,§5.3)
+- **改动**:无;仅在文件顶部追加 XML 注释版权声明 + MIT 许可全文(§0.4 文件级——
+  原文件无版权头,补登)
+
+### 2.3 `assets/harness-icons/omp.svg`(MIT)
+
+- **来源 / 版权**:[oh-my-pi](https://github.com/can1357/oh-my-pi)
+  —— `assets/icon.svg`
+  (Copyright (c) 2025 Mario Zechner;Copyright (c) 2025-2026 Can Bölük)
+- **协议**:MIT([LICENSE](https://github.com/can1357/oh-my-pi/blob/main/LICENSE))
+- **借用方式**:原样拷贝(官方 icon,未改绘)
+- **仓库路径**:`assets/harness-icons/omp.svg`(文件名对齐 harness ID `omp`)
+- **改动**:无;仅在文件顶部追加 XML 注释版权声明 + MIT 许可全文(§0.4 文件级)
+
+> 未知 / 第三方 harness 不内置兜底图,前端用 `lucide-react` 的 `Bot` 兜底;
+> 命名约定 / 维护规则见 `assets/harness-icons/README.md`。
+
 ---
 
 ## 3. 关键第三方依赖(import,未照搬源码)
