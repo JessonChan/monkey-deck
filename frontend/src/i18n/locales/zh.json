@@ -70,7 +70,8 @@
       "replying": "回复中",
       "generating": "生成中",
       "idle": "空闲"
-    }
+    },
+    "harnessTip": "Agent:{{name}}"
   },
   "newSession": {
     "title": "新建对话",

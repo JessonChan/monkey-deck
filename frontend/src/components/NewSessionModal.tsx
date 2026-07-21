@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
+import HarnessIcon from "./HarnessIcon";
 
 interface Props {
   harnesses: Harness[];
@@ -46,6 +47,7 @@ export default function NewSessionModal({ harnesses, isGit, onConfirm, onCancel 
                 data-testid={`ns-harness-${h.id}`}
               >
                 <span className={`ns-radio ${harness === h.id ? "on" : ""}`} />
+                <HarnessIcon harnessId={h.id} size={16} className="ns-harness-icon" />
                 <span className="ns-harness-name">{h.name}</span>
                 <span className="ns-harness-cmd" data-tooltip-id="md-tip" data-tooltip-content={h.command}>{h.command}</span>
               </button>

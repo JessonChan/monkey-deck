@@ -245,6 +245,18 @@ input, textarea { font-family: inherit; }
 .session-item-row svg { color: var(--text-3); flex-shrink: 0; }
 .session-item-row.active svg { color: var(--text-2); }
 .session-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* harness 品牌图标(label 之后,弱色常驻):每个 session 钉住其 harness 的官方 logo,
+   多 harness 项目下可一眼区分。原图自带背景(opencode 深色底),圆角 + contain 适配;
+   空间小,Idle 时降透明度不抢视觉,hover/active 时回到前景色层次。 */
+.session-harness-icon {
+  flex-shrink: 0;
+  border-radius: 3px;
+  object-fit: contain;
+  opacity: 0.6;
+  transition: opacity 0.12s;
+}
+.session-item-row:hover .session-harness-icon,
+.session-item-row.active .session-harness-icon { opacity: 0.9; }
 /* 置顶标记(0008):label 之后、状态簇之前;仅 s.pinned 时渲染。常驻标记(弱色),
    与瞬态活动状态(spinner/unread/time)正交、各占一格;flex-shrink:0 不挤压状态簇。 */
 .session-pin { flex-shrink: 0; display: inline-flex; color: var(--accent); }
@@ -1690,6 +1702,13 @@ input, textarea { font-family: inherit; }
   border: 2px solid var(--sep-strong); background: transparent; transition: all 0.12s;
 }
 .ns-harness.active .ns-radio { border-color: var(--accent); background: radial-gradient(var(--accent) 45%, transparent 50%); }
+/* harness 官方品牌图:radio 与 name 之间,16px。原图自带背景(opencode 深色底),
+   圆角 + contain 让小尺寸下不糊;flex-shrink:0 防止 name 挤压。 */
+.ns-harness-icon {
+  flex-shrink: 0;
+  border-radius: 4px;
+  object-fit: contain;
+}
 .ns-harness-name { font-size: 13px; font-weight: 600; color: var(--text); min-width: 76px; }
 .ns-harness-cmd {
   margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-2);

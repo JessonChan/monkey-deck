@@ -2,6 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, type ReactNode } from "re
 import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
+import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X, Pin, PinOff, PanelLeftClose, Settings, SquareTerminal } from "lucide-react";
 import {
   DndContext,
@@ -14,6 +15,7 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { timeAgo, formatDateTime } from "../utils";
+import HarnessIcon from "./HarnessIcon";
 
 interface Props {
   projects: Project[];
@@ -34,6 +36,9 @@ interface Props {
   permPendingBySession: Record<string, boolean>;
   draftBySession?: Record<string, string>;
   hasTermBySession?: Record<string, boolean>;
+  // 已知 harness 列表(供 session 行 harness 图标的 tooltip 用 ID → 显示名查表;
+  // session.harness 仅 ID,显示名「Oh My Pi / OpenCode」更友好)。
+  harnesses?: Harness[];
   onReorderProjects: (ids: string[]) => void;
   onCollapse?: () => void;
   onOpenSettings: () => void;
@@ -101,6 +106,10 @@ export default function Sidebar(props: Props) {
   // 拖拽时自动折叠所有项目:展开项虽 disabled 仍占满高度(含 session 列表),拖动需跨越整段 → 距离过长 + 碰撞失准。
   // 开始时记录并全折叠,结束/取消时恢复原展开态,不打断用户原本在看的项目。
   const expandedBeforeDrag = useRef<Set<string>>(new Set());
+
+  // harness ID → 显示名 查表(供 session 行 harness 图标 tooltip 用);缺省回退到 ID 本身。
+  const harnessNameById = (id: string): string =>
+    props.harnesses?.find((h) => h.id === id)?.name || id;
 
   // 拖拽排序(0007):distance=6 区分点击/拖动,避免点子按钮误触发拖。
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -385,6 +394,7 @@ export default function Sidebar(props: Props) {
                         >
                           <span className={`session-dot ${cls}`} data-tooltip-id="md-tip" data-tooltip-content={dotTip} />
                           <span className="session-label">{s.title || t("sidebar.sessionDraftFallback")}</span>
+                          <HarnessIcon harnessId={s.harness} size={12} className="session-harness-icon" tooltip={t("sidebar.harnessTip", { name: harnessNameById(s.harness) })} />
                           {s.pinned && (
                             <span className="session-pin" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.pinnedTip")} data-testid={`pin-${s.id}`}>
                               <Pin size={11} />

@@ -33,5 +33,10 @@
 
 - 新增 harness:把官方 logo 原样拷进来命名为 `<id>.svg`,文件头加版权 + MIT 全文,
   并到 THIRD_PARTY_LICENSES.md §2 新增一条。
+- **同步镜像到前端 public**:`assets/harness-icons/<id>.svg` 是**唯一事实源**,
+  前端运行时通过 Vite 的 `frontend/public/harness-icons/<id>.svg` 镜像访问
+  (Vite 把 `public/` 整目录拷进 dist 根,运行时 URL = `/harness-icons/<id>.svg`)。
+  新增 / 替换 SVG 后必须**同步拷贝**到 `frontend/public/harness-icons/`(等量副本,
+  不修改版权头),否则前端取不到图、走 Bot 兜底。
 - **禁止**自研 / 改绘官方 logo(上层需求明确:复用官方品牌,不自研)。
 - 改主题适配(明/暗)是前端层职责,不在本目录引入多个变体。

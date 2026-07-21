@@ -70,7 +70,8 @@
       "replying": "Replying",
       "generating": "Generating",
       "idle": "Idle"
-    }
+    },
+    "harnessTip": "Agent: {{name}}"
   },
   "newSession": {
     "title": "New chat",

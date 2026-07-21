@@ -1073,6 +1073,7 @@ export default function App() {
           statusBySession={statusBySession}
           activityBySession={activityBySession}
           unreadBySession={unreadBySession}
+          harnesses={harnesses}
           onReorderProjects={reorderProjects}
           onCollapse={collapseSidebar}
           onOpenSettings={() => setSettingsOpen(true)}
