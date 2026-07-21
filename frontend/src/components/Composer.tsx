@@ -547,11 +547,13 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                   return;
                 }
               }
-              // 粘贴长文本:折叠成预览(聚焦态下 effect 不会自动折,这里显式触发)。
+              // 粘贴使文本从「非长」跨入「长」→ 折叠成预览(聚焦态下 auto-collapse effect 不会折,这里显式补)。
+              // 仅当粘贴前不是长文本(!isLong)才折:粘贴前已是长文本(用户多半已手动展开在编辑)时,粘贴不应把
+              // textarea 折没 —— 否则键入丢失,即「复制后无法输入」。与 effect 的聚焦守卫一致:聚焦编辑中不打断。
               const pasted = e.clipboardData?.getData("text") ?? "";
               const el = e.currentTarget;
               const future = value.slice(0, el.selectionStart ?? 0) + pasted + value.slice(el.selectionEnd ?? 0);
-              if (future.split("\n").length > LONG_LINE_THRESHOLD || future.length > LONG_CHAR_THRESHOLD) {
+              if (!isLong && (future.split("\n").length > LONG_LINE_THRESHOLD || future.length > LONG_CHAR_THRESHOLD)) {
                 requestAnimationFrame(() => setCollapsed(true));
               }
             }}
