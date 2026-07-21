@@ -68,7 +68,7 @@ export default function App() {
   // messagesToItems 转为 type:'plan' ChatItem 内联渲染。null = 当前无实时 plan。
   const [livePlanBySession, setLivePlanBySession] = useState<Record<string, LivePlan | null>>({});
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
-  const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean } | null>(null);  // 新建对话弹窗
+  const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean; lastHarness: string } | null>(null);  // 新建对话弹窗
   const [settingsOpen, setSettingsOpen] = useState(false); // 统一设置中心面板(收敛语言/提示音/权限/harness)
   // 集成终端(per-session,与 agent ACP 通道完全分离;§1.1 agent 永远走 ACP)。
   // 终端面板开关也 per-session:session A 开着,切到 B 时 B 按自己的状态显示(各自独立)。
@@ -586,12 +586,17 @@ export default function App() {
   }, [loadingMoreBySession, hasMoreBySession, messagesToItems]);
 
   // 新建 session:先弹窗让用户选 harness + 是否建 worktree;projectId 为空时用当前选中项目。
+  // harness 默认选中上次新建对话用的(后端 lastHarness setting,§5.3 本地是真相来源),照抄 worktree 的
+  // 「弹窗打开时预取依赖值放进 newSession 状态、作为 prop 传给 modal」范式。
   const createSession = useCallback(async (projectId?: string) => {
     const pid = projectId ?? selectedProjectId;
     if (!pid) return;
     try {
-      const isGit = await ChatService.IsGitProject(pid);
-      setNewSession({ projectId: pid, isGit });
+      const [isGit, lastHarness] = await Promise.all([
+        ChatService.IsGitProject(pid),
+        ChatService.GetLastHarness(),
+      ]);
+      setNewSession({ projectId: pid, isGit, lastHarness });
     } catch (e) {
       setError(String(e));
     }
@@ -1271,6 +1276,7 @@ export default function App() {
       <NewSessionModal
         harnesses={harnesses}
         isGit={newSession.isGit}
+        lastHarness={newSession.lastHarness}
         onConfirm={confirmNewSession}
         onCancel={() => setNewSession(null)}
       />

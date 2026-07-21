@@ -6,17 +6,22 @@ import HarnessIcon from "./HarnessIcon";
 interface Props {
   harnesses: Harness[];
   isGit: boolean;
+  lastHarness: string;
   onConfirm: (harness: string, useWorktree: boolean) => void;
   onCancel: () => void;
 }
 
 // 新建对话弹窗:让用户选择 1) 使用的 agent harness(omp/opencode)2) 是否新建独立分支(worktree)。
 // harness 决定 spawn 哪个 ACP agent;worktree 决定是否为该会话建独立 git 工作树(并行隔离,§1.4)。
+// harness 默认选中上次新建对话用的(lastHarness,后端 setting);不可用(未安装/未知)时回退列表首个。
 // git 项目下 worktree 必须显式二选一(新建分支 / 使用项目目录),无默认,未选时「新建」按钮禁用。
 // 非 git 项目不展示 worktree 选项(无法建分支)。
-export default function NewSessionModal({ harnesses, isGit, onConfirm, onCancel }: Props) {
+export default function NewSessionModal({ harnesses, isGit, lastHarness, onConfirm, onCancel }: Props) {
   const { t } = useTranslation();
-  const [harness, setHarness] = useState(harnesses[0]?.id || "omp");
+  // harness 默认:上次用的(lastHarness 且仍在可选列表),否则列表首个,再否则 omp。
+  const [harness, setHarness] = useState(
+    lastHarness && harnesses.some((h) => h.id === lastHarness) ? lastHarness : (harnesses[0]?.id || "omp"),
+  );
   // worktree 必须显式选择:null = 未选(默认),true = 新建,false = 使用项目目录。
   const [worktree, setWorktree] = useState<boolean | null>(isGit ? null : false);
 

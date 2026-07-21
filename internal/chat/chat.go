@@ -512,6 +512,10 @@ func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorkt
 		model = s.cfg.DefaultModel
 	}
 	hid := harness.Normalize(harnessID)
+	// 记住本次选择的 harness,下次新建对话默认选中(§5.3 本地是真相来源)。
+	if err := s.st.SetSetting(s.ctx, "lastHarness", hid); err != nil {
+		slog.Warn("persist lastHarness", "err", err)
+	}
 	se, err := s.st.CreateSession(s.ctx, projectID, title, model, hid)
 	if err != nil {
 		return nil, err
@@ -2084,6 +2088,12 @@ func (s *ChatService) IsGitProject(projectID string) (bool, error) {
 		return false, fmt.Errorf("project not found: %s", projectID)
 	}
 	return worktree.IsRepo(proj.Path), nil
+}
+
+// GetLastHarness 返回上次新建对话选择的 harness(下次新建对话默认选中)。无则空串,前端自行回退首个。
+func (s *ChatService) GetLastHarness() string {
+	v, _ := s.st.GetSetting(s.ctx, "lastHarness")
+	return v
 }
 
 // GetConfig 返回当前配置(默认 model、各数据目录)。
