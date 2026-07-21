@@ -10,6 +10,7 @@ import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
 import CollapsibleText from "./CollapsibleText";
 import FilePreviewOverlay, { type PreviewTarget } from "./FilePreviewOverlay";
+import MermaidRenderer from "./MermaidRenderer";
 import PathLinkified from "./PathLinkified";
 import { countDiffLines, diffLineCls } from "../lib/diff";
 import { findTopAnchor, type AnchorProbe } from "../lib/scrollAnchor";
@@ -554,7 +555,7 @@ const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview }: { 
         <div className="avatar"><Sparkles size={15} /></div>
         <div className="bubble-agent-wrap">
           <div className="bubble-agent">
-            <AgentMarkdown text={item.text + (item.streaming ? " ▋" : "")} onOpenFilePreview={onOpenFilePreview} />
+            <AgentMarkdown text={item.text + (item.streaming ? " ▋" : "")} onOpenFilePreview={onOpenFilePreview} streaming={item.streaming} />
           </div>
           <div className="msg-meta">
             {item.ts && <span className="msg-time">{formatTime(item.ts)}</span>}
@@ -1307,9 +1308,23 @@ function PlanTimeline({ entries, prompting }: { entries: PlanEntry[]; prompting:
   );
 }
 
-function PreRenderer(props: ComponentPropsWithoutRef<"pre">) {
+// PreRenderer:ReactMarkdown 的 <pre> 渲染器。代码块 → CodeBox;
+// ```mermaid 围栏 → MermaidRenderer(Task #21289)。
+// streaming=true 时 MermaidRenderer 内部会跳过渲染、先显示源码,避免不完整语法反复渲染失败。
+function PreRenderer(props: ComponentPropsWithoutRef<"pre"> & { streaming?: boolean }) {
   const codeEl = extractCodeChild(props.children);
-  return <CodeBox language={codeEl?.language || "code"} raw={codeEl?.text || ""} />;
+  const language = codeEl?.language || "code";
+  const raw = codeEl?.text || "";
+  if (isMermaidLanguage(language)) {
+    return <MermaidRenderer code={raw} streaming={props.streaming} />;
+  }
+  return <CodeBox language={language} raw={raw} />;
+}
+
+// 同时识别 mermaid 官方语言名与常见变体(mmd / flowchart 等),宽容匹配。
+function isMermaidLanguage(lang: string): boolean {
+  const l = lang.trim().toLowerCase();
+  return l === "mermaid" || l === "mmd";
 }
 
 // 对话外链拦截(Task #15668):markdown 里的 http/https 链接点击 → 调后端 OpenURL
@@ -1328,17 +1343,19 @@ function AnchorRenderer(props: ComponentPropsWithoutRef<"a">) {
 
 // Agent / user-markdown 渲染器(Task #15084):在 ReactMarkdown 的 p / li / td 文本节点里
 // 把文件路径识别成可点击 .path-link。code / pre / a 等保持原样(不破坏代码语义)。
-function AgentMarkdown({ text, onOpenFilePreview }: { text: string; onOpenFilePreview: (path: string, line?: number) => void }) {
+// streaming(Task #21289):仅 agent 消息流式期间为 true,透传到 PreRenderer → MermaidRenderer,
+// 让 mermaid 代码块在消息写完后再渲染。
+function AgentMarkdown({ text, onOpenFilePreview, streaming = false }: { text: string; onOpenFilePreview: (path: string, line?: number) => void; streaming?: boolean }) {
   const components = useMemo(
     () => ({
       code: CodeRenderer,
-      pre: PreRenderer,
+      pre: (props: ComponentPropsWithoutRef<"pre">) => <PreRenderer {...props} streaming={streaming} />,
       a: AnchorRenderer,
       p: makeTextLinkifyRenderer("p", onOpenFilePreview),
       li: makeTextLinkifyRenderer("li", onOpenFilePreview),
       td: makeTextLinkifyRenderer("td", onOpenFilePreview),
     }),
-    [onOpenFilePreview]
+    [onOpenFilePreview, streaming]
   );
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>

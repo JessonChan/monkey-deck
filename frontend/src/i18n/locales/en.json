@@ -172,6 +172,10 @@
     "truncatedSuffix": " · truncated",
     "command": "Command",
     "copyCommandTip": "Copy command",
+    "mermaidDiagram": "Diagram",
+    "mermaidWriting": "Diagram (streaming)",
+    "mermaidLoading": "Rendering diagram…",
+    "mermaidRenderFailed": "Diagram render failed · showing source",
     "planStatus": {
       "completed": "Done",
       "in_progress": "In progress",

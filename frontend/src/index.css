@@ -531,6 +531,45 @@ input, textarea { font-family: inherit; }
   background: var(--elev); padding: 1.5px 5px; border-radius: 4px;
  border: 1px solid var(--sep);
 }
+
+/* Mermaid 图表块(Task #21289):与 .code-box 视觉同源(同底色 / 发丝边 / 头条) */
+.mermaid-box { margin: 9px 0; border: 1px solid var(--sep); border-radius: var(--r-md); overflow: hidden; background: #161617; }
+.mermaid-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 6px 5px 12px; background: #1f1f21; border-bottom: 1px solid var(--sep);
+}
+.mermaid-head-err { background: rgba(255, 69, 58, 0.08); }
+.mermaid-head-label {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.mermaid-head-err .mermaid-head-label { color: var(--red); }
+.mermaid-svg-host {
+  padding: 12px; overflow: auto; user-select: text;
+  display: flex; align-items: center; justify-content: center;
+  background: #161617; min-height: 40px;
+}
+/* mermaid 输出的 SVG 自带 width/height 可能溢出 → 受容器宽度约束自适应 */
+.mermaid-svg-host svg { max-width: 100%; height: auto; }
+.mermaid-src-pre {
+  margin: 0; padding: 11px 14px; overflow-x: auto;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.55; color: #e8e8ed;
+  user-select: text; background: #161617;
+}
+.mermaid-src-pre code { background: none; padding: 0; font-family: inherit; user-select: text; }
+.mermaid-error-msg {
+  padding: 6px 14px 9px; font-family: var(--mono); font-size: 11px;
+  color: var(--red); white-space: pre-wrap; word-break: break-word;
+  border-top: 1px solid var(--sep); background: rgba(255, 69, 58, 0.04);
+}
+.mermaid-loading {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 18px; color: var(--text-2); font-size: 12px;
+}
+.mermaid-spin { animation: mermaid-spin 1s linear infinite; }
+@keyframes mermaid-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
 .tool-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 
 /* 思考块 */
