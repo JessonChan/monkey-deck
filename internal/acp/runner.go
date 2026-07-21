@@ -18,7 +18,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/coder/acp-go-sdk"
 	"github.com/jessonchan/monkey-deck/internal/permissions"
@@ -66,11 +65,15 @@ func NewRunner(command string, env map[string]string) *Runner {
 // ChatSession 保持 harness 进程 + ACP session 跨多轮对话。
 type ChatSession struct {
 	Runner    *Runner
-	Cmd       *exec.Cmd
 	Conn      *acp.ClientSideConnection
 	Handler   *Handler
 	SessionID acp.SessionId
 	WorkDir   string
+	// proc:harness 子进程生命周期单主(独占 cmd.Wait)+ 结构化 exit 根因日志。
+	// 由 spawnAndInit 创建;Close 经 proc.shutdown() 主动关停(标记 expected)。
+	proc *harnessProcess
+	// stderr:harness stderr 的环形缓冲捕获;崩溃时其尾部拼进 exit 根因日志(stderr.go)。
+	stderr *stderrRing
 	// CanListSessions:agent 是否声明了 session/list 能力(Initialize 响应的
 	// capabilities.session.list)。协议硬约束:未声明时禁止调用 session/list
 	// (session-list.mdx:Clients MUST verify this capability before calling)。
@@ -88,7 +91,7 @@ type ChatSession struct {
 // onPermission 接收权限裁决提示(→ 前端弹窗,§3.4)。调用方负责 Close()。
 func (r *Runner) NewChatSession(ctx context.Context, workDir string, onEvent func(SessionEvent), onPermission func(PermissionPrompt)) (*ChatSession, error) {
 	handler := NewHandler(workDir, onEvent, onPermission, 0)
-	cmd, conn, initResp, err := r.spawnAndInit(ctx, workDir, handler)
+	proc, conn, initResp, err := r.spawnAndInit(ctx, workDir, handler)
 	if err != nil {
 		return nil, err
 	}
@@ -97,19 +100,17 @@ func (r *Runner) NewChatSession(ctx context.Context, workDir string, onEvent fun
 		McpServers: []acp.McpServer{},
 	})
 	if err != nil {
-		killProcessGroup(cmd)
+		proc.shutdown()
 		return nil, fmt.Errorf("new session: %w", err)
 	}
 	slog.Info("chat session created", "sessionId", sess.SessionId, "cwd", workDir, "agent", initResp.AgentInfo.Name)
 	cs := &ChatSession{
-		Runner: r, Cmd: cmd, Conn: conn, Handler: handler, SessionID: sess.SessionId, WorkDir: workDir,
+		Runner: r, proc: proc, Conn: conn, Handler: handler, SessionID: sess.SessionId, WorkDir: workDir,
 		CanListSessions:    initResp.AgentCapabilities.SessionCapabilities.List != nil,
 		ConfigOptions:      sess.ConfigOptions,
 		PromptCapabilities: initResp.AgentCapabilities.PromptCapabilities,
 	}
-	if cmd.Process != nil {
-		registerHarness(cmd.Process.Pid) // §3.2:注册活跃,reaper 保护其逃逸子进程
-	}
+	registerHarness(proc.pgid) // §3.2:注册活跃,reaper 保护其逃逸子进程
 	return cs, nil
 }
 
@@ -117,7 +118,7 @@ func (r *Runner) NewChatSession(ctx context.Context, workDir string, onEvent fun
 // 用于应用重启后恢复对话上下文(Cwd 必须匹配原 session)。
 func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string, onEvent func(SessionEvent), onPermission func(PermissionPrompt)) (*ChatSession, error) {
 	handler := NewHandler(workDir, onEvent, onPermission, 0)
-	cmd, conn, initResp, err := r.spawnAndInit(ctx, workDir, handler)
+	proc, conn, initResp, err := r.spawnAndInit(ctx, workDir, handler)
 	if err != nil {
 		return nil, err
 	}
@@ -132,28 +133,30 @@ func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string,
 	})
 	handler.OnEvent = realOnEvent
 	if err != nil {
-		killProcessGroup(cmd)
+		proc.shutdown()
 		return nil, fmt.Errorf("load session: %w", err)
 	}
 	slog.Info("chat session loaded", "sessionId", sessionID, "cwd", workDir)
 	cs := &ChatSession{
-		Runner: r, Cmd: cmd, Conn: conn, Handler: handler, SessionID: acp.SessionId(sessionID), WorkDir: workDir,
+		Runner: r, proc: proc, Conn: conn, Handler: handler, SessionID: acp.SessionId(sessionID), WorkDir: workDir,
 		CanListSessions:    initResp.AgentCapabilities.SessionCapabilities.List != nil,
 		ConfigOptions:      resumeResp.ConfigOptions,
 		PromptCapabilities: initResp.AgentCapabilities.PromptCapabilities,
 	}
-	if cmd.Process != nil {
-		registerHarness(cmd.Process.Pid)
-	}
+	registerHarness(proc.pgid)
 	return cs, nil
 }
 
 // spawnAndInit 公共前置:spawn harness(独立进程组)→ 建连接 → Initialize。
-func (r *Runner) spawnAndInit(ctx context.Context, workDir string, handler *Handler) (*exec.Cmd, *acp.ClientSideConnection, acp.InitializeResponse, error) {
+// 返回 harnessProcess(独占 cmd.Wait + exit 根因日志,见 proc.go)+ stderr ring。
+// 失败时已 shutdown(回收进程组);调用方无需再清理。
+func (r *Runner) spawnAndInit(ctx context.Context, workDir string, handler *Handler) (*harnessProcess, *acp.ClientSideConnection, acp.InitializeResponse, error) {
 	cmd := exec.CommandContext(ctx, r.HarnessCmd[0], r.HarnessCmd[1:]...)
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(), r.Env...)
-	cmd.Stderr = os.Stderr
+	// stderr → 环形缓冲(根因日志素材)+ tee 到 os.Stderr(保留 dev 模式实时看 harness 日志的既有行为)。
+	stderr := newStderrRing(os.Stderr)
+	cmd.Stderr = stderr
 	setProcGroup(cmd) // §3.2:独立进程组
 
 	stdin, err := cmd.StdinPipe()
@@ -169,6 +172,9 @@ func (r *Runner) spawnAndInit(ctx context.Context, workDir string, handler *Hand
 	}
 	slog.Info("harness started", "cmd", strings.Join(r.HarnessCmd, " "), "cwd", workDir)
 
+	// cmd 已 Start:交给 harnessProcess 独占 Wait(单一 reap,杜绝双 Wait 竞态)。
+	proc := newHarnessProcess(cmd, strings.Join(r.HarnessCmd, " "), stderr)
+
 	conn := acp.NewClientSideConnection(handler, stdin, stdout)
 	conn.SetLogger(slog.Default())
 
@@ -182,10 +188,10 @@ func (r *Runner) spawnAndInit(ctx context.Context, workDir string, handler *Hand
 		},
 	})
 	if err != nil {
-		killProcessGroup(cmd)
+		proc.shutdown()
 		return nil, nil, acp.InitializeResponse{}, fmt.Errorf("initialize: %w", err)
 	}
-	return cmd, conn, initResp, nil
+	return proc, conn, initResp, nil
 }
 
 // isTerminalToolStatus 判断 tool status 是否终态(completed/failed)。
@@ -313,12 +319,12 @@ func (cs *ChatSession) SupportsImage() bool {
 // 成功后覆盖 cs.ConfigOptions / cs.PromptCapabilities 为最新全量,返回扁平化结果。
 func (cs *ChatSession) RefreshConfig(ctx context.Context) ([]ConfigOption, error) {
 	handler := NewHandler(cs.WorkDir, func(SessionEvent) {}, func(PermissionPrompt) {}, 0)
-	cmd, conn, initResp, err := cs.Runner.spawnAndInit(ctx, cs.WorkDir, handler)
+	proc, conn, initResp, err := cs.Runner.spawnAndInit(ctx, cs.WorkDir, handler)
 	if err != nil {
 		return nil, fmt.Errorf("refresh config: spawn probe: %w", err)
 	}
-	// probe 拿到结果或出错都要 kill 进程组回收(防泄漏,§3.2)。
-	defer killProcessGroup(cmd)
+	// probe 拿到结果或出错都要 shutdown 回收进程组(防泄漏,§3.2)。
+	defer proc.shutdown()
 	sess, err := conn.NewSession(ctx, acp.NewSessionRequest{
 		Cwd:        cs.WorkDir,
 		McpServers: []acp.McpServer{},
@@ -355,12 +361,12 @@ func (cs *ChatSession) SetConfigOption(ctx context.Context, configId, value stri
 // Close 销毁 session:kill 整个 harness 进程组 + 注销活跃(§3.2)。
 func (cs *ChatSession) Close() {
 	pgid := 0
-	if cs.Cmd != nil && cs.Cmd.Process != nil {
-		pgid = cs.Cmd.Process.Pid
+	if cs.proc != nil {
+		pgid = cs.proc.pgid
+		cs.proc.shutdown() // 标记 expected → 信号整组 → 等 watcher reap 落定
 	}
-	killProcessGroup(cs.Cmd)
 	if pgid != 0 {
-		// 只注销活跃 + 杀本组。reap 由调用方在「无其他活跃 session」时做:
+		// 只注销活跃。reap 由调用方在「无其他活跃 session」时做:
 		// 多 session 并发时,reap 会误杀其他活跃 session 的逃逸 worker(RAK reaper 假设单 harness)。
 		unregisterHarness(pgid)
 	}
@@ -369,12 +375,11 @@ func (cs *ChatSession) Close() {
 // IsAlive 报告 harness 进程是否仍存活(供「预热后空闲断连」检测:开 session 时 eager spawn
 // 保持连接等首条消息,若用户迟迟不发、opencode 空闲断连 §5.4 #9,进程已退出 → 返回 false,
 // 调用方据此拆掉死连接、下次重 spawn,避免把 broken pipe 抛给用户)。
-// 用 signal 0 探活(Unix 标准:进程在返 nil,已退出返 ESRCH)。
 func (cs *ChatSession) IsAlive() bool {
-	if cs.Cmd == nil || cs.Cmd.Process == nil {
+	if cs.proc == nil {
 		return false
 	}
-	return cs.Cmd.Process.Signal(syscall.Signal(0)) == nil
+	return cs.proc.IsAlive()
 }
 
 // IsPeerDisconnected 判断错误是否为 harness 进程崩溃/断开(§5.4 #2)。

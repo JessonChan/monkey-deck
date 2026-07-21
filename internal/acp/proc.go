@@ -11,14 +11,19 @@
 //	→ 判定 StopReasonEndTurn → kill 进程组 + 注销活跃 + reap 逃逸子进程
 package acp
 
-// proc.go:harness 子进程的进程组管理 —— 治本 harness 子进程泄漏(AGENTS.md §3.2 / §5.4 #4)。
+// proc.go:harness 子进程的进程组管理 + 生命周期单主(reap/exit 根因日志)。
+// 治本 harness 子进程泄漏(AGENTS.md §3.2 / §5.4 #4)+ 断连根因日志(§3.3)。
 // 与具体 harness 无关:omp/opencode/... 都走同一套(以 pgidFile 登记的 pgid 为准)。
 //
-// 两层防线:
+// 三层职责:
 //  1. 进程组:Setpgid 建独立进程组 + kill -PGID 整组回收(覆盖留在组内的子孙)。
+//     signalGroupDead 只发信号 + 等死;reap(Wait)由 harnessProcess 的 watcher 独占(单一 Wait,
+//     杜绝双 Wait 竞态)。
 //  2. 精确 reap:harness 内部 fork 的子进程会自己 setpgid 逃逸(脱离父组)+ reparent。
 //     reapStrayHarnesses 在安全时机调用(harness 已 unregister 之后),杀掉这些逃逸进程。
 //     ⚠️ 不做周期性 reap:运行中时逃逸 worker 与孤儿无法区分,周期 reap 会误杀活跃 worker(§5.4 #5)。
+//  3. 结构化 exit 根因日志:harnessProcess.watch 在进程退出时记录退出码/信号 + stderr 尾部,
+//     区分 expected(我们关停)/ unexpected(崩溃 / OOM / 空闲自杀)—— 定位「peer disconnected」真因。
 
 import (
 	"encoding/json"
@@ -28,6 +33,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -41,27 +47,21 @@ func setProcGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setpgid = true
 }
 
-// killProcessGroup 杀掉 cmd 所属的整个进程组(harness 主进程 + 留在组内的子孙)。
-// 先 SIGTERM 优雅退出,3s 后仍存活则 SIGKILL 强杀,最后 Wait 收尸。幂等。
-func killProcessGroup(cmd *exec.Cmd) {
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
-	pgid := cmd.Process.Pid // Setpgid 后主 PID 即 pgid
-
+// signalGroupDead 向进程组发 SIGTERM,3s 后仍存活则 SIGKILL,直到整组死。
+// 只负责「发信号 + 等死」,不做 Wait/reap —— harness 的 reap 由 harnessProcess 的
+// watcher 统一负责(单一 Wait,杜绝双 Wait 竞态,见 harnessProcess.watch)。幂等(组已死则 no-op)。
+func signalGroupDead(pgid int) {
 	termGroup(pgid)
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if !groupAlive(pgid) {
-			break
+			return
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	if groupAlive(pgid) {
 		killGroup(pgid)
 	}
-	_, _ = cmd.Process.Wait() // 收尸主进程,避免僵尸
-	slog.Debug("killed harness process group", "pgid", pgid)
 }
 
 func termGroup(pgid int) {
@@ -82,6 +82,146 @@ func groupAlive(pgid int) bool {
 
 func isNoProcess(err error) bool {
 	return err == syscall.ESRCH
+}
+
+// ─── harnessProcess:进程生命周期单主 + 结构化 exit 根因日志 ───────────────────
+
+// harnessProcess 封装一个 harness 子进程,统一拥有 cmd.Wait()(单一 reap,杜绝双 Wait 竞态),
+// 并在进程退出时产出「结构化 exit + stderr 尾部」根因日志 —— 定位 §3.3 崩溃检测的真因。
+//
+// 为什么需要单主 Wait:旧 killProcessGroup 自己 Wait 收尸;若另起 goroutine 观测 exit,
+// 两个 goroutine 调 cmd.Wait() 会竞态(exec.Cmd.Wait 非并发安全,会释放/复写 cmd 内部状态)。
+// 改成 watcher 独占 Wait,signalGroupDead 只发信号不 reap,Close 经 shutdown 等待 watcher 落定。
+//
+// 退出分类(根因日志的关键):
+//   - expected:我们主动 shutdown(Close/teardown)→ 信号终止是预期,Info 级,不打扰。
+//   - unexpected:进程自行退出 —— 崩溃 / OOM(SIGKILL)/ panic(exit 2)/ harness 空闲自杀
+//     (exit 0)等。Warn/Error 级,并附 stderr ring 尾部:harness 自身日志常含崩溃栈/根因,
+//     这是「peer disconnected」之外唯一能回答「为什么断」的素材。
+type harnessProcess struct {
+	cmd    *exec.Cmd
+	pgid   int        // Setpgid 后 == 主 PID,回收/日志用
+	cmdStr string     // 启动命令,日志可读性用
+	stderr *stderrRing // harness stderr 捕获(根因日志的素材)
+
+	shutdownStarted atomic.Bool       // true = 我们已主动开始关停(expected)
+	alive           atomic.Bool       // true = 进程尚未退出;watcher 在 Wait 返回后置 false
+	done            chan struct{}     // Wait 返回后关闭(shutdown 等它落定,确保 reap 完成)
+	state           atomic.Pointer[os.ProcessState] // Wait 后的退出状态(退出码/信号来源)
+}
+
+// newHarnessProcess 包装一个已 Start 的 cmd,起 watcher goroutine 独占 Wait。
+// 调用方在进程不再需要时调 shutdown(主动关停)—— 不可再对 cmd 调 Wait。
+func newHarnessProcess(cmd *exec.Cmd, cmdStr string, stderr *stderrRing) *harnessProcess {
+	hp := &harnessProcess{
+		cmd:    cmd,
+		pgid:   cmd.Process.Pid,
+		cmdStr: cmdStr,
+		stderr: stderr,
+		done:   make(chan struct{}),
+	}
+	hp.alive.Store(true)
+	go hp.watch()
+	return hp
+}
+
+// watch 独占 cmd.Wait:进程退出时记录退出状态并产出结构化 exit 根因日志。
+// 只跑一次(由 newHarnessProcess 起一个 goroutine)。close(done) 通知 shutdown reap 已落定。
+func (h *harnessProcess) watch() {
+	err := h.cmd.Wait()
+	h.alive.Store(false)
+	if ps := h.cmd.ProcessState; ps != nil {
+		h.state.Store(ps)
+	}
+	h.logExit(err)
+	close(h.done)
+}
+
+// shutdown 主动关停:标记 expected → signalGroupDead(发信号 + 等死)→ 等 watcher reap 落定。
+// 幂等:done 已关闭则立即返回。
+func (h *harnessProcess) shutdown() {
+	h.shutdownStarted.Store(true)
+	signalGroupDead(h.pgid)
+	<-h.done
+}
+
+// IsAlive 报告 harness 进程是否仍存活。alive flag 是快路径(watcher 确认死后永返 false,
+// 省一次 signal syscall);flag 仍真时再用 signal 0 探活拿到实时结果。
+func (h *harnessProcess) IsAlive() bool {
+	if !h.alive.Load() {
+		return false
+	}
+	p := h.cmd.Process
+	if p == nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
+}
+
+// exitCodeSignal 从 ProcessState 解出退出码与(若被信号杀)信号名。
+// Go 的 ExitCode:正常退出=退出码;被信号终止=-1(信号名走 WaitStatus 另取)。
+func exitCodeSignal(ps *os.ProcessState) (int, string) {
+	if ps == nil {
+		return -1, ""
+	}
+	code := ps.ExitCode()
+	sig := ""
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		sig = ws.Signal().String()
+	}
+	return code, sig
+}
+
+// logExit 产出结构化 exit 根因日志。unexpected 退出时附 stderr 尾部 —— harness 自身日志
+// 常含崩溃栈/根因,是定位「peer disconnected」真因的关键素材(§3.3 / §5.4 #2)。
+func (h *harnessProcess) logExit(waitErr error) {
+	expected := h.shutdownStarted.Load()
+	ps := h.state.Load()
+	exitCode, signal := exitCodeSignal(ps)
+	kind := exitKind(expected, exitCode, signal != "")
+
+	fields := []any{
+		"pid", h.pgid,
+		"pgid", h.pgid,
+		"cmd", h.cmdStr,
+		"expected", expected,
+		"exitCode", exitCode,
+		"signal", signal,
+		"kind", kind,
+		"alive", "no",
+	}
+	if waitErr != nil {
+		fields = append(fields, "waitErr", waitErr.Error())
+	}
+	switch kind {
+	case "expected":
+		slog.Info("harness exited (expected)", fields...)
+	case "crash":
+		// 崩溃/OOM/panic:附 stderr 尾部定位根因。
+		if h.stderr != nil {
+			fields = append(fields, "stderrTail", h.stderr.Tail(stderrTailForLog))
+		}
+		slog.Error("harness exited unexpectedly (crash)", fields...)
+	default: // "unexpected-clean":干净 exit 0 但非我们发起 —— 典型 harness 空闲自杀。
+		if h.stderr != nil {
+			fields = append(fields, "stderrTail", h.stderr.Tail(stderrTailForLog))
+		}
+		slog.Warn("harness exited unexpectedly (clean exit 0)", fields...)
+	}
+}
+
+// exitKind 把退出分类成日志级别用的人类可读类别(纯函数,便于单测覆盖分支):
+//   - "expected":我们主动关停(shutdownStarted=true)—— 信号终止是预期,Info。
+//   - "crash":非零退出码或被信号杀 —— 崩溃 / OOM(SIGKILL)/ panic(exit 2)。Error + stderr 尾部。
+//   - "unexpected-clean":干净 exit 0 但非我们发起 —— 典型 harness 空闲自杀(opencode idle)。Warn。
+func exitKind(expected bool, exitCode int, signaled bool) string {
+	if expected {
+		return "expected"
+	}
+	if exitCode != 0 || signaled {
+		return "crash"
+	}
+	return "unexpected-clean"
 }
 
 // ─── 活跃 harness 注册表 + 精确 reap(治本第二层防线)─────────────────────────
