@@ -1,6 +1,10 @@
 package harness
 
-import "testing"
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // TestRegistry 校验受支持 harness 注册表的基础不变量(§2.1)。
 func TestRegistry(t *testing.T) {
@@ -24,6 +28,55 @@ func TestRegistry(t *testing.T) {
 	}
 	if Supported[0].ID != DefaultID {
 		t.Fatalf("first Supported harness must be default: got %q, want %q", Supported[0].ID, DefaultID)
+	}
+}
+
+// TestSupportedIcons 校验每个 Supported harness 的 Icon 字段:
+//   - 非空(已知 harness 都内置了官方 SVG,见 assets/harness-icons/);
+//   - 路径形如 "assets/harness-icons/<id>.svg"(文件名 = ID,见 assets/harness-icons/README.md 单一约定);
+//   - 指向的文件名与 harness ID 对齐(§5.3 KISS:命名约定即不变量,不引入映射表)。
+//
+// 不读文件系统(那是资源层子卡交付物;模型层只校验路径契约,不假设文件存在)。
+func TestSupportedIcons(t *testing.T) {
+	const (
+		iconDir = "assets/harness-icons/"
+		iconExt = ".svg"
+	)
+	for _, h := range Supported {
+		if h.Icon == "" {
+			t.Errorf("harness %q: Icon is empty; expected official SVG path", h.ID)
+			continue
+		}
+		if !strings.HasPrefix(h.Icon, iconDir) {
+			t.Errorf("harness %q: Icon %q must start with %q", h.ID, h.Icon, iconDir)
+		}
+		if want := iconDir + h.ID + iconExt; h.Icon != want {
+			t.Errorf("harness %q: Icon = %q, want %q (filename must equal ID)", h.ID, h.Icon, want)
+		}
+		// 路径清洁性:不应出现 Windows 反斜杠 / 重复斜杠(filepathClean 兼容跨平台)。
+		if cleaned := filepath.Clean(h.Icon); cleaned != h.Icon {
+			t.Errorf("harness %q: Icon %q is not clean (got %q)", h.ID, h.Icon, cleaned)
+		}
+	}
+}
+
+// TestIconByKnownHarnesses 专项校验 omp / opencode 两个内置 harness 的 Icon 值。
+// 锚定具体值,改路径或新增 harness 时此处会显式失败,提醒同步前端 / 资源层。
+func TestIconByKnownHarnesses(t *testing.T) {
+	want := map[string]string{
+		"omp":      "assets/harness-icons/omp.svg",
+		"opencode": "assets/harness-icons/opencode.svg",
+	}
+	got := map[string]string{}
+	for _, h := range Supported {
+		got[h.ID] = h.Icon
+	}
+	for id, w := range want {
+		if g, ok := got[id]; !ok {
+			t.Errorf("harness %q missing from Supported", id)
+		} else if g != w {
+			t.Errorf("harness %q: Icon = %q, want %q", id, g, w)
+		}
 	}
 }
 

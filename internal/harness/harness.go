@@ -3,8 +3,8 @@
 // 目前已知 harness:omp(默认)/ opencode。
 //
 // 三层概念(分层以避免硬编码,§5.3 KISS):
-//   - Supported(var):注册表静态默认(ID/Name/Command 三段),供 Command/Normalize/进程回收用,
-//     始终全量、顺序稳定(DefaultID 在首位)。这部分不变,保持现有契约。
+//   - Supported(var):注册表静态默认(ID/Name/Command/Icon 四段),供 Command/Normalize/进程回收/
+//     前端取图标用,始终全量、顺序稳定(DefaultID 在首位)。这部分不变,保持现有契约。
 //   - Discovered(func):运行时发现结果 —— 在 Supported 基础上补 Path/Installed/InstalledVersion/
 //     LatestVersion/UpgradeAvailable,供前端 harness 管理面板展示「装了没 / 是否最新 / 能否升级」。
 //   - Registry(per-Spec 配置):每个已知 harness 的发现参数(BinaryName/VersionArgs)+ 可选的
@@ -16,13 +16,14 @@ package harness
 // Harness 一个受支持的 ACP harness。
 //
 // 字段分两组:
-//   - 静态(Supported 注册表填充):ID/Name/Command,始终非空。
+//   - 静态(Supported 注册表填充):ID/Name/Command/Icon,始终非空(ID/Name/Command;Icon 空表示无官方图标)。
 //   - 运行时(Discovered 填充):Path/Installed/InstalledVersion/LatestVersion/UpgradeAvailable/
 //     UpgradeError,在静态基础上补充本地安装状态与上游版本信息。
 type Harness struct {
 	ID      string `json:"id"`      // 标识(omp/opencode),存进 session.harness
 	Name    string `json:"name"`    // 显示名
 	Command string `json:"command"` // stdio ACP 启动命令(规范形,如 "omp acp")
+	Icon    string `json:"icon"`    // 官方图标资源路径(如 "assets/harness-icons/omp.svg");空 = 无 / 走兜底
 
 	// 运行时(发现 + 版本检测填充)。Supported 静态默认里这些为零值。
 	Path             string `json:"path,omitempty"`             // 可执行文件绝对路径(空 = 未发现)
@@ -35,9 +36,12 @@ type Harness struct {
 
 // Supported 受支持 harness 的静态注册表(前端选择器 + 进程回收 + Command/Normalize 用)。
 // 第一项为默认 harness。始终全量、顺序稳定;不掺运行时数据(运行时数据走 Discovered)。
+//
+// Icon 指向 assets/harness-icons/ 下的官方 SVG 资源路径(单一事实源:文件名 = ID,
+// 见 assets/harness-icons/README.md)。前端据此取图,未知 harness 的 Icon 为空时由前端走 lucide Bot 兜底。
 var Supported = []Harness{
-	{ID: "omp", Name: "Oh My Pi", Command: "omp acp"},
-	{ID: "opencode", Name: "OpenCode", Command: "opencode acp"},
+	{ID: "omp", Name: "Oh My Pi", Command: "omp acp", Icon: "assets/harness-icons/omp.svg"},
+	{ID: "opencode", Name: "OpenCode", Command: "opencode acp", Icon: "assets/harness-icons/opencode.svg"},
 }
 
 // DefaultID 默认 harness(omp)。
