@@ -144,6 +144,26 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   // 文件预览覆盖层(Task #15084):对话/工具卡片里的路径点击 → 弹此覆盖层。
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
+  // plan 展开/折叠偏好:按 session 持久化(localStorage)(Task #21298)。
+  // 同一 session 内所有 plan(当前 turn 实时 + 历史 turn 静态)共用一个偏好,用户折叠/展开
+  // 一次后整 session 遵循,重开会话也能恢复。默认展开(不再按条数折叠)。
+  const [planOpen, setPlanOpen] = useState<boolean>(() => {
+    const saved = localStorage.getItem(`md:plan-open:${props.sessionId}`);
+    return saved === null ? true : saved === "1";
+  });
+  // ChatView 不随 session 切换重挂载(用 ref 检测):切到别的 session 时,从 localStorage 重读
+  // 该 session 的偏好,避免沿用上一 session 的内存状态。
+  useEffect(() => {
+    const saved = localStorage.getItem(`md:plan-open:${props.sessionId}`);
+    setPlanOpen(saved === null ? true : saved === "1");
+  }, [props.sessionId]);
+  const onTogglePlanOpen = useCallback(() => {
+    setPlanOpen((prev) => {
+      const next = !prev;
+      localStorage.setItem(`md:plan-open:${props.sessionId}`, next ? "1" : "0");
+      return next;
+    });
+  }, [props.sessionId]);
   const openFilePreview = useCallback((path: string, line?: number) => {
     setPreviewTarget({ path, line });
   }, []);
@@ -455,7 +475,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
             if (item.type === "plan") {
               return (
                 <div className="cv-item" data-iid={item.id} key={item.id}>
-                  <PlanTimeline entries={item.entries} prompting={false} />
+                  <PlanTimeline entries={item.entries} prompting={false} isOpen={planOpen} onToggle={onTogglePlanOpen} />
                 </div>
               );
             }
@@ -471,7 +491,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           {/* 当前 turn 的实时 plan(进行中,带 spinner)。turn 结束后由 App.tsx 转为持久化
               type:'plan' ChatItem 内联渲染在 items 里(无 spinner 的静态展示)。 */}
           {props.livePlan && props.livePlan.entries.length > 0 && (
-            <PlanTimeline entries={props.livePlan.entries} prompting={props.status === "prompting"} />
+            <PlanTimeline entries={props.livePlan.entries} prompting={props.status === "prompting"} isOpen={planOpen} onToggle={onTogglePlanOpen} />
           )}
           {props.status === "prompting" && items.length > 0 && (
             <div className="typing-indicator"><span /> <span /> <span /></div>
@@ -1279,21 +1299,17 @@ const PLAN_STATUS_ICON = {
   pending: { cls: "pe-pending", key: "chat.planStatus.pending" },
 } as const;
 
-function PlanTimeline({ entries, prompting }: { entries: PlanEntry[]; prompting: boolean }) {
+function PlanTimeline({ entries, prompting, isOpen, onToggle }: { entries: PlanEntry[]; prompting: boolean; isOpen: boolean; onToggle: () => void }) {
   const { t } = useTranslation();
   const total = entries.length;
   const done = entries.filter((e) => e.status === "completed").length;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
   const anyRunning = prompting && entries.some((e) => e.status === "in_progress" || e.status === "pending");
-  // 长计划(>8 项)默认折叠,避免占屏;短计划默认展开看进度。
-  const [manual, setManual] = useState<boolean | null>(null);
-  const defaultOpen = total <= 8;
-  const isOpen = manual === null ? defaultOpen : manual;
-  const toggle = () => setManual(!isOpen);
+  // 展开/折叠偏好由父级 ChatView 持有并按 session 持久化(localStorage),默认展开(Task #21298)。
   const allDone = total > 0 && done === total;
   return (
     <div className="plan-timeline" data-testid="plan-timeline">
-      <button className="plan-summary" onClick={toggle} type="button" aria-expanded={isOpen}>
+      <button className="plan-summary" onClick={onToggle} type="button" aria-expanded={isOpen}>
         {anyRunning ? <span className="thought-spinner" /> : allDone ? <Check size={13} /> : <ListChecks size={13} />}
         <span className="plan-summary-label">{t("chat.planTitle")}</span>
         <span className="plan-summary-count">{done}/{total}</span>
