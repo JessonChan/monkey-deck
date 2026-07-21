@@ -44,8 +44,19 @@ const (
 type StatusPayload struct {
 	SessionID string `json:"sessionId"`
 	Status    string `json:"status"` // started | prompting | idle | error | closed | readonly
-	Detail    string `json:"detail,omitempty"`
+	// Code 是稳定的机器错误码;前端按 code 经 i18n 翻译成人话提示(§4.4)。
+	// 仅 error 状态填(如 ErrCodeHarnessDisconnected),其余状态留空。
+	Code   string `json:"code,omitempty"`
+	Detail string `json:"detail,omitempty"`
 }
+
+// 错误码(前端按 code 经 i18n 翻译,见 locales 的 chat.error.*)。
+const (
+	// ErrCodeHarnessDisconnected:harness 崩溃/断连或 Prompt 失败,连接已重置,下条消息走 ensureLive 重连。
+	ErrCodeHarnessDisconnected = "harness_disconnected"
+	// ErrCodeHarnessEmptyTurn:Prompt 成功返回但零输出(通常 resume 后 session 状态损坏),按错误处理并重连。
+	ErrCodeHarnessEmptyTurn = "harness_empty_turn"
+)
 
 // SessionMetaPayload 会话元信息更新(标题等)。
 type SessionMetaPayload struct {
@@ -300,6 +311,12 @@ func (s *ChatService) emit(name string, data any) {
 
 func (s *ChatService) emitStatus(sessionID, status, detail string) {
 	s.emit(EventStatus, StatusPayload{SessionID: sessionID, Status: status, Detail: detail})
+}
+
+// emitError 推 error 状态并附带稳定错误码(前端按 code 翻译,§4.4)。
+// detail 留空:不把协议/OS 裸错误抛给用户,文案统一由前端 i18n 提供。
+func (s *ChatService) emitError(sessionID, code string) {
+	s.emit(EventStatus, StatusPayload{SessionID: sessionID, Status: "error", Code: code})
 }
 
 func (s *ChatService) emitSessionMeta(sessionID, title string) {
@@ -1290,7 +1307,7 @@ func (s *ChatService) SendAndWaitSync(sessionID, text string, attachments []acp.
 		}
 		s.teardownLive(sessionID, ls)
 		slog.Error("prompt failed (sync)", "session", sessionID, "err", err, "reason", reason)
-		s.emitStatus(sessionID, "error", "agent 连接已重置,下条消息将自动重连")
+		s.emitError(sessionID, ErrCodeHarnessDisconnected)
 		return agentText, err
 	}
 	s.emitStatus(sessionID, "idle", "stopReason="+string(stopReason))
@@ -1366,8 +1383,8 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 		}
 		s.teardownLive(sessionID, ls)
 		slog.Error("prompt failed", "session", sessionID, "err", err, "reason", reason)
-		// §4.4:不把裸 error(协议 JSON/OS 错)抛给用户,统一人话提示。
-		s.emitStatus(sessionID, "error", "agent 连接已重置,下条消息将自动重连")
+		// §4.4:不把裸 error(协议 JSON/OS 错)抛给用户,改推稳定 code,前端按 code 经 i18n 翻译。
+		s.emitError(sessionID, ErrCodeHarnessDisconnected)
 		return
 	}
 	// 空响应检测:Prompt 成功返回但零输出(timeline 空)——通常是 resume 后
@@ -1376,7 +1393,7 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 	if len(timeline) == 0 {
 		s.teardownLive(sessionID, ls)
 		slog.Error("prompt empty turn", "session", sessionID, "stopReason", stopReason)
-		s.emitStatus(sessionID, "error", "agent 未产生响应,连接已重置,下条消息将自动重连")
+		s.emitError(sessionID, ErrCodeHarnessEmptyTurn)
 		return
 	}
 	// 取 harness 生成的权威标题覆盖兜底标题(§5.4 #14)。

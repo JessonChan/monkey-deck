@@ -300,7 +300,10 @@ export default function App() {
         }
       }
       // 错误提示只对当前查看的 session 弹(切走时不在意别的 session 的错误条)。
-      if (s.status === "error" && s.sessionId === selectedSessionIdRef.current) setError(s.detail || t("app.errorFallback"));
+      // 有 code 时按 code 经 i18n 翻译(harness 断连等稳定文案);否则用 detail;最后兜底。
+      if (s.status === "error" && s.sessionId === selectedSessionIdRef.current) {
+        setError(s.code ? t(`chat.error.${s.code}`) : (s.detail || t("app.errorFallback")));
+      }
       // 回合结束:清掉该 session 最后 agent/thought 的 streaming 标志(去光标 + 显复制按钮);
       // 同时把残留的中间态 tool(in_progress/pending)收口到终态 —— Prompt 正常返回(idle)
       // 意味着所有 tool 必然已完成;若最后的 tool_call_update(completed) 因时序/投递未到前端,

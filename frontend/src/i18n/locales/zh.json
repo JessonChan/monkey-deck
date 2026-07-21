@@ -180,6 +180,10 @@
       "completed": "已完成",
       "in_progress": "进行中",
       "pending": "待处理"
+    },
+    "error": {
+      "harness_disconnected": "agent 连接已重置,下条消息将自动重连",
+      "harness_empty_turn": "agent 未产生响应,连接已重置,下条消息将自动重连"
     }
   },
   "composer": {

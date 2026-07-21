@@ -92,6 +92,7 @@ export interface PermissionPrompt {
 export interface StatusPayload {
   sessionId: string;
   status: "started" | "prompting" | "idle" | "error" | "closed" | "readonly";
+  code?: string; // 稳定错误码;error 状态下前端按 code 经 i18n 翻译(对应 locales 的 chat.error.*)
   detail?: string;
 }
 
