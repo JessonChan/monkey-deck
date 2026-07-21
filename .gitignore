@@ -38,3 +38,6 @@ build/android/
 
 # Wails 生成的 bindings(`wails3 gen bindings` 重新生成,属中间产物,不入库)
 frontend/bindings/
+# RAK runtime (auto-managed, do not commit)
+.rak-env
+/bin/rak
