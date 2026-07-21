@@ -182,8 +182,9 @@
       "pending": "Pending"
     },
     "error": {
-      "harness_disconnected": "Agent connection reset. The next message will auto-reconnect.",
-      "harness_empty_turn": "Agent produced no response. Connection reset; the next message will auto-reconnect."
+      "harness_disconnected": "Agent connection reset. Auto-reconnecting...",
+      "harness_empty_turn": "Agent produced no response. Connection reset; auto-reconnecting...",
+      "harness_reconnect_failed": "Auto-reconnect failed. Send a message to retry manually."
     }
   },
   "composer": {

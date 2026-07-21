@@ -182,8 +182,9 @@
       "pending": "待处理"
     },
     "error": {
-      "harness_disconnected": "agent 连接已重置,下条消息将自动重连",
-      "harness_empty_turn": "agent 未产生响应,连接已重置,下条消息将自动重连"
+      "harness_disconnected": "agent 连接已重置,正在自动重连",
+      "harness_empty_turn": "agent 未产生响应,连接已重置,正在自动重连",
+      "harness_reconnect_failed": "自动重连失败,请发送消息手动重试"
     }
   },
   "composer": {

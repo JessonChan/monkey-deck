@@ -12,6 +12,7 @@ import (
 	"context"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,14 +34,20 @@ type fakeChat struct {
 	emitHook   func(msg string) // 成功返回前回调(模拟 agent 产出一条消息,避免空 turn)
 	configSets []string      // 记录 SetConfigOption 调用("configId=value")
 	promptErr  error         // 非空则 Prompt 立即返回该错(模拟 peer 断连 / 崩溃,触发 emitError 路由)
+	alive      atomic.Bool   // IsAlive 返回值(默认 true;kill 置 false 模拟 harness 死)
 }
 
 func newFakeChat() *fakeChat {
-	return &fakeChat{
+	f := &fakeChat{
 		block:   make(chan struct{}),
 		started: make(chan struct{}, 64),
 	}
+	f.alive.Store(true)
+	return f
 }
+
+// kill 模拟 harness 进程退出(IsAlive → false)。供重连 / health watcher 测试用。
+func (f *fakeChat) kill() { f.alive.Store(false) }
 
 func (f *fakeChat) Prompt(ctx context.Context, msg string, _ []acp.Attachment) (acp.StopReason, error) {
 	f.mu.Lock()
@@ -71,7 +78,7 @@ func (f *fakeChat) Prompt(ctx context.Context, msg string, _ []acp.Attachment) (
 }
 
 func (f *fakeChat) Close()                                               {}
-func (f *fakeChat) IsAlive() bool                                        { return true }
+func (f *fakeChat) IsAlive() bool                                        { return f.alive.Load() }
 func (f *fakeChat) RespondPermission(_, _ string) bool                   { return true }
 func (f *fakeChat) SessionTitle(_ context.Context) (string, error)       { return f.title, nil }
 func (f *fakeChat) FlatConfigOptions() []acp.ConfigOption                { return nil }

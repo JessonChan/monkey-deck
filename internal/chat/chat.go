@@ -52,11 +52,29 @@ type StatusPayload struct {
 
 // 错误码(前端按 code 经 i18n 翻译,见 locales 的 chat.error.*)。
 const (
-	// ErrCodeHarnessDisconnected:harness 崩溃/断连或 Prompt 失败,连接已重置,下条消息走 ensureLive 重连。
+	// ErrCodeHarnessDisconnected:harness 崩溃/断连或 Prompt 失败,连接已重置,正在/将自动重连。
 	ErrCodeHarnessDisconnected = "harness_disconnected"
 	// ErrCodeHarnessEmptyTurn:Prompt 成功返回但零输出(通常 resume 后 session 状态损坏),按错误处理并重连。
 	ErrCodeHarnessEmptyTurn = "harness_empty_turn"
+	// ErrCodeHarnessReconnectFailed:断连后自动重连耗尽重试上限仍失败,需用户手动(发消息)触发再次尝试。
+	ErrCodeHarnessReconnectFailed = "harness_reconnect_failed"
 )
+
+// 会话状态(会随 SessionEvent/StatusPayload 推前端)。
+const (
+	// statusReconnecting:harness 断连后正在后台自动重连(spawn 新 harness)。
+	// 前端据此显示「重连中」提示;非 prompting,不阻塞用户输入(用户发消息会走 ensureLive,
+	// 与重连循环的 ensureLive 经 spawnMu 串行化,不会双 spawn)。
+	statusReconnecting = "reconnecting"
+)
+
+// reconnectCtl 管理一次自动重连的后台 goroutine 生命周期。
+//   - stop:关闭即要求循环退出(CloseSession/DeleteSession/ServiceShutdown 用)。
+//   - done:循环退出时关闭,供 stopReconnect 等待落定(确保 goroutine 不泄漏)。
+type reconnectCtl struct {
+	stop chan struct{}
+	done chan struct{}
+}
 
 // SessionMetaPayload 会话元信息更新(标题等)。
 type SessionMetaPayload struct {
@@ -221,6 +239,21 @@ type ChatService struct {
 	reaperStop  chan struct{}
 	reaperDone  chan struct{}
 
+	// harness 断连自动重连(§3.3):disconnect 后后台 spawn 新 harness,使 session 自愈、
+	// 用户下一条消息零延迟。exponential backoff + 重试上限防崩溃循环;busy/idle 两条分支
+	// 分别由 runPrompt(peer-disconnected)与 health watcher(空闲进程死)触发;userStopped
+	// (StopSession 干净 cancel 不 teardown → 天然不触发)与 CloseSession(显式 stopReconnect)抑制。
+	reconnects       map[string]*reconnectCtl // sessionID → 进行中的重连(去重:同时只一个)
+	reconnectGiveUp  map[string]bool          // sessionID → 重连耗尽,放弃自动重连(用户发消息时清)
+	reconnectEnabled bool                     // ServiceStartup 置 true;未启 ServiceStartup 的单测默认 false(不触发重连)
+	healthStop       chan struct{}            // health watcher 停止信号
+	healthDone       chan struct{}            // health watcher 退出信号(优雅停)
+	healthInterval   time.Duration            // health watcher 扫描间隔(检测空闲断连)
+	reconnMaxAttempt int                      // 重连最大尝试次数
+	reconnInitBackoff time.Duration           // 重连初始退避
+	reconnMaxBackoff  time.Duration           // 重连退避上限
+	reconnStability   time.Duration           // 重连 spawn 后稳定观察期(期内死算失败)
+
 	// 测试钩子(nil = 生产路径,见 emit/persistTurn):emitHook 捕获 emit 事件序列、
 	// persistHook 在 persistTurn 入口阻塞。仅单测注入,用于确定性复现 runPrompt
 	// 收尾与并发 send 的竞态(§5.4 覆盖竞态)。
@@ -235,7 +268,15 @@ type ChatService struct {
 
 // NewChatService 构造(尚未启动;ServiceStartup 时 open store)。
 func NewChatService(cfg *config.Config) *ChatService {
-	return &ChatService{cfg: cfg, active: map[string]*liveSession{}, idleTimeout: 5 * time.Minute}
+	return &ChatService{
+		cfg: cfg, active: map[string]*liveSession{}, idleTimeout: 5 * time.Minute,
+		reconnects: map[string]*reconnectCtl{}, reconnectGiveUp: map[string]bool{},
+		healthInterval:    3 * time.Second,
+		reconnMaxAttempt:  5,
+		reconnInitBackoff: 1 * time.Second,
+		reconnMaxBackoff:  30 * time.Second,
+		reconnStability:   5 * time.Second,
+	}
 }
 
 // ServiceStartup Wails3 启动钩子:建数据目录 + open store。
@@ -255,6 +296,8 @@ func (s *ChatService) ServiceStartup(ctx context.Context, options application.Se
 	acp.SetHarnessCommands(harness.Commands())                          // 注入受支持 harness 命令,回收层据此识别 omp/opencode/...(不再写死 opencode)
 	acp.KillAllHarnesses()                                              // 启动时清上轮残留 harness 进程组(§3.2)
 	s.startIdleReaper()                                                 // B 方案:idle reaper 回收空闲 harness
+	s.startHealthWatcher()                                              // §3.3:空闲断连检测 → 自动重连
+	s.reconnectEnabled = true                                           // 启用断连自动重连(单测默认 false,不触发)
 	// 异步发现本机已安装 harness + 查上游最新版本(不阻塞启动;完成后推 EventHarnesses 让前端重拉)。
 	// 失败静默降级:ListHarnesses 会用静态 Supported 兜底,前端照常可选 harness(只是没版本信息)。
 	go s.refreshHarnessesAsync()
@@ -269,6 +312,12 @@ func (s *ChatService) ServiceShutdown() error {
 		close(s.reaperStop)
 		<-s.reaperDone
 	}
+	// 停 health watcher 与全部重连 goroutine(避免它们在关 session 后还操作 active)。
+	if s.healthStop != nil {
+		close(s.healthStop)
+		<-s.healthDone
+	}
+	s.stopAllReconnects()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, ls := range s.active {
@@ -407,13 +456,19 @@ func (s *ChatService) ReorderProjects(ids []string) error {
 // RemoveProject 删除项目(同时关掉其活跃 session)。
 func (s *ChatService) RemoveProject(id string) error {
 	s.mu.Lock()
+	var stopped []string
 	for sid, ls := range s.active {
 		if ls.proj != nil && ls.proj.ID == id {
 			ls.chat.Close()
 			delete(s.active, sid)
+			s.reconnectGiveUp[sid] = true
+			stopped = append(stopped, sid)
 		}
 	}
 	s.mu.Unlock()
+	for _, sid := range stopped {
+		s.stopReconnect(sid)
+	}
 	// 清理该项目下所有 session 的 worktree + 分支。
 	if sess, err := s.st.ListSessions(s.ctx, id); err == nil {
 		for _, se := range sess {
@@ -503,7 +558,9 @@ func (s *ChatService) DeleteSession(sessionID string) error {
 		ls.chat.Close()
 		delete(s.active, sessionID)
 	}
+	s.reconnectGiveUp[sessionID] = true // 抑制自动重连(session 要删了)
 	s.mu.Unlock()
+	s.stopReconnect(sessionID)
 	if se, _ := s.st.GetSession(s.ctx, sessionID); se != nil {
 		s.cleanupWorktree(se)
 	}
@@ -903,7 +960,19 @@ func (s *ChatService) ContinueSession(sessionID string) error {
 //
 // spawn 段持 spawnMu 串行化:杜绝「预热 goroutine 与首条消息并发各 spawn 一个 harness」
 // (二者都不持 sendMu)——后到者拿到锁后重检 active,已活跃则直接复用。
+//
+// 用户主动调用(发消息 / 继续 / 切配置)经此入口 → 清 reconnectGiveUp:重连耗尽后用户
+// 手动再试,给一个新的重连预算(§3.3 自动重连上限)。重连循环内部用 ensureLiveNoReset
+// 不清(否则耗尽 set 的 giveUp 会被自身 attempt 清掉,失去防崩溃循环作用)。
 func (s *ChatService) ensureLive(sessionID string) error {
+	s.mu.Lock()
+	delete(s.reconnectGiveUp, sessionID)
+	s.mu.Unlock()
+	return s.ensureLiveNoReset(sessionID)
+}
+
+// ensureLiveNoReset 与 ensureLive 同,但不清 reconnectGiveUp(供自动重连循环用)。
+func (s *ChatService) ensureLiveNoReset(sessionID string) error {
 	s.mu.RLock()
 	ls, ok := s.active[sessionID]
 	s.mu.RUnlock()
@@ -1013,6 +1082,7 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 
 // CloseSession 关闭活跃 ACP session(保留 db 记录,可再次 Open)。
 // busy(turn 进行中)时拒绝:idle reaper 跳过、用户需先 Stop。避免杀掉正在输出的 turn。
+// 用户主动关 → 抑制自动重连(stopReconnect + giveUp),防在途重连把刚关的 session 又拉起来。
 func (s *ChatService) CloseSession(sessionID string) error {
 	s.mu.Lock()
 	ls, ok := s.active[sessionID]
@@ -1028,9 +1098,11 @@ func (s *ChatService) CloseSession(sessionID string) error {
 		return errSessionBusy
 	}
 	delete(s.active, sessionID)
+	s.reconnectGiveUp[sessionID] = true // 抑制在途 / 后续自动重连
 	s.mu.Unlock()
 	ls.chat.Close()
 	s.reapIfIdle()
+	s.stopReconnect(sessionID) // 停在跑的重连 goroutine(已 giveUp,startReconnect 也不会再启)
 	s.emitStatus(sessionID, "closed", "")
 	return nil
 }
@@ -1115,6 +1187,206 @@ func (s *ChatService) teardownLive(sessionID string, ls *liveSession) {
 	s.mu.Unlock()
 	ls.chat.Close()
 	s.reapIfIdle()
+}
+
+// ─── harness 断连自动重连(§3.3)─────────────────────────────────────────────
+//
+// 触发:disconnect 后 proactively spawn 新 harness,使 session 自愈、用户下条消息零延迟。
+//   - busy 分支:runPrompt 收到 peer-disconnected → teardownLive + startReconnect。
+//   - idle 分支:health watcher 检测 active 中进程已死且非 busy → teardownLive + startReconnect。
+//
+// 抑制(userStopped):
+//   - StopSession 干净 cancel:不 teardown,harness 仍存活 → 天然不触发(§5.4 #13)。
+//   - CloseSession/DeleteSession/RemoveProject:stopReconnect + setReconnectGiveUp,防在途触发。
+//
+// 防崩溃循环:reconnectLoop 每次尝试后等「稳定观察期」确认 harness 存活才算成功;spawn 后
+// 迅速死掉也计为一次失败。耗尽上限 → setReconnectGiveUp,后续 health watcher 不再自动重连,
+// 直到用户主动操作(发消息/继续/切配置 经 ensureLive)清掉 giveUp 重新给预算。
+
+// startHealthWatcher 启动 health watcher:周期扫描 active session,检测「进程已死但 session
+// 仍在 active」(空闲断连——harness 在 turn 之间自行退出,§5.4 #9 opencode 空闲自杀)。
+// 检测到 → teardownLive + startReconnect(idle 分支)。busy 的交给 runPrompt 处理。
+// ServiceShutdown 经 healthStop 优雅停。
+func (s *ChatService) startHealthWatcher() {
+	s.healthStop = make(chan struct{})
+	s.healthDone = make(chan struct{})
+	go s.healthWatcher()
+}
+
+func (s *ChatService) healthWatcher() {
+	defer close(s.healthDone)
+	if s.healthInterval <= 0 {
+		return // 测试未注入:不启用 health watcher
+	}
+	ticker := time.NewTicker(s.healthInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.healthStop:
+			return
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.checkSessionHealth()
+		}
+	}
+}
+
+// checkSessionHealth 扫描 active session:进程死且非 busy 的视为空闲断连,拆 + 重连。
+// busy 的跳过(runPrompt 的 peer-disconnected 路径会处理)。giveUp 的不重连(耗尽过)。
+func (s *ChatService) checkSessionHealth() {
+	type deadSession struct {
+		id string
+		ls *liveSession
+	}
+	var dead []deadSession
+	s.mu.RLock()
+	for id, ls := range s.active {
+		if ls.chat.IsAlive() {
+			continue
+		}
+		ls.mu.Lock()
+		busy := ls.busy
+		ls.mu.Unlock()
+		if busy {
+			continue // turn 中断连:runPrompt 处理
+		}
+		dead = append(dead, deadSession{id, ls})
+	}
+	s.mu.RUnlock()
+	for _, d := range dead {
+		slog.Info("idle harness died (health watcher), reconnecting", "session", d.id)
+		s.teardownLive(d.id, d.ls)
+		// 不推 error:空闲断连用户无感知,直接进 reconnecting,避免打扰。
+		s.startReconnect(d.id)
+	}
+}
+
+// startReconnect 启动一个后台重连 goroutine(幂等:已有在跑则 no-op;giveUp 则不启动)。
+// 未启用(ServiceStartup 未调 / 单测)时 no-op:既存的 disconnect 单测默认不触发重连。
+func (s *ChatService) startReconnect(sessionID string) {
+	if !s.reconnectEnabled || s.reconnMaxAttempt <= 0 {
+		return
+	}
+	s.mu.Lock()
+	if s.reconnectGiveUp[sessionID] {
+		s.mu.Unlock()
+		return
+	}
+	if _, ok := s.reconnects[sessionID]; ok {
+		s.mu.Unlock()
+		return // 已有重连在跑
+	}
+	ctl := &reconnectCtl{stop: make(chan struct{}), done: make(chan struct{})}
+	s.reconnects[sessionID] = ctl
+	s.mu.Unlock()
+	go func() {
+		defer close(ctl.done)
+		s.reconnectLoop(sessionID, ctl.stop)
+		s.mu.Lock()
+		delete(s.reconnects, sessionID)
+		s.mu.Unlock()
+	}()
+}
+
+// stopReconnect 停止某 session 的重连 goroutine 并等其落定(幂等;无在跑则 no-op)。
+// CloseSession/DeleteSession 用:用户主动关 → 不应再自动重连。
+func (s *ChatService) stopReconnect(sessionID string) {
+	s.mu.Lock()
+	ctl, ok := s.reconnects[sessionID]
+	if ok {
+		// 先从 map 移除,防止 stop 期间另一路 startReconnect 抢入。
+		delete(s.reconnects, sessionID)
+	}
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	close(ctl.stop)
+	<-ctl.done
+}
+
+// stopAllReconnects 停止全部重连 goroutine(ServiceShutdown 用)。
+func (s *ChatService) stopAllReconnects() {
+	s.mu.Lock()
+	ids := make([]string, 0, len(s.reconnects))
+	for id := range s.reconnects {
+		ids = append(ids, id)
+	}
+	s.mu.Unlock()
+	for _, id := range ids {
+		s.stopReconnect(id)
+	}
+}
+
+// reconnectLoop 自动重连主循环:exponential backoff + 重试上限 + 稳定观察期。
+//
+// 成功判定:ensureLiveNoReset 成功 spawn 后,等 reconnStability 确认 harness 仍存活。
+// 期内死掉(health watcher 拆了 / IsAlive 翻 false)算失败,继续下一次尝试——覆盖
+// 「spawn 成功但立刻崩溃」的崩溃循环场景。
+//
+// 耗尽:setReconnectGiveUp(后续自动重连停摆,直到用户主动 ensureLive 清 giveUp)+ 推 error。
+func (s *ChatService) reconnectLoop(sessionID string, stop <-chan struct{}) {
+	s.emitStatus(sessionID, statusReconnecting, "")
+	backoff := s.reconnInitBackoff
+	for attempt := 1; attempt <= s.reconnMaxAttempt; attempt++ {
+		select {
+		case <-stop:
+			return
+		case <-s.ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		if err := s.ensureLiveNoReset(sessionID); err != nil {
+			slog.Warn("reconnect attempt failed", "session", sessionID, "attempt", attempt, "err", err)
+			backoff = min(backoff*2, s.reconnMaxBackoff)
+			continue
+		}
+		// spawn 成功(startLive 已推 started)。等稳定观察期确认不是立刻崩溃。
+		if !s.awaitStability(sessionID, stop) {
+			backoff = min(backoff*2, s.reconnMaxBackoff)
+			continue
+		}
+		slog.Info("reconnect succeeded", "session", sessionID, "attempt", attempt)
+		return
+	}
+	slog.Error("reconnect exhausted retries", "session", sessionID, "attempts", s.reconnMaxAttempt)
+	s.mu.Lock()
+	s.reconnectGiveUp[sessionID] = true
+	s.mu.Unlock()
+	s.emitError(sessionID, ErrCodeHarnessReconnectFailed)
+}
+
+// awaitStability 等 reconnStability 确认 harness 仍存活。期内进程死(active 被拆 /
+// IsAlive 翻 false)→ 返回 false(算失败)。stop/s.ctx 取消 → 返回 false(循环上层退出)。
+func (s *ChatService) awaitStability(sessionID string, stop <-chan struct{}) bool {
+	deadline := time.NewTimer(s.reconnStability)
+	defer deadline.Stop()
+	tick := time.NewTicker(s.reconnStability / 5)
+	defer tick.Stop()
+	for {
+		select {
+		case <-stop:
+			return false
+		case <-s.ctx.Done():
+			return false
+		case <-deadline.C:
+			// 度过完整稳定期:最终确认仍存活。
+			s.mu.RLock()
+			ls, ok := s.active[sessionID]
+			alive := ok && ls.chat.IsAlive()
+			s.mu.RUnlock()
+			return alive
+		case <-tick.C:
+			s.mu.RLock()
+			ls, ok := s.active[sessionID]
+			alive := ok && ls.chat.IsAlive()
+			s.mu.RUnlock()
+			if !alive {
+				return false // 期内死掉:算失败
+			}
+		}
+	}
 }
 
 // LoadMessages 取某 session 的全部历史消息(打开 session 时渲染)。
@@ -1385,6 +1657,9 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 		slog.Error("prompt failed", "session", sessionID, "err", err, "reason", reason)
 		// §4.4:不把裸 error(协议 JSON/OS 错)抛给用户,改推稳定 code,前端按 code 经 i18n 翻译。
 		s.emitError(sessionID, ErrCodeHarnessDisconnected)
+		// §3.3 busy 分支自动重连:harness 断连后后台 spawn 新 harness,使 session 自愈。
+		// userStopped(cancelled)天然不触发——干净 cancel 不 teardown、harness 仍可用。
+		s.startReconnect(sessionID)
 		return
 	}
 	// 空响应检测:Prompt 成功返回但零输出(timeline 空)——通常是 resume 后
@@ -1394,6 +1669,8 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 		s.teardownLive(sessionID, ls)
 		slog.Error("prompt empty turn", "session", sessionID, "stopReason", stopReason)
 		s.emitError(sessionID, ErrCodeHarnessEmptyTurn)
+		// 空响应也是 harness 状态损坏的信号:尝试自动重连(新 harness + resume 可能恢复)。
+		s.startReconnect(sessionID)
 		return
 	}
 	// 取 harness 生成的权威标题覆盖兜底标题(§5.4 #14)。
