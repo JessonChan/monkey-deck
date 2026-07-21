@@ -95,7 +95,7 @@
     "placeholder": "Send a message to start…",
     "loadMore": "Load more",
     "scrollToBottom": "Scroll to latest",
-    "readonlyHint": "Read-only — send a message to continue",
+    "readonlyHint": "Ready",
     "continueSession": "Continue session",
     "continueSessionTip": "Start the agent and resume this session",
     "thinkingLive": "Thinking",
