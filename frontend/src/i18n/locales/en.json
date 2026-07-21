@@ -204,8 +204,6 @@
     "stopTip": "Stop current generation (keeps queue)",
     "sendTip": "Send",
     "queueSendTip": "Queue send (auto-sent after this turn)",
-    "draftTokensTip": "Approximate tokens of current input (chars/4 estimate, not billing)",
-    "contextTokensTip": "Context used / limit for this session",
     "switchCostHint": "Current context ~{{tokens}} tokens · estimated per-turn cost shown per model (token-only if unpriced)",
     "noMatch": "No match",
     "recentUsed": "Recently used",

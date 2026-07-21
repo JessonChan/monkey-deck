@@ -607,10 +607,12 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   );
 }
 
-// ComposerUsage:输入区附近的紧凑 token 用量(§1.6/§4.4)。
-// 两段信息,都是「人话」,不抛原始 JSON/字段名:
+// ComposerUsage:输入区附近的紧凑用量展示(§1.6/§4.4)。合并了原顶部 usage-bar 的全部信息:
 //  - 草稿预估:当前输入框文本的近似 token 数(字符数/4 经验比值,非计费依据)。
-//  - 上下文:session 已用 / 上限(数据源 ACP SessionUsageUpdate,见 usage-bar);无数据则不显示。
+//  - 上下文:session 已用 / 上限 + 占比%(数据源 ACP SessionUsageUpdate + PromptResponse.Usage)。
+//  - 费用:累计 $cost(harness 自报)。
+// 配色按 usageLevel 分级(绿 → 琥珀 → 红),hover tooltip 展示 token 明细(输入/输出/缓存/思考/合计)。
+// §4.5:统一用 react-tooltip(md-tip),禁用原生 title。
 // 仅在有内容可报时渲染(全空则返回 null,不占位)。
 function ComposerUsage({ usage, draftTokens }: {
   usage: Usage;
@@ -619,18 +621,41 @@ function ComposerUsage({ usage, draftTokens }: {
   const { t } = useTranslation();
   const hasDraft = draftTokens > 0;
   const hasCtx = usage.used > 0 || usage.size > 0;
-  if (!hasDraft && !hasCtx) return null;
+  const hasCost = usage.cost > 0;
+  if (!hasDraft && !hasCtx && !hasCost) return null;
   const pct = usage.size > 0 ? Math.min(100, Math.round((usage.used / usage.size) * 100)) : 0;
+  // 分级配色:上下文越满越警示(绿 → 琥珀 → 红),让占比一眼可读。
   const level = pct >= 85 ? "crit" : pct >= 60 ? "high" : pct >= 30 ? "mid" : "low";
+  // token 明细 tooltip(§4.5 react-tooltip):仅在有明细时附加,用 \n 多行(pre-line 渲染)。
+  const hasBreakdown = usage.totalTokens > 0 || usage.inputTokens > 0 || usage.outputTokens > 0
+    || usage.cachedReadTokens > 0 || usage.cachedWriteTokens > 0 || usage.thoughtTokens > 0;
+  const usageTip = hasBreakdown
+    ? [
+        t("chat.usageTitle"),
+        `${t("chat.usageInput")}: ${fmtTokens(usage.inputTokens)}`,
+        `${t("chat.usageOutput")}: ${fmtTokens(usage.outputTokens)}`,
+        usage.cachedReadTokens > 0 ? `${t("chat.usageCachedRead")}: ${fmtTokens(usage.cachedReadTokens)}` : "",
+        usage.cachedWriteTokens > 0 ? `${t("chat.usageCachedWrite")}: ${fmtTokens(usage.cachedWriteTokens)}` : "",
+        usage.thoughtTokens > 0 ? `${t("chat.usageThought")}: ${fmtTokens(usage.thoughtTokens)}` : "",
+        `${t("chat.usageTotal")}: ${fmtTokens(usage.totalTokens)}`,
+      ].filter(Boolean).join("\n")
+    : t("chat.usageTitle");
   return (
-    <span className={`composer-usage composer-usage-${level}`} data-testid="composer-usage">
-      {hasDraft && <span className="cu-draft" title={t("composer.draftTokensTip")}>~{fmtTokens(draftTokens)}</span>}
-      {hasDraft && hasCtx && <span className="cu-sep">·</span>}
+    <span
+      className={`composer-usage composer-usage-${level}`}
+      data-testid="composer-usage"
+      data-tooltip-id="md-tip"
+      data-tooltip-content={usageTip}
+      data-tooltip-place="top"
+    >
+      {hasDraft && <span className="cu-draft">~{fmtTokens(draftTokens)}</span>}
+      {hasDraft && (hasCtx || hasCost) && <span className="cu-sep">·</span>}
       {hasCtx && (
-        <span className="cu-ctx" title={t("composer.contextTokensTip")}>
+        <span className="cu-ctx">
           {fmtTokens(usage.used)}{usage.size > 0 ? ` / ${fmtTokens(usage.size)}` : ""}{usage.size > 0 ? ` · ${pct}%` : ""}
         </span>
       )}
+      {hasCost && <span className="cu-cost">${usage.cost.toFixed(4)}</span>}
     </span>
   );
 }

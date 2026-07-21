@@ -904,18 +904,6 @@ input, textarea { font-family: inherit; }
 @keyframes slideDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 
 .chat-footer { border-top: 1px solid var(--sep); padding: 9px 0 13px; background: var(--bg); }
-.usage-bar { max-width: 1080px; margin: 0 auto 7px; padding: 0 28px; display: flex; align-items: center; gap: 9px; }
-.usage-track { flex: 1; height: 5px; background: var(--elev); border-radius: 3px; overflow: hidden; }
-.usage-fill { height: 100%; border-radius: 3px; transition: width 0.3s, background 0.3s; }
-.usage-text { font-size: 10.5px; color: var(--text-3); font-family: var(--mono); white-space: nowrap; }
-/* 分级配色:占比越高越警示(绿 → 琥珀 → 红),让上下文余量一眼可读。 */
-.usage-low  .usage-fill { background: linear-gradient(90deg, var(--green), #5ce08a); }
-.usage-low  .usage-text { color: var(--text-3); }
-.usage-mid  .usage-fill { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
-.usage-high .usage-fill { background: linear-gradient(90deg, var(--amber), #ffe55c); }
-.usage-high .usage-text { color: var(--amber); }
-.usage-crit .usage-fill { background: linear-gradient(90deg, var(--red), #ff7a72); }
-.usage-crit .usage-text { color: var(--red); }
 
 /* ─── Composer(原生精致) ─── */
 .composer { max-width: 1080px; margin: 0 auto; padding: 0 28px 4px; position: relative; }
@@ -969,7 +957,8 @@ input, textarea { font-family: inherit; }
   border: 1px solid var(--sep); flex-shrink: 0;
 }
 
-/* composer 紧凑 token 用量(草稿预估 + 上下文已用/上限)。色阶随上下文占比加重。 */
+/* composer 紧凑用量(草稿预估 + 上下文已用/上限 + 累计 $cost)。色阶随上下文占比加重(绿 → 琥珀 → 红),
+   与原顶部 usage-bar 一致;明细走 hover tooltip(react-tooltip,见 ComposerUsage)。 */
 .composer-usage {
   display: inline-flex; align-items: center; gap: 4px;
   font-family: var(--mono); font-size: 10.5px; color: var(--text-3); white-space: nowrap;
@@ -977,6 +966,7 @@ input, textarea { font-family: inherit; }
 .composer-usage .cu-sep { opacity: 0.5; }
 .composer-usage .cu-draft { color: var(--text-3); }
 .composer-usage .cu-ctx { color: var(--text-2); }
+.composer-usage .cu-cost { color: var(--green); opacity: 0.85; }
 .composer-usage-mid .cu-ctx { color: #d99a00; }
 .composer-usage-high .cu-ctx { color: #e06a1f; }
 .composer-usage-crit .cu-ctx { color: var(--red); }

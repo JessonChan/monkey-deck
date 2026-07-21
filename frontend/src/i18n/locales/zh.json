@@ -204,8 +204,6 @@
     "stopTip": "停止当前生成(不清理队列)",
     "sendTip": "发送",
     "queueSendTip": "排队发送(本轮结束后自动发)",
-    "draftTokensTip": "当前输入的近似 token 数(字符数/4 估算,非计费)",
-    "contextTokensTip": "本会话上下文已用 / 上限",
     "switchCostHint": "当前上下文约 {{tokens}} tokens · 各模型预估单轮成本见右侧(无定价则仅参考量级)",
     "noMatch": "无匹配",
     "recentUsed": "最近使用",

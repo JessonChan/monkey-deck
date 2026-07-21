@@ -303,7 +303,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     prevFirstIdRef.current = firstId;
     prevHeightRef.current = scrollHeightRef.current = el.scrollHeight;
   }, [items, props.session?.id, props.permission]);
-  // footer 高度变化(textarea autogrow / usage-bar / queue 面板)会压低 chat-body 可视区。
+  // footer 高度变化(textarea autogrow / queue 面板)会压低 chat-body 可视区。
   // 贴底时最新消息会被抬高的输入框遮挡 → 视觉上像「历史随按键向上滚」。
   // onScroll 只在 scrollTop 变化时触发,而这里改的是 clientHeight,故用 ResizeObserver 补偿:
   // 贴底则重新对齐到底;非贴底(用户在翻历史)不动,不打扰。
@@ -367,24 +367,6 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     return () => io.disconnect();
   }, [props.hasMore, props.loadingMore, props.onLoadMore]);
 
-  const pct = props.usage.size > 0 ? Math.min(100, Math.round((props.usage.used / props.usage.size) * 100)) : 0;
-  // 分级配色:上下文越满越警示(绿 → 琥珀 → 红),让占比一眼可读。
-  const usageLevel = pct >= 85 ? "crit" : pct >= 60 ? "high" : pct >= 30 ? "mid" : "low";
-  const hasUsage = props.usage.used > 0 || props.usage.size > 0 || props.usage.cost > 0;
-  // token 明细 tooltip(§4.5 react-tooltip):仅在有明细时附加,用 \n 多行(pre-line 渲染)。
-  const hasBreakdown = props.usage.totalTokens > 0 || props.usage.inputTokens > 0 || props.usage.outputTokens > 0
-    || props.usage.cachedReadTokens > 0 || props.usage.cachedWriteTokens > 0 || props.usage.thoughtTokens > 0;
-  const usageTip = hasBreakdown
-    ? [
-        t("chat.usageTitle"),
-        `${t("chat.usageInput")}: ${formatTokens(props.usage.inputTokens)}`,
-        `${t("chat.usageOutput")}: ${formatTokens(props.usage.outputTokens)}`,
-        props.usage.cachedReadTokens > 0 ? `${t("chat.usageCachedRead")}: ${formatTokens(props.usage.cachedReadTokens)}` : "",
-        props.usage.cachedWriteTokens > 0 ? `${t("chat.usageCachedWrite")}: ${formatTokens(props.usage.cachedWriteTokens)}` : "",
-        props.usage.thoughtTokens > 0 ? `${t("chat.usageThought")}: ${formatTokens(props.usage.thoughtTokens)}` : "",
-        `${t("chat.usageTotal")}: ${formatTokens(props.usage.totalTokens)}`,
-      ].filter(Boolean).join("\n")
-    : t("chat.usageTitle");
   const s = statusInfo(props.status, props.activity);
 
   const onTitleDoubleClick = (e: React.MouseEvent) => {
@@ -524,23 +506,6 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       {props.mergeResult && <div className={`merge-result ${props.mergeResult.startsWith("✅") ? "ok" : "fail"}`}>{props.mergeResult}</div>}
       <FilePreviewOverlay sessionId={props.sessionId} target={previewTarget} onClose={closeFilePreview} />
       <footer className="chat-footer">
-        {hasUsage && (
-          <div
-            className={`usage-bar usage-${usageLevel}`}
-            data-tooltip-id="md-tip"
-            data-tooltip-content={usageTip}
-            data-tooltip-place="top"
-            data-testid="usage-bar"
-          >
-            <div className="usage-track"><div className="usage-fill" style={{ width: `${pct}%` }} /></div>
-            <span className="usage-text">
-              {formatTokens(props.usage.used)}
-              {props.usage.size > 0 && ` / ${formatTokens(props.usage.size)}`}
-              {props.usage.size > 0 && ` · ${pct}%`}
-              {props.usage.cost > 0 && ` · $${props.usage.cost.toFixed(4)}`}
-            </span>
-          </div>
-        )}
         <QueuePanel
           queue={props.queue}
           onInterrupt={props.onInterruptQueue}
@@ -1465,12 +1430,6 @@ function extractCodeChild(children: ComponentPropsWithoutRef<"pre">["children"])
   const lang = /language-(\w[\w+-]*)/.exec(cls)?.[1] || "";
   const text = typeof props.children === "string" ? props.children : String(props.children ?? "");
   return { language: lang || "code", text: text.replace(/\n$/, "") };
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(n);
 }
 
 // 回合分隔:发丝线 + 时间,清晰划分每一轮对话(用户消息前的锚点)。
