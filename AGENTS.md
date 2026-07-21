@@ -261,7 +261,7 @@ monkey-deck/
 
 > 这些是 ACP 实战中易踩的坑,在我们的栈里大概率遇到。先记录先防,踩到了就在这里补本项目实证。
 
-1. **harness 崩溃 = `peer disconnected`**:不要当普通 error 静默吞,要触发清理 + 用户可见提示(错误含 "peer disconnected" / "broken pipe")。
+1. **harness 崩溃 = `peer disconnected`**:不要当普通 error 静默吞,要触发清理 + 用户可见提示(错误含 "peer disconnected" / "broken pipe")。**根因日志**:崩溃的真因(panic 栈 / OOM / 空闲自杀)在 harness 自身 stderr,由 `harnessProcess`(`internal/acp/proc.go`)统一捕获进 stderr ring(`internal/acp/stderr.go`)+ 结构化 exit 日志(pid/pgid/exitCode/signal/kind + stderrTail);排障先在日志里搜 `harness exited unexpectedly`。
 2. **`PromptResponse.Usage` 常为 nil**:用量靠流式 `SessionUsageUpdate` 兜底,别假设一定有值(见 §1.6)。
 3. **安全切片**:`id[:8]` 当 id 不足 8 字符会 panic,用 safe slice。
 4. **tool 状态必须单调推进,禁止回退**:tool 一旦到终态(`completed`/`failed`),后续 `tool_call_update` 只更新 `rawOutput` 等非状态字段,**不接受 `status` 回退到 `in_progress`/`pending`**(omp async task 的 `tool_execution_update` 会硬编码打回 in_progress)。`handleEvent`(`internal/chat`)与 `activityTracker.observe`(`internal/acp`)两处都做。
