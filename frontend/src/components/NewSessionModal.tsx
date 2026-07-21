@@ -13,15 +13,17 @@ interface Props {
 
 // 新建对话弹窗:让用户选择 1) 使用的 agent harness(omp/opencode)2) 是否新建独立分支(worktree)。
 // harness 决定 spawn 哪个 ACP agent;worktree 决定是否为该会话建独立 git 工作树(并行隔离,§1.4)。
-// harness 默认选中上次新建对话用的(lastHarness,后端 setting);不可用(未安装/未知)时回退列表首个。
-// git 项目下 worktree 必须显式二选一(新建分支 / 使用项目目录),无默认,未选时「新建」按钮禁用。
+// harness 与 worktree 都要求显式选择(null = 未选):没选过(lastHarness 空/失效/列表多 harness)不设默认,
+// 未选时「新建」按钮禁用 + label 旁显示 ns-required 提示。单 harness 无歧义,自动选中免纯摩擦。
 // 非 git 项目不展示 worktree 选项(无法建分支)。
 export default function NewSessionModal({ harnesses, isGit, lastHarness, onConfirm, onCancel }: Props) {
   const { t } = useTranslation();
-  // harness 默认:上次用的(lastHarness 且仍在可选列表),否则列表首个,再否则 omp。
-  const [harness, setHarness] = useState(
-    lastHarness && harnesses.some((h) => h.id === lastHarness) ? lastHarness : (harnesses[0]?.id || "omp"),
-  );
+  // harness 必须显式选择:null = 未选。lastHarness 仍可选时默认选它;单 harness 无歧义自动选;否则 null。
+  const [harness, setHarness] = useState<string | null>(() => {
+    if (lastHarness && harnesses.some((h) => h.id === lastHarness)) return lastHarness;
+    if (harnesses.length === 1) return harnesses[0].id;
+    return null;
+  });
   // worktree 必须显式选择:null = 未选(默认),true = 新建,false = 使用项目目录。
   const [worktree, setWorktree] = useState<boolean | null>(isGit ? null : false);
 
@@ -34,7 +36,8 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, onConfi
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
-  const canConfirm = !isGit || worktree !== null;
+  // harness 必须已选 + (非 git 或 worktree 已显式选),否则禁用「新建」。
+  const canConfirm = harness !== null && (!isGit || worktree !== null);
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
@@ -42,7 +45,10 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, onConfi
         <div className="modal-title">{t("newSession.title")}</div>
 
         <div className="ns-field">
-          <div className="ns-label">{t("newSession.selectAgent")}</div>
+          <div className="ns-label">
+            {t("newSession.selectAgent")}
+            {harness === null && <span className="ns-required">{t("newSession.required")}</span>}
+          </div>
           <div className="ns-harness-list">
             {harnesses.map((h) => (
               <button
@@ -102,7 +108,7 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, onConfi
           <button
             className="modal-btn primary"
             disabled={!canConfirm}
-            onClick={() => canConfirm && onConfirm(harness, worktree === true)}
+            onClick={() => harness !== null && onConfirm(harness, worktree === true)}
             data-testid="ns-confirm"
           >
             {t("newSession.createBtn")}
