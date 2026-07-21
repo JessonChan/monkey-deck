@@ -131,7 +131,7 @@
     "status": {
       "idle": "空闲",
       "ready": "就绪",
-      "readonly": "只读",
+      "readonly": "就绪",
       "error": "出错",
       "closed": "已关闭",
       "executing": "执行中",

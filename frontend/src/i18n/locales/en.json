@@ -131,7 +131,7 @@
     "status": {
       "idle": "Idle",
       "ready": "Ready",
-      "readonly": "Read-only",
+      "readonly": "Ready",
       "error": "Error",
       "closed": "Closed",
       "executing": "Executing",
