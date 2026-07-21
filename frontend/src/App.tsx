@@ -4,7 +4,7 @@ import { Events } from "@wailsio/runtime";
 import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import * as TerminalService from "../bindings/github.com/jessonchan/monkey-deck/internal/terminal/terminalservice";
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention, ImageAttachment, PlanEntry, Usage } from "./types";
+import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention, ImageAttachment, PlanEntry, LivePlan, Usage } from "./types";
 import Sidebar from "./components/Sidebar";
 import ChatView, { type ChatViewHandle } from "./components/ChatView";
 import { Sparkles } from "lucide-react";
@@ -63,7 +63,10 @@ export default function App() {
   const [imagesBySession, setImagesBySession] = useState<Record<string, ImageAttachment[]>>({});  // composer 内联图片附件(按 session 隔离,需 agent 支持 image 能力)
   const [imageSupportedBySession, setImageSupportedBySession] = useState<Record<string, boolean>>({});  // agent 是否声明 image prompt 能力(门控图片输入入口)
   const [configOptionsBySession, setConfigOptionsBySession] = useState<Record<string, ConfigOption[]>>({}); // model/mode/effort(agent 自报)
-  const [planBySession, setPlanBySession] = useState<Record<string, PlanEntry[]>>({}); // agent 执行计划(整表替换,ACP protocol)
+  // 当前 turn 的实时 plan(进行中的 turn 由 plan 事件流式刷新;turn 结束转为持久化 plan item)。
+  // 历史 turn 的 plan 不在这里 —— 它们作为 role='plan' message 持久化,重开会话时由
+  // messagesToItems 转为 type:'plan' ChatItem 内联渲染。null = 当前无实时 plan。
+  const [livePlanBySession, setLivePlanBySession] = useState<Record<string, LivePlan | null>>({});
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
   const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean } | null>(null);  // 新建对话弹窗
   const [settingsOpen, setSettingsOpen] = useState(false); // 统一设置中心面板(收敛语言/提示音/权限/harness)
@@ -101,6 +104,11 @@ export default function App() {
   // 不进 effect 依赖(避免每次 sessionsByProject 变化都重订阅事件)。
   const sessionsByProjectRef = useRef(sessionsByProject);
   sessionsByProjectRef.current = sessionsByProject;
+  // livePlanBySession 的 ref:turn 结束(idle/error/closed)时读它把实时 plan 转为持久化
+  // plan item append 进 itemsBySession。用 ref 绕开「在 setLivePlanBySession updater 内
+  // 套 setItemsBySession」的嵌套 setState(StrictMode 下 updater 可能多次执行致重复 append)。
+  const livePlanBySessionRef = useRef(livePlanBySession);
+  livePlanBySessionRef.current = livePlanBySession;
 
   const refreshProjects = useCallback(async () => {
     const list = await ChatService.ListProjects();
@@ -174,8 +182,14 @@ export default function App() {
       return;
     }
     if (ev.kind === "plan") {
-      // agent 执行计划(ACP protocol:整表替换)。plan 是 session 级实时状态,不入消息流、不持久化。
-      setPlanBySession((prev) => ({ ...prev, [ev.sessionId]: ev.planEntries ?? [] }));
+      // agent 执行计划(ACP protocol:整表替换)。plan 按 turn 索引:当前 turn = 实时(livePlan,
+      // 由 plan 事件整表刷新);turn 结束时后端把最终快照落库为 role='plan' message,重开会话时
+      // 作为 type:'plan' ChatItem 内联渲染(历史静态展示)。空 entries 表示 agent 清空 plan。
+      const entries = ev.planEntries ?? [];
+      setLivePlanBySession((prev) => ({
+        ...prev,
+        [ev.sessionId]: entries.length > 0 ? { turnId: ev.turnId ?? "", entries } : null,
+      }));
       return;
     }
     setItemsBySession((prev) => ({
@@ -210,7 +224,7 @@ export default function App() {
   const images = (selectedSessionId ? imagesBySession[selectedSessionId] : undefined) ?? [];
   const imageSupported = !!(selectedSessionId && imageSupportedBySession[selectedSessionId]);
   const configOptions = (selectedSessionId ? configOptionsBySession[selectedSessionId] : undefined) ?? [];
-  const plan = (selectedSessionId ? planBySession[selectedSessionId] : undefined) ?? [];
+  const livePlan = (selectedSessionId ? livePlanBySession[selectedSessionId] : undefined) ?? null;
   const onComposerChange = useCallback((text: string) => {
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
@@ -267,9 +281,10 @@ export default function App() {
         return { ...prev, [s.sessionId]: s.status };
       });
       setStatusDetailBySession((prev) => ({ ...prev, [s.sessionId]: s.detail || "" }));
-      // 新 turn 开始:清掉上一轮的执行计划(避免旧计划残留;agent 会在本 turn 重发 plan_update)。
+      // 新 turn 开始:清掉上一轮的实时 plan(若残留)。历史 turn 的 plan 已作为 type:'plan'
+      // ChatItem 持久化在 items 里,不受影响。agent 会在本 turn 重发 plan 事件刷新 livePlan。
       if (s.status === "prompting") {
-        setPlanBySession((prev) => { if (!prev[s.sessionId]) return prev; const n = { ...prev }; delete n[s.sessionId]; return n; });
+        setLivePlanBySession((prev) => { if (!prev[s.sessionId]) return prev; const n = { ...prev }; delete n[s.sessionId]; return n; });
       }
       // 用户发消息(prompting)→ 即时刷新侧栏顺序。后端 startTurn 已把 prompted_at 刷为
       // now(主排序键),这里重拉让该 session 跳到顶部。后台活动(usage_update/标题同步)不
@@ -304,6 +319,30 @@ export default function App() {
             }),
           };
         });
+        // turn 结束:把实时 plan 转为持久化 plan item(append 到 items 末尾,即 turn 末尾)。
+        // 后端在 emit idle 前已把同样的快照落库为 role='plan' message,故重开会话时该 plan 会
+        // 从 DB 自然加载;此处 eager-append 避免当前会话出现「plan 闪退」(livePlan 清掉到下次
+        // 重载之间的空窗)。读 ref 而非在 updater 内套 setState(StrictMode 下 updater 可能
+        // 多次执行)。turnID 来自 livePlan(由 plan 事件携带 = user message ID)。
+        const lp = livePlanBySessionRef.current[s.sessionId];
+        if (lp && lp.entries.length > 0) {
+          setItemsBySession((prev) => {
+            const cur = prev[s.sessionId] ?? [];
+            // 兜底:若已有同 turnId 的 plan item(重复事件 / 重放),不重复 append。
+            if (cur.some((it) => it.type === "plan" && it.turnId === lp.turnId)) return prev;
+            return {
+              ...prev,
+              [s.sessionId]: [...cur, {
+                type: "plan" as const,
+                id: `live-plan-${lp.turnId}`,
+                turnId: lp.turnId,
+                entries: lp.entries,
+                ts: Date.now(),
+              }],
+            };
+          });
+        }
+        setLivePlanBySession((prev) => { if (!prev[s.sessionId]) return prev; const n = { ...prev }; delete n[s.sessionId]; return n; });
         setActivityBySession((p) => { if (!p[s.sessionId]) return p; const n = { ...p }; delete n[s.sessionId]; return n; });
       }
       // 回合结束后刷新 Git 面板的 diff(agent 可能改了文件)
@@ -383,6 +422,14 @@ export default function App() {
       if (m.role === "user") return { type: "user", id: m.id, text: m.content, ts: m.createdAt };
       if (m.role === "agent") return { type: "agent", id: m.id, text: m.content, ts: m.createdAt };
       if (m.role === "thought") return { type: "thought", id: m.id, text: m.content, ts: m.createdAt };
+      if (m.role === "plan") {
+        // 历史 turn 的 plan 快照(role='plan' message,turn 结束时后端落库)。
+        // content 是 JSON 序列化的 []PlanEntry;toolCallId 列存 turnID(= user message ID)。
+        // 解析失败兜底为空 entries(不阻塞历史加载)。
+        let entries: PlanEntry[] = [];
+        try { entries = JSON.parse(m.content) as PlanEntry[]; } catch { entries = []; }
+        return { type: "plan", id: m.id, turnId: m.toolCallId || "", entries, ts: m.createdAt };
+      }
       let title = "";
       let status = "";
       let kind = "";
@@ -1122,7 +1169,7 @@ export default function App() {
               activity={activityBySession[selectedSessionId]}
               sessionId={selectedSessionId}
               configOptions={configOptions}
-              plan={plan}
+              livePlan={livePlan}
               onSetConfig={setSessionConfig}
               hasMore={hasMore}
               loadingMore={loadingMore}

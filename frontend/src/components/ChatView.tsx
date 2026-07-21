@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem, Mention, ImageAttachment, PlanEntry, Usage } from "../types";
+import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem, Mention, ImageAttachment, PlanEntry, LivePlan, Usage } from "../types";
 import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
@@ -51,7 +51,9 @@ interface Props {
   history: string[];
   sessionId: string;
   configOptions: ConfigOption[];
-  plan: PlanEntry[];
+  // 当前 turn 的实时 plan(进行中的 turn 由 plan 事件流式刷新;turn 结束转为持久化
+  // type:'plan' ChatItem 内联渲染在 items 里)。null = 当前无实时 plan。
+  livePlan: LivePlan | null;
   onSetConfig: (configId: string, value: string) => void;
   hasMore: boolean;
   loadingMore: boolean;
@@ -448,6 +450,15 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
                 </div>
               );
             }
+            // 历史 turn 的 plan(静态展示,无 spinner —— turn 已结束,plan 是定格快照)。
+            // 当前 turn 的实时 plan 不在 items 里,它由下方的 livePlan 渲染(prompting 时带 spinner)。
+            if (item.type === "plan") {
+              return (
+                <div className="cv-item" data-iid={item.id} key={item.id}>
+                  <PlanTimeline entries={item.entries} prompting={false} />
+                </div>
+              );
+            }
             return (
               <div className="cv-item" data-iid={item.id} key={item.id}>
                 {/* 回合分隔:每条用户消息(首条除外)前插一条带时间的分隔线,让多轮对话边界清晰。 */}
@@ -457,7 +468,11 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
             );
           })}
           {props.permission && <PermissionCard prompt={props.permission} onRespond={props.onRespondPermission} />}
-          {props.plan.length > 0 && <PlanTimeline entries={props.plan} prompting={props.status === "prompting"} />}
+          {/* 当前 turn 的实时 plan(进行中,带 spinner)。turn 结束后由 App.tsx 转为持久化
+              type:'plan' ChatItem 内联渲染在 items 里(无 spinner 的静态展示)。 */}
+          {props.livePlan && props.livePlan.entries.length > 0 && (
+            <PlanTimeline entries={props.livePlan.entries} prompting={props.status === "prompting"} />
+          )}
           {props.status === "prompting" && items.length > 0 && (
             <div className="typing-indicator"><span /> <span /> <span /></div>
           )}
@@ -567,6 +582,11 @@ const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview }: { 
   }
   if (item.type === "thought") {
     return <ThoughtBlock item={item} sessionId={sessionId} onOpenFilePreview={onOpenFilePreview} />;
+  }
+  if (item.type === "plan") {
+    // plan 由 items.map 顶层分支渲染为 PlanTimeline,ChatRow 不应收到 plan item。
+    // 防御性返回 null(TS 收窄:剩余类型只剩 tool,但 union 里仍有 plan,显式处理)。
+    return null;
   }
   return <ToolCard item={item} onOpenFilePreview={onOpenFilePreview} />;
 });

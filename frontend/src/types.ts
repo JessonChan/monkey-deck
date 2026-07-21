@@ -16,6 +16,9 @@ export interface SessionEvent {
   text?: string; // agent/thought 为累积全文
   messageId?: string; // ACP messageId:同一条逻辑消息的所有 chunk 共享(§5.4 #11),主键归并用
   seq?: number; // 单调序号(防流式乱序)
+  // turnId:plan 事件所属的 turn(= 开启该 turn 的 user message ID,client 生成;协议无 turnId)。
+  // 仅 plan 事件携带:plan 按 turn 索引,当前 turn 实时 / 历史 turn 静态展示。
+  turnId?: string;
   toolCallId?: string;
   toolTitle?: string;
   toolStatus?: string; // pending | in_progress | completed | failed
@@ -45,6 +48,13 @@ export interface PlanEntry {
   content: string;
   priority?: string;
   status: string;
+}
+
+// 当前 turn 的实时 plan(进行中的 turn 由 plan 事件流式刷新,turn 结束转为持久化 plan item)。
+// turnId 标识该 plan 所属的 turn(= user message ID);entries 为最新全量快照。
+export interface LivePlan {
+  turnId: string;
+  entries: PlanEntry[];
 }
 
 // session config option(agent 经 NewSession/config_option_update 自报,前端渲染下拉)。
@@ -130,5 +140,12 @@ export type ChatItem =
       kind: string;
       rawInput?: unknown;
       rawOutput?: unknown;
+      ts?: number;
+    }
+  | {
+      type: "plan";
+      id: string; // 持久化 message id;实时 eager-append 用 `live-plan-<turnId>`
+      turnId: string; // 所属 turn(= user message ID)
+      entries: PlanEntry[];
       ts?: number;
     };
