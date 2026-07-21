@@ -31,6 +31,10 @@ type SessionEvent struct {
 	Text      string `json:"text"` // chunk 文本(message/thought);agent/thought 为累积全文
 	Seq       int64  `json:"seq,omitempty"` // 单调序号(防流式乱序,§4.3)
 	MessageID string `json:"messageId,omitempty"` // ACP messageId:同一条逻辑消息的所有 chunk 共享(§5.4 #11),主键归并用
+	// TurnID 标识事件所属的 turn(= 开启该 turn 的 user message ID,由 client 生成;
+	// 协议无 turnId 字段,见 docs/worklog/2026-07-22-plan-history-by-turn.md)。
+	// 目前仅 plan 事件携带:plan 按 turn 索引,当前 turn 实时 / 历史 turn 静态展示。
+	TurnID string `json:"turnId,omitempty"`
 
 	ToolCallID string `json:"toolCallId,omitempty"`
 	ToolTitle  string `json:"toolTitle,omitempty"`
