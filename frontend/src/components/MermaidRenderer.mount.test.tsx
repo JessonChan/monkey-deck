@@ -1,0 +1,157 @@
+// Mount-test MermaidRenderer with happy-dom + React, exercising the real React tree
+// (Task #21290 review). Stubs the dynamic `import("mermaid")` so the test doesn't pull
+// ~600KB / real layout, but exercises the actual `renderMermaid` lib + component state machine.
+// Goal: prove the component's state transitions and fallback UX actually fire in React,
+// not just read correctly in source — closes the worklog OPEN item "server 模式实测" with a
+// deterministic, hermetic alternative that runs in `bun test`.
+
+import { describe, test, expect, mock } from "bun:test";
+import { Window } from "happy-dom";
+import React from "react";
+import { createRoot } from "react-dom/client";
+
+// ---- happy-dom setup ----
+const window = new Window();
+const document = window.document;
+globalThis.window = window;
+globalThis.document = document;
+globalThis.navigator = window.navigator;
+globalThis.getComputedStyle = window.getComputedStyle.bind(window);
+globalThis.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 0);
+globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+globalThis.MouseEvent = window.MouseEvent;
+globalThis.KeyboardEvent = window.KeyboardEvent;
+window.React = React;
+// react-tooltip & react-i18next imports must resolve; their defaults are no-ops in our test path.
+// Patch dynamic import to return a fake mermaid before importing the component.
+const calls = [];
+const validSvg = "<svg class='fake-mermaid'><g>diagram</g></svg>";
+const fakeMermaid = {
+  default: {
+    initialize: (config) => calls.push({ init: config }),
+    render: async (id, text) => {
+      calls.push({ render: id, text });
+      if (text.includes("BROKEN")) throw new Error("parse error: broken");
+      return { svg: validSvg, diagramType: "flowchart-v2", bindFunctions: (el) => { calls.push({ bind: !!el }); } };
+    },
+  },
+};
+// Mock mermaid (dynamic import). Our lib does `mod.default.initialize/render`, so the
+// mocked module namespace must expose `{ default: { initialize, render } }`.
+mock.module("mermaid", () => ({ default: fakeMermaid.default }));
+mock.module("react-tooltip", () => ({ Tooltip: () => null, default: () => null }));
+mock.module("react-i18next", () => ({
+  useTranslation: () => ({ t: (k) => k }),
+  initReactI18next: { type: "3rd-party" },
+  default: { useTranslation: () => ({ t: (k) => k }) },
+}));
+
+// Now import the components fresh (after mocks are registered).
+const { default: MermaidRenderer } = await import("./MermaidRenderer.tsx");
+const { renderMermaid, __resetMermaidCacheForTest } = await import("../lib/mermaidRenderer.ts");
+
+function mount(jsx) {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  root.render(jsx);
+  return { host, root };
+}
+
+async function flush() {
+  // happy-dom + React 19 need a tick to commit + run effects.
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 5));
+}
+
+describe("renderMermaid (lib)", () => {
+  test("valid code → {ok, svg}", async () => {
+    __resetMermaidCacheForTest();
+    const r = await renderMermaid("graph TD\n  A --> B");
+    expect(r.ok).toBe(true);
+    expect(r.svg).toContain("<svg");
+  });
+
+  test("invalid code → {ok:false, error}", async () => {
+    __resetMermaidCacheForTest();
+    const r = await renderMermaid("BROKEN SYNTAX");
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("parse error");
+  });
+
+  test("same valid code → cached (render called once)", async () => {
+    __resetMermaidCacheForTest();
+    calls.length = 0;
+    await renderMermaid("graph TD\n  A --> B");
+    await renderMermaid("graph TD\n  A --> B");
+    const renders = calls.filter((c) => "render" in c);
+    expect(renders.length).toBe(1);
+  });
+
+  test("empty code → {ok:false}", async () => {
+    const r = await renderMermaid("   ");
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("MermaidRenderer (component)", () => {
+  test("streaming=true → shows source, does not call render", async () => {
+    __resetMermaidCacheForTest();
+    calls.length = 0;
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={true} />);
+    await flush();
+    expect(host.querySelector('[data-testid="mermaid-source"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="mermaid-diagram"]')).toBeNull();
+    const renders = calls.filter((c) => "render" in c);
+    expect(renders.length).toBe(0);
+  });
+
+  test("streaming=false + valid code → renders SVG", async () => {
+    __resetMermaidCacheForTest();
+    calls.length = 0;
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    // First commit shows loading, then async resolves to success.
+    const diag = host.querySelector('[data-testid="mermaid-diagram"]');
+    expect(diag).not.toBeNull();
+    expect(diag.querySelector("svg")).not.toBeNull();
+    // bindFunctions should have been called on the host element.
+    const binds = calls.filter((c) => "bind" in c);
+    expect(binds.length).toBe(1);
+  });
+
+  test("invalid code → fallback with source + error message", async () => {
+    __resetMermaidCacheForTest();
+    calls.length = 0;
+    const { host } = mount(<MermaidRenderer code={"BROKEN SYNTAX"} streaming={false} />);
+    await flush();
+    const fb = host.querySelector('[data-testid="mermaid-fallback"]');
+    expect(fb).not.toBeNull();
+    const err = host.querySelector('[data-testid="mermaid-error-msg"]');
+    expect(err).not.toBeNull();
+    expect(err.textContent).toContain("parse error");
+  });
+
+  test("empty code → idle (no diagram, no loading, no fallback)", async () => {
+    const { host } = mount(<MermaidRenderer code={"   "} streaming={false} />);
+    await flush();
+    expect(host.querySelector('[data-testid="mermaid-diagram"]')).toBeNull();
+    expect(host.querySelector('[data-testid="mermaid-fallback"]')).toBeNull();
+    expect(host.querySelector('[data-testid="mermaid-loading"]')).toBeNull();
+    expect(host.querySelector('[data-testid="mermaid-source"]')).not.toBeNull();
+  });
+
+  test("transition streaming=true → false triggers render", async () => {
+    __resetMermaidCacheForTest();
+    calls.length = 0;
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    root.render(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={true} />);
+    await flush();
+    expect(host.querySelector('[data-testid="mermaid-source"]')).not.toBeNull();
+    expect(calls.filter((c) => "render" in c).length).toBe(0);
+    root.render(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    expect(host.querySelector('[data-testid="mermaid-diagram"]')).not.toBeNull();
+  });
+});
