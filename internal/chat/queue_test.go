@@ -32,6 +32,7 @@ type fakeChat struct {
 	title      string        // SessionTitle 返回值(模拟 harness 经 session/list 给的标题)
 	emitHook   func(msg string) // 成功返回前回调(模拟 agent 产出一条消息,避免空 turn)
 	configSets []string      // 记录 SetConfigOption 调用("configId=value")
+	promptErr  error         // 非空则 Prompt 立即返回该错(模拟 peer 断连 / 崩溃,触发 emitError 路由)
 }
 
 func newFakeChat() *fakeChat {
@@ -44,10 +45,16 @@ func newFakeChat() *fakeChat {
 func (f *fakeChat) Prompt(ctx context.Context, msg string, _ []acp.Attachment) (acp.StopReason, error) {
 	f.mu.Lock()
 	f.prompts = append(f.prompts, msg)
+	err := f.promptErr
 	f.mu.Unlock()
 	select {
 	case f.started <- struct{}{}:
 	default:
+	}
+	// 模拟 harness 崩溃/断连:立即返回注入的错(不进入 block/cancel 分支),
+	// 供 disconnect 路由测试断言 emitError(ErrCodeHarnessDisconnected)。
+	if err != nil {
+		return "", err
 	}
 	select {
 	case <-ctx.Done():
