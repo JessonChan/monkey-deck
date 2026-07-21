@@ -186,11 +186,16 @@ monkey-deck/
 - 每个活跃 harness 要注册到活跃集合,reaper 据此区分。
 - **回收必须 harness 无关:以 pgidFile 登记的 pgid 为唯一真相**(启动清残留 / reap 逃逸都基于它),**禁止写死某个 harness 命令字符串做 grep**——harness 启动命令会变(如 omp 以 `bun …/omp acp` 启动),写死会漏掉主力 harness 致孤儿永不回收。
 
-### 3.3 不能裸跑:崩溃检测 + 用户可停(无静默超时)
+### 3.3 不能裸跑:崩溃检测 + 用户可停 + 自动重连(无静默超时)
 - **Prompt 不设静默超时或绝对超时**——对齐 omp TUI 的设计:turn 跑到自然结束(`end_turn` / error),内部空停止重试(最多 3 次)、auto-retry(429/503/timeout)对 ACP client 不可见,设超时会打断这些机制。
 - 兜底靠两条:
   1. **崩溃检测**:harness 进程死 → ACP 连接断 → `IsPeerDisconnected`(含 "peer disconnected" / "broken pipe")→ teardown + 下条消息走 `ensureLive` 重连(§5.4 #2)。
   2. **用户可停**:桌面应用有人在场,用户点 Stop → `turnCancel()` 取消 `ctx` → Prompt 返回(等价 TUI 的 Ctrl+C)。
+- **断连自动重连**(disconnect 后主动 spawn 新 harness,使 session 自愈、下条消息零延迟):
+  - **两条触发分支**:busy(turn 中 peer-disconnected → `runPrompt` teardown + `startReconnect`)、idle(turn 间 harness 自杀 → health watcher 周期检测 `!IsAlive()` + `startReconnect`)。
+  - **指数退避 + 重试上限**:`reconnectLoop` 每次 backoff 翻倍(上限 `reconnMaxBackoff`),超 `reconnMaxAttempt` 次 → `reconnectGiveUp` + 推 `ErrCodeHarnessReconnectFailed`,停摆直到用户主动操作。
+  - **稳定观察期**:spawn 成功后等 `reconnStability` 确认仍存活才算成功——覆盖「spawn 成功但立刻崩溃」的崩溃循环。
+  - **userStopped 抑制**:StopSession 干净 cancel 不 teardown(harness 仍存活,天然不触发);CloseSession/DeleteSession `stopReconnect` + `reconnectGiveUp`。用户主动操作(发消息/继续/切配置)经 `ensureLive` 清 `reconnectGiveUp`,重新给重连预算。
 - **禁止**用固定 `sleep` 假装「等 agent 回复」;**禁止**恢复静默超时/绝对超时(已删除,见 `docs/worklog/2026-07-01-remove-silent-timeout.md`)。
 
 ### 3.4 权限裁决:有人在场,可交互
@@ -266,6 +271,7 @@ monkey-deck/
 3. **安全切片**:`id[:8]` 当 id 不足 8 字符会 panic,用 safe slice。
 4. **tool 状态必须单调推进,禁止回退**:tool 一旦到终态(`completed`/`failed`),后续 `tool_call_update` 只更新 `rawOutput` 等非状态字段,**不接受 `status` 回退到 `in_progress`/`pending`**(omp async task 的 `tool_execution_update` 会硬编码打回 in_progress)。`handleEvent`(`internal/chat`)与 `activityTracker.observe`(`internal/acp`)两处都做。
 5. **持久化按真实时序交错写库**:思考/回复/工具是交错的(thought→tool→agent→tool→agent),`persistTurn` 必须按真实发生顺序逐条写 `seq`,不能先写完所有 segment 再写所有 tool(否则重开会话历史时工具卡片全聚到 turn 末尾)。
+6. **自动重连的崩溃循环防护**:`reconnectLoop` 的「spawn 成功」判定必须有**稳定观察期**(`reconnStability`)——只判 ensureLive 返回 nil 就算成功,会导致「spawn OK 但立刻崩溃」的 harness 被判为重连成功,reconnect goroutine 退出,health watcher 又检测到死、再触发重连,形成无上限的紧密循环。稳定观察期 + 重试上限 + `reconnectGiveUp`(耗尽后停摆直到用户主动操作)三道一起才能把循环收敛到有限次。
 
 > 具体项目踩坑与修复记录(根因/修法/验证)统一落在 `docs/worklog/YYYY-MM-DD-<slug>.md`,本文只保留原则性规则。流式合并按主键归并的原则见 §5.3。
 
