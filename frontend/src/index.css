@@ -1078,8 +1078,31 @@ input, textarea { font-family: inherit; }
   box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.14), 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 .compose-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 4px; }
-.compose-tools { display: flex; gap: 2px; }
+.compose-tools { display: flex; gap: 2px; align-items: center; }
 .compose-right { display: flex; align-items: center; gap: 10px; }
+
+/* ─── Composer ↑↓ 翻历史 hint chip / 导航徽标 ─── */
+/* placeholder 瘦身后,翻历史快捷键失去曝光入口;用 chip 在 compose-tools 里补上。
+   未翻历史:compose-history-chip(可点,等价 ↑);翻历史中:compose-history-badge(显示位置)。 */
+.compose-history-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
+  background: var(--elev-2); border: 1px solid var(--sep);
+  padding: 2px 7px; border-radius: 5px; height: 20px; margin-left: 4px;
+  cursor: pointer; outline: none;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.compose-history-chip:hover:not(:disabled) { color: var(--accent-2); border-color: var(--accent); background: var(--hover); }
+.compose-history-chip:disabled { opacity: 0.4; cursor: default; }
+.compose-history-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-family: var(--mono); font-size: 10.5px; font-weight: 500; color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--sep));
+  padding: 2px 7px; border-radius: 5px; height: 20px; margin-left: 4px;
+  animation: compose-history-badge-in 0.12s ease;
+}
+@keyframes compose-history-badge-in { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
 
 /* ─── Composer 长文本折叠(TUI 风格紧凑块)─── */
 .composer-meta-row {

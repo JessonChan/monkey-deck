@@ -188,8 +188,12 @@
     }
   },
   "composer": {
-    "placeholderNormal": "Message monkey-deck…   (Enter to send · Shift+Enter for newline · @ files · / commands · ↑↓ history)",
+    "placeholderNormal": "Message monkey-deck…",
     "placeholderQueued": "Queue next message… (Enter to enqueue · auto-sent after this turn)",
+    "historyHint": "↑↓ History",
+    "historyHintTip": "Use arrow keys to browse past messages of this session; edit or press Enter to resend",
+    "historyBadge": "History {{idx}}/{{total}}",
+    "historyBadgeTip": "↑ older · ↓ newer · past latest restores draft",
     "lineCharCount": "{{lines}} lines · {{chars}} chars",
     "linesFolded": "{{count}} lines folded",
     "longLineTruncated": "{{count}} chars · long line truncated",

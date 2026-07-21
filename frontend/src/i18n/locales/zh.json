@@ -188,8 +188,12 @@
     }
   },
   "composer": {
-    "placeholderNormal": "给 monkey-deck 发消息…   (Enter 发送 · Shift+Enter 换行 · @ 提文件 · / 看命令 · ↑↓ 翻历史)",
+    "placeholderNormal": "给 monkey-deck 发消息…",
     "placeholderQueued": "排队下一条…(Enter 入队 · 本轮结束后自动发)",
+    "historyHint": "↑↓ 历史",
+    "historyHintTip": "上下方向键翻阅本会话发过的消息;选中后可编辑或直接 Enter 重发",
+    "historyBadge": "历史 {{idx}}/{{total}}",
+    "historyBadgeTip": "↑ 向旧 · ↓ 向新 · 翻过最新恢复草稿",
     "lineCharCount": "{{lines}} 行 · {{chars}} 字符",
     "linesFolded": "{{count}} 行已折叠",
     "longLineTruncated": "{{count}} 字符 · 长行已截断",

@@ -148,7 +148,10 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   // --- 上下键翻历史 ---
   // navIdx = -1:未翻历史(显示当前草稿);否则指向 history 数组的下标(当前展示的那条)。
   // history 按时间升序(末尾=最新)。↑ 向旧、↓ 向新,翻过最新恢复草稿。
+  // navRef:事件处理中同步读写的权威值;navDisplay:镜像到 state 仅用于驱动徽标渲染
+  // (ref 变化不触发重渲染,徽标要随翻阅即时更新,必须有 state)。
   const navRef = useRef(-1);
+  const [navDisplay, setNavDisplay] = useState(-1);
   const draftRef = useRef("");
 
   // --- @autocomplete ---
@@ -227,6 +230,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     onMentionsChange([]);
     onImagesChange([]);
     navRef.current = -1;
+    setNavDisplay(-1);
     setMentionOpen(false);
     setSlashOpen(false);
     requestAnimationFrame(() => { if (ref.current) ref.current.style.height = "auto"; });
@@ -341,10 +345,11 @@ export default function Composer({ value, onChange, disabled, prompting, configO
       navRef.current = history.length - 1;
     } else {
       const next = navRef.current + dir; // dir=-1(↑向旧) → idx 减;dir=1(↓向新) → idx 增
-      if (next >= history.length) { navRef.current = -1; onChange(draftRef.current); moveCursorEnd(); return; }
+      if (next >= history.length) { navRef.current = -1; setNavDisplay(-1); onChange(draftRef.current); moveCursorEnd(); return; }
       if (next < 0) { navRef.current = 0; }
       else { navRef.current = next; }
     }
+    setNavDisplay(navRef.current);
     onChange(history[navRef.current]);
     moveCursorEnd();
   };
@@ -359,6 +364,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     cursorRef.current = e.target.selectionEnd ?? 0;
     setCursorPos(cursorRef.current);
     navRef.current = -1; // 真实输入(非翻历史)→ 退出翻历史模式
+    setNavDisplay(-1);
     onChange(e.target.value);
   };
   const handleSelect = () => {
@@ -579,6 +585,33 @@ export default function Composer({ value, onChange, disabled, prompting, configO
             >
               <Slash size={17} />
             </button>
+            {/* ↑↓ 翻历史:placeholder 瘦身后,把这条最隐晦(无可视入口)的快捷键提为 compose-tools chip。
+                未翻历史 → 可点 chip(点击等价 ↑,进入翻历史);翻历史中 → 徽标显示当前位置(1-indexed,旧→新)。 */}
+            {history.length > 0 && (
+              navDisplay >= 0 ? (
+                <span
+                  className="compose-history-badge"
+                  data-testid="composer-history-badge"
+                  data-tooltip-id="md-tip"
+                  data-tooltip-content={t("composer.historyBadgeTip")}
+                  data-tooltip-place="top"
+                >
+                  {t("composer.historyBadge", { idx: navDisplay + 1, total: history.length })}
+                </span>
+              ) : (
+                <button
+                  className="compose-history-chip"
+                  data-testid="composer-history-chip"
+                  onClick={() => { navigateHistory(-1); requestAnimationFrame(() => ref.current?.focus()); }}
+                  disabled={disabled}
+                  data-tooltip-id="md-tip"
+                  data-tooltip-content={t("composer.historyHintTip")}
+                  data-tooltip-place="top"
+                >
+                  {t("composer.historyHint")}
+                </button>
+              )
+            )}
           </div>
           <div className="compose-right">
             <ModelSelect configOptions={configOptions} disabled={disabled} onSetConfig={onSetConfig} contextTokens={usage.used} />
