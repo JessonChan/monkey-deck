@@ -638,7 +638,7 @@ function ComposerUsage({ usage, draftTokens }: {
 // ModelSelect 渲染 configOptions 里的 model/effort/mode 控件(发送按钮左侧)。
 // 用 cmdk(Command) + @radix-ui/react-popover:Radix 管开合/定位/焦点/ARIA,cmdk 管搜索/分组/键盘导航。
 // model 按 value 的 provider 前缀("provider/model")分组;大量选项时 cmdk 内置搜索 + List 滚动。
-function ModelSelect({ configOptions, disabled, onSetConfig, contextTokens }: {
+export function ModelSelect({ configOptions, disabled, onSetConfig, contextTokens }: {
   configOptions: ConfigOption[];
   disabled: boolean;
   onSetConfig: (configId: string, value: string) => void;
