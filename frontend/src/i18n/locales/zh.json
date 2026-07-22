@@ -265,7 +265,8 @@
     "clearSchedule": "立即",
     "clearScheduleTip": "清除定时:尽快发送(下一轮 drain 即发)",
     "scheduledSend": "⏰ {{time}}",
-    "scheduledSendTip": "定时发送 —— 到点后才发送"
+    "scheduledSendTip": "定时发送 —— 到点后才发送",
+    "reorderTip": "拖拽以调整发送顺序"
   },
   "terminal": {
     "closeTabTip": "关闭终端",

@@ -70,7 +70,7 @@ describe("QueuePanel schedule picker (Task #22134)", () => {
   test("future scheduledAt shows the scheduled-send badge, not the queued label", async () => {
     const future = Date.now() + 60_000;
     const { host } = mount(
-      <QueuePanel queue={[item("q1", "later", future)]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={() => {}} />
+      <QueuePanel queue={[item("q1", "later", future)]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={() => {}} onReorder={() => {}} />
     );
     await flush();
 
@@ -81,7 +81,7 @@ describe("QueuePanel schedule picker (Task #22134)", () => {
   test("schedule -> datetime-local -> save calls onSchedule with epoch ms", async () => {
     const calls: Array<{ id: string; scheduledAt: number }> = [];
     const { host } = mount(
-      <QueuePanel queue={[item("q1", "hi", Date.now())]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(id, scheduledAt) => calls.push({ id, scheduledAt })} />
+      <QueuePanel queue={[item("q1", "hi", Date.now())]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(id, scheduledAt) => calls.push({ id, scheduledAt })} onReorder={() => {}} />
     );
     await flush();
 
@@ -112,7 +112,7 @@ describe("QueuePanel schedule picker (Task #22134)", () => {
     const calls: number[] = [];
     const future = Date.now() + 5 * 60_000;
     const { host } = mount(
-      <QueuePanel queue={[item("q1", "later", future)]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(_id, scheduledAt) => calls.push(scheduledAt)} />
+      <QueuePanel queue={[item("q1", "later", future)]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(_id, scheduledAt) => calls.push(scheduledAt)} onReorder={() => {}} />
     );
     await flush();
 

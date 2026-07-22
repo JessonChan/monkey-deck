@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import type { QueueItem } from "../types";
 import { useTranslation } from "react-i18next";
-import { Zap, Pencil, Trash2, Check, X, Clock } from "lucide-react";
+import { Zap, Pencil, Trash2, Check, X, Clock, GripVertical } from "lucide-react";
 
 interface Props {
   queue: QueueItem[];
@@ -9,6 +9,7 @@ interface Props {
   onRevoke: (id: string) => void;    // 撤回编辑:移出队列,文本回填输入框
   onEdit: (id: string, text: string) => void; // inline 编辑:改队列里这条的文本,保留在队列
   onSchedule: (id: string, scheduledAt: number) => void; // 定时发送:设/清这条的 scheduledAt(0/Date.now()=立即)
+  onReorder: (activeId: string, overId: string) => void; // 拖拽重排:把 activeId 这条移到 overId 这条的位置
 }
 
 // QueuePanel:turn 进行中时排队消息的列表面板。
@@ -16,13 +17,18 @@ interface Props {
 // 或「撤回编辑」(回填输入框),也可「inline 编辑」(点编辑变 input,保存写回队列)。多条 FIFO,
 // 按序逐条自动发(每条 = 一个独立 turn)。
 //
+// 拖拽重排:每条左侧的 ⠿ 手柄 draggable(HTML5 drag-drop),整行作 drop target;松手时调
+// onReorder(activeId, overId),父层把 activeId 这条移到 overId 位置,drainSession 按新顺序发。
+//
 // 编辑态 textarea 用非受控(defaultValue)+ ref:保存时直接读 DOM 当前值,既避开受控组件在
 // 事件流上的边角问题,也杜绝「state 尚未同步就读值」的 stale 风险。
 // 定时发送:同模式用 datetime-local(非受控 defaultValue + ref)。
-export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSchedule }: Props) {
+export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSchedule, onReorder }: Props) {
   const { t } = useTranslation();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [schedulingId, setSchedulingId] = useState<string | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);   // 正被拖拽的条目 id
+  const [overId, setOverId] = useState<string | null>(null);   // 拖拽悬停的目标条目 id
   const editRef = useRef<HTMLTextAreaElement>(null);
   const scheduleRef = useRef<HTMLInputElement>(null);
 
@@ -71,7 +77,24 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
       {queue.map((item, idx) => {
         const pending = item.scheduledAt > Date.now();
         return (
-        <div className="queue-item" data-testid="queue-item" key={item.id}>
+        <div
+          className={`queue-item${overId === item.id ? " drag-over" : ""}`}
+          data-testid="queue-item"
+          data-id={item.id}
+          key={item.id}
+          onDragOver={(e) => {
+            if (!dragId) return;
+            e.preventDefault();
+            if (overId !== item.id) setOverId(item.id);
+          }}
+          onDragLeave={() => { if (overId === item.id) setOverId(null); }}
+          onDrop={(e) => {
+            e.preventDefault();
+            if (dragId && dragId !== item.id) onReorder(dragId, item.id);
+            setDragId(null);
+            setOverId(null);
+          }}
+        >
           <span className="queue-idx">{idx + 1}</span>
           {editingId === item.id ? (
             <div className="queue-item-edit" data-testid="queue-edit-row">
@@ -144,6 +167,23 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
             </div>
           ) : (
             <>
+              <span
+                className="queue-grip"
+                data-testid="queue-grip"
+                data-tooltip-id="md-tip"
+                data-tooltip-content={t("queue.reorderTip")}
+                draggable
+                onDragStart={(e) => {
+                  setDragId(item.id);
+                  try {
+                    e.dataTransfer.setData("text/plain", item.id);
+                    e.dataTransfer.effectAllowed = "move";
+                  } catch { /* dataTransfer 在测试环境可能缺失,忽略 */ }
+                }}
+                onDragEnd={() => { setDragId(null); setOverId(null); }}
+              >
+                <GripVertical size={13} />
+              </span>
               <span className="queue-item-text">{item.text}</span>
               {pending ? (
                 <span className="queue-scheduled future" data-testid="queue-scheduled-send" title={t("queue.scheduledSendTip")}>

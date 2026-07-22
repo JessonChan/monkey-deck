@@ -68,7 +68,7 @@ describe("QueuePanel inline edit + scheduledAt (Task #22132)", () => {
     const calls: Array<{ id: string; text: string }> = [];
     const q = [item("q1", "hello", Date.now())];
     const { host } = mount(
-      <QueuePanel queue={q} onInterrupt={() => {}} onRevoke={() => {}} onEdit={(id, text) => calls.push({ id, text })} onSchedule={() => {}} />
+      <QueuePanel queue={q} onInterrupt={() => {}} onRevoke={() => {}} onEdit={(id, text) => calls.push({ id, text })} onSchedule={() => {}} onReorder={() => {}} />
     );
     await flush();
 
@@ -103,7 +103,7 @@ describe("QueuePanel inline edit + scheduledAt (Task #22132)", () => {
     const calls: string[] = [];
     const q = [item("q1", "hello", Date.now())];
     const { host } = mount(
-      <QueuePanel queue={q} onInterrupt={() => {}} onRevoke={() => {}} onEdit={(id, text) => calls.push(`${id}:${text}`)} onSchedule={() => {}} />
+      <QueuePanel queue={q} onInterrupt={() => {}} onRevoke={() => {}} onEdit={(id, text) => calls.push(`${id}:${text}`)} onSchedule={() => {}} onReorder={() => {}} />
     );
     await flush();
 
@@ -129,7 +129,7 @@ describe("QueuePanel inline edit + scheduledAt (Task #22132)", () => {
     const calls: string[] = [];
     const q = [item("q1", "hello", Date.now())];
     const { host } = mount(
-      <QueuePanel queue={q} onInterrupt={() => {}} onRevoke={() => {}} onEdit={(id, text) => calls.push(`${id}:${text}`)} onSchedule={() => {}} />
+      <QueuePanel queue={q} onInterrupt={() => {}} onRevoke={() => {}} onEdit={(id, text) => calls.push(`${id}:${text}`)} onSchedule={() => {}} onReorder={() => {}} />
     );
     await flush();
 

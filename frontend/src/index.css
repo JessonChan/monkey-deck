@@ -1192,6 +1192,16 @@ input, textarea { font-family: inherit; }
   background: var(--elev-2); border-radius: 4px; min-width: 18px; height: 18px;
   display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
+/* 拖拽手柄(HTML5 drag-drop 重排):仅 read 态出现,hover 高亮 + 抓取光标 */
+.queue-grip {
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-3); cursor: grab; flex-shrink: 0; padding: 2px 1px;
+  border-radius: var(--r-sm); transition: color 0.12s, background 0.12s;
+}
+.queue-grip:hover { color: var(--text); background: var(--hover); }
+.queue-grip:active { cursor: grabbing; }
+/* 拖拽悬停目标:整行高亮提示落点 */
+.queue-item.drag-over { border-color: var(--amber); background: var(--hover); box-shadow: 0 0 0 1px var(--amber) inset; }
 .queue-item-text {
   flex: 1; font-size: 13px; color: var(--text-2); line-height: 1.4;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

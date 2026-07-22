@@ -851,6 +851,24 @@ export default function App() {
     }
   }, [armScheduleTimer, drainSession]);
 
+  // 拖拽重排:把 activeId 这条移到 overId 的位置(remove 后插到 overIdx),drainSession 按新顺序发。
+  // 重 arm 定时器(order 变了首条可能变);若 idle 且新首条已到点 → 主动 drain(与 scheduleQueueItem 一致)。
+  const reorderQueue = useCallback((activeId: string, overId: string) => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid || activeId === overId) return;
+    const q = queueBySessionRef.current[sid] || [];
+    const from = q.findIndex((x) => x.id === activeId);
+    const to = q.findIndex((x) => x.id === overId);
+    if (from < 0 || to < 0) return;
+    const next = q.slice();
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: next };
+    setQueueBySession(queueBySessionRef.current);
+    armScheduleTimer(sid);
+    if (statusRef.current !== "prompting") void drainSession(sid);
+  }, [armScheduleTimer, drainSession]);
+
   const handleComposerAction = useCallback(
     (action: "clear" | "new" | "stop") => {
       if (action === "stop") {
@@ -1300,6 +1318,7 @@ export default function App() {
               onRevokeQueue={revokeQueue}
               onEditQueue={editQueueItem}
               onScheduleQueue={scheduleQueueItem}
+              onReorderQueue={reorderQueue}
               composerValue={composerValue}
               onComposerChange={onComposerChange}
               attachments={attachments}

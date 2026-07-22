@@ -265,7 +265,8 @@
     "clearSchedule": "Now",
     "clearScheduleTip": "Clear schedule: send as soon as possible (next drain)",
     "scheduledSend": "⏰ {{time}}",
-    "scheduledSendTip": "Scheduled send — will be sent after this time"
+    "scheduledSendTip": "Scheduled send — will be sent after this time",
+    "reorderTip": "Drag to reorder send order"
   },
   "terminal": {
     "closeTabTip": "Close terminal",
