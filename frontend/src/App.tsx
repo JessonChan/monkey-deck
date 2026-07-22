@@ -81,7 +81,14 @@ export default function App() {
   const [hasTermBySession, setHasTermBySession] = useState<Record<string, boolean>>({});
   const termCwdRef = useRef("");
   const queueBySessionRef = useRef<Record<string, QueueItem[]>>({});
-  const userStoppedRef = useRef(false);                    // 用户主动停止:抑制该次 idle 的 auto-continue
+  // per-session 用户主动停止标记:Stop 该 session → 加入;该 session 下一个 idle/error 的
+  // drainSession 消费一次性标记并跳过 auto-continue(队列保留)。per-session 化后,停 A 不再误抑制
+  // B 的续发(原为全局 ref:停 A 后切走,B 的 idle 会被错误抑制或漏触发)。
+  const userStoppedBySessionRef = useRef<Set<string>>(new Set());
+  // per-session 竞态隔离:同一 session 的 drain 同时只允许一个在飞。SendMessage 是绑定调用,后端
+  // runPrompt 在 goroutine 里跑,故绑定几乎立即返回、guard 仅短暂持有;但能挡住 idle/error 抖动或
+  // 重复事件触发的并发 dequeue(防跳序 / 重发)。后端 busy 守卫是最终兜底。
+  const drainingBySessionRef = useRef<Set<string>>(new Set());
   // status 派生值的 ref:sendMessage 闭包锁 status 导致「prompting 时仍直发 → 后端报 busy」,
   // 用 ref 绕过 stale closure,读取最新的派生 status。
   const statusRef = useRef<string>("empty");
@@ -246,6 +253,41 @@ export default function App() {
     setImagesBySession((prev) => ({ ...prev, [sid]: next }));
   }, []);
 
+  // auto-continue:指定 session 的 turn 结束(idle/error)时,若非用户主动停且队列非空,自动发下一条
+  // (FIFO)。每条排队消息 = 一个独立 turn,按序逐个发(协议无 queue,一次只一个 Prompt)。
+  // 由 chat:status 事件直接按 sessionId 触发(§5.3 尊重数据源:status 事件携带 sessionId,是「哪个
+  // session 该续发」的权威信号)——故后台(非选中)session 的队列也能自动续发,不再限于选中态。
+  const drainSession = useCallback(async (sid: string) => {
+    // 用户主动停止该 session:消费一次性标记,不自动续发(队列保留)。
+    if (userStoppedBySessionRef.current.has(sid)) {
+      userStoppedBySessionRef.current.delete(sid);
+      return;
+    }
+    // per-session 竞态隔离:同一 session 已有 drain 在飞 → 跳过(防重复 dequeue)。
+    if (drainingBySessionRef.current.has(sid)) return;
+    const q = queueBySessionRef.current[sid] || [];
+    if (q.length === 0) return;
+    drainingBySessionRef.current.add(sid);
+    const next = q[0];
+    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: q.slice(1) };
+    setQueueBySession(queueBySessionRef.current);
+    // error 条只对当前查看的 session 弹(后台 session 续发失败不打扰用户视图)。
+    const isViewing = sid === selectedSessionIdRef.current;
+    if (isViewing) setError(null);
+    setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
+    try {
+      await ChatService.SendMessage(sid, next.text, [
+        ...(next.mentions || []).map((m) => ({ path: m.path, name: m.name })),
+        ...(next.images || []).map((im) => ({ name: im.name, data: im.data, mimeType: im.mimeType })),
+      ]);
+    } catch (e) {
+      if (isViewing) setError(String(e));
+      setStatusBySession((prev) => ({ ...prev, [sid]: "idle" }));
+    } finally {
+      drainingBySessionRef.current.delete(sid);
+    }
+  }, []);
+
   // 启动:加载项目 + 订阅事件。
   useEffect(() => {
     void refreshProjects();
@@ -360,6 +402,13 @@ export default function App() {
         const sid = selectedSessionIdRef.current;
         if (sid) { ChatService.SessionDiff(sid).then(d => setSessionDiff(d || "")).catch(() => {}); ChatService.SessionChanges(sid).then(setSessionChanges).catch(() => {}); }
       }
+      // auto-continue:turn 结束(idle/error)→ 续发该 session 队列下一条(不限选中态,§1.6)。
+      // 由 status 事件按 sessionId 直接触发(尊重数据源:status 事件是「哪个 session 该续发」的权威
+      // 信号),后台 session 的队列也能自动续发。closed = idle reaper 回收,session 已关,不续发。
+      // 用户主动停则 drainSession 内部按 per-session 标记跳过(队列保留)。
+      if (s.status === "idle" || s.status === "error") {
+        void drainSession(s.sessionId);
+      }
     });
     const offMeta = Events.On("chat:session-meta", (e: { data: { sessionId: string; title: string } }) => {
       const m = e.data;
@@ -380,7 +429,7 @@ export default function App() {
       offMeta();
       offHarnesses();
     };
-  }, [refreshProjects, applyEvent, refreshSessions]);
+  }, [refreshProjects, applyEvent, refreshSessions, drainSession]);
 
   // 多项目同时展开:项目列表就绪后,把每个项目的 sessions 都加载进 map(本地 SQLite,快)。
   useEffect(() => {
@@ -388,36 +437,6 @@ export default function App() {
       if (!(p.id in sessionsByProject)) void refreshSessions(p.id);
     }
   }, [projects, sessionsByProject, refreshSessions]);
-
-  // auto-continue:status 转 idle 时,若非用户主动停止且队列非空,自动发下一条(FIFO)。
-  // 每条排队消息 = 一个独立 turn,按序逐个发(协议无 queue,一次只一个 Prompt)。
-  const drainQueue = useCallback(async () => {
-    const sid = selectedSessionIdRef.current;
-    if (!sid) return;
-    const q = queueBySessionRef.current[sid] || [];
-    if (q.length === 0) return;
-    const next = q[0];
-    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: q.slice(1) };
-    setQueueBySession(queueBySessionRef.current);
-    setError(null);
-    setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
-    try {
-      await ChatService.SendMessage(sid, next.text, [
-        ...(next.mentions || []).map((m) => ({ path: m.path, name: m.name })),
-        ...(next.images || []).map((im) => ({ name: im.name, data: im.data, mimeType: im.mimeType })),
-      ]);
-    } catch (e) {
- setError(String(e));
-      setStatusBySession((prev) => ({ ...prev, [sid]: "idle" }));
-    }
-  }, []);
-  useEffect(() => {
-    // idle 和 error 都触发 drain:error 时(如 peer disconnected)队列不能卡死,
-    // 下一条会走 ensureLive 重连。用户主动停则不续发(队列保留)。
-    if (status !== "idle" && status !== "error") return;
-    if (userStoppedRef.current) { userStoppedRef.current = false; return; }
-    void drainQueue();
-  }, [status, drainQueue]);
 
   // 把持久化消息转成展示 items。
   const messagesToItems = useCallback((msgs: Message[]): ChatItem[] => {
@@ -499,7 +518,7 @@ export default function App() {
       if (projectId && projectId !== selectedProjectId) setSelectedProjectId(projectId);
       setSelectedSessionId(sessionId);
       setUnreadBySession((prev) => { if (!prev[sessionId]) return prev; const n = { ...prev }; delete n[sessionId]; return n; });
-      userStoppedRef.current = false;
+      userStoppedBySessionRef.current.delete(sessionId);
       setError(null);
       await ChatService.OpenSession(sessionId);
       // 从持久化的 session 用量恢复 token 占比(无 live 记录时),使重开会话不归零(§1.6)。
@@ -666,10 +685,10 @@ export default function App() {
     [selectedSessionId]
   );
 
-  // 回合结束 drainQueue 自动续发(见下方 effect);idle 直发,status 由 chat:status 事件驱动。
+  // 回合结束 drainSession 自动续发(由 chat:status 事件按 sessionId 触发);idle 直发,status 由 chat:status 事件驱动。
   const stopSession = useCallback(async () => {
     if (!selectedSessionId) return;
-    userStoppedRef.current = true; // 抑制本次 idle 的 auto-continue(用户主动停,不自动续发;队列保留)
+    userStoppedBySessionRef.current.add(selectedSessionId); // 抑制本 session 下个 idle 的 auto-continue(用户主动停,不自动续发;队列保留)
     await ChatService.StopSession(selectedSessionId);
   }, [selectedSessionId]);
 
@@ -696,7 +715,7 @@ export default function App() {
     queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: q.filter((x) => x.id !== id) };
     setQueueBySession(queueBySessionRef.current);
     setError(null);
-    userStoppedRef.current = false;
+    userStoppedBySessionRef.current.delete(sid);
     setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
     try {
       await ChatService.InterruptAndSend(sid, item.text, [
@@ -1017,6 +1036,8 @@ export default function App() {
       setImageSupportedBySession(drop);
       setConfigOptionsBySession(drop);
       queueBySessionRef.current = drop(queueBySessionRef.current);
+      userStoppedBySessionRef.current.delete(sessionId);
+      drainingBySessionRef.current.delete(sessionId);
       delete oldestSeqRef.current[sessionId];
       loadedSessionsRef.current.delete(sessionId);
       historySeededRef.current.delete(sessionId);
