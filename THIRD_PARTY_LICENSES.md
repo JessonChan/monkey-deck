@@ -71,15 +71,16 @@ SOFTWARE.
 - **改动**:无;仅在文件顶部追加 XML 注释版权声明 + MIT 许可全文(§0.4 文件级——
   原文件无版权头,补登)
 
-### 2.3 `assets/harness-icons/omp.svg`(MIT)
+### 2.3 `assets/harness-icons/omp.png`(MIT)
 
 - **来源 / 版权**:[oh-my-pi](https://github.com/can1357/oh-my-pi)
-  —— `assets/icon.svg`
+  —— `python/robomp/assets/icon.png`(robomp 彩色品牌图标;原样借用,未改绘)
   (Copyright (c) 2025 Mario Zechner;Copyright (c) 2025-2026 Can Bölük)
 - **协议**:MIT([LICENSE](https://github.com/can1357/oh-my-pi/blob/main/LICENSE))
 - **借用方式**:原样拷贝(官方 icon,未改绘)
-- **仓库路径**:`assets/harness-icons/omp.svg`(文件名对齐 harness ID `omp`)
-- **改动**:无;仅在文件顶部追加 XML 注释版权声明 + MIT 许可全文(§0.4 文件级)
+- **仓库路径**:`assets/harness-icons/omp.png`(文件名对齐 harness ID `omp`)
+- **改动**:无;**PNG 为二进制资源,无法内嵌文件级版权头**,故仅在此处登记
+  项目级署名(§0.4 项目级)。原文件无单独 NOTICE,版权以 oh-my-pi 仓库 LICENSE 为准。
 
 > 未知 / 第三方 harness 不内置兜底图,前端用 `lucide-react` 的 `Bot` 兜底;
 > 命名约定 / 维护规则见 `assets/harness-icons/README.md`。
