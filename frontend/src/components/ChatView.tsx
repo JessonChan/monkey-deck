@@ -40,6 +40,7 @@ interface Props {
   queue: QueueItem[];
   onInterruptQueue: (id: string) => void;
   onRevokeQueue: (id: string) => void;
+  onEditQueue: (id: string, text: string) => void;
   composerValue: string;
   onComposerChange: (v: string) => void;
   attachments: string[];
@@ -560,6 +561,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           queue={props.queue}
           onInterrupt={props.onInterruptQueue}
           onRevoke={props.onRevokeQueue}
+          onEdit={props.onEditQueue}
         />
         <Composer
           value={props.composerValue}

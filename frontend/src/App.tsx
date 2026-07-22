@@ -669,7 +669,7 @@ export default function App() {
       // 回合进行中(statusRef 防 stale closure):入队而非直发,避免后端 busy 报错。
       // statusRef.current 始终反映最新 status,闭包锁的 status 可能在 re-render 前仍为旧值。
       if (statusRef.current === "prompting") {
-        const item: QueueItem = { id: `q-${Date.now()}-${selectedSessionId}`, text, mentions, images: imgs };
+        const item: QueueItem = { id: `q-${Date.now()}-${selectedSessionId}`, text, mentions, images: imgs, scheduledAt: Date.now() };
         queueBySessionRef.current = {
           ...queueBySessionRef.current,
           [selectedSessionId]: [...(queueBySessionRef.current[selectedSessionId] || []), item],
@@ -746,7 +746,7 @@ export default function App() {
         if (cur[cur.length - 1] === text) return prev; // 与最后一条相同则不重复
         return { ...prev, [selectedSessionId]: [...cur, text] };
       });
-      const item: QueueItem = { id: `q-${Date.now()}-${selectedSessionId}`, text, mentions, images: imgs };
+      const item: QueueItem = { id: `q-${Date.now()}-${selectedSessionId}`, text, mentions, images: imgs, scheduledAt: Date.now() };
       queueBySessionRef.current = {
         ...queueBySessionRef.current,
         [selectedSessionId]: [...(queueBySessionRef.current[selectedSessionId] || []), item],
@@ -774,6 +774,19 @@ export default function App() {
       const cur = prev[sid] || "";
       return { ...prev, [sid]: cur.trim() ? cur + "\n" + item.text : item.text };
     });
+  }, []);
+
+  // inline 编辑:直接改队列里某条的文本(mentions/images/scheduledAt 原地保留),不离开队列。
+  const editQueueItem = useCallback((id: string, text: string) => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    const q = queueBySessionRef.current[sid] || [];
+    const idx = q.findIndex((x) => x.id === id);
+    if (idx < 0) return;
+    const next = q.slice();
+    next[idx] = { ...q[idx], text };
+    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: next };
+    setQueueBySession(queueBySessionRef.current);
   }, []);
 
   const handleComposerAction = useCallback(
@@ -1221,6 +1234,7 @@ export default function App() {
               queue={queue}
               onInterruptQueue={interruptQueue}
               onRevokeQueue={revokeQueue}
+              onEditQueue={editQueueItem}
               composerValue={composerValue}
               onComposerChange={onComposerChange}
               attachments={attachments}

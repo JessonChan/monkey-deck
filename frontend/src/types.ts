@@ -121,11 +121,13 @@ export interface Usage {
 }
 
 // 排队消息(前端队列:ACP 协议无 queue,turn 进行中的消息先入前端队列,回合结束自动续发)。
+// scheduledAt:入队时刻(Date.now()),QueuePanel 据此显示排队时间。
 export interface QueueItem {
   id: string;
   text: string;
   mentions?: Mention[];
   images?: ImageAttachment[];
+  scheduledAt: number;
 }
 
 // 前端展示用的对话条目(由持久化历史 + 实时流式合并而来)。
