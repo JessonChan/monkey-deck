@@ -278,6 +278,18 @@ input, textarea { font-family: inherit; }
 }
 .unread-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--accent); }
 .perm-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: #ffd60a; box-shadow: 0 0 0 2px rgba(255,214,10,0.2); animation: perm-pulse 1.4s ease-in-out infinite; }
+/* 设置入口齿轮 / 设置内 harness 菜单的「有新版」红点(§设置入口/harness 菜单红点)。
+   父按钮加 .has-update-dot 提供 position:relative 锚点;红点贴右上角。 */
+.has-update-dot { position: relative; }
+.update-dot {
+  position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--red); box-shadow: 0 0 0 2px var(--sidebar-solid);
+  pointer-events: none;
+}
+/* harness 菜单导航项里的红点:跟在文字后(贴右),并恢复 hover 以承接 tooltip。 */
+.settings-nav-item .update-dot {
+  position: static; margin-left: auto; pointer-events: auto;
+}
 @keyframes perm-pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.78); } }
 .session-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--text-3); }
 .session-dot.running { background: var(--green); }

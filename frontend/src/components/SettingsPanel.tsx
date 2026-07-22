@@ -32,9 +32,11 @@ const CATEGORIES: CategoryDef[] = [
 interface Props {
   onClose: () => void;
   initialCategory?: CategoryId;
+  // 有 harness 新版时,harness 菜单(harness 分类导航项)亮红点(§设置入口/harness 菜单红点)。
+  harnessUpdateAvailable?: boolean;
 }
 
-export default function SettingsPanel({ onClose, initialCategory = "general" }: Props) {
+export default function SettingsPanel({ onClose, initialCategory = "general", harnessUpdateAvailable = false }: Props) {
   const { t } = useTranslation();
   const [active, setActive] = useState<CategoryId>(initialCategory);
 
@@ -68,15 +70,23 @@ export default function SettingsPanel({ onClose, initialCategory = "general" }: 
           <nav className="settings-nav" data-testid="settings-nav">
             {CATEGORIES.map((c) => {
               const Icon = c.icon;
+              const dot = c.id === "models" && harnessUpdateAvailable;
               return (
                 <button
                   key={c.id}
-                  className={`settings-nav-item ${active === c.id ? "active" : ""}`}
+                  className={`settings-nav-item has-update-dot ${active === c.id ? "active" : ""}`}
                   data-testid={`settings-cat-${c.id}`}
                   onClick={() => setActive(c.id)}
                 >
                   <Icon size={14} />
                   <span>{t(c.labelKey)}</span>
+                  {dot && (
+                    <span
+                      className="update-dot"
+                      data-tooltip-id="md-tip"
+                      data-tooltip-content={t("settings.harness.updateDotTip")}
+                    />
+                  )}
                 </button>
               );
             })}

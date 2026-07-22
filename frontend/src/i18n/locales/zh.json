@@ -322,6 +322,7 @@
   "settings": {
     "center": {
       "openTip": "设置",
+      "openTipUpdate": "设置 · 有 harness 新版本",
       "title": "设置",
       "cat": {
         "general": "通用",
@@ -404,7 +405,10 @@
       "upgradeTip": "调用此 harness 自己的升级命令拉取最新版本",
       "upgradeDone": "已升级",
       "upgradeFailed": "升级失败",
-      "upToDate": "已是最新"
+      "upToDate": "已是最新",
+      "autoCheckTitle": "自动检查 harness 更新",
+      "autoCheckDesc": "运行时定期重新扫描并对照上游发布源;发现新版时在设置入口与 harness 菜单亮红点(默认开启)。",
+      "updateDotTip": "有 harness 新版本"
     }
   }
 }

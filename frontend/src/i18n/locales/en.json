@@ -322,6 +322,7 @@
   "settings": {
     "center": {
       "openTip": "Settings",
+      "openTipUpdate": "Settings · harness update available",
       "title": "Settings",
       "cat": {
         "general": "General",
@@ -404,7 +405,10 @@
       "upgradeTip": "Run this harness's own upgrade command to fetch the latest version",
       "upgradeDone": "Upgraded",
       "upgradeFailed": "Upgrade failed",
-      "upToDate": "Up to date"
+      "upToDate": "Up to date",
+      "autoCheckTitle": "Auto-check harness updates",
+      "autoCheckDesc": "Periodically re-scan and check upstream releases while running; show a red dot on the settings entry and harness menu when a newer version is found (on by default).",
+      "updateDotTip": "A harness update is available"
     }
   }
 }

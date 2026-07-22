@@ -42,6 +42,8 @@ interface Props {
   onReorderProjects: (ids: string[]) => void;
   onCollapse?: () => void;
   onOpenSettings: () => void;
+  // 有 harness 新版时,齿轮入口亮红点(§设置入口/harness 菜单红点)。
+  harnessUpdateAvailable?: boolean;
 }
 
 // 可拖拽项目行(0007):折叠态整行可拖,展开态 disabled(不可主动拖,但仍可被其他项挤动)。
@@ -275,8 +277,9 @@ export default function Sidebar(props: Props) {
           <button className="icon-btn" data-testid="collapse-sidebar" onClick={() => props.onCollapse?.()} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.collapse")} data-tooltip-place="bottom">
             <PanelLeftClose size={16} />
           </button>
-          <button className="icon-btn" data-testid="open-settings" onClick={props.onOpenSettings} data-tooltip-id="md-tip" data-tooltip-content={t("settings.center.openTip")} data-tooltip-place="bottom">
+          <button className="icon-btn has-update-dot" data-testid="open-settings" onClick={props.onOpenSettings} data-tooltip-id="md-tip" data-tooltip-content={props.harnessUpdateAvailable ? t("settings.center.openTipUpdate") : t("settings.center.openTip")} data-tooltip-place="bottom">
             <Settings size={16} />
+            {props.harnessUpdateAvailable && <span className="update-dot" />}
           </button>
           <button className="icon-btn" data-testid="add-project" onClick={startAdd} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.addProject")} data-tooltip-place="bottom">
             <Plus size={17} />

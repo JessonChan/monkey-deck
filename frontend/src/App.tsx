@@ -68,6 +68,11 @@ export default function App() {
   // messagesToItems 转为 type:'plan' ChatItem 内联渲染。null = 当前无实时 plan。
   const [livePlanBySession, setLivePlanBySession] = useState<Record<string, LivePlan | null>>({});
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
+  // 任一 harness 有新版 → 设置入口齿轮 + 设置内 harness 菜单亮红点(§设置入口/harness 菜单红点)。
+  const harnessUpdateAvailable = useMemo(
+    () => harnesses.some((h) => h.upgradeAvailable),
+    [harnesses],
+  );
   const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean; lastHarness: string } | null>(null);  // 新建对话弹窗
   const [settingsOpen, setSettingsOpen] = useState(false); // 统一设置中心面板(收敛语言/提示音/权限/harness)
   // 集成终端(per-session,与 agent ACP 通道完全分离;§1.1 agent 永远走 ACP)。
@@ -1153,6 +1158,7 @@ export default function App() {
           onReorderProjects={reorderProjects}
           onCollapse={collapseSidebar}
           onOpenSettings={() => setSettingsOpen(true)}
+          harnessUpdateAvailable={harnessUpdateAvailable}
         />
       </Panel>
       {!leftCollapsed && <Separator className="resize-handle" />}
@@ -1303,7 +1309,7 @@ export default function App() {
       />
     )}
     {settingsOpen && (
-      <SettingsPanel onClose={() => setSettingsOpen(false)} />
+      <SettingsPanel onClose={() => setSettingsOpen(false)} harnessUpdateAvailable={harnessUpdateAvailable} />
     )}
     <Tooltip id="md-tip" delayShow={isMac ? 1500 : 500} />
     </>

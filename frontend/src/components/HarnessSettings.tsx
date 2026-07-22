@@ -13,9 +13,20 @@ export default function HarnessPane() {
   const [list, setList] = useState<Harness[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // 「自动检查 harness 更新」开关:真相源在后端 SQLite(check_harness_updates),
+  // 后台 ticker 据此启停(Task #22121)。这里经 GetCheckHarnessUpdates/SetCheckHarnessUpdates
+  // 直接读写后端设置,实时启停 ticker;不另存前端镜像(单一真相源,§5.3 Less is More)。
+  const [autoCheck, setAutoCheck] = useState<boolean>(true);
   // per-harness 升级状态:id → "running" | "ok" | "err"
   const [upgrading, setUpgrading] = useState<Record<string, "running" | "ok" | "err">>({});
   const [error, setError] = useState<string | null>(null);
+
+  // 拉后端开关当前值(默认开)。失败兜底为 true,与后端默认一致。
+  useEffect(() => {
+    ChatService.GetCheckHarnessUpdates()
+      .then((v) => setAutoCheck(v))
+      .catch(() => {});
+  }, []);
 
   const reload = useCallback(async () => {
     try {
@@ -60,6 +71,19 @@ export default function HarnessPane() {
     }
   }, []);
 
+  // 切换开关:写后端 SQLite 设置(SetCheckHarnessUpdates 实时启停后台 ticker)。
+  // 失败不回滚 UI(下次 GetCheckHarnessUpdates 会把 UI 纠正回真相值)。
+  const toggleAutoCheck = useCallback(async () => {
+    const next = !autoCheck;
+    setAutoCheck(next);
+    try {
+      await ChatService.SetCheckHarnessUpdates(next);
+    } catch (e) {
+      setError(String(e));
+      setAutoCheck(!next);
+    }
+  }, [autoCheck]);
+
   return (
     <div className="settings-pane" data-testid="harness-pane">
       <div className="pane-head">
@@ -77,6 +101,22 @@ export default function HarnessPane() {
       </div>
 
       {error && <div className="modal-del-err">{error}</div>}
+
+      <div className="settings-row" data-testid="harness-autocheck-row">
+        <div className="settings-row-text">
+          <div className="settings-row-title">{t("settings.harness.autoCheckTitle")}</div>
+          <div className="settings-row-sub">{t("settings.harness.autoCheckDesc")}</div>
+        </div>
+        <button
+          className={`settings-switch ${autoCheck ? "on" : ""}`}
+          role="switch"
+          aria-checked={autoCheck}
+          data-testid="harness-autocheck"
+          onClick={() => void toggleAutoCheck()}
+        >
+          <span className="settings-switch-thumb" />
+        </button>
+      </div>
 
       <div className="harness-list" data-testid="harness-list">
         {loading && <div className="perm-empty">{t("settings.harness.loading")}</div>}
