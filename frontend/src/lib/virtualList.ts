@@ -35,6 +35,11 @@ export const PRIOR_HEIGHT: Record<ChatItem["type"], number> = {
   plan: 120,
 };
 
+/** 尾部区(加载更多/权限卡/实时 plan/打字指示)未实测前的估算高度(px);实测后覆盖。 */
+export const TAIL_PRIOR = 60;
+/** 顶部留白(px):与 .chat-body 的 padding-top 一致,使布局坐标与 scrollTop 同系。 */
+export const HEAD_PRIOR = 22;
+
 /** 渲染行(虚拟化单元):连续 tool 折叠成组后的一行,与 ChatView 的 .cv-item 一一对应。 */
 export interface VRow {
   id: string; // 首条 item 的 id = data-iid 锚点键
@@ -96,7 +101,11 @@ export class HeightModel {
   }
 }
 
-/** 前缀和布局:tops[i]/heights[i] = 第 i 行顶部偏移/高度,tailTop = 尾部区顶部,total = 内容总高。 */
+/**
+ * 前缀和布局:tops[i]/heights[i] = 第 i 行顶部偏移/高度,tailTop = 尾部区顶部,total = 内容总高。
+ * headPad = 顶部留白(滚动容器 padding 的等价物):所有坐标含 headPad,与 el.scrollTop 同坐标系,
+ * 消费方(窗口/贴底/锚点)无需再做偏移换算。
+ */
 export interface Layout {
   tops: number[];
   heights: number[];
@@ -104,11 +113,11 @@ export interface Layout {
   total: number;
 }
 
-export function computeLayout(rows: VRow[], model: HeightModel, tailH: number): Layout {
+export function computeLayout(rows: VRow[], model: HeightModel, tailH: number, headPad = 0): Layout {
   const n = rows.length;
   const tops: number[] = new Array(n);
   const heights: number[] = new Array(n);
-  let acc = 0;
+  let acc = headPad;
   for (let i = 0; i < n; i++) {
     const h = model.h(rows[i]);
     tops[i] = acc;

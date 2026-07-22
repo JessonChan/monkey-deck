@@ -117,6 +117,18 @@ describe("computeLayout", () => {
     expect(layout.total).toBe(340);
   });
 
+  test("headPad:所有坐标整体下移,total 含留白", () => {
+    const layout = computeLayout(
+      Array.from({ length: 2 }, (_, i) => ({ id: `r${i}`, kind: "agent", first: i, last: i + 1 }) as VRow),
+      fixedModel(),
+      40,
+      22
+    );
+    expect(layout.tops).toEqual([22, 122]);
+    expect(layout.tailTop).toBe(222);
+    expect(layout.total).toBe(262);
+  });
+
   test("空行集 → total = tailH", () => {
     const layout = computeLayout([], fixedModel(), 25);
     expect(layout.total).toBe(25);
