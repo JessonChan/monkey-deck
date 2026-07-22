@@ -13,7 +13,7 @@ import FilePreviewOverlay, { type PreviewTarget } from "./FilePreviewOverlay";
 import MermaidRenderer from "./MermaidRenderer";
 import PathLinkified from "./PathLinkified";
 import { countDiffLines, diffLineCls } from "../lib/diff";
-import { findTopAnchor, type AnchorProbe } from "../lib/scrollAnchor";
+import { buildRows, computeLayout, computeWindow, anchorAt, restoreScroll, isAtBottom, HeightModel, TAIL_PRIOR, HEAD_PRIOR, type VRow, type Layout } from "../lib/virtualList";
 import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, RefreshCw, Eye, MessageSquarePlus } from "lucide-react";
 
 interface Props {
@@ -95,49 +95,34 @@ export interface ChatViewHandle {
 export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props, ref) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
-  // 内容层(items 的容器):ResizeObserver 观察它拿「内容高度变化」,与观察容器(clientHeight)互补。
-  // content-visibility 估算→真实渲染、图片晚载等「内容长个但 items 没变」的场景都靠它重新贴底。
+  // 内容层:绝对定位行 + 尾部区的容器。高度 = 布局 total(显式撑开滚动条),行位置由模型单方面设定。
   const contentRef = useRef<HTMLDivElement>(null);
   const { items } = props;
   // 用户是否贴底:记最近一次滚动的「贴底」状态。新消息到来时只在贴底才自动滚,
   // 用户向上翻阅历史时不打断(避免每条新消息强制拽回底部)。
   const stickToBottomRef = useRef(true);
-  // 按 session 记忆滚动位置:锚点 = 视口顶部条目的 id + 条内偏移,stick = 是否贴底。
+  // 按 session 记忆滚动位置:锚点 = 视口顶部行的 id + 条内偏移,stick = 是否贴底。
   // 切走时存、切回时恢复——用户读到哪里就从哪里继续;贴底的恢复到底部(看最新)。
-  // 不记像素 scrollTop:content-visibility 估算下像素坐标不稳定(见 lib/scrollAnchor.ts)。
+  // 不记像素 scrollTop:高度模型先验→实测会收敛,像素坐标不稳定;行 id 才是稳定坐标(§5.3)。
   const scrollStateRef = useRef<Map<string, { iid: string; off: number; stick: boolean }>>(new Map());
   // sessionId 的实时镜像:onScroll 的 rAF 回调读它而不是闭包里的 props——
   // 否则切换瞬间挂起的 rAF 会把新 session 的几何信息记到旧 session 名下(触控板惯性滚动必现)。
   const sessionIdLiveRef = useRef("");
   sessionIdLiveRef.current = props.session?.id || "";
-  // 锚点钉住:恢复位置后内容高度还会变(content-visibility 估算→真实,多数回落),settle 期间
-  // 在内容 RO 回调里反复重对齐到锚点;实测不加这层时 scrollTop 被回落的 maxScroll 夹到底部、
-  // 位置记忆被改写成 stick=true(2026-07-18 实测 trace)。解除 = 用户表达滚动意图(wheel/
-  // touch/key/pointer 输入事件,见 RO effect);位置比较仅作兜底(滚动条拖动可能不发 pointer事件)。
-  const pinRef = useRef<{ iid: string; off: number } | null>(null);
-  // 最近一次「钉住重对齐」实际写入的 scrollTop(浏览器夹取后的回读值)。兜底判据用它区分
-  // 「锚点自己动了」(scrollTop 仍等于上次写入)与「用户滚了」(与上次写入/当前目标都偏离)。
-  const lastPinAppliedRef = useRef<number | null>(null);
-  // 钉住目标位的当前像素值:锚点条目 offsetTop + 条内偏移(off = scrollTop - 条目 top,见
-  // findTopAnchor;恢复时 scrollTop = 条目 top + off)。估算回落时该值跟着变,所以能追踪。
-  const pinTopOf = (): number | null => {
-    const pin = pinRef.current;
-    const contentEl = contentRef.current;
-    if (!pin || !contentEl) return null;
-    const a = contentEl.querySelector<HTMLElement>(`:scope > .cv-item[data-iid="${CSS.escape(pin.iid)}"]`);
-    if (!a) return null;
-    return contentEl.offsetTop + a.offsetTop + pin.off;
-  };
+  // 虚拟化高度模型(唯一高度事实源,见 lib/virtualList.ts):实测 Map + 类型先验。
+  // 按 session 切走 prune 防无界增长;切回重载后实测清空、由 RO 重测收敛。
+  const modelRef = useRef(new HeightModel());
+  // 布局缓存:每次 render 由 (rows, model, tailH) 重算并写入;onScroll 的 rAF 回调读它判贴底/锚点,
+  // 不读 el.scrollHeight(虚拟化下 scrollHeight 恒 = 显式 total,读它无信息且触发强制布局)。
+  const layoutRef = useRef<Layout>({ tops: [], heights: [], tailTop: 0, total: 0 });
+  // 尾部区(加载更多/权限卡/实时 plan/打字指示)实测高度;未实测前用 TAIL_PRIOR。
+  const tailHRef = useRef(TAIL_PRIOR);
+  // 当前锚点(非贴底时):行 id + 条内偏移。锚点上方行变高 → 补偿 scrollTop 保持视觉位置(A 不变量)。
+  const anchorRef = useRef<{ iid: string; off: number } | null>(null);
   const prevSessionIdRef = useRef<string>("");
-  // prepend(加载更多)检测:记录上一轮的首条 id + 容器高度,比较后算高度差补偿 scrollTop。
+  // prepend(加载更多)检测:记录上一轮的首条 id,首条变了 → 补偿新增行高度,保持视觉位置(P 不变量)。
   const prevFirstIdRef = useRef<string>("");
-  const prevHeightRef = useRef(0);
   const loadMoreRef = useRef<HTMLButtonElement>(null);
-  // 滚动掉帧优化:scrollHeight 的缓存值(在 items 变化/容器 resize 时更新)。
-  // onScroll 用它判断「是否贴底」,避免每次滚动事件都读 el.scrollHeight —— 后者会触发同步强制
-  // 布局(layout thrashing),是滚动掉帧主因;content-visibility 下 scrollHeight 解算更贵。
-  // scrollTop/clientHeight 在无 DOM/样式变更时不强制布局,读取廉价。
-  const scrollHeightRef = useRef(0);
   // onScroll 的 rAF 句柄:一帧内多个 scroll 事件合并处理一次,杜绝布局抖动。
   const scrollRafRef = useRef(0);
   // Floating scroll-to-bottom button visibility: true = show FAB (user is reading history).
@@ -168,18 +153,73 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     setPreviewTarget({ path, line });
   }, []);
   const closeFilePreview = useCallback(() => setPreviewTarget(null), []);
+  // ─── 虚拟化:状态 / 派生数据 / 助手 ───
+  // 窗口 [start, end):只有这些行进入 DOM。区间变化才 setState(W 不变量)。
+  const [win, setWin] = useState({ start: 0, end: 0 });
+  // 模型版本号:实测高度写入即 bump → 触发布局重算 + 重渲染。
+  const [modelVersion, setModelVersion] = useState(0);
+  // 头部区(顶部留白/加载更多/占位)实测高度;未实测前用 HEAD_PRIOR。
+  const headHRef = useRef(HEAD_PRIOR);
+  // rows 最新镜像:rAF/RO 回调读它,不读闭包。
+  const rowsRef = useRef<VRow[]>([]);
+  // 共享 ResizeObserver + 已观察元素集合(随窗口/items 变化与 DOM 同步)。
+  const roRef = useRef<ResizeObserver | null>(null);
+  const observedRef = useRef<Set<Element>>(new Set());
+  // pendingScrollRef:切走丢弃后切回的 session 要从 DB 异步重载,切换瞬间 items 仍为空。
+  // 若此时定位会落到错位(空容器下值无意义);等 items 到达时切换分支已不再触发 → 卡在错位。
+  // 故 items 为空时推迟定位,记下待定 session,items 首次非空时补做(见 useLayoutEffect)。
+  const pendingScrollRef = useRef<string | null>(null);
+
+  // rows = 把 items 折叠成渲染行(连续 tool 成组);layout = 前缀和几何(唯一坐标事实,含 headPad 与 scrollTop 同系)。
+  const rows = useMemo(() => buildRows(items), [items]);
+  const layout = useMemo(
+    () => computeLayout(rows, modelRef.current, tailHRef.current, headHRef.current),
+    // modelRef/tailHRef/headHRef 是 ref:modelVersion bump 是重算信号(RO 回调写入时保证同步 bump)。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, modelVersion]
+  );
+  // render 期写镜像:rAF/RO 回调读最新值(不读 el.scrollHeight,虚拟化下它恒 = 显式 total)。
+  layoutRef.current = layout;
+  rowsRef.current = rows;
+
+  // 窗口计算(W):overscan 取 600px 与一屏的较大者。
+  const computeWinFor = useCallback((lay: Layout, scrollTop: number) => {
+    const viewport = scrollRef.current?.clientHeight ?? 0;
+    return computeWindow(lay, scrollTop, viewport, Math.max(600, viewport));
+  }, []);
+
+  // 窗口区间真正变化才 setState(滚动在同一窗口内逐帧不重渲染)。
+  const setWinIfChanged = useCallback((next: { start: number; end: number }) => {
+    setWin((prev) => (prev.start === next.start && prev.end === next.end ? prev : next));
+  }, []);
+
+  // 把 RO 观察集合与当前 DOM 同步:观察新挂载的 .cv-item/.cv-head/.cv-tail,取消已移除的。
+  const syncObserved = useCallback(() => {
+    const ro = roRef.current;
+    const contentEl = contentRef.current;
+    if (!ro || !contentEl) return;
+    const observed = observedRef.current;
+    const current = new Set<Element>();
+    contentEl.querySelectorAll<HTMLElement>(".cv-item, .cv-head, .cv-tail").forEach((el) => current.add(el));
+    for (const el of current) if (!observed.has(el)) { ro.observe(el); observed.add(el); }
+    for (const el of observed) if (!current.has(el)) { ro.unobserve(el); observed.delete(el); }
+  }, []);
+
   // Expose imperative scrollToBottom to parent (used right after user sends a message).
   useImperativeHandle(ref, () => ({
     scrollToBottom: () => {
       const el = scrollRef.current;
       if (!el) return;
-      pinRef.current = null; // 用户/父级明确要到底 → 解除钉住
-      lastPinAppliedRef.current = null;
-      el.scrollTop = el.scrollHeight;
+      anchorRef.current = null; // 明确要到底 → 清除锚点
       stickToBottomRef.current = true;
+      const bottom = Math.max(0, layoutRef.current.total - el.clientHeight);
+      el.scrollTop = bottom;
       setShowScrollBtn(false);
+      // 立即按底部 scrollTop 重算窗口(不等 scroll 事件回环)。
+      setWinIfChanged(computeWinFor(layoutRef.current, bottom));
     },
-  }), []);
+  }), [computeWinFor, setWinIfChanged]);
+
   const onScroll = () => {
     // rAF 合批:同一帧内多个 scroll 事件只处理一次,避免与浏览器绘制竞争造成掉帧。
     if (scrollRafRef.current) return;
@@ -187,77 +227,52 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       scrollRafRef.current = 0;
       const el = scrollRef.current;
       if (!el) return;
-      // 自愈:scrollTop+clientHeight 不可能超过真实 scrollHeight(浏览器会夹住 scrollTop)。
-      // 若超过缓存值,说明内容增长了而缓存未刷新(折叠块展开/图片加载等不触发 items/resize 的场景),
-      // 此时才读真实 scrollHeight 修正。纯滚动(无内容变化)不会触发 → 不在此处付出 content-visibility 解算代价。
-      if (el.scrollTop + el.clientHeight > scrollHeightRef.current) {
-        scrollHeightRef.current = el.scrollHeight;
-      }
-      // 钉住期(主解除路径是输入事件,见 RO effect):与「当前锚点目标」和「上次重对齐写入值」
-      // 都偏离 → 兜底判定为用户接管(滚动条拖动等),解除钉住;否则保持钉住,只重存锚点语义
-      // (stick=false),不让 settle 期被夹取的几何把记忆改写成贴底。
-      if (pinRef.current) {
-        const pinTop = pinTopOf();
-        const expected = pinTop === null ? null : Math.min(Math.max(0, pinTop), Math.max(0, el.scrollHeight - el.clientHeight));
-        const deviates = (v: number | null) => v === null || Math.abs(el.scrollTop - v) > 2;
-        if (expected === null || (deviates(expected) && deviates(lastPinAppliedRef.current))) {
-          pinRef.current = null;
-        } else {
-          stickToBottomRef.current = false;
-          setShowScrollBtn((prev) => (prev === true ? prev : true));
-          scrollStateRef.current.set(sessionIdLiveRef.current, { iid: pinRef.current.iid, off: pinRef.current.off, stick: false });
-          return;
-        }
-      }
-      // 用缓存的 scrollHeight(见 scrollHeightRef 注释),不在此处读 el.scrollHeight 触发强制布局。
-      const nearBottom = scrollHeightRef.current - el.scrollTop - el.clientHeight <= 80;
+      const lay = layoutRef.current;
+      const nearBottom = isAtBottom(lay.total, el.scrollTop, el.clientHeight);
       stickToBottomRef.current = nearBottom;
       // 仅在状态真正翻转时 setState(避免每帧无谓的 setter 调用)。
       setShowScrollBtn((prev) => (prev === !nearBottom ? prev : !nearBottom));
-      // 锚点 = 视口顶部命中的条目(.cv-item 按文档序 = top 升序,二分)。布局干净时 offsetTop/
-      // offsetHeight 读取不强制布局,廉价;流式脏布局的首读与既有 scrollHeight 自愈读同价。
-      const contentEl = contentRef.current;
-      let anchor: { id: string; off: number } | null = null;
-      if (contentEl) {
-        const base = contentEl.offsetTop;
-        const probes: AnchorProbe[] = [];
-        contentEl.querySelectorAll<HTMLElement>(":scope > .cv-item").forEach((k) => {
-          if (k.dataset.iid) probes.push({ id: k.dataset.iid, top: base + k.offsetTop, height: k.offsetHeight });
-        });
-        anchor = findTopAnchor(probes, el.scrollTop);
-      }
+      // 锚点(A 不变量):视口顶部命中的行 + 条内偏移;贴底则清除。
       // sessionId 读实时镜像(见 sessionIdLiveRef),不用本闭包的 props.session。
-      scrollStateRef.current.set(sessionIdLiveRef.current, { iid: anchor?.id ?? "", off: anchor?.off ?? 0, stick: nearBottom });
+      const a = anchorAt(lay, el.scrollTop);
+      if (nearBottom || !a) {
+        anchorRef.current = null;
+        scrollStateRef.current.set(sessionIdLiveRef.current, { iid: "", off: 0, stick: true });
+      } else {
+        const iid = rowsRef.current[a.index]?.id ?? "";
+        anchorRef.current = iid ? { iid, off: a.off } : null;
+        scrollStateRef.current.set(sessionIdLiveRef.current, { iid, off: a.off, stick: false });
+      }
+      // 窗口重算(W 不变量)。
+      setWinIfChanged(computeWinFor(lay, el.scrollTop));
     });
   };
-  // pendingScrollRef:切走丢弃后切回的 session 要从 DB 异步重载,切换瞬间 items 仍为空。
-  // 若此时按既有逻辑算 scrollHeight/saved.top 定位,会落到错位(空容物下值无意义),
-  // 等 items 到达时切换分支已不再触发 → 卡在错位。故 items 为空时推迟定位,记下待定 session,
-  // items 首次非空时补做(见 useLayoutEffect)。切走丢弃前 items 缓存同步在,不触发推迟。
-  const pendingScrollRef = useRef<string | null>(null);
+
   // 切换/重载后的一次性定位:有锚点记忆且非贴底 → 恢复到该条目原位;否则贴底(看最新)。
-  // 此刻内容高度仍是 content-visibility 估算值:锚点恢复自洽(条目估算位就是它当前的位
-  // 置);贴底则是「估算底部」,之后由内容层 ResizeObserver 随真实渲染持续收敛到真底部。
+  // 此刻高度仍是先验估算:锚点恢复自洽(估算位即当前位置);贴底则是「估算底部」,
+  // 之后由 ResizeObserver 随真实渲染持续收敛到真底部。
   const applyInitialPosition = (el: HTMLDivElement, sessionId: string) => {
     const saved = scrollStateRef.current.get(sessionId);
-    const contentEl = contentRef.current;
-    const anchorEl = saved && !saved.stick && saved.iid && contentEl
-      ? contentEl.querySelector<HTMLElement>(`:scope > .cv-item[data-iid="${CSS.escape(saved.iid)}"]`)
+    const lay = layoutRef.current;
+    const restored = saved && !saved.stick && saved.iid
+      ? restoreScroll(lay, rowsRef.current, saved.iid, saved.off)
       : null;
-    if (anchorEl && contentEl && saved) {
+    if (restored !== null && saved) {
       stickToBottomRef.current = false;
+      anchorRef.current = { iid: saved.iid, off: saved.off };
       setShowScrollBtn(true);
-      pinRef.current = { iid: saved.iid, off: saved.off }; // 钉住锚点直到用户接管(见 pinRef 注释)
-      el.scrollTop = Math.max(0, contentEl.offsetTop + anchorEl.offsetTop + saved.off);
-      lastPinAppliedRef.current = el.scrollTop; // 回读浏览器夹取后的实际值(兜底判据用)
+      el.scrollTop = restored;
+      setWinIfChanged(computeWinFor(lay, restored));
     } else {
       stickToBottomRef.current = true;
+      anchorRef.current = null;
       setShowScrollBtn(false);
-      pinRef.current = null;
-      lastPinAppliedRef.current = null;
-      el.scrollTop = el.scrollHeight;
+      const bottom = Math.max(0, lay.total - el.clientHeight);
+      el.scrollTop = bottom;
+      setWinIfChanged(computeWinFor(lay, bottom));
     }
   };
+
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -265,18 +280,17 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     // 切 session:瞬间定位(不动画,避免「乱滚」)。有记忆且不在底部 → 恢复原位;否则贴底(看最新)。
     if (prevSessionIdRef.current !== sessionId) {
       prevSessionIdRef.current = sessionId;
+      // 实测高度剪枝到当前行集(防 Map 无界增长)。
+      modelRef.current.prune(new Set(rows.map((r) => r.id)));
       if (items.length > 0) {
-        // items 已在(切走丢弃未丢此 session / 已加载过):立刻定位。
         pendingScrollRef.current = null;
         applyInitialPosition(el, sessionId);
       } else {
         // items 还没到(切走丢弃重载中 / 首次加载中):推迟定位,等 items 到来再补做,否则错位。
         pendingScrollRef.current = sessionId;
-        pinRef.current = null; // 旧 session 的钉住不带过切换
-        lastPinAppliedRef.current = null;
+        anchorRef.current = null; // 旧 session 的锚点不带过切换
       }
       prevFirstIdRef.current = items.length > 0 ? items[0].id : "";
-      prevHeightRef.current = scrollHeightRef.current = el.scrollHeight;
       return; // 切换瞬间一次性定位,不走下面的逻辑。
     }
     // 待定位 session 的 items 到达(DB 重载完成 / 首次加载完成):补做定位。
@@ -284,70 +298,86 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       pendingScrollRef.current = null;
       applyInitialPosition(el, sessionId);
       prevFirstIdRef.current = items[0].id;
-      prevHeightRef.current = scrollHeightRef.current = el.scrollHeight;
       return;
     }
-    // 加载更多(prepend):首条 id 变了 → 补偿高度差,保持用户视觉位置不动。
+    // 加载更多(prepend):首条 id 变了 → 补偿插入行的高度,保持用户视觉位置不动(P 不变量)。
     const firstId = items.length > 0 ? items[0].id : "";
     if (firstId !== prevFirstIdRef.current && prevFirstIdRef.current !== "" && firstId) {
-      const delta = el.scrollHeight - prevHeightRef.current;
-      el.scrollTop += delta;
-      stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 80;
+      const idx = rows.findIndex((r) => r.id === prevFirstIdRef.current);
+      if (idx > 0) {
+        // 旧首行新 top - 头部区高度(头区不变) = 插入行的高度。
+        el.scrollTop += layout.tops[idx] - headHRef.current;
+      }
+      stickToBottomRef.current = isAtBottom(layout.total, el.scrollTop, el.clientHeight);
       setShowScrollBtn(!stickToBottomRef.current);
       prevFirstIdRef.current = firstId;
-      prevHeightRef.current = scrollHeightRef.current = el.scrollHeight;
+      setWinIfChanged(computeWinFor(layout, el.scrollTop));
       return;
     }
-    // 同一 session 内 items 变化(流式输出 / 历史加载完成):仅在贴底时跟随。
-    if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+    // 同一 session 内 items 变化(流式输出 / 历史加载完成):仅在贴底时跟随(S 不变量)。
+    if (stickToBottomRef.current) {
+      const bottom = Math.max(0, layout.total - el.clientHeight);
+      el.scrollTop = bottom;
+      setWinIfChanged(computeWinFor(layout, bottom));
+    } else {
+      setWinIfChanged(computeWinFor(layout, el.scrollTop));
+    }
     prevFirstIdRef.current = firstId;
-    prevHeightRef.current = scrollHeightRef.current = el.scrollHeight;
-  }, [items, props.session?.id, props.permission]);
-  // footer 高度变化(textarea autogrow / queue 面板)会压低 chat-body 可视区。
-  // 贴底时最新消息会被抬高的输入框遮挡 → 视觉上像「历史随按键向上滚」。
-  // onScroll 只在 scrollTop 变化时触发,而这里改的是 clientHeight,故用 ResizeObserver 补偿:
-  // 贴底则重新对齐到底;非贴底(用户在翻历史)不动,不打扰。
-  // 观察对象 = 容器(clientHeight 变化)+ 内容层(内容高度变化:content-visibility 估算→真实、
-  // 图片晚载、折叠展开)。内容层观察是贴底定位的收敛机制:初次贴底落在「估算底部」上,随真实
-  // 渲染逐次回调重新对齐,最终停在真底部。
+  }, [items, props.session?.id, props.permission, rows, layout, computeWinFor, setWinIfChanged]);
+
+  // ResizeObserver:唯一测量入口(M 不变量)。观察容器(视口变化)+ 头/尾区 + 窗口内行。
+  // 行高变化 → 写 HeightModel → 重算布局 → A 不变量补偿(锚点上方行)/ S 不变量贴底 → 窗口重算。
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
-      // resize 时刷新 scrollHeight 缓存(供 onScroll 用)。
-      scrollHeightRef.current = el.scrollHeight;
-      // 钉住期:内容高度一变就重对齐到锚点(settle 回落追踪);锚点消失则解除。
-      if (pinRef.current) {
-        const pinTop = pinTopOf();
-        if (pinTop === null) {
-          pinRef.current = null;
-          lastPinAppliedRef.current = null;
-        } else {
-          el.scrollTop = Math.max(0, pinTop);
-          lastPinAppliedRef.current = el.scrollTop; // 回读夹取后实际值
+    const ro = new ResizeObserver((entries) => {
+      const model = modelRef.current;
+      const rs = rowsRef.current;
+      const idxById = new Map<string, number>();
+      rs.forEach((r, i) => idxById.set(r.id, i));
+      const anchorIid = anchorRef.current?.iid ?? null;
+      const anchorIdx = anchorIid ? idxById.get(anchorIid) ?? -1 : -1;
+      let modelChanged = false;
+      let viewportChanged = false;
+      let delta = 0; // A 不变量:锚点上方行的高度变化累计
+      for (const entry of entries) {
+        const target = entry.target as HTMLElement;
+        if (target === el) { viewportChanged = true; continue; }
+        const iid = target.dataset.iid;
+        const h = target.offsetHeight;
+        if (iid === "__head__") {
+          if (h > 0 && headHRef.current !== h) { headHRef.current = h; modelChanged = true; }
+        } else if (iid === "__tail__") {
+          if (h > 0 && tailHRef.current !== h) { tailHRef.current = h; modelChanged = true; }
+        } else if (iid) {
+          const idx = idxById.get(iid) ?? -1;
+          const prevH = idx >= 0 ? model.h(rs[idx]) : 0;
+          if (model.set(iid, h)) {
+            modelChanged = true;
+            if (!stickToBottomRef.current && anchorIdx >= 0 && idx >= 0 && idx < anchorIdx) {
+              delta += h - prevH;
+            }
+          }
         }
-        return;
       }
-      // 贴底则重新对齐到底;非贴底(用户在翻历史)不动,不打扰。
-      if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+      if (!modelChanged && !viewportChanged && delta === 0) return;
+      const newLay = computeLayout(rs, model, tailHRef.current, headHRef.current);
+      layoutRef.current = newLay;
+      if (delta !== 0) el.scrollTop += delta; // A 不变量:锚点上方行变高 → 下推保持视觉位置
+      if (stickToBottomRef.current) el.scrollTop = Math.max(0, newLay.total - el.clientHeight); // S 不变量
+      setWinIfChanged(computeWinFor(newLay, el.scrollTop));
+      if (modelChanged) setModelVersion((v) => v + 1);
     });
+    roRef.current = ro;
+    observedRef.current = new Set(); // session 切换(.chat-body 按 key 重挂载)清空旧观察集
     ro.observe(el);
-    if (contentRef.current) ro.observe(contentRef.current);
-    // 钉住的主解除路径 = 用户滚动意图(输入事件);程序写 scrollTop 不触发这些,不会误伤。
-    // wheel=滚轮/触控板;touchmove=触屏;pointerdown=点滚动条/点按;keydown=P↑P↓/方向键。
-    const releasePin = () => { pinRef.current = null; lastPinAppliedRef.current = null; };
-    el.addEventListener("wheel", releasePin, { passive: true });
-    el.addEventListener("touchmove", releasePin, { passive: true });
-    el.addEventListener("pointerdown", releasePin, { passive: true });
-    el.addEventListener("keydown", releasePin);
-    return () => {
-      ro.disconnect();
-      el.removeEventListener("wheel", releasePin);
-      el.removeEventListener("touchmove", releasePin);
-      el.removeEventListener("pointerdown", releasePin);
-      el.removeEventListener("keydown", releasePin);
-    };
-  }, [props.sessionId]);
+    return () => { ro.disconnect(); roRef.current = null; };
+  }, [props.sessionId, computeWinFor, setWinIfChanged]);
+
+  // 把 RO 观察集合与当前 DOM 同步(窗口/items 变化后)。
+  useEffect(() => {
+    syncObserved();
+  }, [props.sessionId, win.start, win.end, items, syncObserved]);
 
   // 卸载时取消未派发的 scroll rAF,避免回调在组件已卸载后操作失效 ref。
   useEffect(() => () => { if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current); }, []);
@@ -423,61 +453,57 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       )}
 
       <div className="chat-body" key={props.sessionId} ref={scrollRef} onScroll={onScroll} data-testid="chat-body">
-        {/* 内容层:滚动定位/锚点/内容 ResizeObserver 都以它为基准(offsetTop 坐标系,见 .chat-content)。 */}
-        <div className="chat-content" ref={contentRef}>
-          {items.length === 0 && <div className="chat-placeholder">{t("chat.placeholder")}</div>}
-          {props.hasMore && (
-            <button ref={loadMoreRef} className="load-more-btn" onClick={props.onLoadMore} disabled={props.loadingMore} data-testid="load-more">
-              {props.loadingMore ? t("common.loading") : t("chat.loadMore")}
-            </button>
-          )}
-          {items.map((item, i) => {
-            // 每条(组)包一层 .cv-item:content-visibility 的估算单位 + 锚点定位单元(data-iid)。
-            // 连续工具调用折叠:遇到 tool 时,若前一个也是 tool 则跳过(已被组首个处理);
-            // 组首个负责收集后续连续 tool,2 个以上渲染为 ToolGroup,单个仍用 ToolCard。
-            if (item.type === "tool") {
-              const prevIsTool = i > 0 && items[i - 1].type === "tool";
-              if (prevIsTool) return null;
-              const group = [item];
-              for (let j = i + 1; j < items.length; j++) {
-                const next = items[j];
-                if (next.type !== "tool") break;
-                group.push(next);
-              }
-              return (
-                <div className="cv-item" data-iid={item.id} key={item.id}>
-                  {group.length >= 2
-                    ? <ToolGroup tools={group} onOpenFilePreview={openFilePreview} />
-                    : <ToolCard item={item} onOpenFilePreview={openFilePreview} />}
-                </div>
-              );
-            }
-            // 历史 turn 的 plan(静态展示,无 spinner —— turn 已结束,plan 是定格快照)。
-            // 当前 turn 的实时 plan 不在 items 里,它由下方的 livePlan 渲染(prompting 时带 spinner)。
-            if (item.type === "plan") {
-              return (
-                <div className="cv-item" data-iid={item.id} key={item.id}>
-                  <PlanTimeline entries={item.entries} prompting={false} isOpen={planOpen} onToggle={onTogglePlanOpen} />
-                </div>
+        {/* 内容层:显式高度 = 布局 total(撑开滚动条),行绝对定位(top = layout.tops,与 scrollTop 同系)。 */}
+        <div className="chat-content" ref={contentRef} style={{ height: layout.total }}>
+          {/* 头部区:顶部留白 + 加载更多 + 占位。实测高度 headHRef(data-iid=__head__)。 */}
+          <div className="cv-head" data-iid="__head__" style={{ top: 0 }}>
+            {items.length === 0 && <div className="chat-placeholder">{t("chat.placeholder")}</div>}
+            {props.hasMore && (
+              <button ref={loadMoreRef} className="load-more-btn" onClick={props.onLoadMore} disabled={props.loadingMore} data-testid="load-more">
+                {props.loadingMore ? t("common.loading") : t("chat.loadMore")}
+              </button>
+            )}
+          </div>
+          {/* 窗口化行:只有 [win.start, win.end) 的行进入 DOM(W 不变量)。 */}
+          {rows.slice(win.start, win.end).map((row, wi) => {
+            const index = win.start + wi;
+            let content: React.ReactNode;
+            if (row.kind === "tool") {
+              // 连续 tool 折叠:2 个以上渲染为 ToolGroup,单个仍用 ToolCard。
+              const group = items.slice(row.first, row.last) as Extract<ChatItem, { type: "tool" }>[];
+              content = group.length >= 2
+                ? <ToolGroup tools={group} onOpenFilePreview={openFilePreview} />
+                : <ToolCard item={group[0]} onOpenFilePreview={openFilePreview} />;
+            } else if (row.kind === "plan") {
+              // 历史 turn 的 plan(静态展示,无 spinner —— turn 已结束,plan 是定格快照)。
+              content = <PlanTimeline entries={(items[row.first] as Extract<ChatItem, { type: "plan" }>).entries} prompting={false} isOpen={planOpen} onToggle={onTogglePlanOpen} />;
+            } else {
+              content = (
+                <>
+                  {/* 回合分隔:每条用户消息(首条除外)前插一条带时间的分隔线,让多轮对话边界清晰。 */}
+                  {row.kind === "user" && row.first > 0 && <TurnDivider ts={(items[row.first] as Extract<ChatItem, { type: "user" }>).ts} />}
+                  <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} />
+                </>
               );
             }
             return (
-              <div className="cv-item" data-iid={item.id} key={item.id}>
-                {/* 回合分隔:每条用户消息(首条除外)前插一条带时间的分隔线,让多轮对话边界清晰。 */}
-                {item.type === "user" && i > 0 && <TurnDivider ts={item.ts} />}
-                <ChatRow item={item} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} />
+              <div className="cv-item" data-iid={row.id} key={row.id} style={{ top: layout.tops[index] }}>
+                {content}
               </div>
             );
           })}
-          {props.permission && <PermissionCard prompt={props.permission} onRespond={props.onRespondPermission} />}
-          {/* 当前 turn 的实时 plan(进行中,带 spinner)。turn 结束后由 App.tsx 转为持久化
-              type:'plan' ChatItem 内联渲染在 items 里(无 spinner 的静态展示)。 */}
-          {props.livePlan && props.livePlan.entries.length > 0 && (
-            <PlanTimeline entries={props.livePlan.entries} prompting={props.status === "prompting"} isOpen={planOpen} onToggle={onTogglePlanOpen} />
-          )}
-          {props.status === "prompting" && items.length > 0 && (
-            <div className="typing-indicator"><span /> <span /> <span /></div>
-          )}
+          {/* 尾部区:权限卡 + 实时 plan + 打字指示。实测高度 tailHRef(data-iid=__tail__)。 */}
+          <div className="cv-tail" data-iid="__tail__" style={{ top: layout.tailTop }}>
+            {props.permission && <PermissionCard prompt={props.permission} onRespond={props.onRespondPermission} />}
+            {/* 当前 turn 的实时 plan(进行中,带 spinner)。turn 结束后由 App.tsx 转为持久化
+                type:'plan' ChatItem 内联渲染在 items 里(无 spinner 的静态展示)。 */}
+            {props.livePlan && props.livePlan.entries.length > 0 && (
+              <PlanTimeline entries={props.livePlan.entries} prompting={props.status === "prompting"} isOpen={planOpen} onToggle={onTogglePlanOpen} />
+            )}
+            {props.status === "prompting" && items.length > 0 && (
+              <div className="typing-indicator"><span /> <span /> <span /></div>
+            )}
+          </div>
         </div>
         {/* Floating scroll-to-bottom FAB: sticky 粘在 chat-body 底部,不破坏 flex/overflow 滚动布局。 */}
         {showScrollBtn && (
@@ -487,11 +513,12 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
               onClick={() => {
                 const el = scrollRef.current;
                 if (!el) return;
-                pinRef.current = null; // 用户明确回到底部 → 解除钉住
-                lastPinAppliedRef.current = null;
-                el.scrollTop = el.scrollHeight;
+                anchorRef.current = null; // 用户明确回到底部 → 清除锚点
                 stickToBottomRef.current = true;
+                const bottom = Math.max(0, layoutRef.current.total - el.clientHeight);
+                el.scrollTop = bottom;
                 setShowScrollBtn(false);
+                setWinIfChanged(computeWinFor(layoutRef.current, bottom));
               }}
               data-tooltip-id="md-tip"
               data-tooltip-content={t("chat.scrollToBottom")}
