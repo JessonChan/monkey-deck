@@ -179,6 +179,11 @@ type Handler struct {
 	// 权限裁决(§3.4):harness 请求权限时,通过 OnPermission 通知前端弹窗,
 	// 用户在前端响应 → service 调 RespondPermission → 唤醒等待的 RequestPermission。
 	OnPermission func(PermissionPrompt)
+	// OnGlobalRule:用户选「全局允许」(RespondPermission 传 "global")时回调 service,
+	// 把由当前请求固化出的「准确匹配」allow 规则(permissions.ExactMatchRule)交由 service
+	// 持久化进 DB + 刷新全部活跃 session 的规则快照(跨 session/project 全局生效,§3.4)。
+	// nil = 不持久化(handler 单测默认 nil,只验内存记忆 + 规则形状)。
+	OnGlobalRule func(permissions.Rule)
 
 	mu        sync.Mutex
 	pending   map[string]*pendingPermission // id → 待裁决
@@ -369,6 +374,11 @@ func (h *Handler) RequestPermission(ctx context.Context, req acp.RequestPermissi
 			timer.Stop()
 			h.removePending(id)
 			opt := h.applyDecision(level, req.Options)
+			// 「全局允许」:把当前请求固化成准确匹配 allow 规则交 service 持久化(§3.4)。
+			// 在返回 ACP 响应前完成持久化 + 刷新快照,使本轮内紧随的同标识请求也命中规则。
+			if level == "global" {
+				h.emitGlobalRule(req)
+			}
 			slog.Info("permission responded", "id", id, "level", level, "option", opt)
 			return acp.RequestPermissionResponse{
 				Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: opt}},
@@ -459,8 +469,9 @@ func (h *Handler) removePending(id string) {
 	h.mu.Unlock()
 }
 
-// applyDecision 把前端传来的裁决档位(once/session/project/deny)映射成 ACP 选项,
-// 并按档位设置记忆:session/project 档令后续「所有 RequestPermission」自动放行(不弹,见字段注释)。deny 只本次不记。
+// applyDecision 把前端传来的裁决档位(once/session/project/global/deny)映射成 ACP 选项,
+// 并按档位设置记忆:session/project/global 档令后续「所有 RequestPermission」自动放行(不弹,见字段注释);
+// global 档另经 emitGlobalRule 把准确匹配 allow 规则交 service 持久化(跨 session/project)。deny 只本次不记。
 func (h *Handler) applyDecision(level string, opts []acp.PermissionOption) acp.PermissionOptionId {
 	switch level {
 	case "deny":
@@ -469,12 +480,24 @@ func (h *Handler) applyDecision(level string, opts []acp.PermissionOption) acp.P
 		}
 	case "session":
 		h.sessionAllowExternal.Store(true)
-	case "project":
+	case "project", "global":
+		// global 与 project 同样写满本 session + 本 project 记忆(本 session 即时放行);
+		// global 的「持久化为全局规则」由 emitGlobalRule 负责。
 		h.sessionAllowExternal.Store(true)
 		h.projectAllowExternal.Store(true)
 	default: // "once":允许本次,不记忆
 	}
 	return pickAllowOption(opts)
+}
+
+// emitGlobalRule 把当前请求固化成「准确匹配」allow 规则(permissions.ExactMatchRule),
+// 经 OnGlobalRule 回调交 service 持久化进 DB + 刷新全部活跃 session 的规则快照(§3.4)。
+// OnGlobalRule 为 nil(handler 单测默认)时只本 session 内存记忆(applyDecision 已设置),不持久化。
+func (h *Handler) emitGlobalRule(req acp.RequestPermissionRequest) {
+	if h.OnGlobalRule == nil {
+		return
+	}
+	h.OnGlobalRule(permissions.ExactMatchRule(toMatchRequest(req)))
 }
 
 // SetProjectAllowExternal 由 service 在 session 启动时调用,把项目级记忆(DB)加载进 handler,
