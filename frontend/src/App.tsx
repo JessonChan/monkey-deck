@@ -732,6 +732,35 @@ export default function App() {
     }
   }, []);
 
+  // 主动入队列:与「发送」并列的显式入队入口(Composer 入队列按钮 / ⌘⇧↩)。无论 idle/prompting
+  // 都把消息压入该 session 的前端队列(Protocol 无 queue,回合结束由 chat:status 的 idle 事件自动续发)。
+  // idle 时入队后需主动 drainSession 推一次队列 —— 否则没有 idle 事件触发、队列会静死;
+  // prompting 时入队则等本轮结束的 idle 事件续发。主动入队 = 用户想继续,清掉该 session 的停意图
+  // (与 interruptQueue 一致),否则被 Stop 标记抑制、入队却不续发。
+  const enqueueMessage = useCallback(
+    async (text: string, mentions: Mention[], imgs?: ImageAttachment[]) => {
+      if (!selectedSessionId || !text.trim()) return;
+      chatViewRef.current?.scrollToBottom();
+      setHistoryBySession((prev) => {
+        const cur = prev[selectedSessionId] || [];
+        if (cur[cur.length - 1] === text) return prev; // 与最后一条相同则不重复
+        return { ...prev, [selectedSessionId]: [...cur, text] };
+      });
+      const item: QueueItem = { id: `q-${Date.now()}-${selectedSessionId}`, text, mentions, images: imgs };
+      queueBySessionRef.current = {
+        ...queueBySessionRef.current,
+        [selectedSessionId]: [...(queueBySessionRef.current[selectedSessionId] || []), item],
+      };
+      setQueueBySession(queueBySessionRef.current);
+      userStoppedBySessionRef.current.delete(selectedSessionId);
+      // idle(非 prompting)时无 idle 事件会触发,需主动推一次队列,否则队列静死。
+      if (statusRef.current !== "prompting") {
+        void drainSession(selectedSessionId);
+      }
+    },
+    [selectedSessionId, drainSession]
+  );
+
   // 撤回编辑:移出队列,文本回填 composer。
   const revokeQueue = useCallback((id: string) => {
     const sid = selectedSessionIdRef.current;
@@ -1178,6 +1207,7 @@ export default function App() {
               error={error}
               permission={permission}
               onSend={sendMessage}
+              onEnqueue={enqueueMessage}
               onStop={stopSession}
               onContinue={continueSession}
               onAction={handleComposerAction}

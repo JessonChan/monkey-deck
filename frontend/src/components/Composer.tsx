@@ -6,7 +6,7 @@ import type { ConfigOption, Mention, ImageAttachment, Usage } from "../types";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
-import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ImageIcon } from "lucide-react";
+import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ImageIcon, ListPlus } from "lucide-react";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -26,6 +26,7 @@ interface Props {
   imageSupported: boolean;    // agent 是否声明 image prompt 能力(门控图片输入入口)
   usage: Usage;  // 上下文用量(展示已用/上限 + 明细)
   onSend: (text: string, mentions: Mention[], images?: ImageAttachment[]) => void;
+  onEnqueue: (text: string, mentions: Mention[], images?: ImageAttachment[]) => void;  // 主动入队列(并列发送):无论 idle/prompting 都入队
   onStop: () => void;
   onAction: (action: "clear" | "new" | "stop") => void;
 }
@@ -94,7 +95,7 @@ const IMAGE_MIME_ALLOWED = ["image/png", "image/jpeg", "image/webp", "image/gif"
 // 单图大小上限(base64 前,字节):10MB。过大发不出去且占上下文,超过则拒收并提示。
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
-export default function Composer({ value, onChange, disabled, prompting, configOptions, onSetConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, usage, onSend, onStop, onAction }: Props) {
+export default function Composer({ value, onChange, disabled, prompting, configOptions, onSetConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, usage, onSend, onEnqueue, onStop, onAction }: Props) {
   const { t } = useTranslation();
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
@@ -209,7 +210,9 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   const baseName = (p: string) => p.split(/[/\\]/).pop() || p;
   const empty = !value.trim() && attachments.length === 0 && mentions.length === 0 && images.length === 0;
 
-  const submit = (finalText?: string) => {
+  // mode: "send" = 默认发送(idle 直发 / prompting 入队由 App 决定);
+  //       "enqueue" = 主动入队列(始终压入前端队列,与发送按钮并列的显式入口)。
+  const submit = (finalText?: string, mode: "send" | "enqueue" = "send") => {
     if (disabled) return;
     const t = (finalText ?? value).trim();
     // 收集有效提及:@autocomplete 选中的需仍在文本里(用户可能已删掉);用词边界防 @src/foo 误命中 @src/foobar。
@@ -224,7 +227,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     const all = [...inline, ...clips];
     const imgs = images.length > 0 ? images : undefined;
     if (!t && all.length === 0 && images.length === 0) return;
-    onSend(t, all, imgs);
+    (mode === "enqueue" ? onEnqueue : onSend)(t, all, imgs);
     onChange("");
     onAttachmentsChange([]);
     onMentionsChange([]);
@@ -334,6 +337,8 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     }
 
     if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); submit(); }
+    // ⌘⇧↩ / Ctrl+Shift+Enter:主动入队列(与发送并列的显式入口,无论 idle/prompting 都入队)。
+    if (e.key === "Enter" && e.shiftKey && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(undefined, "enqueue"); }
   };
 
   // dir = -1 向旧(↑),dir = 1 向新(↓)。翻到最新之后恢复草稿。
@@ -626,6 +631,15 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                 <Square size={15} />
               </button>
             )}
+            <button
+              className="send-btn enqueue"
+              data-testid="enqueue-btn"
+              onClick={() => submit(undefined, "enqueue")}
+              disabled={disabled || empty}
+              title={t("composer.enqueueTip")}
+            >
+              <ListPlus size={16} />
+            </button>
             <button
               className="send-btn"
               data-testid="send-btn"

@@ -108,6 +108,7 @@ function baseProps(items: ChatItem[]) {
     mergeResult: null,
     sessionDiff: null,
     onSend: () => {},
+    onEnqueue: () => {},
     onStop: () => {},
     onContinue: () => {},
     onAction: () => {},

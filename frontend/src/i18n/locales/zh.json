@@ -214,6 +214,7 @@
     "stopTip": "停止当前生成(不清理队列)",
     "sendTip": "发送",
     "queueSendTip": "排队发送(本轮结束后自动发)",
+    "enqueueTip": "入队列 · ⌘⇧Enter(始终入队;本轮结束后自动发,空闲则立即开始)",
     "switchCostHint": "当前上下文约 {{tokens}} tokens · 各模型预估单轮成本见右侧(无定价则仅参考量级)",
     "noMatch": "无匹配",
     "recentUsed": "最近使用",

@@ -1166,6 +1166,7 @@ input, textarea { font-family: inherit; }
 .send-btn:hover { filter: brightness(1.08); }
 .send-btn:disabled { opacity: 0.35; }
 .send-btn.stop { background: var(--red); }
+.send-btn.enqueue { background: var(--amber); color: #1a1a1a; }
 
 /* ─── QueuePanel(排队消息) ─── */
 .queue-panel {

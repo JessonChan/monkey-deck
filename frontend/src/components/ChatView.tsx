@@ -28,6 +28,7 @@ interface Props {
   mergeResult: string | null;
   sessionDiff: string | null;
   onSend: (text: string, mentions: Mention[], images?: ImageAttachment[]) => void;
+  onEnqueue: (text: string, mentions: Mention[], images?: ImageAttachment[]) => void;
   onStop: () => void;
   onContinue: () => void;
   onAction: (action: "clear" | "new" | "stop") => void;
@@ -576,6 +577,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           configOptions={props.configOptions}
           onSetConfig={props.onSetConfig}
           onSend={props.onSend}
+          onEnqueue={props.onEnqueue}
           onStop={props.onStop}
           onAction={props.onAction}
           history={props.history}

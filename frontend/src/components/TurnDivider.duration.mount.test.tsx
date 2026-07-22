@@ -90,7 +90,7 @@ function baseProps(items: ChatItem[], status: "idle" | "prompting") {
     project: null, session: { id: "s1" }, items, status, statusDetail: "",
     usage: { used: 0, size: 0, cost: 0, cachedReadTokens: 0, cachedWriteTokens: 0, inputTokens: 0, outputTokens: 0 },
     error: null, permission: null, mergeResult: null, sessionDiff: null,
-    onSend: () => {}, onStop: () => {}, onContinue: () => {}, onAction: () => {},
+    onSend: () => {}, onEnqueue: () => {}, onStop: () => {}, onContinue: () => {}, onAction: () => {},
     onRespondPermission: () => {}, onToggleTerminal: () => {}, onRefreshConfig: () => {},
     refreshingConfig: false, onMerge: () => {}, queue: [], onInterruptQueue: () => {}, onRevokeQueue: () => {},
     composerValue: "", onComposerChange: () => {}, attachments: [], onAttachmentsChange: () => {},

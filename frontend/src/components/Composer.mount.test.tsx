@@ -124,6 +124,7 @@ const STUB_PROPS = {
   imageSupported: false,
   usage: { used: 0, size: 0, cost: 0 } as any,
   onSend: () => {},
+  onEnqueue: () => {},
   onStop: () => {},
   onAction: () => {},
 };
@@ -166,5 +167,46 @@ describe("Composer paste-into-long regression (Task #21328)", () => {
     // FIXED: textarea must remain editable (not yanked into collapsed preview).
     expect(host.querySelector('[data-testid="composer-input"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="composer-collapse"]')).toBeNull();
+  });
+});
+
+// Task #22131: 主动入队列 —— Composer 入队列按钮 + ⌘⇧↩ 快捷键应调 onEnqueue(而非 onSend)。
+describe("Composer active enqueue (Task #22131)", () => {
+  test("enqueue button calls onEnqueue (not onSend) and clears the input", async () => {
+    const onSend = mock(() => {});
+    const onEnqueue = mock(() => {});
+    const onChange = mock(() => {});
+    const { host } = mount(
+      <Composer value={"do something"} {...STUB_PROPS} onSend={onSend} onEnqueue={onEnqueue} onChange={onChange} />
+    );
+    await flush();
+
+    const btn = host.querySelector('[data-testid="enqueue-btn"]') as HTMLElement;
+    expect(btn).not.toBeNull();
+    btn.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    expect(onEnqueue).toHaveBeenCalledTimes(1);
+    expect(onSend).not.toHaveBeenCalled();
+    // submit 总是以 (text, mentions[], imgs) 调用并清空输入。
+    expect(onChange).toHaveBeenCalledWith("");
+  });
+
+  test("⌘⇧↩ on the textarea triggers enqueue, plain ↩ triggers send", async () => {
+    const onSend = mock(() => {});
+    const onEnqueue = mock(() => {});
+    const { host } = mount(
+      <Composer value={"hello"} {...STUB_PROPS} onSend={onSend} onEnqueue={onEnqueue} />
+    );
+    await flush();
+
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    expect(ta).not.toBeNull();
+
+    // ⌘⇧↩ → enqueue
+    ta.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", shiftKey: true, metaKey: true, bubbles: true }));
+    await flush();
+    expect(onEnqueue).toHaveBeenCalledTimes(1);
+    expect(onSend).not.toHaveBeenCalled();
   });
 });
