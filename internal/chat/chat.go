@@ -1073,6 +1073,9 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 	// 加载分级权限规则快照到 handler(§3.4:allow/ask/deny 路由)。规则是全局的(全应用一份),
 	// 每个 session 启动时拿当前快照;规则变更时由 applyPermissionRulesToAll 刷新全部活跃 session。
 	chat.SetPermissionRules(s.snapshotPermissionRules())
+	// 注册「全局允许」回调:用户在某 session 选 onRespond("global") 时,handler 把当前请求
+	// 固化成的准确匹配 allow 规则交回 service 持久化进 DB + 刷新全部活跃 session(跨 session/project 全局生效,§3.4)。
+	chat.Handler.OnGlobalRule = s.persistGlobalPermissionRule
 
 	s.mu.Lock()
 	s.active[se.ID] = ls
@@ -2273,6 +2276,26 @@ func (s *ChatService) applyPermissionRulesToAll() {
 	defer s.mu.RUnlock()
 	for _, ls := range s.active {
 		ls.chat.SetPermissionRules(rules)
+	}
+}
+
+// persistGlobalPermissionRule 把「全局允许」(onRespond("global"))固化出的准确匹配 allow 规则
+// 持久化进 DB,并经 CreatePermissionRule → applyPermissionRulesToAll 刷新全部活跃 session 的规则
+// 快照——使后续「同工具 + 同命令/同路径」的请求被规则引擎自动放行(跨 session/project 全局生效,§3.4)。
+// 由 handler 在用户裁决 "global" 时经 OnGlobalRule 回调;handler 已另写满本 session 内存记忆,
+// 故即使持久化失败,当前 session 仍即时放行(降级安全)。
+func (s *ChatService) persistGlobalPermissionRule(r permissions.Rule) {
+	sr := store.PermissionRule{
+		ID:             "", // CreatePermissionRule 自动生成
+		ToolName:       r.ToolName,
+		ActionType:     r.ActionType,
+		PathPattern:    r.PathPattern,
+		CommandPattern: r.CommandPattern,
+		Level:          r.Level,
+		Enabled:        true,
+	}
+	if _, err := s.CreatePermissionRule(sr); err != nil {
+		slog.Warn("persist global permission rule", "err", err, "tool", r.ToolName, "action", r.ActionType, "cmd", r.CommandPattern, "path", r.PathPattern)
 	}
 }
 
