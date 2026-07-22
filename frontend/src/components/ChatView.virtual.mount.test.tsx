@@ -121,6 +121,7 @@ function baseProps(items: ChatItem[]) {
     onInterruptQueue: () => {},
     onRevokeQueue: () => {},
     onEditQueue: () => {},
+    onScheduleQueue: () => {},
     composerValue: "",
     onComposerChange: () => {},
     attachments: [],
