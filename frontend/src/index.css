@@ -1591,7 +1591,7 @@ input, textarea { font-family: inherit; }
 
 /* ─── 统一设置中心面板(收敛分散设置项) ─── */
 .settings-card {
-  width: 100%; max-width: 720px; max-height: 82vh; min-height: 360px;
+  width: 100%; max-width: 720px; height: clamp(360px, 82vh, 82vh);
   background: var(--elev-2); border: 1px solid var(--sep-strong); border-radius: var(--r-md);
   box-shadow: var(--shadow-pop); padding: 0; display: flex; flex-direction: column; overflow: hidden;
 }
