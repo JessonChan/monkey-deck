@@ -94,6 +94,11 @@ export default function App() {
   // runPrompt 在 goroutine 里跑,故绑定几乎立即返回、guard 仅短暂持有;但能挡住 idle/error 抖动或
   // 重复事件触发的并发 dequeue(防跳序 / 重发)。后端 busy 守卫是最终兜底。
   const drainingBySessionRef = useRef<Set<string>>(new Set());
+  // 定时发送:per-session setTimeout 句柄。drainSession 发现队列里所有条目都未到点(scheduledAt 在
+  // 未来)时,armScheduleTimer 按最早 scheduledAt 设一个一次性定时器,到点再触发 drainSession —— 否则
+  // idle 状态下没有 idle 事件会触发、定时消息会静死。drainSession / scheduleQueueItem / enqueueMessage 改动队列后重 arm。
+  const scheduledTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const drainSessionRef = useRef<(sid: string) => Promise<void>>(async () => {});
   // status 派生值的 ref:sendMessage 闭包锁 status 导致「prompting 时仍直发 → 后端报 busy」,
   // 用 ref 绕过 stale closure,读取最新的派生 status。
   const statusRef = useRef<string>("empty");
@@ -262,6 +267,9 @@ export default function App() {
   // (FIFO)。每条排队消息 = 一个独立 turn,按序逐个发(协议无 queue,一次只一个 Prompt)。
   // 由 chat:status 事件直接按 sessionId 触发(§5.3 尊重数据源:status 事件携带 sessionId,是「哪个
   // session 该续发」的权威信号)——故后台(非选中)session 的队列也能自动续发,不再限于选中态。
+  //
+  // 定时发送(Task #22134):队列里 scheduledAt 在未来的条目「未到点跳过」,不阻塞后续已到点/无定时项
+  // (扫描找第一条已到点的发)。全队都未到点 → 不发,armScheduleTimer 设定时器到点再触发(见上方 ref)。
   const drainSession = useCallback(async (sid: string) => {
     // 用户主动停止该 session:消费一次性标记,不自动续发(队列保留)。
     if (userStoppedBySessionRef.current.has(sid)) {
@@ -272,9 +280,17 @@ export default function App() {
     if (drainingBySessionRef.current.has(sid)) return;
     const q = queueBySessionRef.current[sid] || [];
     if (q.length === 0) return;
+    // 找第一条已到点(scheduledAt <= now)的;定时未到的跳过,不阻塞后续无定时项。
+    const now = Date.now();
+    const dueIdx = q.findIndex((it) => it.scheduledAt <= now);
+    if (dueIdx < 0) {
+      // 全队都是未来定时项:设定时器到最早 scheduledAt 再触发,队列静死。
+      armScheduleTimer(sid);
+      return;
+    }
     drainingBySessionRef.current.add(sid);
-    const next = q[0];
-    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: q.slice(1) };
+    const next = q[dueIdx];
+    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: q.filter((_, i) => i !== dueIdx) };
     setQueueBySession(queueBySessionRef.current);
     // error 条只对当前查看的 session 弹(后台 session 续发失败不打扰用户视图)。
     const isViewing = sid === selectedSessionIdRef.current;
@@ -290,8 +306,32 @@ export default function App() {
       setStatusBySession((prev) => ({ ...prev, [sid]: "idle" }));
     } finally {
       drainingBySessionRef.current.delete(sid);
+      // 剩余条目可能仍是未来定时项 —— 重 arm 让到点时再发。
+      armScheduleTimer(sid);
     }
   }, []);
+
+  // armScheduleTimer:为指定 session 设一个一次性定时器,在「最早的未来 scheduledAt」触发 drainSession。
+  // 幂等:先清该 session 既有定时器再重设。无未来定时项则清掉(不设)。用 drainSessionRef 解循环依赖。
+  const armScheduleTimer = useCallback((sid: string) => {
+    const ex = scheduledTimersRef.current[sid];
+    if (ex) clearTimeout(ex);
+    const q = queueBySessionRef.current[sid] || [];
+    const now = Date.now();
+    let earliest = 0;
+    for (const it of q) {
+      if (it.scheduledAt > now && (earliest === 0 || it.scheduledAt < earliest)) earliest = it.scheduledAt;
+    }
+    if (earliest > 0) {
+      scheduledTimersRef.current[sid] = setTimeout(() => {
+        delete scheduledTimersRef.current[sid];
+        void drainSessionRef.current(sid);
+      }, Math.min(earliest - now, 2_147_000_000));
+    } else {
+      delete scheduledTimersRef.current[sid];
+    }
+  }, []);
+  drainSessionRef.current = drainSession;
 
   // 启动:加载项目 + 订阅事件。
   useEffect(() => {
@@ -756,9 +796,12 @@ export default function App() {
       // idle(非 prompting)时无 idle 事件会触发,需主动推一次队列,否则队列静死。
       if (statusRef.current !== "prompting") {
         void drainSession(selectedSessionId);
+      } else {
+        // prompting 时入队若设了未来定时,需 arm 定时器(无 idle 事件会触发,定时器兜底到点发)。
+        armScheduleTimer(selectedSessionId);
       }
     },
-    [selectedSessionId, drainSession]
+    [selectedSessionId, drainSession, armScheduleTimer]
   );
 
   // 撤回编辑:移出队列,文本回填 composer。
@@ -788,6 +831,25 @@ export default function App() {
     queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: next };
     setQueueBySession(queueBySessionRef.current);
   }, []);
+
+  // 定时发送:设置/清空队列里某条的 scheduledAt(Task #22134)。<= now 视为「立即可发」(清除定时)。
+  // 改动后重 arm 定时器;若该 session idle 且新设的 scheduledAt 已到点 → 主动 drain 一次立即发。
+  const scheduleQueueItem = useCallback((id: string, scheduledAt: number) => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    const q = queueBySessionRef.current[sid] || [];
+    const idx = q.findIndex((x) => x.id === id);
+    if (idx < 0) return;
+    const at = scheduledAt > 0 ? scheduledAt : Date.now();
+    const next = q.slice();
+    next[idx] = { ...q[idx], scheduledAt: at };
+    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: next };
+    setQueueBySession(queueBySessionRef.current);
+    armScheduleTimer(sid);
+    if (at <= Date.now() && statusRef.current !== "prompting") {
+      void drainSession(sid);
+    }
+  }, [armScheduleTimer, drainSession]);
 
   const handleComposerAction = useCallback(
     (action: "clear" | "new" | "stop") => {
@@ -1085,6 +1147,8 @@ export default function App() {
       queueBySessionRef.current = drop(queueBySessionRef.current);
       userStoppedBySessionRef.current.delete(sessionId);
       drainingBySessionRef.current.delete(sessionId);
+      const t = scheduledTimersRef.current[sessionId];
+      if (t) { clearTimeout(t); delete scheduledTimersRef.current[sessionId]; }
       delete oldestSeqRef.current[sessionId];
       loadedSessionsRef.current.delete(sessionId);
       historySeededRef.current.delete(sessionId);
@@ -1235,6 +1299,7 @@ export default function App() {
               onInterruptQueue={interruptQueue}
               onRevokeQueue={revokeQueue}
               onEditQueue={editQueueItem}
+              onScheduleQueue={scheduleQueueItem}
               composerValue={composerValue}
               onComposerChange={onComposerChange}
               attachments={attachments}

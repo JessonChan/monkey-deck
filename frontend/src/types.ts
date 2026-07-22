@@ -121,7 +121,9 @@ export interface Usage {
 }
 
 // 排队消息(前端队列:ACP 协议无 queue,turn 进行中的消息先入前端队列,回合结束自动续发)。
-// scheduledAt:入队时刻(Date.now()),QueuePanel 据此显示排队时间。
+// scheduledAt:定时发送时刻(epoch ms)。默认 = 入队时刻(Date.now()),即「立即可发」;
+// 用户可在 QueuePanel 选定一个未来时刻 → drainSession 跳过未到点的条目(不阻塞后续无定时项),
+// 到点后才发。QueuePanel 据此显示「排队于 HH:mm」(已到点)或「⏰定时 HH:mm」(未来)。
 export interface QueueItem {
   id: string;
   text: string;

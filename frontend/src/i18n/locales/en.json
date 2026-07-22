@@ -259,7 +259,13 @@
     "save": "Save",
     "cancelTip": "Cancel editing",
     "cancel": "Cancel",
-    "scheduled": "queued {{time}}"
+    "scheduled": "queued {{time}}",
+    "schedule": "Schedule",
+    "scheduleTip": "Schedule: pick a time to auto-send this message (skipped until then)",
+    "clearSchedule": "Now",
+    "clearScheduleTip": "Clear schedule: send as soon as possible (next drain)",
+    "scheduledSend": "⏰ {{time}}",
+    "scheduledSendTip": "Scheduled send — will be sent after this time"
   },
   "terminal": {
     "closeTabTip": "Close terminal",

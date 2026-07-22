@@ -1208,13 +1208,26 @@ input, textarea { font-family: inherit; }
 .queue-btn.interrupt:hover { background: rgba(100, 210, 255, 0.12); color: var(--accent-2); }
 .queue-btn.revoke:hover { color: var(--text-2); }
 .queue-btn.edit:hover { color: var(--amber); }
+.queue-btn.schedule:hover { color: var(--accent-2); }
 .queue-btn.save { color: var(--accent-2); border-color: rgba(100, 210, 255, 0.3); }
 .queue-btn.save:hover { background: rgba(100, 210, 255, 0.12); color: var(--accent-2); }
 .queue-btn.cancel:hover { color: var(--text-2); }
+.queue-btn.clear { color: var(--text-3); }
+.queue-btn.clear:hover { color: var(--text); }
 .queue-scheduled {
   font-family: var(--mono); font-size: 10px; color: var(--text-3); flex-shrink: 0;
   white-space: nowrap;
 }
+.queue-scheduled.future {
+  color: var(--amber); display: inline-flex; align-items: center; gap: 3px;
+  font-weight: 600;
+}
+.queue-schedule-input {
+  font-size: 13px; color: var(--text); background: transparent;
+  border: 1px solid var(--sep-strong); border-radius: var(--r-sm); padding: 4px 8px;
+  font-family: inherit; flex: 1;
+}
+.queue-schedule-input:focus { outline: none; border-color: var(--accent-2); }
 /* inline 编辑态 */
 .queue-item-edit {
   flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0;

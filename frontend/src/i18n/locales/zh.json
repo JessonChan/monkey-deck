@@ -259,7 +259,13 @@
     "save": "保存",
     "cancelTip": "取消编辑",
     "cancel": "取消",
-    "scheduled": "排队于 {{time}}"
+    "scheduled": "排队于 {{time}}",
+    "schedule": "定时",
+    "scheduleTip": "定时:选一个时间自动发送这条(未到点前会跳过)",
+    "clearSchedule": "立即",
+    "clearScheduleTip": "清除定时:尽快发送(下一轮 drain 即发)",
+    "scheduledSend": "⏰ {{time}}",
+    "scheduledSendTip": "定时发送 —— 到点后才发送"
   },
   "terminal": {
     "closeTabTip": "关闭终端",
