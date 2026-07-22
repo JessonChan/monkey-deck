@@ -172,6 +172,25 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
 
   // rows = 把 items 折叠成渲染行(连续 tool 成组);layout = 前缀和几何(唯一坐标事实,含 headPad 与 scrollTop 同系)。
   const rows = useMemo(() => buildRows(items), [items]);
+  // 每个回合的起止时间,供 TurnDivider 显示本轮持续时间。
+  // turn start = user 消息 ts(发送时刻落库);turn end = 该回合最后一条消息的 ts
+  // —— persistTurn 在回合结束时统一写库,最后一条 createdAt ≈ 回合结束时刻(§5.3 尊重数据源)。
+  // 仅「已结束」回合算出 end:有后续 user 消息(下回合已开)必为结束;最后一回合在非 prompting
+  // (idle/error/…)时视为结束。进行中(prompting)的回合不显示时长(无结束时刻)。
+  const turnBounds = useMemo(() => {
+    const m = new Map<number, { start?: number; end?: number }>();
+    const userIdx: number[] = [];
+    for (let i = 0; i < items.length; i++) if (items[i].type === "user") userIdx.push(i);
+    for (let k = 0; k < userIdx.length; k++) {
+      const start = userIdx[k];
+      const startTs = items[start].ts;
+      const isLast = k === userIdx.length - 1;
+      const endIdx = isLast ? items.length - 1 : userIdx[k + 1] - 1;
+      const complete = !isLast || props.status !== "prompting";
+      m.set(start, { start: startTs, end: complete ? items[endIdx]?.ts : undefined });
+    }
+    return m;
+  }, [items, props.status]);
   const layout = useMemo(
     () => computeLayout(rows, modelRef.current, tailHRef.current, headHRef.current),
     // modelRef/tailHRef/headHRef 是 ref:modelVersion bump 是重算信号(RO 回调写入时保证同步 bump)。
@@ -478,10 +497,13 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
               // 历史 turn 的 plan(静态展示,无 spinner —— turn 已结束,plan 是定格快照)。
               content = <PlanTimeline entries={(items[row.first] as Extract<ChatItem, { type: "plan" }>).entries} prompting={false} isOpen={planOpen} onToggle={onTogglePlanOpen} />;
             } else {
+              const userItem = row.kind === "user" ? (items[row.first] as Extract<ChatItem, { type: "user" }>) : undefined;
+              const tb = userItem ? turnBounds.get(row.first) : undefined;
+              const durationMs = tb?.start && tb?.end && tb.end > tb.start ? tb.end - tb.start : undefined;
               content = (
                 <>
                   {/* 回合分隔:每条用户消息(首条除外)前插一条带时间的分隔线,让多轮对话边界清晰。 */}
-                  {row.kind === "user" && row.first > 0 && <TurnDivider ts={(items[row.first] as Extract<ChatItem, { type: "user" }>).ts} />}
+                  {userItem && row.first > 0 && <TurnDivider ts={userItem.ts} durationMs={durationMs} />}
                   <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} />
                 </>
               );
@@ -1467,15 +1489,33 @@ function extractCodeChild(children: ComponentPropsWithoutRef<"pre">["children"])
   return { language: lang || "code", text: text.replace(/\n$/, "") };
 }
 
-// 回合分隔:发丝线 + 时间,清晰划分每一轮对话(用户消息前的锚点)。
-function TurnDivider({ ts }: { ts?: number }) {
+// 回合分隔:发丝线 + 时间 + 本轮持续时间,清晰划分每一轮对话(用户消息前的锚点)。
+function TurnDivider({ ts, durationMs }: { ts?: number; durationMs?: number }) {
+  const dur = formatDuration(durationMs);
   return (
     <div className="turn-divider">
       <span className="turn-divider-line" />
-      {ts && <span className="turn-divider-time">{formatTime(ts)}</span>}
+      {ts && (
+        <span className="turn-divider-time">
+          {formatTime(ts)}{dur && <span className="turn-divider-dur"> · {dur}</span>}
+        </span>
+      )}
       <span className="turn-divider-line" />
     </div>
   );
+}
+
+// 时长格式化:<60s → "Ns";<60m → "Mm SSs"(SS 零填充);≥60m → "Hh MMm"。不足 1s 返回空。
+function formatDuration(ms?: number): string {
+  if (!ms || ms < 1000) return "";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return rs ? `${m}m ${pad2(rs)}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm ? `${h}h ${pad2(rm)}m` : `${h}h`;
 }
 
 // 时间格式化:今天显示 HH:mm;跨天显示 MM-DD HH:mm;无 ts 返回空。
