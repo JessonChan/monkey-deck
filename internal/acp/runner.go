@@ -23,6 +23,10 @@ import (
 	"github.com/jessonchan/monkey-deck/internal/permissions"
 )
 
+// maxListPages:session/list 分页拉取的页数上限(防 misbehaving peer 永远返回非空 cursor
+// 致死循环,peer 不可全信)。每页 ~50-100 条,100 页覆盖万级 session,远超任何单项目。
+const maxListPages = 100
+
 // StopReason 透传 SDK 的 StopReason,供 internal/chat 等业务包引用
 // (§2.1:internal/acp 是 ACP 唯一封装层,业务包不直接 import SDK)。
 type StopReason = acp.StopReason
@@ -277,14 +281,48 @@ func (cs *ChatSession) SessionTitle(ctx context.Context) (string, error) {
 		// 协议硬约束:agent 未声明 session/list 能力时禁止调用(session-list.mdx)。
 		return "", nil
 	}
-	lr, err := cs.Conn.ListSessions(ctx, acp.ListSessionsRequest{})
-	if err != nil {
-		return "", err
-	}
-	for _, s := range lr.Sessions {
-		if s.SessionId == cs.SessionID && s.Title != nil {
-			return *s.Title, nil
+	// listOnePage 注入 session/list 单页拉取(便于单测注入 mock,§5.1):按 cwd 过滤 + cursor 分页。
+	listOnePage := func(ctx context.Context, cwd string, cursor *string) ([]acp.SessionInfo, *string, error) {
+		lr, err := cs.Conn.ListSessions(ctx, acp.ListSessionsRequest{Cwd: &cwd, Cursor: cursor})
+		if err != nil {
+			return nil, nil, err
 		}
+		return lr.Sessions, lr.NextCursor, nil
+	}
+	return findSessionTitle(ctx, listOnePage, cs.WorkDir, cs.SessionID)
+}
+
+// sessionLister 抽象 session/list 的单页拉取,便于 findSessionTitle 单测注入 mock(§5.1)。
+// 返回本页 session 列表 + 下一页 cursor(nil/空 = 无更多页)。
+type sessionLister func(ctx context.Context, cwd string, cursor *string) ([]acp.SessionInfo, *string, error)
+
+// findSessionTitle 在 harness 的 session 列表里按 sessionId 找 harness 生成的权威标题。
+//
+// 设计依据(探针确认,Task #22117):
+//   - 协议支持 cwd 过滤 + cursor 分页(ListSessionsRequest.{Cwd,Cursor} / NextCursor)。
+//   - OMP/opencode 实测均支持 cwd 过滤:全量首页 50/100 条(跨所有项目,OMP 还分页)→
+//     按 cwd 过滤后只剩本项目 2/3 条,NextCursor=nil。旧实现无过滤拉首页,目标 session
+//     仅因「最新」侥幸落在首页;切项目 / 续旧 session 时极易被挤出首页 → 静默漏抓标题。
+//   - 每个 session 的 cwd = 其项目目录 / worktree(§1.4),目标 session 必在 cwd 过滤集里。
+//
+// 不变量(§5.3):按协议主键 sessionId 归并,不猜边界。逐页跟进 NextCursor 直到命中或耗尽;
+// maxListPages 防止 misbehaving peer 永远返回非空 cursor 致死循环(peer 不可全信)。
+func findSessionTitle(ctx context.Context, list sessionLister, cwd string, sid acp.SessionId) (string, error) {
+	var cursor *string
+	for page := 0; page < maxListPages; page++ {
+		sessions, next, err := list(ctx, cwd, cursor)
+		if err != nil {
+			return "", err
+		}
+		for _, s := range sessions {
+			if s.SessionId == sid && s.Title != nil {
+				return *s.Title, nil
+			}
+		}
+		if next == nil || *next == "" {
+			return "", nil
+		}
+		cursor = next
 	}
 	return "", nil
 }
