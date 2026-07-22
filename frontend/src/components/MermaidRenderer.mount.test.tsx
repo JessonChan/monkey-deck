@@ -154,4 +154,92 @@ describe("MermaidRenderer (component)", () => {
     await flush();
     expect(host.querySelector('[data-testid="mermaid-diagram"]')).not.toBeNull();
   });
+
+  // ---- Task #22115: view-source toggle + zoom ----
+
+  // reset 按钮 tooltip 形如 "chat.mermaidZoomReset · 120%";取百分比段断言缩放倍率。
+  function resetPct(h) {
+    const btn = h.querySelector('[data-testid="mermaid-zoom-reset"]');
+    return btn?.getAttribute("data-tooltip-content") || "";
+  }
+
+  test("view-source toggle switches diagram ↔ source", async () => {
+    __resetMermaidCacheForTest();
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    expect(host.querySelector(".mermaid-svg-host")).not.toBeNull();
+    expect(host.querySelector(".mermaid-src-pre")).toBeNull();
+    host.querySelector('[data-testid="mermaid-src-toggle"]').click();
+    await flush();
+    expect(host.querySelector(".mermaid-src-pre")).not.toBeNull();
+    expect(host.querySelector(".mermaid-svg-host")).toBeNull();
+    host.querySelector('[data-testid="mermaid-src-toggle"]').click();
+    await flush();
+    expect(host.querySelector(".mermaid-svg-host")).not.toBeNull();
+    expect(host.querySelector(".mermaid-src-pre")).toBeNull();
+  });
+
+  test("zoom-in / zoom-out buttons change zoom (read reset %)", async () => {
+    __resetMermaidCacheForTest();
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    expect(resetPct(host)).toContain("100%");
+    host.querySelector('[data-testid="mermaid-zoom-in"]').click();
+    await flush();
+    expect(resetPct(host)).toContain("120%");
+    host.querySelector('[data-testid="mermaid-zoom-out"]').click();
+    await flush();
+    expect(resetPct(host)).toContain("100%");
+  });
+
+  test("reset button restores 100%", async () => {
+    __resetMermaidCacheForTest();
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    host.querySelector('[data-testid="mermaid-zoom-in"]').click();
+    host.querySelector('[data-testid="mermaid-zoom-in"]').click();
+    await flush();
+    expect(resetPct(host)).toContain("140%");
+    host.querySelector('[data-testid="mermaid-zoom-reset"]').click();
+    await flush();
+    expect(resetPct(host)).toContain("100%");
+  });
+
+  test("zoom buttons clamp + disable at min/max", async () => {
+    __resetMermaidCacheForTest();
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    const out = () => host.querySelector('[data-testid="mermaid-zoom-out"]');
+    const inn = () => host.querySelector('[data-testid="mermaid-zoom-in"]');
+    expect(out().disabled).toBe(false);
+    // 0.2 步进从 1.0 缩到 0.3(clamp),额外点击被 clamp 吸收。
+    for (let i = 0; i < 8; i++) out().click();
+    await flush();
+    expect(out().disabled).toBe(true);
+    // 从 0.2/0.3 一路放大到 3.0(clamp)。
+    for (let i = 0; i < 20; i++) inn().click();
+    await flush();
+    expect(inn().disabled).toBe(true);
+  });
+
+  test("Ctrl/⌘ + wheel zooms; plain wheel does not", async () => {
+    __resetMermaidCacheForTest();
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    const svgHost = host.querySelector(".mermaid-svg-host");
+    // happy-dom 的 WheelEvent 构造器不会从 init 设 ctrlKey(真实浏览器会),这里显式补上以测逻辑。
+    const ctrlWheel = (deltaY) => {
+      const ev = new window.WheelEvent("wheel", { deltaY });
+      Object.defineProperty(ev, "ctrlKey", { value: true });
+      svgHost.dispatchEvent(ev);
+    };
+    // 无 ctrl 不缩放(deltaY 非 0 但 ctrlKey 缺省 falsy)。
+    svgHost.dispatchEvent(new window.WheelEvent("wheel", { deltaY: -100 }));
+    await flush();
+    expect(resetPct(host)).toContain("100%");
+    // ctrl + 滚轮上 ×3 → +0.3 → 130%。
+    for (let i = 0; i < 3; i++) ctrlWheel(-100);
+    await flush();
+    expect(resetPct(host)).toContain("130%");
+  });
 });
