@@ -599,6 +599,7 @@ input, textarea { font-family: inherit; }
   border: 1px solid var(--sep); border-top: none;
   border-radius: 0 0 var(--r-sm) var(--r-sm);
   margin: 0 0 7px; line-height: 1.55; word-break: break-word; user-select: text;
+  max-height: 360px; overflow-y: auto;
 }
 
 /* 工具卡 */

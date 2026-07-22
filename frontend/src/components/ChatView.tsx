@@ -734,6 +734,14 @@ function ThoughtBlock({ item, sessionId, onOpenFilePreview }: { item: Extract<Ch
   const everOpenedRef = useRef(open);
   if (open) everOpenedRef.current = true;
   const toggle = () => setOpen((prev) => !prev);
+  const textRef = useRef<HTMLDivElement>(null);
+  // streaming 时展开内容自动滚到底(限高滚动容器内),让用户能看到最新思考。
+  // 非流式或折叠时不动作;依赖 text/streaming/open,文本增长或展开瞬间都会触发。
+  useEffect(() => {
+    if (!open || !item.streaming) return;
+    const el = textRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [open, item.streaming, item.text]);
   return (
     <div className="thought-block">
       <button className={`thought-summary ${open ? "open" : ""}`} onClick={toggle} type="button">
@@ -745,7 +753,7 @@ function ThoughtBlock({ item, sessionId, onOpenFilePreview }: { item: Extract<Ch
         <div className="collapse-body-inner">
           {everOpenedRef.current && (
             <>
-              <div className="thought-text">
+              <div className="thought-text" ref={textRef}>
                 <PathLinkified text={item.text} onOpen={onOpenFilePreview} />
               </div>
               <button className="thought-collapse-btn" onClick={toggle}>{t("chat.collapseThought")}</button>
