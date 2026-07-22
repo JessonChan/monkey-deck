@@ -214,3 +214,87 @@ func TestMatchPath(t *testing.T) {
 		}
 	}
 }
+
+// TestExactMatchRuleShape 验证 ExactMatchRule 按请求标识固化出「准确匹配」allow 规则:
+// 工具/动作/命令或路径的形状正确,level=allow、enabled=true。
+func TestExactMatchRuleShape(t *testing.T) {
+	cases := []struct {
+		name string
+		req  MatchRequest
+		want Rule
+	}{
+		{
+			name: "exec 命令锚定全等",
+			req:  MatchRequest{ToolKind: "execute", RawInput: map[string]any{"command": "git status"}},
+			want: Rule{ToolName: "execute", ActionType: ActionExec, CommandPattern: `^git status$`, Level: LevelAllow, Enabled: true},
+		},
+		{
+			name: "exec 命令含正则元字符被转义",
+			req:  MatchRequest{ToolKind: "execute", RawInput: map[string]any{"command": "echo a.* +b"}},
+			want: Rule{ToolName: "execute", ActionType: ActionExec, CommandPattern: `^echo a\.\* \+b$`, Level: LevelAllow, Enabled: true},
+		},
+		{
+			name: "exec argv 拼接后锚定",
+			req:  MatchRequest{ToolKind: "execute", RawInput: map[string]any{"argv": []any{"go", "build", "./..."}}},
+			want: Rule{ToolName: "execute", ActionType: ActionExec, CommandPattern: `^go build \./\.\.\.$`, Level: LevelAllow, Enabled: true},
+		},
+		{
+			name: "write 取首个 location 原值",
+			req:  MatchRequest{ToolKind: "edit", Locations: []string{"/foo/bar.go"}},
+			want: Rule{ToolName: "edit", ActionType: ActionWrite, PathPattern: "/foo/bar.go", Level: LevelAllow, Enabled: true},
+		},
+		{
+			name: "read 多 location 取首个(集合取近似)",
+			req:  MatchRequest{ToolKind: "read", Locations: []string{"/a", "/b"}},
+			want: Rule{ToolName: "read", ActionType: ActionRead, PathPattern: "/a", Level: LevelAllow, Enabled: true},
+		},
+		{
+			name: "无命令无路径仅工具+动作",
+			req:  MatchRequest{ToolKind: "switch_mode"},
+			want: Rule{ToolName: "switch_mode", ActionType: ActionOther, Level: LevelAllow, Enabled: true},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := ExactMatchRule(c.req)
+			if got != c.want {
+				t.Fatalf("ExactMatchRule(%+v) = %+v, want %+v", c.req, got, c.want)
+			}
+		})
+	}
+}
+
+// TestExactMatchRuleReproducesRequest 验证「准确匹配」语义:用 ExactMatchRule 造出的规则
+// 构造引擎,同标识请求应 allow,不同标识(命令不同/路径不同/工具不同)应不命中 → fallback。
+func TestExactMatchRuleReproducesRequest(t *testing.T) {
+	t.Run("exec 同命令放行 不同命令不命中", func(t *testing.T) {
+		rule := ExactMatchRule(MatchRequest{ToolKind: "execute", RawInput: map[string]any{"command": "git status"}})
+		e := NewEngine([]Rule{rule})
+		if got := e.Decide(MatchRequest{ToolKind: "execute", RawInput: map[string]any{"command": "git status"}}, LevelAsk); got != LevelAllow {
+			t.Fatalf("同命令应 allow, got %s", got)
+		}
+		// 命令前缀/后缀不算全等 → 不命中(锚定的意义)
+		if got := e.Decide(MatchRequest{ToolKind: "execute", RawInput: map[string]any{"command": "git status --short"}}, LevelAsk); got != LevelAsk {
+			t.Fatalf("不同命令不应命中, got %s", got)
+		}
+		// 不同工具同名命令也不命中(工具是主判别项)
+		if got := e.Decide(MatchRequest{ToolKind: "bash", RawInput: map[string]any{"command": "git status"}}, LevelAsk); got != LevelAsk {
+			t.Fatalf("不同工具不应命中, got %s", got)
+		}
+	})
+
+	t.Run("fs 同路径放行 不同路径不命中", func(t *testing.T) {
+		rule := ExactMatchRule(MatchRequest{ToolKind: "edit", Locations: []string{"/foo/bar.go"}})
+		e := NewEngine([]Rule{rule})
+		if got := e.Decide(MatchRequest{ToolKind: "edit", Locations: []string{"/foo/bar.go"}}, LevelAsk); got != LevelAllow {
+			t.Fatalf("同路径应 allow, got %s", got)
+		}
+		if got := e.Decide(MatchRequest{ToolKind: "edit", Locations: []string{"/foo/baz.go"}}, LevelAsk); got != LevelAsk {
+			t.Fatalf("不同路径不应命中, got %s", got)
+		}
+		// 多 location 含已允许路径 → 命中(引擎「任一 location 命中」语义)
+		if got := e.Decide(MatchRequest{ToolKind: "edit", Locations: []string{"/foo/baz.go", "/foo/bar.go"}}, LevelAsk); got != LevelAllow {
+			t.Fatalf("含已允许路径应 allow, got %s", got)
+		}
+	})
+}

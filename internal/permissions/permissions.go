@@ -251,3 +251,40 @@ func normalizeLevel(s string) string {
 		return LevelAsk // 未知/空 → ask(最安全,保留人工裁决)
 	}
 }
+
+// ExactMatchRule 根据一次权限请求构造「准确匹配」的 allow 规则(§3.4「全局允许」决策用)。
+//
+// 用户在前端选「全局允许」(onRespond("global"))时,把当前请求的标识固化成一条
+// level=allow 的规则,使后续「同工具 + 同命令」或「同工具 + 同路径」的请求被规则引擎
+// 自动放行——跨 session / 跨 project 全局生效(区别于 session/project 仅内存记忆、随
+// session 生灭)。规则经 service 持久化进 DB,刷新全部活跃 session 的规则快照后即刻生效。
+//
+// 标识选取(「准确匹配」= 复现当前请求所需的全部非空约束,AND 语义):
+//   - ToolName = req.ToolKind(精确工具,主判别项;不同 kind 不会误命中)
+//   - ActionType = ActionOfKind(ToolKind)(与 kind 一致,供分组/展示)
+//   - 有命令(exec 类):CommandPattern = ^转义命令$(锚定 + 转义元字符,严格全等)
+//   - 无命令有路径(fs 类):PathPattern = 首个 location 原值(引擎按「任一 location 命中」
+//     判定,当前请求含该路径 → 自身可复现;多路径请求只能取其一,见下方注释)
+//   - 无命令无路径:仅按工具+动作匹配(可表达的最窄「同工具」语义)
+//
+// 纯逻辑、无副作用,单测直接验证输入→规则形状(§5.1)。
+func ExactMatchRule(req MatchRequest) Rule {
+	rule := Rule{
+		ToolName:   req.ToolKind,
+		ActionType: ActionOfKind(req.ToolKind),
+		Level:      LevelAllow,
+		Enabled:    true,
+	}
+	if cmd := ExtractCommand(req.RawInput); cmd != "" {
+		// 锚定 + 转义:命令作为正则全等匹配,避免元字符/前缀误命中。
+		rule.CommandPattern = "^" + regexp.QuoteMeta(cmd) + "$"
+		return rule
+	}
+	if len(req.Locations) > 0 {
+		// 取首个 location:引擎 matchPaths 对「任一 location 命中」算命中,当前请求必含
+		// 该路径故自身可复现。多路径请求的完整集合无法用单条 glob 表达(取首个为最佳近似)。
+		rule.PathPattern = req.Locations[0]
+		return rule
+	}
+	return rule
+}
