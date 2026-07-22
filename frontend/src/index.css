@@ -507,6 +507,8 @@ input, textarea { font-family: inherit; }
   transition: background 0.1s, color 0.1s;
 }
 .msg-action-btn:hover { background: var(--elev); color: var(--text); }
+.msg-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.msg-action-btn:disabled:hover { background: transparent; color: var(--text-3); }
 
 /* 代码块 */
 .code-box { margin: 9px 0; border: 1px solid var(--sep); border-radius: var(--r-md); overflow: hidden; background: #161617; }
@@ -541,6 +543,7 @@ input, textarea { font-family: inherit; }
   text-transform: uppercase; letter-spacing: 0.06em;
 }
 .mermaid-head-err .mermaid-head-label { color: var(--red); }
+.mermaid-head-actions { display: flex; align-items: center; gap: 1px; }
 .mermaid-svg-host {
   padding: 12px; overflow: auto; user-select: text;
   display: flex; align-items: center; justify-content: center;

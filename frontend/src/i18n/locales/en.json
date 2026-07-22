@@ -176,6 +176,11 @@
     "mermaidWriting": "Diagram (streaming)",
     "mermaidLoading": "Rendering diagram…",
     "mermaidRenderFailed": "Diagram render failed · showing source",
+    "mermaidViewSource": "View source",
+    "mermaidViewDiagram": "View diagram",
+    "mermaidZoomIn": "Zoom in",
+    "mermaidZoomOut": "Zoom out",
+    "mermaidZoomReset": "Reset zoom",
     "planStatus": {
       "completed": "Done",
       "in_progress": "In progress",

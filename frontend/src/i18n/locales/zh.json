@@ -176,6 +176,11 @@
     "mermaidWriting": "图表(生成中)",
     "mermaidLoading": "正在渲染图表…",
     "mermaidRenderFailed": "图表渲染失败 · 显示源码",
+    "mermaidViewSource": "查看源码",
+    "mermaidViewDiagram": "查看图表",
+    "mermaidZoomIn": "放大",
+    "mermaidZoomOut": "缩小",
+    "mermaidZoomReset": "重置缩放",
     "planStatus": {
       "completed": "已完成",
       "in_progress": "进行中",
