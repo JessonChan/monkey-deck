@@ -1207,6 +1207,24 @@ input, textarea { font-family: inherit; }
 .queue-btn.interrupt { color: var(--accent-2); border-color: rgba(100, 210, 255, 0.3); }
 .queue-btn.interrupt:hover { background: rgba(100, 210, 255, 0.12); color: var(--accent-2); }
 .queue-btn.revoke:hover { color: var(--text-2); }
+.queue-btn.edit:hover { color: var(--amber); }
+.queue-btn.save { color: var(--accent-2); border-color: rgba(100, 210, 255, 0.3); }
+.queue-btn.save:hover { background: rgba(100, 210, 255, 0.12); color: var(--accent-2); }
+.queue-btn.cancel:hover { color: var(--text-2); }
+.queue-scheduled {
+  font-family: var(--mono); font-size: 10px; color: var(--text-3); flex-shrink: 0;
+  white-space: nowrap;
+}
+/* inline 编辑态 */
+.queue-item-edit {
+  flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0;
+}
+.queue-edit-input {
+  flex: 1; font-size: 13px; line-height: 1.4; color: var(--text); background: transparent;
+  border: 1px solid var(--sep-strong); border-radius: var(--r-sm); padding: 4px 8px;
+  resize: vertical; min-height: 26px; font-family: inherit;
+}
+.queue-edit-input:focus { outline: none; border-color: var(--accent-2); }
 
 /* 空状态 */
 .empty-state {

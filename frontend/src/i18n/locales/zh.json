@@ -252,7 +252,14 @@
     "interruptTip": "立即发送:打断当前生成,这条先发(其余保留排队)",
     "interrupt": "立即发送",
     "revokeTip": "撤回:移出队列并回填到输入框编辑",
-    "revoke": "撤回"
+    "revoke": "撤回",
+    "editTip": "编辑:就地修改这条排队消息(保留在队列原位)",
+    "edit": "编辑",
+    "saveTip": "保存改动写回队列",
+    "save": "保存",
+    "cancelTip": "取消编辑",
+    "cancel": "取消",
+    "scheduled": "排队于 {{time}}"
   },
   "terminal": {
     "closeTabTip": "关闭终端",

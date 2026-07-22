@@ -252,7 +252,14 @@
     "interruptTip": "Send now: interrupts current generation, sends this first (rest stay queued)",
     "interrupt": "Send now",
     "revokeTip": "Revoke: removes from queue and refills the composer for editing",
-    "revoke": "Revoke"
+    "revoke": "Revoke",
+    "editTip": "Edit: rename this queued message in place (keeps its place in queue)",
+    "edit": "Edit",
+    "saveTip": "Save changes back to queue",
+    "save": "Save",
+    "cancelTip": "Cancel editing",
+    "cancel": "Cancel",
+    "scheduled": "queued {{time}}"
   },
   "terminal": {
     "closeTabTip": "Close terminal",
