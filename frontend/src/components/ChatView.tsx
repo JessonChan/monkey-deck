@@ -1306,6 +1306,7 @@ function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRes
         <button className="perm-btn perm-allow" data-testid="perm-once" onClick={() => onRespond("once")}>{t("chat.permAllowOnce")}</button>
         <button className="perm-btn perm-allow" data-testid="perm-session" onClick={() => onRespond("session")}>{t("chat.permAllowSession")}</button>
         <button className="perm-btn perm-allow" data-testid="perm-project" onClick={() => onRespond("project")}>{t("chat.permAllowProject")}</button>
+        <button className="perm-btn perm-allow" data-testid="perm-global" onClick={() => onRespond("global")}>{t("chat.permAllowGlobal")}</button>
         <button className="perm-btn perm-deny" data-testid="perm-deny" onClick={() => onRespond("deny")}>{t("chat.permDeny")}</button>
       </div>
     </div>

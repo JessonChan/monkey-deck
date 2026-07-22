@@ -108,6 +108,7 @@
     "permAllowOnce": "Allow once",
     "permAllowSession": "Allow for this session",
     "permAllowProject": "Allow for this project",
+    "permAllowGlobal": "Allow globally",
     "permDeny": "Deny this time",
     "permActionRead": "Read",
     "permActionWrite": "Write",
