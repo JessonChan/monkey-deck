@@ -23,7 +23,7 @@ type Harness struct {
 	ID      string `json:"id"`      // 标识(omp/opencode),存进 session.harness
 	Name    string `json:"name"`    // 显示名
 	Command string `json:"command"` // stdio ACP 启动命令(规范形,如 "omp acp")
-	Icon    string `json:"icon"`    // 官方图标资源路径(如 "assets/harness-icons/omp.svg");空 = 无 / 走兜底
+	Icon    string `json:"icon"`    // 官方图标资源路径(如 "assets/harness-icons/omp.png");空 = 无 / 走兜底
 
 	// 运行时(发现 + 版本检测填充)。Supported 静态默认里这些为零值。
 	Path             string `json:"path,omitempty"`             // 可执行文件绝对路径(空 = 未发现)
@@ -37,10 +37,11 @@ type Harness struct {
 // Supported 受支持 harness 的静态注册表(前端选择器 + 进程回收 + Command/Normalize 用)。
 // 第一项为默认 harness。始终全量、顺序稳定;不掺运行时数据(运行时数据走 Discovered)。
 //
-// Icon 指向 assets/harness-icons/ 下的官方 SVG 资源路径(单一事实源:文件名 = ID,
-// 见 assets/harness-icons/README.md)。前端据此取图,未知 harness 的 Icon 为空时由前端走 lucide Bot 兜底。
+// Icon 指向 assets/harness-icons/ 下的官方图标资源路径(单一事实源:文件名 = ID,
+// 扩展名随源项目原图格式——svg 或 png,见 assets/harness-icons/README.md)。前端据此取图,
+// 未知 harness 的 Icon 为空时由前端走 lucide Bot 兜底。
 var Supported = []Harness{
-	{ID: "omp", Name: "Oh My Pi", Command: "omp acp", Icon: "assets/harness-icons/omp.svg"},
+	{ID: "omp", Name: "Oh My Pi", Command: "omp acp", Icon: "assets/harness-icons/omp.png"},
 	{ID: "opencode", Name: "OpenCode", Command: "opencode acp", Icon: "assets/harness-icons/opencode.svg"},
 }
 
