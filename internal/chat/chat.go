@@ -243,16 +243,24 @@ type ChatService struct {
 	// 用户下一条消息零延迟。exponential backoff + 重试上限防崩溃循环;busy/idle 两条分支
 	// 分别由 runPrompt(peer-disconnected)与 health watcher(空闲进程死)触发;userStopped
 	// (StopSession 干净 cancel 不 teardown → 天然不触发)与 CloseSession(显式 stopReconnect)抑制。
-	reconnects       map[string]*reconnectCtl // sessionID → 进行中的重连(去重:同时只一个)
-	reconnectGiveUp  map[string]bool          // sessionID → 重连耗尽,放弃自动重连(用户发消息时清)
-	reconnectEnabled bool                     // ServiceStartup 置 true;未启 ServiceStartup 的单测默认 false(不触发重连)
-	healthStop       chan struct{}            // health watcher 停止信号
-	healthDone       chan struct{}            // health watcher 退出信号(优雅停)
-	healthInterval   time.Duration            // health watcher 扫描间隔(检测空闲断连)
-	reconnMaxAttempt int                      // 重连最大尝试次数
-	reconnInitBackoff time.Duration           // 重连初始退避
-	reconnMaxBackoff  time.Duration           // 重连退避上限
-	reconnStability   time.Duration           // 重连 spawn 后稳定观察期(期内死算失败)
+	reconnects        map[string]*reconnectCtl // sessionID → 进行中的重连(去重:同时只一个)
+	reconnectGiveUp   map[string]bool          // sessionID → 重连耗尽,放弃自动重连(用户发消息时清)
+	reconnectEnabled  bool                     // ServiceStartup 置 true;未启 ServiceStartup 的单测默认 false(不触发重连)
+	healthStop        chan struct{}            // health watcher 停止信号
+	healthDone        chan struct{}            // health watcher 退出信号(优雅停)
+	healthInterval    time.Duration            // health watcher 扫描间隔(检测空闲断连)
+	reconnMaxAttempt  int                      // 重连最大尝试次数
+	reconnInitBackoff time.Duration            // 重连初始退避
+	reconnMaxBackoff  time.Duration            // 重连退避上限
+	reconnStability   time.Duration            // 重连 spawn 后稳定观察期(期内死算失败)
+
+	// harness 版本更新周期刷新(可选,check_harness_updates 设置开关):周期重跑
+	// refreshHarnessesAsync,持续刷新「上游最新版本」(前端据此显示可升级提示)。
+	// ServiceStartup 按持久化设置决定是否起;SetCheckHarnessUpdates 实时启停。
+	// 默认开启,周期 harnessRefreshEvery(测试可注入短间隔加速)。
+	harnessRefreshStop  chan struct{}
+	harnessRefreshDone  chan struct{}
+	harnessRefreshEvery time.Duration
 
 	// 测试钩子(nil = 生产路径,见 emit/persistTurn):emitHook 捕获 emit 事件序列、
 	// persistHook 在 persistTurn 入口阻塞。仅单测注入,用于确定性复现 runPrompt
@@ -271,11 +279,12 @@ func NewChatService(cfg *config.Config) *ChatService {
 	return &ChatService{
 		cfg: cfg, active: map[string]*liveSession{}, idleTimeout: 5 * time.Minute,
 		reconnects: map[string]*reconnectCtl{}, reconnectGiveUp: map[string]bool{},
-		healthInterval:    3 * time.Second,
-		reconnMaxAttempt:  5,
-		reconnInitBackoff: 1 * time.Second,
-		reconnMaxBackoff:  30 * time.Second,
-		reconnStability:   5 * time.Second,
+		healthInterval:      3 * time.Second,
+		reconnMaxAttempt:    5,
+		reconnInitBackoff:   1 * time.Second,
+		reconnMaxBackoff:    30 * time.Second,
+		reconnStability:     5 * time.Second,
+		harnessRefreshEvery: time.Hour,
 	}
 }
 
@@ -291,16 +300,21 @@ func (s *ChatService) ServiceStartup(ctx context.Context, options application.Se
 	}
 	s.st = st
 	s.loadPersistedConfig()
-	s.spawnFn = s.startLive // 默认 spawn 实现;单测可注入 mock(§5.1)
+	s.spawnFn = s.startLive                                               // 默认 spawn 实现;单测可注入 mock(§5.1)
 	acp.SetPgidFile(filepath.Join(s.cfg.CachesDir, "harness-pgids.json")) // §3.2:限定回收范围到本应用派生的 harness
-	acp.SetHarnessCommands(harness.Commands())                          // 注入受支持 harness 命令,回收层据此识别 omp/opencode/...(不再写死 opencode)
-	acp.KillAllHarnesses()                                              // 启动时清上轮残留 harness 进程组(§3.2)
-	s.startIdleReaper()                                                 // B 方案:idle reaper 回收空闲 harness
-	s.startHealthWatcher()                                              // §3.3:空闲断连检测 → 自动重连
-	s.reconnectEnabled = true                                           // 启用断连自动重连(单测默认 false,不触发)
+	acp.SetHarnessCommands(harness.Commands())                            // 注入受支持 harness 命令,回收层据此识别 omp/opencode/...(不再写死 opencode)
+	acp.KillAllHarnesses()                                                // 启动时清上轮残留 harness 进程组(§3.2)
+	s.startIdleReaper()                                                   // B 方案:idle reaper 回收空闲 harness
+	s.startHealthWatcher()                                                // §3.3:空闲断连检测 → 自动重连
+	s.reconnectEnabled = true                                             // 启用断连自动重连(单测默认 false,不触发)
 	// 异步发现本机已安装 harness + 查上游最新版本(不阻塞启动;完成后推 EventHarnesses 让前端重拉)。
 	// 失败静默降级:ListHarnesses 会用静态 Supported 兜底,前端照常可选 harness(只是没版本信息)。
 	go s.refreshHarnessesAsync()
+	// 周期刷新 harness 版本(可选):按 check_harness_updates 设置开关启停。默认开启,
+	// 持续刷新上游最新版本(前端显示可升级提示);用户可在设置里关掉省网络/电量。
+	if s.checkHarnessUpdatesSetting() {
+		s.startHarnessRefresh()
+	}
 	slog.Info("chat service started", "dataDir", s.cfg.DataDir)
 	return nil
 }
@@ -317,6 +331,7 @@ func (s *ChatService) ServiceShutdown() error {
 		close(s.healthStop)
 		<-s.healthDone
 	}
+	s.stopHarnessRefresh() // 停 harness 周期刷新 ticker
 	s.stopAllReconnects()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1728,6 +1743,7 @@ func (s *ChatService) persistTurnPlan(sessionID, turnID string, entries []acp.Pl
 		slog.Warn("persist plan", "err", err)
 	}
 }
+
 // persistConfigCache 把最新的扁平化 config options 序列化写库(懒 spawn:只读态渲染 ModelSelect 用)。
 // 在 spawn 完成(startLive)/ config_option_update(handleEvent) / set_config_option / refresh config 时调用。
 // 空切片不写(避免清空有效缓存)。写失败只记日志,不影响主流程。
@@ -2054,6 +2070,113 @@ func (s *ChatService) refreshHarnessesAsync() {
 	s.emit(EventHarnesses, nil)
 }
 
+// ─── harness 版本更新周期刷新(check_harness_updates 设置开关)──────────────────
+//
+// 周期重跑 refreshHarnessesAsync,持续刷新「上游最新版本」:用户装了新 harness、上游发了
+// 新版本时,前端能持续看到可升级提示(不必手动点刷新)。GitHub API 免鉴权 60/小时/IP,
+// 默认每小时一次、每个有 Source 的 harness 一请求,远在限额内。
+//
+// 开关持久化在 settings(check_harness_updates),默认开启;SetCheckHarnessUpdates 实时启停
+// 后台 ticker;ServiceShutdown/Close 时优雅停(等待 goroutine 落定,不泄漏)。
+
+const settingKeyCheckHarnessUpdates = "check_harness_updates"
+
+// settingBool 把 setting 字符串值解释为 bool;空/无法识别按 def
+// (避免设置项刚引入、缺省时读不出而误判)。
+func settingBool(v string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	return def
+}
+
+// checkHarnessUpdatesSetting 读 check_harness_updates 设置(默认开启:开箱即得更新提示)。
+func (s *ChatService) checkHarnessUpdatesSetting() bool {
+	v, _ := s.st.GetSetting(s.ctx, settingKeyCheckHarnessUpdates)
+	return settingBool(v, true)
+}
+
+// GetCheckHarnessUpdates 返回「周期检查 harness 更新」开关当前值(前端设置面板复选框)。
+// store 未就绪(单测未启 ServiceStartup)时按默认 true,与启动默认一致。
+func (s *ChatService) GetCheckHarnessUpdates() bool {
+	if s.st == nil {
+		return true
+	}
+	return s.checkHarnessUpdatesSetting()
+}
+
+// SetCheckHarnessUpdates 设置「周期检查 harness 更新」开关并实时启停后台 ticker:
+// 开 → 起周期刷新;关 → 停(下个 tick 前退出)。值持久化,重启后保持。
+func (s *ChatService) SetCheckHarnessUpdates(on bool) error {
+	val := "false"
+	if on {
+		val = "true"
+	}
+	if err := s.st.SetSetting(s.ctx, settingKeyCheckHarnessUpdates, val); err != nil {
+		return err
+	}
+	if on {
+		s.startHarnessRefresh()
+	} else {
+		s.stopHarnessRefresh()
+	}
+	return nil
+}
+
+// startHarnessRefresh 启动 harness 周期刷新 goroutine(幂等:已在跑则不重复起)。
+// ServiceStartup(设置开启时)与 SetCheckHarnessUpdates(true)调用。
+func (s *ChatService) startHarnessRefresh() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.harnessRefreshStop != nil {
+		return // 已在跑
+	}
+	if s.harnessRefreshEvery <= 0 {
+		return // 未配置周期(测试默认 0):不起
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	s.harnessRefreshStop = stop
+	s.harnessRefreshDone = done
+	go s.harnessRefreshLoop(stop, done)
+}
+
+// stopHarnessRefresh 停止 harness 周期刷新 goroutine 并等待落定(幂等:未起则直接返回)。
+func (s *ChatService) stopHarnessRefresh() {
+	s.mu.Lock()
+	stop := s.harnessRefreshStop
+	done := s.harnessRefreshDone
+	s.harnessRefreshStop = nil
+	s.harnessRefreshDone = nil
+	s.mu.Unlock()
+	if stop == nil {
+		return
+	}
+	close(stop)
+	<-done
+}
+
+// harnessRefreshLoop 周期重跑 refreshHarnessesAsync(发现新装 harness / 上游新版本 → 推 EventHarnesses)。
+// stop 由 startHarnessRefresh 创建,stopHarnessRefresh close 它请求退出并等待 done 落定。
+func (s *ChatService) harnessRefreshLoop(stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(s.harnessRefreshEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.refreshHarnessesAsync()
+		}
+	}
+}
+
 // UpgradeHarness 触发某 harness 的升级(委托给 Registry 配置的 Upgrader,通常是官方安装脚本)。
 // 升级后自动重新发现并刷新缓存,返回最新列表(让前端能看到新版本号)。
 // 升级报错时仍刷新一次并把错误塞进对应 harness 的 UpgradeError 字段,便于前端展示。
@@ -2099,11 +2222,12 @@ func (s *ChatService) GetLastHarness() string {
 // GetConfig 返回当前配置(默认 model、各数据目录)。
 func (s *ChatService) GetConfig() map[string]string {
 	return map[string]string{
-		"defaultModel": s.cfg.DefaultModel,
-		"dataDir":      s.cfg.DataDir,
-		"logsDir":      s.cfg.LogsDir,
-		"cachesDir":    s.cfg.CachesDir,
-		"stateDir":     s.cfg.StateDir,
+		"defaultModel":        s.cfg.DefaultModel,
+		"checkHarnessUpdates": strconv.FormatBool(s.GetCheckHarnessUpdates()),
+		"dataDir":             s.cfg.DataDir,
+		"logsDir":             s.cfg.LogsDir,
+		"cachesDir":           s.cfg.CachesDir,
+		"stateDir":            s.cfg.StateDir,
 	}
 }
 

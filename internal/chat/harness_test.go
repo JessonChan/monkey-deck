@@ -6,11 +6,14 @@ package chat
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jessonchan/monkey-deck/internal/config"
 	"github.com/jessonchan/monkey-deck/internal/harness"
+	"github.com/jessonchan/monkey-deck/internal/store"
 )
 
 // stubUpgrader 测试用 Upgrader,捕获调用 + 返回预设错误。
@@ -178,3 +181,147 @@ func (f fakeStubProbe) Version(_ context.Context, bin string, _ []string) (strin
 }
 
 var errFakeNotFound = errors.New("fake probe: not found")
+
+// ─── check_harness_updates 设置开关 + 周期刷新 ticker ──────────────────────────
+
+// setupHarnessStoreSvc 构造带 store 的 ChatService(可读写 settings),不起 ServiceStartup。
+// 周期刷新间隔设为 0(默认不启 ticker),由具体测试按需注入短间隔。
+func setupHarnessStoreSvc(t *testing.T) *ChatService {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := store.New(filepath.Join(dir, config.AppSlug+".db"))
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	cfg := config.TestConfig(dir)
+	svc := NewChatService(cfg)
+	svc.ctx = context.Background()
+	svc.st = st
+	t.Cleanup(func() { _ = svc.ServiceShutdown() })
+	return svc
+}
+
+// TestSettingBool 校验 setting 字符串 → bool 解析(空/未知按默认)。
+func TestSettingBool(t *testing.T) {
+	cases := []struct {
+		in   string
+		def  bool
+		want bool
+	}{
+		{"true", false, true}, {"TRUE", false, true}, {"1", false, true},
+		{"on", false, true}, {"yes", false, true},
+		{"false", true, false}, {"0", true, false}, {"off", true, false},
+		{"no", true, false},
+		{"", true, true}, {"", false, false}, // 空 → def
+		{"garbage", true, true}, {"garbage", false, false}, // 未知 → def
+	}
+	for _, c := range cases {
+		if got := settingBool(c.in, c.def); got != c.want {
+			t.Errorf("settingBool(%q, def=%v) = %v, want %v", c.in, c.def, got, c.want)
+		}
+	}
+}
+
+// TestGetCheckHarnessUpdates_DefaultTrue 缺省(setting 未写)时默认开启,与 ServiceStartup 默认一致。
+func TestGetCheckHarnessUpdates_DefaultTrue(t *testing.T) {
+	svc := setupHarnessStoreSvc(t)
+	if !svc.GetCheckHarnessUpdates() {
+		t.Fatalf("GetCheckHarnessUpdates default = false, want true")
+	}
+	// GetConfig 也应暴露该字段且为 "true"。
+	cfg := svc.GetConfig()
+	if cfg["checkHarnessUpdates"] != "true" {
+		t.Fatalf("GetConfig.checkHarnessUpdates = %q, want %q", cfg["checkHarnessUpdates"], "true")
+	}
+}
+
+// TestSetCheckHarnessUpdates_PersistsAndReadsBack SetCheckHarnessUpdates(false) 持久化,
+// GetCheckHarnessUpdates / GetConfig 读回 false;再设回 true 读回 true。
+func TestSetCheckHarnessUpdates_PersistsAndReadsBack(t *testing.T) {
+	svc := setupHarnessStoreSvc(t)
+	// 设短间隔避免 SetCheckHarnessUpdates(true) 起真实长周期 ticker 干扰(此处只验设置读写)。
+	svc.harnessRefreshEvery = 0
+
+	if err := svc.SetCheckHarnessUpdates(false); err != nil {
+		t.Fatalf("SetCheckHarnessUpdates(false): %v", err)
+	}
+	if svc.GetCheckHarnessUpdates() {
+		t.Fatalf("after set false, GetCheckHarnessUpdates = true, want false")
+	}
+	if got := svc.GetConfig()["checkHarnessUpdates"]; got != "false" {
+		t.Fatalf("GetConfig.checkHarnessUpdates = %q, want false", got)
+	}
+	// 再设回 true。
+	if err := svc.SetCheckHarnessUpdates(true); err != nil {
+		t.Fatalf("SetCheckHarnessUpdates(true): %v", err)
+	}
+	if !svc.GetCheckHarnessUpdates() {
+		t.Fatalf("after set true, GetCheckHarnessUpdates = false, want true")
+	}
+}
+
+// TestHarnessRefreshTicker_RunsPeriodically 周期 ticker 启用后确实周期性跑 refreshHarnessesAsync
+// (EventHarnesses 事件被多次触发),关闭 SetCheckHarnessUpdates(false) 后不再触发。
+// 隔离网络:注入空 Probe + 空 Registry,Discover 不打 GitHub。
+func TestHarnessRefreshTicker_RunsPeriodically(t *testing.T) {
+	prevProbe := harness.SetProbeForTest(fakeStubProbe{})
+	t.Cleanup(prevProbe)
+	prevReg := harness.SwapRegistryForTest([]harness.Spec{{ID: "opencode", BinaryName: "opencode"}}) // 无 Source,不打网络
+	t.Cleanup(prevReg)
+
+	svc := setupHarnessStoreSvc(t)
+	svc.harnessRefreshEvery = 15 * time.Millisecond // 短间隔加速
+
+	var emits atomic.Int64
+	svc.emitHook = func(name string, _ any) {
+		if name == EventHarnesses {
+			emits.Add(1)
+		}
+	}
+
+	// 开启 → 起 ticker;等至少 3 次 tick。
+	if err := svc.SetCheckHarnessUpdates(true); err != nil {
+		t.Fatalf("SetCheckHarnessUpdates(true): %v", err)
+	}
+	waitFor(t, 2*time.Second, func() bool { return emits.Load() >= 3 })
+
+	// 关闭 → 停 ticker;记录当前计数,等一段后确认不再增长。
+	before := emits.Load()
+	if err := svc.SetCheckHarnessUpdates(false); err != nil {
+		t.Fatalf("SetCheckHarnessUpdates(false): %v", err)
+	}
+	time.Sleep(80 * time.Millisecond) // > 5 个 tick 周期
+	if got := emits.Load(); got != before {
+		t.Fatalf("after disable, emits grew %d → %d, want stop", before, got)
+	}
+}
+
+// TestHarnessRefreshToggle_Idempotent 多次 start/stop 不 panic、不泄漏(等待落定)。
+func TestHarnessRefreshToggle_Idempotent(t *testing.T) {
+	svc := setupHarnessStoreSvc(t)
+	svc.harnessRefreshEvery = 50 * time.Millisecond
+
+	// 双重 start 幂等。
+	svc.startHarnessRefresh()
+	svc.startHarnessRefresh()
+	// 双重 stop 幂等。
+	svc.stopHarnessRefresh()
+	svc.stopHarnessRefresh()
+	// 再开再关一轮。
+	svc.startHarnessRefresh()
+	svc.stopHarnessRefresh()
+}
+
+// waitFor 轮询直到 cond 返回 true 或超时(周期 ticker 的确定性等待)。
+func waitFor(t *testing.T, max time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(max)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("condition not met within %v", max)
+}
