@@ -179,6 +179,7 @@
     "mermaidZoomIn": "Zoom in",
     "mermaidZoomOut": "Zoom out",
     "mermaidZoomReset": "Reset zoom",
+    "mermaidFullscreen": "Fullscreen",
     "planStatus": {
       "completed": "Done",
       "in_progress": "In progress",

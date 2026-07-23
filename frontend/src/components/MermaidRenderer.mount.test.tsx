@@ -242,4 +242,87 @@ describe("MermaidRenderer (component)", () => {
     await flush();
     expect(resetPct(host)).toContain("130%");
   });
+
+  // ---- Task #22945: fullscreen modal(复用 zoom)----
+
+  // modal 内 reset 按钮 testid=mermaid-fs-zoom-reset,与 inline 区分避免选择器误选。
+  function fsResetPct(h) {
+    const btn = h.querySelector('[data-testid="mermaid-fs-zoom-reset"]');
+    return btn?.getAttribute("data-tooltip-content") || "";
+  }
+
+  test("fullscreen button opens modal overlay with SVG", async () => {
+    __resetMermaidCacheForTest();
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    expect(host.querySelector('[data-testid="mermaid-fullscreen"]')).toBeNull();
+    host.querySelector('[data-testid="mermaid-fullscreen-open"]').click();
+    await flush();
+    const fs = host.querySelector('[data-testid="mermaid-fullscreen"]');
+    expect(fs).not.toBeNull();
+    expect(fs.querySelector("svg")).not.toBeNull();
+    // modal 有独立的 zoom 控件 + 关闭按钮。
+    expect(fs.querySelector('[data-testid="mermaid-fs-zoom-in"]')).not.toBeNull();
+    expect(fs.querySelector('[data-testid="mermaid-fullscreen-close"]')).not.toBeNull();
+  });
+
+  test("close button closes fullscreen", async () => {
+    __resetMermaidCacheForTest();
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    host.querySelector('[data-testid="mermaid-fullscreen-open"]').click();
+    await flush();
+    expect(host.querySelector('[data-testid="mermaid-fullscreen"]')).not.toBeNull();
+    host.querySelector('[data-testid="mermaid-fullscreen-close"]').click();
+    await flush();
+    expect(host.querySelector('[data-testid="mermaid-fullscreen"]')).toBeNull();
+  });
+
+  test("click on mask closes fullscreen; click inside card does not", async () => {
+    __resetMermaidCacheForTest();
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    host.querySelector('[data-testid="mermaid-fullscreen-open"]').click();
+    await flush();
+    const overlay = host.querySelector(".mermaid-fs-overlay");
+    // 点卡片内部不关(点 zoom-in 验证 stopPropagation)。
+    host.querySelector('[data-testid="mermaid-fs-zoom-in"]').click();
+    await flush();
+    expect(host.querySelector('[data-testid="mermaid-fullscreen"]')).not.toBeNull();
+    // 点遮罩关闭:直接派发 click 到 overlay。
+    overlay.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await flush();
+    expect(host.querySelector('[data-testid="mermaid-fullscreen"]')).toBeNull();
+  });
+
+  test("Esc closes fullscreen", async () => {
+    __resetMermaidCacheForTest();
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    host.querySelector('[data-testid="mermaid-fullscreen-open"]').click();
+    await flush();
+    expect(host.querySelector('[data-testid="mermaid-fullscreen"]')).not.toBeNull();
+    window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flush();
+    expect(host.querySelector('[data-testid="mermaid-fullscreen"]')).toBeNull();
+  });
+
+  test("modal zoom is independent + starts at 100%", async () => {
+    __resetMermaidCacheForTest();
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    // inline 先放大到 120%(不应影响稍后打开的 modal)。
+    host.querySelector('[data-testid="mermaid-zoom-in"]').click();
+    await flush();
+    expect(resetPct(host)).toContain("120%");
+    host.querySelector('[data-testid="mermaid-fullscreen-open"]').click();
+    await flush();
+    // modal 独立状态:打开即 100%。
+    expect(fsResetPct(host)).toContain("100%");
+    host.querySelector('[data-testid="mermaid-fs-zoom-in"]').click();
+    await flush();
+    expect(fsResetPct(host)).toContain("120%");
+    // inline 的缩放未被 modal 影响。
+    expect(resetPct(host)).toContain("120%");
+  });
 });

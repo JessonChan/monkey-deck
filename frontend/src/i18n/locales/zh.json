@@ -179,6 +179,7 @@
     "mermaidZoomIn": "放大",
     "mermaidZoomOut": "缩小",
     "mermaidZoomReset": "重置缩放",
+    "mermaidFullscreen": "全屏",
     "planStatus": {
       "completed": "已完成",
       "in_progress": "进行中",

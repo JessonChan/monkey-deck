@@ -581,6 +581,23 @@ input, textarea { font-family: inherit; }
 .mermaid-spin { animation: mermaid-spin 1s linear infinite; }
 @keyframes mermaid-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
+/* Mermaid 全屏查看 modal(Task #22945):复用 .preview-overlay 形态,深底 + 居中卡片;
+   z-index 45 高于 .preview-overlay(40)、低于 react-tooltip(70,按钮 tooltip 仍可见)。 */
+.mermaid-fs-overlay {
+  position: fixed; inset: 0; z-index: 45;
+  background: rgba(0, 0, 0, 0.66); backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center; padding: 32px;
+  animation: fadeIn 0.15s ease;
+}
+.mermaid-fs-card {
+  width: 100%; max-width: 1200px; max-height: 90vh; background: #161617;
+  border: 1px solid var(--sep-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.mermaid-fs-stage { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+/* modal 内的 SVG 宿主填满 stage、留更大留白(zoom>1 时自身 overflow:auto 出滚动条)。 */
+.mermaid-fs-stage .mermaid-svg-host { flex: 1; padding: 24px; min-height: 60vh; }
+
 .tool-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 
 /* 思考块 */
