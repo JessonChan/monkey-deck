@@ -1159,7 +1159,7 @@ input, textarea { font-family: inherit; }
 .composer-collapse-divider:hover { color: var(--accent-2); background: var(--hover); }
 .send-btn {
   width: 34px; height: 34px; border-radius: 50%;
-  background: var(--accent); color: #fff;
+  background: var(--green); color: #fff;
   display: inline-flex; align-items: center; justify-content: center;
   transition: filter 0.1s, opacity 0.1s; flex-shrink: 0;
 }
