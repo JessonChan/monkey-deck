@@ -263,6 +263,7 @@
     "clearScheduleTip": "Clear schedule: send as soon as possible (next drain)",
     "scheduledSend": "⏰ {{time}}",
     "scheduledSendTip": "Scheduled send — will be sent after this time",
+    "scheduleExpired": "The picked time has already passed. Please pick a future time.",
     "reorderTip": "Drag to reorder send order"
   },
   "terminal": {

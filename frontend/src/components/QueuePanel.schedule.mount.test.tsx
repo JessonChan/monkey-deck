@@ -130,4 +130,57 @@ describe("QueuePanel schedule picker (Task #22134)", () => {
     expect(calls[0]).toBeLessThanOrEqual(Date.now());
     expect(calls[0]).toBeGreaterThanOrEqual(before);
   });
+
+  test("datetime-local input has min >= now (Task #22386)", async () => {
+    const before = Date.now();
+    const { host } = mount(
+      <QueuePanel queue={[item("q1", "hi", Date.now())]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={() => {}} onReorder={() => {}} />
+    );
+    await flush();
+    const after = Date.now();
+
+    (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    const input = host.querySelector('[data-testid="queue-schedule-input"]') as HTMLInputElement;
+    expect(input).not.toBeNull();
+    // min attribute must be set and reflect ~now. datetime-local truncates to the minute
+    // (drops seconds/ms), so the min epoch may be up to 1 minute below the render-time epoch.
+    const min = input.getAttribute("min");
+    expect(min).not.toBeNull();
+    const minTs = Date.parse(min!);
+    expect(Number.isNaN(minTs)).toBe(false);
+    expect(minTs).toBeGreaterThanOrEqual(before - 60_000);
+    expect(minTs).toBeLessThanOrEqual(after);
+  });
+
+  test("submitting a past time is intercepted with expiry error, onSchedule not called (Task #22386)", async () => {
+    const calls: Array<{ id: string; scheduledAt: number }> = [];
+    const { host } = mount(
+      <QueuePanel queue={[item("q1", "hi", Date.now())]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(id, scheduledAt) => calls.push({ id, scheduledAt })} onReorder={() => {}} />
+    );
+    await flush();
+
+    (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    const input = host.querySelector('[data-testid="queue-schedule-input"]') as HTMLInputElement;
+    // Pick a time 5 minutes in the past.
+    const target = new Date(Date.now() - 5 * 60_000);
+    const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
+    const v = `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}T${pad(target.getHours())}:${pad(target.getMinutes())}`;
+    setInputValue(input, v);
+    await flush();
+
+    (host.querySelector('[data-testid="queue-schedule-save"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    // Intercepted: no onSchedule call, error shown, schedule row stays open.
+    expect(calls).toHaveLength(0);
+    expect(host.querySelector('[data-testid="queue-schedule-error"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-input"]')).not.toBeNull();
+  });
 });

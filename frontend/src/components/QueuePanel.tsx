@@ -27,6 +27,7 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   const { t } = useTranslation();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [schedulingId, setSchedulingId] = useState<string | null>(null);
+  const [scheduleError, setScheduleError] = useState<string | null>(null); // 定时提交复验过期提示
   const [dragId, setDragId] = useState<string | null>(null);   // 正被拖拽的条目 id
   const [overId, setOverId] = useState<string | null>(null);   // 拖拽悬停的目标条目 id
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -53,19 +54,27 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
     }
   };
 
-  const startSchedule = (item: QueueItem) => { setSchedulingId(item.id); setEditingId(null); };
-  const cancelSchedule = () => setSchedulingId(null);
+  const startSchedule = (item: QueueItem) => { setSchedulingId(item.id); setEditingId(null); setScheduleError(null); };
+  const cancelSchedule = () => { setSchedulingId(null); setScheduleError(null); };
   const saveSchedule = () => {
     if (!schedulingId) return;
     const v = scheduleRef.current?.value;
     const ts = v ? fromLocalInput(v) : 0;
+    // 提交时复验过期:min=now 只是 UX 第一道防线(用户可手动键入过去时刻,或开着选择器
+    // 停留过久使原本合法的时刻变成过去)。此处再判一次,过期则拦截并提示,不调 onSchedule。
+    if (ts > 0 && ts <= Date.now()) {
+      setScheduleError(t("queue.scheduleExpired"));
+      return;
+    }
     onSchedule(schedulingId, ts > 0 ? ts : Date.now());
     setSchedulingId(null);
+    setScheduleError(null);
   };
   const clearSchedule = () => {
     if (!schedulingId) return;
     onSchedule(schedulingId, Date.now());
     setSchedulingId(null);
+    setScheduleError(null);
   };
 
   return (
@@ -132,6 +141,7 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                 className="queue-schedule-input"
                 data-testid="queue-schedule-input"
                 type="datetime-local"
+                min={toLocalInput(Date.now())}
                 defaultValue={pending ? toLocalInput(item.scheduledAt) : defaultLocalInput()}
                 ref={scheduleRef}
                 autoFocus
@@ -164,6 +174,11 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                   </button>
                 )}
               </div>
+              {scheduleError && (
+                <span className="queue-schedule-error" data-testid="queue-schedule-error">
+                  {scheduleError}
+                </span>
+              )}
             </div>
           ) : (
             <>

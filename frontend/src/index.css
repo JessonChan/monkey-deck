@@ -1238,6 +1238,9 @@ input, textarea { font-family: inherit; }
   font-family: inherit; flex: 1;
 }
 .queue-schedule-input:focus { outline: none; border-color: var(--accent-2); }
+.queue-schedule-error {
+  color: var(--red); font-size: 11px; flex-shrink: 0; font-weight: 600;
+}
 /* inline 编辑态 */
 .queue-item-edit {
   flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0;
