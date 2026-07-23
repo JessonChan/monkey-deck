@@ -96,7 +96,7 @@ export default function App() {
   const drainingBySessionRef = useRef<Set<string>>(new Set());
   // 定时发送:per-session setTimeout 句柄。drainSession 发现队列里所有条目都未到点(scheduledAt 在
   // 未来)时,armScheduleTimer 按最早 scheduledAt 设一个一次性定时器,到点再触发 drainSession —— 否则
-  // idle 状态下没有 idle 事件会触发、定时消息会静死。drainSession / scheduleQueueItem / enqueueMessage 改动队列后重 arm。
+  // idle 状态下没有 idle 事件会触发、定时消息会静死。drainSession / scheduleQueueItem 改动队列后重 arm(enqueueMessage 只停车、不 arm)。
   const scheduledTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const drainSessionRef = useRef<(sid: string) => Promise<void>>(async () => {});
   // status 派生值的 ref:sendMessage 闭包锁 status 导致「prompting 时仍直发 → 后端报 busy」,
@@ -773,10 +773,11 @@ export default function App() {
   }, []);
 
   // 主动入队列:与「发送」并列的显式入队入口(Composer 入队列按钮 / ⌘⇧↩)。无论 idle/prompting
-  // 都把消息压入该 session 的前端队列(Protocol 无 queue,回合结束由 chat:status 的 idle 事件自动续发)。
-  // idle 时入队后需主动 drainSession 推一次队列 —— 否则没有 idle 事件触发、队列会静死;
-  // prompting 时入队则等本轮结束的 idle 事件续发。主动入队 = 用户想继续,清掉该 session 的停意图
-  // (与 interruptQueue 一致),否则被 Stop 标记抑制、入队却不续发。
+  // 都只把消息压入该 session 的前端队列 —— **永远只停车,不 auto-start**(不主动 drainSession、
+  // 不 arm 定时器)。续发时机统一交给「turn 结束的 idle 事件」(chat:status handler 内按 sessionId
+  // 触发 drainSession):prompting 时入队,本轮结束的 idle 续发;idle 时入队,等下一次自然 turn 结束
+  // 或下一次直发触发。主动入队 = 用户想继续,清掉该 session 的停意图(与 interruptQueue 一致),
+  // 否则被 Stop 标记抑制、到点续发时被跳过。
   const enqueueMessage = useCallback(
     async (text: string, mentions: Mention[], imgs?: ImageAttachment[]) => {
       if (!selectedSessionId || !text.trim()) return;
@@ -793,15 +794,8 @@ export default function App() {
       };
       setQueueBySession(queueBySessionRef.current);
       userStoppedBySessionRef.current.delete(selectedSessionId);
-      // idle(非 prompting)时无 idle 事件会触发,需主动推一次队列,否则队列静死。
-      if (statusRef.current !== "prompting") {
-        void drainSession(selectedSessionId);
-      } else {
-        // prompting 时入队若设了未来定时,需 arm 定时器(无 idle 事件会触发,定时器兜底到点发)。
-        armScheduleTimer(selectedSessionId);
-      }
     },
-    [selectedSessionId, drainSession, armScheduleTimer]
+    [selectedSessionId]
   );
 
   // 撤回编辑:移出队列,文本回填 composer。
