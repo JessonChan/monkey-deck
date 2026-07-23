@@ -115,8 +115,9 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   // 虚拟化高度模型(唯一高度事实源,见 lib/virtualList.ts):实测 Map + 类型先验。
   // 按 session 切走 prune 防无界增长;切回重载后实测清空、由 RO 重测收敛。
   const modelRef = useRef(new HeightModel());
-  // 布局缓存:每次 render 由 (rows, model, tailH) 重算并写入;onScroll 的 rAF 回调读它判贴底/锚点,
-  // 不读 el.scrollHeight(虚拟化下 scrollHeight 恒 = 显式 total,读它无信息且触发强制布局)。
+  // 布局缓存:每次 render 由 (rows, model, tailH, headH) 重算并写入;rAF/RO 回调读它算锚点/窗口。
+  // 贴底判定例外:读 el.scrollHeight(DOM 真相)——收敛期 layoutRef.total 超前于已提交的 DOM 高度,
+  // 用它判贴底会把 RO re-pin 的 clamp 误判为「离底」,致 stick 误翻 false、停在偏上位置。
   const layoutRef = useRef<Layout>({ tops: [], heights: [], tailTop: 0, total: 0 });
   // 尾部区(加载更多/权限卡/实时 plan/打字指示)实测高度;未实测前用 TAIL_PRIOR。
   const tailHRef = useRef(TAIL_PRIOR);
@@ -200,7 +201,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rows, modelVersion]
   );
-  // render 期写镜像:rAF/RO 回调读最新值(不读 el.scrollHeight,虚拟化下它恒 = 显式 total)。
+  // render 期写镜像:rAF/RO 回调读最新值算锚点/窗口(贴底判定例外,读 el.scrollHeight,见 layoutRef 注释)。
   layoutRef.current = layout;
   rowsRef.current = rows;
 
@@ -250,7 +251,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       const el = scrollRef.current;
       if (!el) return;
       const lay = layoutRef.current;
-      const nearBottom = isAtBottom(lay.total, el.scrollTop, el.clientHeight);
+      const nearBottom = isAtBottom(el.scrollHeight, el.scrollTop, el.clientHeight);
       stickToBottomRef.current = nearBottom;
       // 仅在状态真正翻转时 setState(避免每帧无谓的 setter 调用)。
       setShowScrollBtn((prev) => (prev === !nearBottom ? prev : !nearBottom));
@@ -304,6 +305,10 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       prevSessionIdRef.current = sessionId;
       // 实测高度剪枝到当前行集(防 Map 无界增长)。
       modelRef.current.prune(new Set(rows.map((r) => r.id)));
+      // 头/尾区高度重置为先验:.chat-body 按 key 重挂载,新 session 的头/尾区是全新 DOM
+      // (内容随 session 变:权限卡/plan/打字指示有无可差上百 px),旧实测高不适用。
+      headHRef.current = HEAD_PRIOR;
+      tailHRef.current = TAIL_PRIOR;
       if (items.length > 0) {
         pendingScrollRef.current = null;
         applyInitialPosition(el, sessionId);
