@@ -138,8 +138,9 @@ type turnEntry struct {
 
 // liveSession 一个活跃的 ACP 对话(内存态,钉在某个 db session 上)。
 type liveSession struct {
-	chat chatConn
-	proj *store.Project
+	chat      chatConn
+	proj      *store.Project
+	harnessID string // 该 session 使用的 harness(omp/opencode);自动升级据此判定「该 harness 是否有运行中进程」
 
 	mu       sync.Mutex
 	timeline []*turnEntry          // 单一时序队列:真相,持久化按此序写库
@@ -262,6 +263,13 @@ type ChatService struct {
 	harnessRefreshDone  chan struct{}
 	harnessRefreshEvery time.Duration
 
+	// 自动升级(auto_harness_upgrade 设置开关):周期 ticker 发现 UpgradeAvailable 后,
+	// 若开关开启且该 harness 无运行中进程(§5.3 先验证再动手),静默调 UpgradeHarness。
+	// 失败进冷却(autoUpgradeCooldown[id] = 可再试时刻)防每个 tick 反复重试同一失败升级。
+	// 与 check_harness_updates 共用同一 ticker(ticker 在二者任一开启时运行)。
+	autoUpgradeCooldown    map[string]time.Time // harnessID → 冷却到期时刻(受 s.mu 保护)
+	autoUpgradeCooldownDur time.Duration        // 失败冷却时长(生产默认 1h;测试注入短值加速)
+
 	// 测试钩子(nil = 生产路径,见 emit/persistTurn):emitHook 捕获 emit 事件序列、
 	// persistHook 在 persistTurn 入口阻塞。仅单测注入,用于确定性复现 runPrompt
 	// 收尾与并发 send 的竞态(§5.4 覆盖竞态)。
@@ -279,12 +287,14 @@ func NewChatService(cfg *config.Config) *ChatService {
 	return &ChatService{
 		cfg: cfg, active: map[string]*liveSession{}, idleTimeout: 5 * time.Minute,
 		reconnects: map[string]*reconnectCtl{}, reconnectGiveUp: map[string]bool{},
-		healthInterval:      3 * time.Second,
-		reconnMaxAttempt:    5,
-		reconnInitBackoff:   1 * time.Second,
-		reconnMaxBackoff:    30 * time.Second,
-		reconnStability:     5 * time.Second,
-		harnessRefreshEvery: time.Hour,
+		healthInterval:         3 * time.Second,
+		reconnMaxAttempt:       5,
+		reconnInitBackoff:      1 * time.Second,
+		reconnMaxBackoff:       30 * time.Second,
+		reconnStability:        5 * time.Second,
+		harnessRefreshEvery:    time.Hour,
+		autoUpgradeCooldown:    map[string]time.Time{},
+		autoUpgradeCooldownDur: time.Hour,
 	}
 }
 
@@ -310,11 +320,10 @@ func (s *ChatService) ServiceStartup(ctx context.Context, options application.Se
 	// 异步发现本机已安装 harness + 查上游最新版本(不阻塞启动;完成后推 EventHarnesses 让前端重拉)。
 	// 失败静默降级:ListHarnesses 会用静态 Supported 兜底,前端照常可选 harness(只是没版本信息)。
 	go s.refreshHarnessesAsync()
-	// 周期刷新 harness 版本(可选):按 check_harness_updates 设置开关启停。默认开启,
-	// 持续刷新上游最新版本(前端显示可升级提示);用户可在设置里关掉省网络/电量。
-	if s.checkHarnessUpdatesSetting() {
-		s.startHarnessRefresh()
-	}
+	// 周期刷新 harness 版本(check / auto 设置共用同一 ticker):按持久化设置决定是否起。
+	// check 负责「周期刷新上游版本」(红点),auto 负责「发现可升级且安全时静默 UpgradeHarness」。
+	// 二者任一开启即运行 ticker;都关闭则不耗资源。
+	s.syncHarnessRefreshTicker()
 	slog.Info("chat service started", "dataDir", s.cfg.DataDir)
 	return nil
 }
@@ -1043,7 +1052,7 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 		cwd = se.WorktreePath // 每个 session 独占 worktree(并行隔离)
 	}
 
-	ls := &liveSession{proj: proj, index: map[string]*turnEntry{}, lastActivity: time.Now().UnixMilli()}
+	ls := &liveSession{proj: proj, harnessID: se.Harness, index: map[string]*turnEntry{}, lastActivity: time.Now().UnixMilli()}
 	onEvent := func(e acp.SessionEvent) {
 		s.handleEvent(ls, se.ID, e)
 	}
@@ -2084,6 +2093,12 @@ func (s *ChatService) refreshHarnessesAsync() {
 
 const settingKeyCheckHarnessUpdates = "check_harness_updates"
 
+// settingKeyAutoHarnessUpgrade:「自动升级 harness」开关键(默认关闭:静默跑官方安装脚本较重,
+// 由用户在设置里显式开启)。与 check_harness_updates 共用同一周期 ticker:
+// check 负责周期刷新上游版本(红点),auto 负责「发现可升级且安全时静默 UpgradeHarness」。
+// 二者任一开启即运行 ticker;都关闭则停。
+const settingKeyAutoHarnessUpgrade = "auto_harness_upgrade"
+
 // settingBool 把 setting 字符串值解释为 bool;空/无法识别按 def
 // (避免设置项刚引入、缺省时读不出而误判)。
 func settingBool(v string, def bool) bool {
@@ -2102,6 +2117,17 @@ func (s *ChatService) checkHarnessUpdatesSetting() bool {
 	return settingBool(v, true)
 }
 
+// autoHarnessUpgradeSetting 读 auto_harness_upgrade 设置(默认关闭:跑官方安装脚本较重,显式开启)。
+func (s *ChatService) autoHarnessUpgradeSetting() bool {
+	v, _ := s.st.GetSetting(s.ctx, settingKeyAutoHarnessUpgrade)
+	return settingBool(v, false)
+}
+
+// refreshTickerNeeded 报告是否需要运行周期 ticker:check 或 auto 任一开启即需要。
+func (s *ChatService) refreshTickerNeeded() bool {
+	return s.checkHarnessUpdatesSetting() || s.autoHarnessUpgradeSetting()
+}
+
 // GetCheckHarnessUpdates 返回「周期检查 harness 更新」开关当前值(前端设置面板复选框)。
 // store 未就绪(单测未启 ServiceStartup)时按默认 true,与启动默认一致。
 func (s *ChatService) GetCheckHarnessUpdates() bool {
@@ -2111,8 +2137,27 @@ func (s *ChatService) GetCheckHarnessUpdates() bool {
 	return s.checkHarnessUpdatesSetting()
 }
 
+// GetAutoHarnessUpgrade 返回「自动升级 harness」开关当前值(前端设置面板复选框)。
+// store 未就绪(单测)时按默认 false,与启动默认一致。
+func (s *ChatService) GetAutoHarnessUpgrade() bool {
+	if s.st == nil {
+		return false
+	}
+	return s.autoHarnessUpgradeSetting()
+}
+
+// syncHarnessRefreshTicker 按「check 或 auto 任一开启」实时启停周期 ticker。
+// 两个开关的 setter 都调它,避免各自 start/stop 互相踩(如:关 check 但 auto 仍开时 ticker 不该停)。
+func (s *ChatService) syncHarnessRefreshTicker() {
+	if s.refreshTickerNeeded() {
+		s.startHarnessRefresh()
+	} else {
+		s.stopHarnessRefresh()
+	}
+}
+
 // SetCheckHarnessUpdates 设置「周期检查 harness 更新」开关并实时启停后台 ticker:
-// 开 → 起周期刷新;关 → 停(下个 tick 前退出)。值持久化,重启后保持。
+// 仅当 auto 也关闭时关 check 才会真正停 ticker。值持久化,重启后保持。
 func (s *ChatService) SetCheckHarnessUpdates(on bool) error {
 	val := "false"
 	if on {
@@ -2121,11 +2166,22 @@ func (s *ChatService) SetCheckHarnessUpdates(on bool) error {
 	if err := s.st.SetSetting(s.ctx, settingKeyCheckHarnessUpdates, val); err != nil {
 		return err
 	}
+	s.syncHarnessRefreshTicker()
+	return nil
+}
+
+// SetAutoHarnessUpgrade 设置「自动升级 harness」开关并实时启停后台 ticker:
+// 开启即起周期 ticker(发现可升级且安全时静默 UpgradeHarness);关闭且 check 也关时停 ticker。
+// 值持久化,重启后保持。
+func (s *ChatService) SetAutoHarnessUpgrade(on bool) error {
+	val := "false"
 	if on {
-		s.startHarnessRefresh()
-	} else {
-		s.stopHarnessRefresh()
+		val = "true"
 	}
+	if err := s.st.SetSetting(s.ctx, settingKeyAutoHarnessUpgrade, val); err != nil {
+		return err
+	}
+	s.syncHarnessRefreshTicker()
 	return nil
 }
 
@@ -2163,6 +2219,8 @@ func (s *ChatService) stopHarnessRefresh() {
 }
 
 // harnessRefreshLoop 周期重跑 refreshHarnessesAsync(发现新装 harness / 上游新版本 → 推 EventHarnesses)。
+// 每个 tick 后追加 maybeAutoUpgrade:若 auto_harness_upgrade 开启,对「可升级且无运行中进程」
+// 的 harness 静默 UpgradeHarness(失败进冷却,见 maybeAutoUpgrade)。
 // stop 由 startHarnessRefresh 创建,stopHarnessRefresh close 它请求退出并等待 done 落定。
 func (s *ChatService) harnessRefreshLoop(stop <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
@@ -2176,8 +2234,71 @@ func (s *ChatService) harnessRefreshLoop(stop <-chan struct{}, done chan<- struc
 			return
 		case <-ticker.C:
 			s.refreshHarnessesAsync()
+			s.maybeAutoUpgrade()
 		}
 	}
+}
+
+// maybeAutoUpgrade 由 harnessRefreshLoop 在每个 tick 后调用:若 auto_harness_upgrade 开启,
+// 遍历缓存的 harness,对「UpgradeAvailable 且无运行中进程 且 未在失败冷却期」的 harness 静默升级。
+//
+// 两条安全闸门(§5.3 外部事实是设计前提时先验证再动手):
+//  1. 运行中进程安全:升级一个正在被某活跃 session 使用的 harness 可能与运行中进程冲突
+//     (Windows 无法覆写运行中 .exe;Unix 虽换 inode 但官方安装脚本可能重启服务/动用户数据)。
+//     故先扫 s.active,任一活跃 session 使用该 harness 即跳过,等下个 tick 再试(那时通常已 idle)。
+//  2. 失败冷却:升级失败则置 autoUpgradeCooldown[id]=now+cooldown,冷却期内不再反复重试同一失败升级
+//     (防每个 tick 反复跑同一失败的安装脚本,打满日志/网络)。成功则清冷却。
+//
+// 纯静默:不向用户弹错误(后台行为);失败仅 slog + 冷却。升级成功会经 UpgradeHarness 刷新缓存 + 推事件,
+// 前端自然看到新版本号(红点消失)。
+func (s *ChatService) maybeAutoUpgrade() {
+	if !s.autoHarnessUpgradeSetting() {
+		return
+	}
+	p := s.harnessCache.Load()
+	if p == nil {
+		return
+	}
+	now := time.Now()
+	s.mu.Lock()
+	inUse := make(map[string]bool, len(s.active))
+	for _, ls := range s.active {
+		inUse[ls.harnessID] = true
+	}
+	var candidates []string
+	for _, h := range *p {
+		if !h.UpgradeAvailable {
+			continue
+		}
+		if inUse[h.ID] {
+			continue // 运行中进程安全:跳过(§5.3)
+		}
+		if until := s.autoUpgradeCooldown[h.ID]; until.After(now) {
+			continue // 失败冷却期内:跳过
+		}
+		candidates = append(candidates, h.ID)
+	}
+	s.mu.Unlock()
+
+	// 串行升级(不并行跑多个安装脚本,避免互相打架/抢网络)。
+	for _, id := range candidates {
+		s.autoUpgradeOne(id)
+	}
+}
+
+// autoUpgradeOne 对单个 harness 静默升级;失败置冷却,成功清冷却。
+// 复用 UpgradeHarness(它会重发现 + 刷缓存 + 推事件);auto 路径仅额外做冷却簿记。
+func (s *ChatService) autoUpgradeOne(id string) {
+	if _, err := s.UpgradeHarness(id); err != nil {
+		slog.Warn("auto harness upgrade failed, entering cooldown", "harness", id, "err", err, "cooldown", s.autoUpgradeCooldownDur)
+		s.mu.Lock()
+		s.autoUpgradeCooldown[id] = time.Now().Add(s.autoUpgradeCooldownDur)
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Lock()
+	delete(s.autoUpgradeCooldown, id)
+	s.mu.Unlock()
 }
 
 // UpgradeHarness 触发某 harness 的升级(委托给 Registry 配置的 Upgrader,通常是官方安装脚本)。
@@ -2227,6 +2348,7 @@ func (s *ChatService) GetConfig() map[string]string {
 	return map[string]string{
 		"defaultModel":        s.cfg.DefaultModel,
 		"checkHarnessUpdates": strconv.FormatBool(s.GetCheckHarnessUpdates()),
+		"autoHarnessUpgrade":  strconv.FormatBool(s.GetAutoHarnessUpgrade()),
 		"dataDir":             s.cfg.DataDir,
 		"logsDir":             s.cfg.LogsDir,
 		"cachesDir":           s.cfg.CachesDir,
