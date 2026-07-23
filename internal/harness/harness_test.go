@@ -70,7 +70,7 @@ func TestSupportedIcons(t *testing.T) {
 // 锚定具体值,改路径或新增 harness 时此处会显式失败,提醒同步前端 / 资源层。
 func TestIconByKnownHarnesses(t *testing.T) {
 	want := map[string]string{
-		"omp":      "assets/harness-icons/omp.png",
+		"omp":      "assets/harness-icons/omp.svg",
 		"opencode": "assets/harness-icons/opencode.svg",
 	}
 	got := map[string]string{}

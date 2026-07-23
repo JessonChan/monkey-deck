@@ -15,7 +15,7 @@
 
 | 文件 | harness ID | 来源 |
 |---|---|---|
-| `omp.png` | `omp`(Oh My Pi) | [oh-my-pi](https://github.com/can1357/oh-my-pi) `python/robomp/assets/icon.png`(robomp 彩色图标) |
+| `omp.svg` | `omp`(Oh My Pi) | [oh-my-pi](https://github.com/can1357/oh-my-pi) `packages/collab-web/public/favicon.svg`(彩色渐变 π 图标) |
 | `opencode.svg` | `opencode`(OpenCode) | [opencode](https://github.com/anomalyco/opencode) `packages/identity/mark.svg` |
 
 ## 兜底(未知 / 第三方 harness)
