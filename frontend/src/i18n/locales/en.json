@@ -422,6 +422,9 @@
       "upToDate": "Up to date",
       "autoCheckTitle": "Auto-check harness updates",
       "autoCheckDesc": "Periodically re-scan and check upstream releases while running; show a red dot on the settings entry and harness menu when a newer version is found (on by default).",
+      "autoUpgradeTitle": "Auto-upgrade harnesses",
+      "autoUpgradeDesc": "When an upgrade is found, silently run each harness's own install script in the background (off by default). Skips harnesses with a running session; failed upgrades cool down for an hour.",
+      "autoUpgradeRiskTip": "Risky: this runs each harness's official install script unattended (network, disk writes, may restart services or change your environment). Enable only if you trust the upstream installers.",
       "updateDotTip": "A harness update is available"
     }
   }

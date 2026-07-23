@@ -1680,6 +1680,9 @@ input, textarea { font-family: inherit; }
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 10px 12px; background: var(--bg); border: 1px solid var(--sep); border-radius: 8px;
 }
+/* 子开关行:挂在上一开关之下,缩进 + 左侧 accent 边线区分层级(harness 自动升级挂自动检查下)。 */
+.settings-row.is-sub { margin-left: 14px; border-left: 2px solid var(--accent); }
+.harness-risk-icon { color: #ff9f0a; vertical-align: -2px; margin-right: 5px; flex-shrink: 0; }
 .settings-row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .settings-row-title { font-size: 12.5px; font-weight: 500; color: var(--text); }
 .settings-row-sub { font-size: 11px; color: var(--text-3); line-height: 1.4; }

@@ -422,6 +422,9 @@
       "upToDate": "已是最新",
       "autoCheckTitle": "自动检查 harness 更新",
       "autoCheckDesc": "运行时定期重新扫描并对照上游发布源;发现新版时在设置入口与 harness 菜单亮红点(默认开启)。",
+      "autoUpgradeTitle": "自动升级 harness",
+      "autoUpgradeDesc": "发现可升级时,在后台静默运行各 harness 自带的安装脚本(默认关闭)。会跳过有活跃会话的 harness;升级失败后冷却一小时再重试。",
+      "autoUpgradeRiskTip": "有风险:此举会在无人值守下运行各 harness 的官方安装脚本(联网、写磁盘,可能重启服务或改动你的环境)。仅在你信任上游安装器时开启。",
       "updateDotTip": "有 harness 新版本"
     }
   }

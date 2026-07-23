@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download } from "lucide-react";
+import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download, AlertTriangle } from "lucide-react";
 
 // harness 管理 pane(发现 / 版本检测 / 升级)。
 // 展示每个已知 harness 的:名称 + 启动命令 + 本地版本 + 上游最新版本 + 升级按钮 / 状态。
@@ -14,17 +14,26 @@ export default function HarnessPane() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   // 「自动检查 harness 更新」开关:真相源在后端 SQLite(check_harness_updates),
-  // 后台 ticker 据此启停(Task #22121)。这里经 GetCheckHarnessUpdates/SetCheckHarnessUpdates
-  // 直接读写后端设置,实时启停 ticker;不另存前端镜像(单一真相源,§5.3 Less is More)。
+  // 后台 ticker 据此启停(Task #22121)。这里经 SetCheckHarnessUpdates 写后端设置实时启停 ticker,
+  // 初值经 GetConfig 读取;不另存前端镜像(单一真相源,§5.3 Less is More)。
   const [autoCheck, setAutoCheck] = useState<boolean>(true);
+  // 「自动升级 harness」子开关(auto_harness_upgrade 设置,Task #22385 后端落地):
+  // 开启后周期 ticker 发现 UpgradeAvailable 且安全时静默跑官方安装脚本。默认关闭(较重 / 有风险)。
+  // 与 autoCheck 共用同一 ticker,OR 语义:任一开启即跑 ticker,都关才停。
+  const [autoUpgrade, setAutoUpgrade] = useState<boolean>(false);
   // per-harness 升级状态:id → "running" | "ok" | "err"
   const [upgrading, setUpgrading] = useState<Record<string, "running" | "ok" | "err">>({});
   const [error, setError] = useState<string | null>(null);
 
-  // 拉后端开关当前值(默认开)。失败兜底为 true,与后端默认一致。
+  // 拉后端开关当前值:经 GetConfig 一次取回 checkHarnessUpdates / autoHarnessUpgrade 两个字段
+  // (单一真相源 = 后端 SQLite;GetConfig 是后端聚合的只读快照,Task #22385 已暴露 autoHarnessUpgrade)。
+  // 缺省 / 解析失败兜底:autoCheck=true / autoUpgrade=false,与后端默认一致。
   useEffect(() => {
-    ChatService.GetCheckHarnessUpdates()
-      .then((v) => setAutoCheck(v))
+    ChatService.GetConfig()
+      .then((cfg) => {
+        if (cfg && cfg.checkHarnessUpdates != null) setAutoCheck(cfg.checkHarnessUpdates !== "false");
+        if (cfg && cfg.autoHarnessUpgrade != null) setAutoUpgrade(cfg.autoHarnessUpgrade === "true");
+      })
       .catch(() => {});
   }, []);
 
@@ -72,7 +81,7 @@ export default function HarnessPane() {
   }, []);
 
   // 切换开关:写后端 SQLite 设置(SetCheckHarnessUpdates 实时启停后台 ticker)。
-  // 失败不回滚 UI(下次 GetCheckHarnessUpdates 会把 UI 纠正回真相值)。
+  // 失败回滚 UI 到原值(下次 GetConfig 会把 UI 纠正回真相值)。
   const toggleAutoCheck = useCallback(async () => {
     const next = !autoCheck;
     setAutoCheck(next);
@@ -83,6 +92,19 @@ export default function HarnessPane() {
       setAutoCheck(!next);
     }
   }, [autoCheck]);
+
+  // 切换「自动升级」子开关:写后端 SQLite(auto_harness_upgrade,SetAutoHarnessUpgrade 实时
+  // 启停后台 ticker 的 auto 分支)。失败回滚 UI 到原值。
+  const toggleAutoUpgrade = useCallback(async () => {
+    const next = !autoUpgrade;
+    setAutoUpgrade(next);
+    try {
+      await ChatService.SetAutoHarnessUpgrade(next);
+    } catch (e) {
+      setError(String(e));
+      setAutoUpgrade(!next);
+    }
+  }, [autoUpgrade]);
 
   return (
     <div className="settings-pane" data-testid="harness-pane">
@@ -113,6 +135,33 @@ export default function HarnessPane() {
           aria-checked={autoCheck}
           data-testid="harness-autocheck"
           onClick={() => void toggleAutoCheck()}
+        >
+          <span className="settings-switch-thumb" />
+        </button>
+      </div>
+
+      {/* 自动升级子开关:挂在「自动检查」之下(auto_harness_upgrade)。默认关闭,因静默跑官方
+          安装脚本较重 / 有风险——整行带风险 tooltip + 警告图标说明(§4.4 不裸露技术格式,
+          §4.5 统一 react-tooltip)。与 autoCheck 共用后端 ticker,OR 语义。 */}
+      <div
+        className="settings-row is-sub"
+        data-testid="harness-autoupgrade-row"
+        data-tooltip-id="md-tip"
+        data-tooltip-content={t("settings.harness.autoUpgradeRiskTip")}
+      >
+        <div className="settings-row-text">
+          <div className="settings-row-title">
+            <AlertTriangle size={12} className="harness-risk-icon" />
+            {t("settings.harness.autoUpgradeTitle")}
+          </div>
+          <div className="settings-row-sub">{t("settings.harness.autoUpgradeDesc")}</div>
+        </div>
+        <button
+          className={`settings-switch ${autoUpgrade ? "on" : ""}`}
+          role="switch"
+          aria-checked={autoUpgrade}
+          data-testid="harness-autoupgrade"
+          onClick={() => void toggleAutoUpgrade()}
         >
           <span className="settings-switch-thumb" />
         </button>
