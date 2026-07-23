@@ -23,7 +23,7 @@
 
 ## 获取参考库
 
-`references/` 是上述项目的本地只读副本，不入库（约 5GB）。克隆本仓库后用一条命令补齐：
+上述项目的本地只读副本约 5GB，**不入库**，存放在机器级共享目录（默认 `/tmp/monkey-deck-reference`，见 AGENTS.md §0.2）。克隆本仓库后用一条命令补齐：
 
 ```bash
 bash scripts/references.sh            # 浅克隆缺失项

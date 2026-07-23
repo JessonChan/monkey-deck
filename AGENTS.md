@@ -27,12 +27,13 @@
 
 **禁止跳过阅读直接写代码。** ACP 生命周期搞错（比如把 client 当 server、漏掉 SessionUpdate 回调、Prompt 当成纯异步）是一切偏离的源头。
 
-### 0.2 references/ 是只读参考,严禁改动
+### 0.2 外部参考库是只读参考,放在机器级共享目录,严禁改动
 
-- `references/`(仓库根下,不入库)是外部参考项目集(`wesight/`、`orca`、`openwork` 等),**只读**。下文 `references/xxx` 均指此相对路径。
-- **严禁创建、修改、删除 `references/` 下的任何文件**,严禁往里面写测试 / 构建产物 / 临时文件。要验证想法就在本项目自己的代码里验证。
+- 外部参考项目集(`openwork`、`emdash`、`wesight`、`orca`、`opencode`、`agent-client-protocol` 等)是**只读**参考,**永不入库**,存放在**仓库外的机器级共享目录** `$MD_REF_DIR`(默认 `/tmp/monkey-deck-reference`,可用环境变量 `MONKEY_DECK_REFERENCE_DIR` 覆盖)。下文(含历史 worklog)出现 `references/<name>` 均指 `$MD_REF_DIR/<name>`。
+- **为什么放仓库外共享目录、而不是仓库内 `references/`**:本项目 session 走 git worktree 模型(§1.4),`references/` 是 `.gitignore` 的,**不会被 checkout 进 linked worktree**——agent 在 worktree 里读不到仓库内的 `references/`。放机器级共享绝对路径,主检出 + 所有 worktree 共用同一份,既避免 `5GB × N` 重复,又让任意 worktree 都能读到。
+- **严禁创建、修改、删除参考库下的任何文件**,严禁往里面写测试 / 构建产物 / 临时文件。要验证想法就在本项目自己的代码里验证。
 - 只允许 `read` / `search` / `find` 获取知识。
-- **获取参考(`references/` 不入库,克隆者 / AI 工具需自行拉取)**:清单(URL / 协议 / 用途)与一键同步都在**入库的** `scripts/references.sh`(单一事实来源,见其顶部 `REFERENCES` 表)。`bash scripts/references.sh` 浅克隆全部缺失项,`--status` 预览,`--pull` 更新,或 `task references -- --status`。这样无需把 ~5GB 内容入库:别人克隆后一条命令补齐;AI 编码工具读脚本即可"看见"参考目录(否则 `.gitignore` 会让它们忽略 `references/`)。
+- **获取参考(参考库不入库,克隆者 / AI 工具需自行拉取)**:清单(URL / 协议 / 用途)与一键同步都在**入库的** `scripts/references.sh`(单一事实来源,见其顶部 `REFERENCES` 表)。`bash scripts/references.sh` 浅克隆全部缺失项到 `$MD_REF_DIR`,`--status` 预览,`--pull` 更新,或 `task references -- --status`。这样无需把 ~5GB 内容入库:别人克隆后一条命令补齐;AI 编码工具读脚本即可"看见"参考目录。⚠ 默认 `/tmp` 在 macOS 会被 periodic(daily)回收(默认 3 天未访问即清理),需要持久化请用 `MONKEY_DECK_REFERENCE_DIR` 指向稳定目录。
 
 ### 0.3 开发追踪:docs/worklog/(PROCESS.md 已停维)
 
@@ -136,7 +137,6 @@ spawn harness 子进程（独立进程组,见 §3.2）
 ```
 monkey-deck/
 ├── AGENTS.md                  # 本文件(规矩)
-├── references/                # 只读参考(严禁改动,不入库,见 §0.2)
 ├── assets/                    # 图标设计源 PNG(换图标流程输入,见 docs/icon.md)
 ├── go.mod                     # 单一 Go module
 ├── main.go                    # Wails3 application.New() 入口
@@ -322,9 +322,9 @@ WAILS_SERVER_PORT=9246 ./bin/monkey-deck-server      # 或 wails3 task run:serve
 - **分支策略**:日常可直接在 `main` 原子推进;较大功能 / 不确定改动开 `feat/xxx` 或 `fix/xxx` 分支,验证通过再合并,保持 `main` 始终可运行。
 - **收工即提交**:做完一个功能点 → 跑测试 → 立刻 commit,并在 `docs/worklog/` 新增一条工作日志(§0.3)。不要留一堆未提交改动过夜。
 
-### 6.3 .gitignore 与 references/
-- 仓库初始化即配 `.gitignore`(排除 `references/` 与构建产物)。
-- `references/` **永远不入库**:它是本机外部参考(含软链 / 外部仓库),进库会污染历史且体积失控。
+### 6.3 .gitignore 与外部参考库
+- 仓库初始化即配 `.gitignore`(排除构建产物;并保留 `references/` 一条作**防御性安全网**——参考库现已迁至仓库外的共享目录,见 §0.2,仓库内本不该出现 `references/`,但若有人误建则该规则拦下)。
+- 外部参考库**永不入库**:它是本机外部参考(含软链 / 外部仓库,~5GB),进库会污染历史且体积失控;入库的发现通道是 `scripts/references.sh` 顶部的 `REFERENCES` 清单(§0.2)。
 
 ---
 
@@ -347,9 +347,9 @@ WAILS_SERVER_PORT=9246 ./bin/monkey-deck-server      # 或 wails3 task run:serve
 - [ ] 读过 §0(做什么/不做什么)和 §7(当前不做),本次改动没越界?
 - [ ] 开工前读过 `docs/worklog/` 最近几条?(§0.3)
 - [ ] 收工前已在 `docs/worklog/` 新增工作日志?(§0.3)
-- [ ] 原子提交、commit message 清楚、没夹带无关改动、没提交 references/ 与构建产物?(§6.2)
-- [ ] 没碰 `references/` 下任何文件?(§0.2)
-- [ ] 借用 `references/` 下任何项目的代码已按其原始协议署名(版权声明 + 许可文本 + THIRD_PARTY_LICENSES 登记;openwork 避开 `ee/`)?(§0.4)
+- [ ] 原子提交、commit message 清楚、没夹带无关改动、没提交构建产物?(§6.2)
+- [ ] 没碰外部参考库(`/tmp/monkey-deck-reference`,见 §0.2)下任何文件?
+- [ ] 借用参考库下任何项目的代码已按其原始协议署名(版权声明 + 许可文本 + THIRD_PARTY_LICENSES 登记;openwork 避开 `ee/`)?(§0.4)
 - [ ] ACP 单测用 mock,没启真 harness?(§5.1)
 - [ ] `go test ./...` 通过?
 
