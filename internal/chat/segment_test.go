@@ -63,7 +63,7 @@ func TestSegmentBoundaryNoMessageId(t *testing.T) {
 	svc, sessionID, _ := newTestService(t)
 	ls := svc.active[sessionID]
 
-	// 无 messageId:每个 chunk 落到独立 entry(回退:每条新开)。
+	// 无 messageId 且 role 变化(thought→agent):各自独立 entry(role 在 key 里 → 不同段)。
 	svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_thought_chunk", Text: "想"})
 	svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "答"})
 
@@ -71,7 +71,7 @@ func TestSegmentBoundaryNoMessageId(t *testing.T) {
 	segs := ls.segmentEntries()
 	ls.mu.Unlock()
 
-	// 两个独立 entry(无 messageId → 不归并,各自一段)。
+	// 两个独立 entry(role 不同 → 不归并;同 role 连续 chunk 的归并见 TestSegmentMergeNoMessageIdConsecutive)。
 	if len(segs) != 2 {
 		t.Fatalf("expected 2 segments without messageId, got %d: %+v", len(segs), segs)
 	}
@@ -80,5 +80,42 @@ func TestSegmentBoundaryNoMessageId(t *testing.T) {
 	}
 	if segs[1].role != "agent" || segs[1].content != "答" {
 		t.Fatalf("seg1: %+v", segs[1])
+	}
+}
+
+// 回归(§5.3 / goose):无 messageId(goose 等不发 messageId 的 harness)时,
+// 连续同 role chunk 必须归并成一条 entry;tool_call 是段边界,tool 后的同 role 文本落新段。
+// 旧 bug:messageKey 无 id 时每条 chunk 生成唯一 key → 每条新 entry → 一个 turn 碎成数百条。
+func TestSegmentMergeNoMessageIdConsecutive(t *testing.T) {
+	svc, sessionID, _ := newTestService(t)
+	ls := svc.active[sessionID]
+
+	// 连续 agent chunk(无 messageId,goose 形态)→ 必须归并成一条。
+	svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "我来看"})
+	svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "看当前"})
+	svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "代码。"})
+
+	// tool_call = 段边界。
+	svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "tool_call", ToolCallID: "T1", ToolTitle: "read", ToolStatus: "completed"})
+
+	// tool 后的连续 agent chunk → 新的一段(不并入 tool 前那段)。
+	svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "看完了"})
+	svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: ",总结如下。"})
+
+	ls.mu.Lock()
+	segs := ls.segmentEntries()
+	ls.mu.Unlock()
+
+	want := []struct{ role, content string }{
+		{"agent", "我来看看当前代码。"},
+		{"agent", "看完了,总结如下。"},
+	}
+	if len(segs) != len(want) {
+		t.Fatalf("expected %d segments, got %d: %+v", len(want), len(segs), segs)
+	}
+	for i, w := range want {
+		if segs[i].role != w.role || segs[i].content != w.content {
+			t.Fatalf("segment %d: want {%s, %q}, got {%s, %q}", i, w.role, w.content, segs[i].role, segs[i].content)
+		}
 	}
 }

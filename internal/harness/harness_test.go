@@ -21,7 +21,7 @@ func TestRegistry(t *testing.T) {
 		}
 		seen[h.ID] = true
 	}
-	for _, id := range []string{"omp", "opencode"} {
+	for _, id := range []string{"omp", "opencode", "goose"} {
 		if !seen[id] {
 			t.Fatalf("expected harness %s in Supported", id)
 		}
@@ -66,12 +66,13 @@ func TestSupportedIcons(t *testing.T) {
 	}
 }
 
-// TestIconByKnownHarnesses 专项校验 omp / opencode 两个内置 harness 的 Icon 值。
+// TestIconByKnownHarnesses 专项校验 omp / opencode / goose 三个内置 harness 的 Icon 值。
 // 锚定具体值,改路径或新增 harness 时此处会显式失败,提醒同步前端 / 资源层。
 func TestIconByKnownHarnesses(t *testing.T) {
 	want := map[string]string{
 		"omp":      "assets/harness-icons/omp.svg",
 		"opencode": "assets/harness-icons/opencode.svg",
+		"goose":    "assets/harness-icons/goose.svg",
 	}
 	got := map[string]string{}
 	for _, h := range Supported {

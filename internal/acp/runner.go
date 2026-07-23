@@ -118,7 +118,7 @@ func (r *Runner) NewChatSession(ctx context.Context, workDir string, onEvent fun
 	return cs, nil
 }
 
-// LoadChatSession 恢复已有 session:spawn harness → initialize → loadSession(resume)(§1.4)。
+// LoadChatSession 恢复已有 session:spawn → initialize → resume(支持时)/ 跳过(goose auto-load)(§1.4、§ACP conformance)。
 // 用于应用重启后恢复对话上下文(Cwd 必须匹配原 session)。
 func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string, onEvent func(SessionEvent), onPermission func(PermissionPrompt)) (*ChatSession, error) {
 	handler := NewHandler(workDir, onEvent, onPermission, 0)
@@ -126,16 +126,29 @@ func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string,
 	if err != nil {
 		return nil, err
 	}
-	// 抑制 resume 期间 opencode 重放的历史事件:前端已从 DB 加载历史,
-	// 重放会重复显示。临时把 OnEvent 换成 no-op,resume 完再恢复。
-	realOnEvent := handler.OnEvent
-	handler.OnEvent = func(SessionEvent) {}
-	resumeResp, err := conn.ResumeSession(ctx, acp.ResumeSessionRequest{
-		SessionId:  acp.SessionId(sessionID),
-		Cwd:        workDir,
-		McpServers: []acp.McpServer{},
-	})
-	handler.OnEvent = realOnEvent
+	// 按 harness 实际能力选恢复方式(实测,§5.3 外部事实先验证):
+	var configOptions []acp.SessionConfigOption
+	if initResp.AgentCapabilities.SessionCapabilities.Resume != nil {
+		// resume(omp/opencode):重连已持久化 session,恢复上下文不重放。
+		// 抑制 resume 期间 harness 可能重放的历史事件(前端已从 DB 加载历史)。
+		realOnEvent := handler.OnEvent
+		handler.OnEvent = func(SessionEvent) {}
+		resp, lerr := conn.ResumeSession(ctx, acp.ResumeSessionRequest{
+			SessionId:  acp.SessionId(sessionID),
+			Cwd:        workDir,
+			McpServers: []acp.McpServer{},
+		})
+		handler.OnEvent = realOnEvent
+		err = lerr
+		if lerr == nil {
+			configOptions = resp.ConfigOptions
+		}
+	} else {
+		// 无 resume(goose 等):跳过 session setup。goose 在首个 session/prompt 时由
+		// get_session_agent 自动从持久化加载完整上下文(不重放,实测多轮历史 + 续聊均正确);
+		// resume 不支持(-32601)、load 会全量重放(无分页,浪费)。故不调任何 setup,等首条
+		// prompt 自动激活。configOptions 留空,chat 层用持久化缓存渲染模型选择器(见 startLive)。
+	}
 	if err != nil {
 		proc.shutdown()
 		return nil, fmt.Errorf("load session: %w", err)
@@ -144,7 +157,7 @@ func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string,
 	cs := &ChatSession{
 		Runner: r, proc: proc, Conn: conn, Handler: handler, SessionID: acp.SessionId(sessionID), WorkDir: workDir,
 		CanListSessions:    initResp.AgentCapabilities.SessionCapabilities.List != nil,
-		ConfigOptions:      resumeResp.ConfigOptions,
+		ConfigOptions:      configOptions,
 		PromptCapabilities: initResp.AgentCapabilities.PromptCapabilities,
 	}
 	registerHarness(proc.pgid)

@@ -142,10 +142,11 @@ type liveSession struct {
 	proj      *store.Project
 	harnessID string // 该 session 使用的 harness(omp/opencode);自动升级据此判定「该 harness 是否有运行中进程」
 
-	mu       sync.Mutex
-	timeline []*turnEntry          // 单一时序队列:真相,持久化按此序写库
-	index    map[string]*turnEntry // 主键 → entry(归并用);message 主键=mid+role,tool 主键=toolCallId
-	seq      int64                 // 单调序号,流式事件防乱序(§4.3)
+	mu           sync.Mutex
+	timeline     []*turnEntry          // 单一时序队列:真相,持久化按此序写库
+	index        map[string]*turnEntry // 主键 → entry(归并用);message 主键=mid+role,tool 主键=toolCallId
+	seq          int64                 // 单调序号,流式事件防乱序(§4.3)
+	syntheticGen int                   // 无 messageId(harness 不发,如 goose)时的合成消息代际:tool_call 递增,使 tool 后的同 role 文本落新段(§5.3 无 messageId 回退)
 
 	// 当前 turn 的标识与 plan 快照(用于按 turn 保留历史 plan):
 	//   - currentTurnID:开启该 turn 的 user message ID(由 client 生成,协议无 turnId)。
@@ -176,6 +177,7 @@ func (ls *liveSession) resetBuffers() {
 	ls.index = map[string]*turnEntry{}
 	ls.currentTurnID = ""
 	ls.currentPlan = nil
+	ls.syntheticGen = 0
 }
 
 // appendEntry 新建 entry 并入队 timeline + 登记 index。调用方须持 ls.mu。
@@ -1099,6 +1101,15 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 	// 同时附带 image prompt 能力门控(前端据此决定是否展示图片输入入口,§3.5)。
 	// 即使无 config options 也要发,以投递 imageSupported(去掉 len>0 守卫)。
 	flatOpts := chat.FlatConfigOptions()
+	// goose skip-setup(无 resume/load):拿不到 fresh configOptions → 用持久化缓存兜底,
+	// 否则前端 config_option 事件用空数组覆盖、模型选择器空白(goose 首条 prompt 自动加载
+	// session 时模型已在它那持久化;此处仅渲染选择器,不影响实际生效的 model)。
+	if len(flatOpts) == 0 && se.ConfigOptionsCache != "" {
+		var cached []acp.ConfigOption
+		if json.Unmarshal([]byte(se.ConfigOptionsCache), &cached) == nil {
+			flatOpts = cached
+		}
+	}
 	s.emit(EventUpdate, acp.SessionEvent{
 		SessionID:      se.ID,
 		Kind:           "config_option",
@@ -1804,6 +1815,7 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 		entry.text.WriteString(e.Text)
 		e.Text = entry.text.String()
 	case "tool_call":
+		ls.syntheticGen++ // 新工具 = 段边界:无 messageId 的 harness(如 goose)在此后产的文本落新段
 		t, exists := ls.index[e.ToolCallID]
 		if exists && t.kind == "tool" && t.tool != nil {
 			// 重复 tool_call(异常):就地更新,不动位置。
@@ -1876,21 +1888,20 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 	s.emit(EventUpdate, e)
 }
 
-// messageKey 生成 message entry 的归并主键:messageId(协议,优先)+ role 复合。
-// messageId 为空(协议 UNSTABLE,harness 可能不发)时回退:每条都新开 —— 这样 role 变化
-// 或被 tool 打断后,新 chunk 落到新 entry(等价旧的"段边界"语义,但只在无 id 时启用)。
+// messageKey 生成 message entry 的归并主键。
+//
+// 有 messageId(协议 UNSTABLE 但 omp/opencode 发):用 messageId+role,同 id 同 role 的 chunk 归并一条 —— 主干不变量。
+// 无 messageId(goose 等不发):用 role+syntheticGen 做稳定键,连续同 role chunk 归并一条;
+//
+//	tool_call 递增 syntheticGen(handleEvent),使 tool 后的文本落新段 —— 边界信号从 messageId 换成 tool。
+//	(§5.3:协议 messageId 是 UNSTABLE/可选,不能当稳定不变量;无 id 时的稳定信号是 tool 边界 + role。)
+//
 // 调用方须持 ls.mu。
 func messageKey(ls *liveSession, messageId, role string) string {
 	if messageId != "" {
 		return "msg:" + messageId + ":" + role
 	}
-	return "msg:_" + role + ":" + nextSyntheticID(ls)
-}
-
-// nextSyntheticID 生成一次性合成 id(无 messageId 时的兜底主键)。调用方须持 ls.mu。
-func nextSyntheticID(ls *liveSession) string {
-	ls.seq++ // 复用 seq 计数器(已在 ls.seq++ 基础上再自增,保证唯一)
-	return strconv.FormatInt(ls.seq, 36)
+	return "msg:_" + role + ":" + strconv.Itoa(ls.syntheticGen)
 }
 
 // RespondPermission 用户在前端对某权限请求做出裁决(§3.4)。

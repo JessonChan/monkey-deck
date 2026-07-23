@@ -44,6 +44,8 @@ func (s Spec) versionArgs() []string {
 //   - omp:自带 `omp update --check`(check-only,输出 "New version available: <ver>")→ Source 委派,
 //     Pattern 锚定关键词提取(无匹配 = 已是最新 → Latest 空 → 前端显示「已是最新」);
 //     Upgrader 委派给 `omp update`(幂等,与 omp 自身升级逻辑一致)。
+//   - goose:`goose update` 无 check-only 子命令 → Source 走 GitHub Releases(aaif-goose/goose);
+//     Upgrader 委派给 `goose update`(自带升级,幂等)。官方 https://github.com/aaif-goose/goose。
 var Registry = []Spec{
 	{
 		ID:         "opencode",
@@ -59,6 +61,14 @@ var Registry = []Spec{
 			Pattern: regexp.MustCompile(`New version available:\s*(\S+)`),
 		},
 		Upgrader: CommandUpgrader{Cmd: []string{"omp", "update"}},
+	},
+	{
+		ID:         "goose",
+		BinaryName: "goose",
+		// goose update 无 check-only 子命令(仅 -c/--canary、-r/--reconfigure),无法委派查最新 →
+		// Source 走 GitHub Releases(aaif-goose/goose,与 opencode 同款);Upgrader 委派 `goose update`。
+		Source:   &GitHubSource{Repo: "aaif-goose/goose"},
+		Upgrader: CommandUpgrader{Cmd: []string{"goose", "update"}},
 	},
 }
 

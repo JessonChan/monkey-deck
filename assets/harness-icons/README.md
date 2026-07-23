@@ -17,6 +17,7 @@
 |---|---|---|
 | `omp.svg` | `omp`(Oh My Pi) | [oh-my-pi](https://github.com/can1357/oh-my-pi) `packages/collab-web/public/favicon.svg`(彩色渐变 π 图标) |
 | `opencode.svg` | `opencode`(OpenCode) | [opencode](https://github.com/anomalyco/opencode) `packages/identity/mark.svg` |
+| `goose.svg` | `goose`(Goose) | [goose](https://github.com/aaif-goose/goose) `ui/desktop/src/components/icons/Goose.tsx`(Apache-2.0;React 组件转独立 SVG) |
 
 ## 兜底(未知 / 第三方 harness)
 
@@ -26,8 +27,8 @@
 
 ## 协议 / 署名
 
-所有图标均自 `references/` 下 MIT 项目原样借用。
-**SVG** 在文件顶部 XML 注释保留原版权声明与 MIT 许可全文(§0.4 文件级);
+所有图标原样借用各自官方项目(omp/opencode 自 `references/` 下 MIT 项目;goose 自 goose 仓库,Apache-2.0)。
+**SVG** 在文件顶部 XML 注释保留原版权声明与许可全文(MIT 全文 / Apache-2.0 SPDX + 修改声明,§0.4 文件级);
 **PNG 等二进制资源**无法内嵌版权头,仅在仓库根
 [THIRD_PARTY_LICENSES.md](../../THIRD_PARTY_LICENSES.md) §2 登记项目级署名。
 所有借用都在 §2 登记。
