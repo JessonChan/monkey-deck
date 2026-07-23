@@ -113,6 +113,7 @@ const STUB_PROPS = {
   prompting: false,
   configOptions: [],
   onSetConfig: () => {},
+  onRefreshConfig: () => {},
   history: [],
   sessionId: "",
   attachments: [],

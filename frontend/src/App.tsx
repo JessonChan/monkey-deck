@@ -53,8 +53,6 @@ export default function App() {
   const [unreadBySession, setUnreadBySession] = useState<Record<string, boolean>>({});
   const [permissionBySession, setPermissionBySession] = useState<Record<string, PermissionPrompt | null>>({});
   const [error, setError] = useState<string | null>(null);
-  // 刷新模型列表(spawn probe harness 拉最新 configOptions)。按 session 隔离,切走保留。
-  const [refreshingConfigBySession, setRefreshingConfigBySession] = useState<Record<string, boolean>>({});
   const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({});  // 前端 FIFO 队列(按 session 隔离,切走保留)
   const [draftBySession, setDraftBySession] = useState<Record<string, string>>({});  // composer 草稿(按 session 隔离,切走保留)
   const [historyBySession, setHistoryBySession] = useState<Record<string, string[]>>({});  // 输入框历史(上下键翻):按 session 隔离,seed 自 DB + 每次发送追加
@@ -996,22 +994,20 @@ export default function App() {
     catch (e) { setError(String(e)); }
   }, []);
 
-  // 刷新模型列表:spawn probe harness 拉最新 configOptions(同步用户在 harness 配置里外部改动
-  // 的新 provider/model)。后端成功后会推 config_option event 自动更新下拉,这里只管 loading/error。
-  // 独立于当前对话流:即使 turn 正在跑也能刷新(后端 probe 是独立进程)。
-  const refreshingConfig = !!(selectedSessionId && refreshingConfigBySession[selectedSessionId]);
-  const refreshConfig = useCallback(async () => {
-    const sid = selectedSessionIdRef.current;
-    if (!sid) return;
-    try {
-      setError(null);
-      setRefreshingConfigBySession((prev) => ({ ...prev, [sid]: true }));
-      await ChatService.RefreshSessionConfig(sid);
-    } catch (e) {
-      setError(`${t("chat.refreshConfigFailed")}: ${String(e)}`);
-    } finally {
-      setRefreshingConfigBySession((prev) => ({ ...prev, [sid]: false }));
-    }
+  // 打开 model 下拉时防抖重拉 configOptions(同步外部配置改动:用户在 harness 配置里新增的 provider/model)。
+  // 后端 probe 是独立进程,即使 turn 在跑也能刷新;成功后由 config_option event 自动更新下拉。
+  // 防抖:下拉快速开合只 spawn 一次 probe;readonly/empty(懒 spawn 未活跃)跳过,避免 "session not active" 报错。
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshConfig = useCallback(() => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      const sid = selectedSessionIdRef.current;
+      if (!sid) return;
+      if (statusRef.current === "readonly" || statusRef.current === "empty") return;
+      ChatService.RefreshSessionConfig(sid).catch((e) => {
+        setError(`${t("chat.refreshConfigFailed")}: ${String(e)}`);
+      });
+    }, 400);
   }, [t]);
 
   const [mergeResult, setMergeResult] = useState<string | null>(null);
@@ -1303,7 +1299,6 @@ export default function App() {
               onRespondPermission={respondPermission}
               onToggleTerminal={toggleTerminalPanel}
               onRefreshConfig={refreshConfig}
-              refreshingConfig={refreshingConfig}
               onMerge={mergeSession}
               mergeResult={mergeResult}
               sessionDiff={sessionDiff}

@@ -15,6 +15,7 @@ interface Props {
   prompting: boolean;       // 一轮进行中:显示停止键 + send 提示将排队
   configOptions: ConfigOption[];        // agent 自报的 model/mode/effort(渲染下拉)
   onSetConfig: (configId: string, value: string) => void;  // 切换 config option(热切)
+  onRefreshConfig: () => void;  // 打开 model 下拉时防抖重拉 configOptions(同步外部配置改动)
   history: string[];        // 输入框历史(上下键翻):该 session 全部发过的消息,无长度限制
   sessionId: string;        // @autocomplete 浏览此 session 的 cwd
   attachments: string[];      // 回形针附件(绝对路径)— 按 session 隔离(App 持有)
@@ -95,7 +96,7 @@ const IMAGE_MIME_ALLOWED = ["image/png", "image/jpeg", "image/webp", "image/gif"
 // 单图大小上限(base64 前,字节):10MB。过大发不出去且占上下文,超过则拒收并提示。
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
-export default function Composer({ value, onChange, disabled, prompting, configOptions, onSetConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, usage, onSend, onEnqueue, onStop, onAction }: Props) {
+export default function Composer({ value, onChange, disabled, prompting, configOptions, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, usage, onSend, onEnqueue, onStop, onAction }: Props) {
   const { t } = useTranslation();
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
@@ -621,7 +622,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
             )}
           </div>
           <div className="compose-right">
-            <ModelSelect configOptions={configOptions} disabled={disabled} onSetConfig={onSetConfig} contextTokens={usage.used} />
+            <ModelSelect configOptions={configOptions} disabled={disabled} onSetConfig={onSetConfig} onRefreshConfig={onRefreshConfig} contextTokens={usage.used} />
             <ComposerUsage usage={usage} draftTokens={estimateTokens(value)} />
             {(attachments.length > 0 || mentions.length > 0 || images.length > 0) && (
               <span className="composer-count">{t("composer.referencesCount", { count: attachments.length + mentions.length + images.length })}</span>
@@ -712,10 +713,11 @@ function ComposerUsage({ usage, draftTokens }: {
 // ModelSelect 渲染 configOptions 里的 model/effort/mode 控件(发送按钮左侧)。
 // 用 cmdk(Command) + @radix-ui/react-popover:Radix 管开合/定位/焦点/ARIA,cmdk 管搜索/分组/键盘导航。
 // model 按 value 的 provider 前缀("provider/model")分组;大量选项时 cmdk 内置搜索 + List 滚动。
-export function ModelSelect({ configOptions, disabled, onSetConfig, contextTokens }: {
+export function ModelSelect({ configOptions, disabled, onSetConfig, onRefreshConfig, contextTokens }: {
   configOptions: ConfigOption[];
   disabled: boolean;
   onSetConfig: (configId: string, value: string) => void;
+  onRefreshConfig: () => void;
   contextTokens: number;
 }) {
   const { t } = useTranslation();
@@ -725,7 +727,7 @@ export function ModelSelect({ configOptions, disabled, onSetConfig, contextToken
   if (!modelOpt) return null;
   return (
     <div className="cfg-group">
-      <ConfigSelect label={t("composer.cfgLabel.model")} currentValue={modelOpt.currentValue} options={modelOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(modelOpt.id, v)} groupByProvider searchable contextTokens={contextTokens} />
+      <ConfigSelect label={t("composer.cfgLabel.model")} currentValue={modelOpt.currentValue} options={modelOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(modelOpt.id, v)} groupByProvider searchable contextTokens={contextTokens} onRefreshConfig={onRefreshConfig} />
       {modeOpt && <ConfigSelect label={t("composer.cfgLabel.mode")} currentValue={modeOpt.currentValue} options={modeOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(modeOpt.id, v)} />}
       {effortOpt && <ConfigSelect label={t("composer.cfgLabel.thought")} currentValue={effortOpt.currentValue} options={effortOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(effortOpt.id, v)} />}
     </div>
@@ -743,11 +745,16 @@ interface ConfigSelectProps {
   groupByProvider?: boolean;
   searchable?: boolean;
   contextTokens?: number; // model 专用:切换成本提示用的当前上下文 token 量(Task #15138)
+  onRefreshConfig?: () => void; // model 专用:打开下拉时防抖重拉 configOptions
 }
 
-function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupByProvider, searchable, contextTokens }: ConfigSelectProps) {
+function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupByProvider, searchable, contextTokens, onRefreshConfig }: ConfigSelectProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  // model 下拉打开时防抖重拉最新 configOptions(同步外部 provider/model 改动);mode/effort 不传 → 不触发。
+  useEffect(() => {
+    if (open && onRefreshConfig) onRefreshConfig();
+  }, [open, onRefreshConfig]);
   const currentName = options.find((o) => o.value === currentValue)?.name ?? currentValue ?? label;
 
   // 最近使用(model 专用):localStorage 持久化,选中的模型前移去重,最多 5 个。

@@ -147,7 +147,7 @@ describe("ModelSelect configId wiring", () => {
     const calls: [string, string][] = [];
     const onSetConfig = (configId: string, value: string) => calls.push([configId, value]);
     const { host } = mount(
-      <ModelSelect configOptions={CFG_OPTS} disabled={false} onSetConfig={onSetConfig} contextTokens={0} />
+      <ModelSelect configOptions={CFG_OPTS} disabled={false} onSetConfig={onSetConfig} onRefreshConfig={() => {}} contextTokens={0} />
     );
     await flush();
     const effortTrigger = host.querySelector('[data-testid="cfg-trigger-composer.cfgLabel.thought"]') as HTMLElement;
@@ -166,7 +166,7 @@ describe("ModelSelect configId wiring", () => {
     const calls: [string, string][] = [];
     const onSetConfig = (configId: string, value: string) => calls.push([configId, value]);
     const { host } = mount(
-      <ModelSelect configOptions={CFG_OPTS} disabled={false} onSetConfig={onSetConfig} contextTokens={0} />
+      <ModelSelect configOptions={CFG_OPTS} disabled={false} onSetConfig={onSetConfig} onRefreshConfig={() => {}} contextTokens={0} />
     );
     await flush();
     const modeTrigger = host.querySelector('[data-testid="cfg-trigger-composer.cfgLabel.mode"]') as HTMLElement;
@@ -184,7 +184,7 @@ describe("ModelSelect configId wiring", () => {
     const calls: [string, string][] = [];
     const onSetConfig = (configId: string, value: string) => calls.push([configId, value]);
     const { host } = mount(
-      <ModelSelect configOptions={CFG_OPTS} disabled={false} onSetConfig={onSetConfig} contextTokens={0} />
+      <ModelSelect configOptions={CFG_OPTS} disabled={false} onSetConfig={onSetConfig} onRefreshConfig={() => {}} contextTokens={0} />
     );
     await flush();
     const modelTrigger = host.querySelector('[data-testid="cfg-trigger-composer.cfgLabel.model"]') as HTMLElement;

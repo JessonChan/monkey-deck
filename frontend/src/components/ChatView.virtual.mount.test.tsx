@@ -115,7 +115,6 @@ function baseProps(items: ChatItem[]) {
     onRespondPermission: () => {},
     onToggleTerminal: () => {},
     onRefreshConfig: () => {},
-    refreshingConfig: false,
     onMerge: () => {},
     queue: [],
     onInterruptQueue: () => {},
