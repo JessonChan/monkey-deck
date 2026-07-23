@@ -211,7 +211,7 @@
     "stopTip": "Stop current generation (keeps queue)",
     "sendTip": "Send",
     "queueSendTip": "Queue send (auto-sent after this turn)",
-    "enqueueTip": "Enqueue · ⌘⇧Enter (always queues; auto-sent after current turn, or starts now if idle)",
+    "enqueueTip": "Enqueue · ⌘⇧Enter (always queues; auto-sent after current turn)",
     "switchCostHint": "Current context ~{{tokens}} tokens · estimated per-turn cost shown per model (token-only if unpriced)",
     "noMatch": "No match",
     "recentUsed": "Recently used",
