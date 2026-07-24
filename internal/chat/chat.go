@@ -314,7 +314,7 @@ func (s *ChatService) ServiceStartup(ctx context.Context, options application.Se
 	s.loadPersistedConfig()
 	s.spawnFn = s.startLive                                               // 默认 spawn 实现;单测可注入 mock(§5.1)
 	acp.SetPgidFile(filepath.Join(s.cfg.CachesDir, "harness-pgids.json")) // §3.2:限定回收范围到本应用派生的 harness
-	acp.SetHarnessCommands(harness.Commands())                            // 注入受支持 harness 命令,回收层据此识别 omp/opencode/...(不再写死 opencode)
+	acp.SetHarnessCommands(s.allHarnessCommands())                       // 内置+用户 harness 命令;用户新增后 reloadHarnessCommands 重注入(§3.2)
 	acp.KillAllHarnesses()                                                // 启动时清上轮残留 harness 进程组(§3.2)
 	s.startIdleReaper()                                                   // B 方案:idle reaper 回收空闲 harness
 	s.startHealthWatcher()                                                // §3.3:空闲断连检测 → 自动重连
@@ -537,7 +537,7 @@ func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorkt
 	if model == "" {
 		model = s.cfg.DefaultModel
 	}
-	hid := harness.Normalize(harnessID)
+	hid := s.normalizeHarnessID(harnessID)
 	// 记住本次选择的 harness,下次新建对话默认选中(§5.3 本地是真相来源)。
 	if err := s.st.SetSetting(s.ctx, "lastHarness", hid); err != nil {
 		slog.Warn("persist lastHarness", "err", err)
@@ -1045,7 +1045,7 @@ func (s *ChatService) ensureLiveNoReset(sessionID string) error {
 // startLive 启动一个 liveSession(spawn harness + Init + NewSession/LoadSession)。
 func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessionID string, resume bool) error {
 	// 按 session 选择的 harness 解析启动命令(§2.1 harness 适配层)。
-	cmdStr := harness.Command(se.Harness)
+	cmdStr := s.harnessCommand(se.Harness)
 	// model 不在 spawn 注入:统一走 ACP session config option(model selector)
 	// + session/set_config_option 在 NewSession 后应用(见 SetSessionConfigOption)。
 	runner := acp.NewRunner(cmdStr, nil)
@@ -2062,33 +2062,106 @@ func (s *ChatService) isBusy(sessionID string) bool {
 // errSCMBusy turn 进行中操作源代码管理时返回。
 var errSCMBusy = errors.New("对话进行中,请等回合结束再操作源代码管理")
 
+// --- 用户声明 harness 合并(声明即用流程)---
+//
+// harness 包保持 store-free;用户行由本层从 store 加载,与内置项合并。
+// 驱动层(runner/chat/handler)零 per-harness 身份分支(见 worklog 交叉验证)。
+
+// userHarnessRows 从 store 加载用户声明的 harness,转成 harness.Harness(运行时字段留空,
+// 由 DiscoverWith 填充)。store 不可用或无行时返回 nil。
+func (s *ChatService) userHarnessRows() []harness.Harness {
+	if s.st == nil {
+		return nil
+	}
+	rows, err := s.st.ListUserHarnesses(s.ctx)
+	if err != nil {
+		slog.Warn("list user harnesses", "err", err)
+		return nil
+	}
+	out := make([]harness.Harness, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, harness.Harness{ID: r.ID, Name: r.Name, Command: r.Command, Icon: r.Icon})
+	}
+	return out
+}
+
+// harnessCommand 解析 session harness 启动命令:内置走 harness.Command,否则查用户行,都没有回退默认。
+func (s *ChatService) harnessCommand(id string) string {
+	if harness.IsBuiltin(id) {
+		return harness.Command(id)
+	}
+	if s.st != nil {
+		if uh, err := s.st.GetUserHarness(s.ctx, id); err == nil && uh != nil {
+			return uh.Command
+		}
+	}
+	return harness.Command(harness.DefaultID)
+}
+
+// normalizeHarnessID 归一化:内置或用户行存在则保留,否则回退默认。
+func (s *ChatService) normalizeHarnessID(id string) string {
+	if harness.IsBuiltin(id) {
+		return id
+	}
+	if s.st != nil {
+		if uh, err := s.st.GetUserHarness(s.ctx, id); err == nil && uh != nil {
+			return id
+		}
+	}
+	return harness.DefaultID
+}
+
+// allHarnessCommands 内置 + 用户 harness 启动命令(供 reaper SetHarnessCommands)。
+func (s *ChatService) allHarnessCommands() []string {
+	cmds := harness.Commands()
+	cmds = append(cmds, s.userHarnessCommands()...)
+	return cmds
+}
+
+// userHarnessCommands 仅用户 harness 的启动命令。
+func (s *ChatService) userHarnessCommands() []string {
+	rows := s.userHarnessRows()
+	cmds := make([]string, 0, len(rows))
+	for _, h := range rows {
+		cmds = append(cmds, h.Command)
+	}
+	return cmds
+}
+
+// reloadHarnessCommands 用户 harness 增删后重注入 reaper 命令集(§3.2)。
+func (s *ChatService) reloadHarnessCommands() {
+	acp.SetHarnessCommands(s.allHarnessCommands())
+}
+
 // --- 配置查询(前端设置页用)---
 
 // ListHarnesses 返回当前已发现的 harness 列表(含本地安装版本与上游最新版本)。
-// 启动后异步刷新;未就绪时回退静态 Supported(无版本信息,但前端能继续选 harness)。
+// 启动后异步刷新;未就绪时回退静态内置+用户行(无版本信息,但前端能继续选 harness)。
 // 前端监听 EventHarnesses 事件以在刷新后重拉。
 func (s *ChatService) ListHarnesses() []harness.Harness {
 	if p := s.harnessCache.Load(); p != nil {
 		return *p
 	}
-	return harness.Supported
+	out := make([]harness.Harness, len(harness.Supported))
+	copy(out, harness.Supported)
+	return append(out, s.userHarnessRows()...)
 }
 
-// RefreshHarnesses 立即重新发现 harness 并查上游最新版本,更新缓存并返回。
+// RefreshHarnesses 立即重新发现 harness(内置+用户)并查上游最新版本,更新缓存并返回。
 // 用户在 harness 管理面板点「刷新」时调;比启动时的异步刷新慢但更完整(无短超时)。
 func (s *ChatService) RefreshHarnesses() ([]harness.Harness, error) {
-	list := harness.Discover(s.ctx)
+	list := harness.DiscoverWith(s.ctx, s.userHarnessRows())
 	s.harnessCache.Store(&list)
 	s.emit(EventHarnesses, nil)
 	return list, nil
 }
 
 // refreshHarnessesAsync 启动时后台发现:限时 5s(网络/超时不阻塞应用启动太长)。
-// 出错也写空缓存 → ListHarnesses 拿到 nil 走 Supported 静态兜底,前端体验不退化。
+// 出错也写空缓存 → ListHarnesses 拿到 nil 走静态兜底,前端体验不退化。
 func (s *ChatService) refreshHarnessesAsync() {
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
-	list := harness.Discover(ctx)
+	list := harness.DiscoverWith(ctx, s.userHarnessRows())
 	s.harnessCache.Store(&list)
 	s.emit(EventHarnesses, nil)
 }
@@ -2321,7 +2394,7 @@ func (s *ChatService) UpgradeHarness(id string) ([]harness.Harness, error) {
 	defer cancel()
 	upgradeErr := harness.Upgrade(ctx, id)
 
-	list := harness.Discover(s.ctx)
+	list := harness.DiscoverWith(s.ctx, s.userHarnessRows())
 	if upgradeErr != nil {
 		// 把升级错误塞到对应 harness 的 UpgradeError 字段(便于前端展示具体原因)。
 		for i := range list {
