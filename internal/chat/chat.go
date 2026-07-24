@@ -1045,6 +1045,11 @@ func (s *ChatService) ensureLiveNoReset(sessionID string) error {
 // startLive 启动一个 liveSession(spawn harness + Init + NewSession/LoadSession)。
 func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessionID string, resume bool) error {
 	// 按 session 选择的 harness 解析启动命令(§2.1 harness 适配层)。
+	// harness 已删除/不存在(用户删了它,session 仍绑定旧 id):拒绝 spawn,会话不能继续。
+	// 历史保留(可读),仅不能新增对话——避免静默回退到默认 harness 跑出错误上下文。
+	if !s.harnessExists(se.Harness) {
+		return fmt.Errorf("harness %q 已删除或不存在,无法继续此会话", se.Harness)
+	}
 	cmdStr := s.harnessCommand(se.Harness)
 	// model 不在 spawn 注入:统一走 ACP session config option(model selector)
 	// + session/set_config_option 在 NewSession 后应用(见 SetSessionConfigOption)。
@@ -2131,6 +2136,19 @@ func (s *ChatService) userHarnessCommands() []string {
 // reloadHarnessCommands 用户 harness 增删后重注入 reaper 命令集(§3.2)。
 func (s *ChatService) reloadHarnessCommands() {
 	acp.SetHarnessCommands(s.allHarnessCommands())
+}
+
+// harnessExists 判断 id 是否仍可用(内置或用户声明行存在)。删 harness 后,绑定它的
+// session 此处返 false → startLive 拒绝 spawn,会话无法继续(历史保留,仅不能新增对话)。
+func (s *ChatService) harnessExists(id string) bool {
+	if harness.IsBuiltin(id) {
+		return true
+	}
+	if s.st == nil {
+		return false
+	}
+	uh, err := s.st.GetUserHarness(s.ctx, id)
+	return err == nil && uh != nil
 }
 
 // --- 配置查询(前端设置页用)---

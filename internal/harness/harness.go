@@ -32,6 +32,7 @@ type Harness struct {
 	LatestVersion    string `json:"latestVersion,omitempty"`    // 上游 release 最新版本(空 = 未查/无源)
 	UpgradeAvailable bool   `json:"upgradeAvailable"`            // InstalledVersion < LatestVersion
 	UpgradeError     string `json:"upgradeError,omitempty"`     // 上次升级报错(前端展示;空 = 无)
+	UserDefined      bool   `json:"userDefined,omitempty"`        // 用户声明的 harness(可删;内置为 false)
 }
 
 // Supported 受支持 harness 的静态注册表(前端选择器 + 进程回收 + Command/Normalize 用)。

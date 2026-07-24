@@ -230,6 +230,7 @@ func DiscoverWith(ctx context.Context, extra []Harness) []Harness {
 	// 无 Source/Upgrader → LatestVersion 空、无升级(降级,不阻断)。
 	for _, e := range extra {
 		h := e
+		h.UserDefined = true // 用户声明的 harness:前端据此显示删除按钮
 		if fields := strings.Fields(e.Command); len(fields) > 0 {
 			if path, err := p.LookPath(fields[0]); err == nil && path != "" {
 				h.Path = path
