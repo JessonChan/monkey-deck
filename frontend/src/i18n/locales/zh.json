@@ -426,7 +426,29 @@
       "autoUpgradeTitle": "自动升级 harness",
       "autoUpgradeDesc": "发现可升级时,在后台静默运行各 harness 自带的安装脚本(默认关闭)。会跳过有活跃会话的 harness;升级失败后冷却一小时再重试。",
       "autoUpgradeRiskTip": "有风险:此举会在无人值守下运行各 harness 的官方安装脚本(联网、写磁盘,可能重启服务或改动你的环境)。仅在你信任上游安装器时开启。",
-      "updateDotTip": "有 harness 新版本"
+      "updateDotTip": "有 harness 新版本",
+      "addBtn": "添加自定义 harness",
+      "addTitle": "声明自定义 harness(任意 ACP)",
+      "addCmdLabel": "启动命令",
+      "addCmdPh": "如 jcode acp",
+      "addNameLabel": "显示名(可选)",
+      "addNamePh": "留空取 harness 自报名",
+      "addProbe": "自检",
+      "addProbing": "自检中…(最多 3 分钟)",
+      "addConfirm": "添加",
+      "addCancel": "取消",
+      "addAdding": "添加中…",
+      "addErrCmd": "请填写启动命令",
+      "addVerdictOk": "通过 — 可以添加",
+      "addVerdictFail": "未通过 — 不可添加",
+      "addTierInit": "握手",
+      "addTierSess": "建会话",
+      "addTierStream": "流式产出",
+      "addTierTurn": "完成一轮",
+      "addCapResume": "恢复能力",
+      "addCapImage": "图片输入",
+      "addMsgIdYes": "该 harness 发送 messageId(按 id 归并)",
+      "addMsgIdNo": "该 harness 不发 messageId(用工具边界归并,已支持)"
     }
   }
 }

@@ -2,7 +2,8 @@ import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download, AlertTriangle } from "lucide-react";
+import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download, AlertTriangle, Plus } from "lucide-react";
+import AddHarnessWizard from "./AddHarnessWizard";
 
 // harness 管理 pane(发现 / 版本检测 / 升级)。
 // 展示每个已知 harness 的:名称 + 启动命令 + 本地版本 + 上游最新版本 + 升级按钮 / 状态。
@@ -24,6 +25,8 @@ export default function HarnessPane() {
   // per-harness 升级状态:id → "running" | "ok" | "err"
   const [upgrading, setUpgrading] = useState<Record<string, "running" | "ok" | "err">>({});
   const [error, setError] = useState<string | null>(null);
+  // 声明即用向导:展开内联表单(命令+自检+添加)。
+  const [showAdd, setShowAdd] = useState(false);
 
   // 拉后端开关当前值:经 GetConfig 一次取回 checkHarnessUpdates / autoHarnessUpgrade 两个字段
   // (单一真相源 = 后端 SQLite;GetConfig 是后端聚合的只读快照,Task #22385 已暴露 autoHarnessUpgrade)。
@@ -120,6 +123,15 @@ export default function HarnessPane() {
         >
           <RefreshCw size={13} className={refreshing ? "spin" : ""} /> {t("settings.harness.refresh")}
         </button>
+        <button
+          className="modal-btn ghost"
+          data-testid="harness-add-btn"
+          data-tooltip-id="md-tip"
+          data-tooltip-content={t("settings.harness.addBtn")}
+          onClick={() => setShowAdd((v) => !v)}
+        >
+          <Plus size={13} /> {t("settings.harness.addBtn")}
+        </button>
       </div>
 
       {error && <div className="modal-del-err">{error}</div>}
@@ -181,6 +193,16 @@ export default function HarnessPane() {
           />
         ))}
       </div>
+
+      {showAdd && (
+        <AddHarnessWizard
+          onDone={() => {
+            setShowAdd(false);
+            void reload();
+          }}
+          onCancel={() => setShowAdd(false)}
+        />
+      )}
     </div>
   );
 }

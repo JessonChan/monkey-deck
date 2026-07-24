@@ -426,7 +426,29 @@
       "autoUpgradeTitle": "Auto-upgrade harnesses",
       "autoUpgradeDesc": "When an upgrade is found, silently run each harness's own install script in the background (off by default). Skips harnesses with a running session; failed upgrades cool down for an hour.",
       "autoUpgradeRiskTip": "Risky: this runs each harness's official install script unattended (network, disk writes, may restart services or change your environment). Enable only if you trust the upstream installers.",
-      "updateDotTip": "A harness update is available"
+      "updateDotTip": "A harness update is available",
+      "addBtn": "Add custom harness",
+      "addTitle": "Declare a custom harness (any ACP)",
+      "addCmdLabel": "Launch command",
+      "addCmdPh": "e.g. jcode acp",
+      "addNameLabel": "Display name (optional)",
+      "addNamePh": "blank = harness self-reported name",
+      "addProbe": "Self-check",
+      "addProbing": "Checking… (up to 3 min)",
+      "addConfirm": "Add",
+      "addCancel": "Cancel",
+      "addAdding": "Adding…",
+      "addErrCmd": "Please fill in the launch command",
+      "addVerdictOk": "Passed — can be added",
+      "addVerdictFail": "Failed — cannot be added",
+      "addTierInit": "Handshake",
+      "addTierSess": "Session",
+      "addTierStream": "Stream",
+      "addTierTurn": "Full turn",
+      "addCapResume": "Resume",
+      "addCapImage": "Image input",
+      "addMsgIdYes": "Sends messageId (merge by id)",
+      "addMsgIdNo": "No messageId (merge by tool boundary, supported)"
     }
   }
 }
