@@ -558,4 +558,32 @@ describe("ChatView 虚拟化(W 不变量:DOM 平台期)", () => {
     rowHeights.clear();
     root.unmount();
   });
+
+  test("动态类型先验:content 高度远比固定先验接近真实(虚拟化窗口外行的核心)", async () => {
+    // 根因验证:虚拟化下窗口外行永远不在 DOM,无法实测,只能用先验估算 total。
+    // 固定先验(P50 定标)对单 session 的真实高度分布严重偏小:
+    //   agent 先验 90 vs 真实 300 → 170 行未测量时 total 偏差 ~50% → scrollTop 到不了真底部。
+    // 动态类型先验:窗口内同类型实测行提供均值,未测量行用均值估算 → total 偏差 <5%。
+    rowHeights.clear();
+    const { items, heights } = makeDiverseItems(210); // 30 回合,窗口只渲染底部 ~30 行
+    for (const [k, v] of Object.entries(heights)) rowHeights.set(k, v);
+    const { host, root } = mount(items);
+    await flush();
+    await settle(); // 一轮测量:窗口内 ~30 行实测 → typeStats 累积样本
+    await settle();
+
+    const content = host.querySelector(".chat-content") as HTMLElement;
+    const estimatedTotal = parseInt(content.style.height, 10);
+
+    // 真实 total(所有行用真实高度):1 回合 = 120+30+40+300+250 = 740,×30 + head22 + tail22 ≈ 22244
+    let trueTotal = 22 + 22; // head + tail
+    for (const v of Object.values(heights)) trueTotal += v;
+
+    const errPct = Math.abs(estimatedTotal - trueTotal) / trueTotal * 100;
+    // 动态先验收敛后:误差 <5%(固定先验会 ~50%,根本到不了底部)。
+    expect(errPct).toBeLessThan(5);
+
+    rowHeights.clear();
+    root.unmount();
+  });
 });

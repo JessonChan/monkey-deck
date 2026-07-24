@@ -304,7 +304,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     if (prevSessionIdRef.current !== sessionId) {
       prevSessionIdRef.current = sessionId;
       // 实测高度剪枝到当前行集(防 Map 无界增长)。
-      modelRef.current.prune(new Set(rows.map((r) => r.id)));
+      modelRef.current.prune(rows);
       // 头/尾区高度重置为先验:.chat-body 按 key 重挂载,新 session 的头/尾区是全新 DOM
       // (内容随 session 变:权限卡/plan/打字指示有无可差上百 px),旧实测高不适用。
       headHRef.current = HEAD_PRIOR;
@@ -394,7 +394,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         } else if (iid) {
           const idx = idxById.get(iid) ?? -1;
           const prevH = idx >= 0 ? model.h(rs[idx]) : 0;
-          if (model.set(iid, h)) {
+          if (idx >= 0 && model.set(rs[idx], h)) {
             modelChanged = true;
             if (!stickToBottomRef.current && anchorIdx >= 0 && idx >= 0 && idx < anchorIdx) {
               delta += h - prevH;
