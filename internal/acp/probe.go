@@ -66,9 +66,11 @@ type ConformanceReport struct {
 	Error string `json:"error,omitempty"`
 }
 
-// CanAdd Tier 1 硬契约全过即可加。能力矩阵缺失只降级、不阻断。
+// CanAdd 严格门槛:Tier1 全过(Initialized + NewSession + Streamed + PromptTurn=end_turn)。
+// 要求完整跑完一轮(end_turn):不仅证 ACP 健康,还证该 harness 在当前环境真能干活
+// (模型/key/网络就绪)。能力矩阵缺失只降级、不阻断。
 func (r ConformanceReport) CanAdd() bool {
-	return r.Initialized.Pass && r.NewSession.Pass && r.Streamed.Pass
+	return r.Initialized.Pass && r.NewSession.Pass && r.Streamed.Pass && r.PromptTurn.Pass
 }
 
 // Summary 人话体检单(供 UI / 日志展示)。
