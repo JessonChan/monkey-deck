@@ -331,4 +331,130 @@ describe("ChatView 虚拟化(W 不变量:DOM 平台期)", () => {
     mockRowH = 100;
     root.unmount();
   });
+
+  test("切 session(异步加载 items):定位贴底,FAB 不出现", async () => {
+    // A 已贴底 → 切到 B(items 异步到达,模拟 LoadMessagesPage)。
+    const { host, root } = mount(makeItems(300));
+    await flush();
+    await settle();
+    await settle();
+    await settle();
+    const body = host.querySelector(".chat-body") as HTMLElement;
+    expect(body.scrollTop).toBe(body.scrollHeight - VIEWPORT);
+
+    // 切到 B:items 尚未到达(空)。
+    const bEmpty = { ...baseProps([]), session: { id: "s2" }, sessionId: "s2" };
+    root.render(<ChatView {...(bEmpty as never)} />);
+    await flush();
+
+    // B 的 items 到达(DB 重载完成)。
+    const bItems = { ...baseProps(makeItems(40)), session: { id: "s2" }, sessionId: "s2" };
+    root.render(<ChatView {...(bItems as never)} />);
+    await flush();
+    await settle();
+    await settle();
+    await settle();
+
+    const body2 = host.querySelector(".chat-body") as HTMLElement;
+    // 贴底:scrollTop 在真底部,FAB 隐藏,最末行在 DOM。
+    expect(body2.scrollTop).toBe(body2.scrollHeight - VIEWPORT);
+    expect(host.querySelector(".scroll-bottom-btn")).toBeNull();
+    expect(host.querySelector('[data-iid="a39"]')).not.toBeNull();
+
+    root.unmount();
+  });
+
+  test("切 session(items 已缓存,同帧到达):定位贴底,FAB 不出现", async () => {
+    const { host, root } = mount(makeItems(300));
+    await flush();
+    await settle();
+    await settle();
+    await settle();
+
+    // 切到 B,items 同帧到达(缓存命中)。
+    const bItems = { ...baseProps(makeItems(40)), session: { id: "s2" }, sessionId: "s2" };
+    root.render(<ChatView {...(bItems as never)} />);
+    await flush();
+    await settle();
+    await settle();
+    await settle();
+
+    const body2 = host.querySelector(".chat-body") as HTMLElement;
+    expect(body2.scrollTop).toBe(body2.scrollHeight - VIEWPORT);
+    expect(host.querySelector(".scroll-bottom-btn")).toBeNull();
+    expect(host.querySelector('[data-iid="a39"]')).not.toBeNull();
+
+    root.unmount();
+  });
+
+  test("全新会话(内容不足一屏):FAB 不出现,scrollTop 为 0", async () => {
+    const { host, root } = mount(makeItems(300));
+    await flush();
+    await settle();
+    await settle();
+    await settle();
+
+    // 切到全新会话 D:先空,再到 1 条 user 消息(内容远不足一屏)。
+    const dEmpty = { ...baseProps([]), session: { id: "s3" }, sessionId: "s3" };
+    root.render(<ChatView {...(dEmpty as never)} />);
+    await flush();
+
+    const dOne = {
+      ...baseProps([{ type: "user", id: "u0", text: "hello", ts: 1000 }]),
+      session: { id: "s3" },
+      sessionId: "s3",
+    };
+    root.render(<ChatView {...(dOne as never)} />);
+    await flush();
+    await settle();
+    await settle();
+
+    const body2 = host.querySelector(".chat-body") as HTMLElement;
+    // 内容不足一屏:scrollTop 必为 0,FAB 绝不出现。
+    expect(body2.scrollTop).toBe(0);
+    expect(host.querySelector(".scroll-bottom-btn")).toBeNull();
+
+    root.unmount();
+  });
+
+  test("从「已上翻」的 A 切到全新空会话 D:FAB 不残留,定位贴底", async () => {
+    // A 有 300 条,用户上翻到中部 → stick=false,FAB 可见。
+    const { host, root } = mount(makeItems(300));
+    await flush();
+    await settle();
+    await settle();
+    await settle();
+    const body = host.querySelector(".chat-body") as HTMLElement;
+    body.scrollTop = mockHeadH + 100 * mockRowH; // 滚到中部(远离底部)
+    body.dispatchEvent(new window.Event("scroll"));
+    await flush();
+    await settle();
+    // 前置断言:确实处于「上翻」态——FAB 可见。
+    expect(host.querySelector(".scroll-bottom-btn")).not.toBeNull();
+
+    // 切到全新会话 D:items 尚未到达(空)。此时 D 还没任何内容,
+    // 绝不能残留 A 的「上翻」态(FAB 应消失,stick 应复位为贴底)。
+    const dEmpty = { ...baseProps([]), session: { id: "s4" }, sessionId: "s4" };
+    root.render(<ChatView {...(dEmpty as never)} />);
+    await flush();
+
+    // 关键断言:空会话 D 上 FAB 不残留(bug:残留 A 的 showScrollBtn=true)。
+    expect(host.querySelector(".scroll-bottom-btn")).toBeNull();
+
+    // D 的第一条消息到达:应贴底,FAB 仍不出现。
+    const dOne = {
+      ...baseProps([{ type: "user", id: "u0", text: "hello", ts: 1000 }]),
+      session: { id: "s4" },
+      sessionId: "s4",
+    };
+    root.render(<ChatView {...(dOne as never)} />);
+    await flush();
+    await settle();
+    await settle();
+    const body2 = host.querySelector(".chat-body") as HTMLElement;
+    expect(body2.scrollTop).toBe(0);
+    expect(host.querySelector(".scroll-bottom-btn")).toBeNull();
+
+    root.unmount();
+  });
 });

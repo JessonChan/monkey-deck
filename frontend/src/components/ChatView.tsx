@@ -313,9 +313,14 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         pendingScrollRef.current = null;
         applyInitialPosition(el, sessionId);
       } else {
-        // items 还没到(切走丢弃重载中 / 首次加载中):推迟定位,等 items 到来再补做,否则错位。
+        // items 还没到(切走丢弃重载中 / 首次加载中 / 全新空会话):推迟定位,等 items 到来再补做。
+        // 旧 session 的滚动态不带过切换:锚点清空、stick 复位为贴底、FAB 隐藏。
+        // 否则从「已上翻」的 A(stick=false、FAB 可见)切到空 D 时,FAB 与 stick=false 残留,
+        // 待 items 到达前视图停在错位且浮着小圆球(用户实测:新会话也「不在底部」)。
         pendingScrollRef.current = sessionId;
-        anchorRef.current = null; // 旧 session 的锚点不带过切换
+        anchorRef.current = null;
+        stickToBottomRef.current = true;
+        setShowScrollBtn(false);
       }
       prevFirstIdRef.current = items.length > 0 ? items[0].id : "";
       return; // 切换瞬间一次性定位,不走下面的逻辑。
