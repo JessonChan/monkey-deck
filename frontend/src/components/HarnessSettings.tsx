@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download, AlertTriangle, Plus } from "lucide-react";
+import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download, AlertTriangle, Plus, Trash2 } from "lucide-react";
 import AddHarnessWizard from "./AddHarnessWizard";
 
 // harness 管理 pane(发现 / 版本检测 / 升级)。
@@ -82,6 +82,19 @@ export default function HarnessPane() {
       setError(String(e));
     }
   }, []);
+
+  // 删除用户声明的 harness(内置不可删,后端 RemoveUserHarness 已拦)。删后绑定它的
+  // session 不能再继续对话(后端 startLive 守卫拒绝 spawn,历史保留)。确认后调,失败进 error 区。
+  const remove = useCallback(async (id: string) => {
+    if (!window.confirm(t("settings.harness.delConfirm"))) return;
+    setError(null);
+    try {
+      await ChatService.RemoveUserHarness(id);
+      await reload();
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [t, reload]);
 
   // 切换开关:写后端 SQLite 设置(SetCheckHarnessUpdates 实时启停后台 ticker)。
   // 失败回滚 UI 到原值(下次 GetConfig 会把 UI 纠正回真相值)。
@@ -190,6 +203,7 @@ export default function HarnessPane() {
             h={h}
             upgrading={upgrading[h.id]}
             onUpgrade={() => void upgrade(h.id)}
+            onDelete={() => void remove(h.id)}
           />
         ))}
       </div>
@@ -211,10 +225,12 @@ function HarnessRow({
   h,
   upgrading,
   onUpgrade,
+  onDelete,
 }: {
   h: Harness;
   upgrading: "running" | "ok" | "err" | undefined;
   onUpgrade: () => void;
+  onDelete: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -296,6 +312,18 @@ function HarnessRow({
           <span className="harness-status-ok" data-testid={`harness-uptodate-${h.id}`}>
             <CheckCircle2 size={14} /> {t("settings.harness.upToDate")}
           </span>
+        )}
+        {/* 用户声明的 harness 才显示删除(内置不可删)。删后绑定它的 session 不能再继续对话。 */}
+        {h.userDefined && (
+          <button
+            className="modal-btn ghost danger"
+            data-testid={`harness-delete-${h.id}`}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("settings.harness.delTip")}
+            onClick={onDelete}
+          >
+            <Trash2 size={13} /> {t("settings.harness.delete")}
+          </button>
         )}
       </div>
     </div>

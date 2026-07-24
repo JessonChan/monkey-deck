@@ -448,7 +448,10 @@
       "addCapResume": "Resume",
       "addCapImage": "Image input",
       "addMsgIdYes": "Sends messageId (merge by id)",
-      "addMsgIdNo": "No messageId (merge by tool boundary, supported)"
+      "addMsgIdNo": "No messageId (merge by tool boundary, supported)",
+      "delete": "Delete",
+      "delTip": "Remove this custom harness (built-ins excluded); sessions bound to it can no longer continue",
+      "delConfirm": "Remove this custom harness? Sessions bound to it will no longer be usable (history kept)."
     }
   }
 }

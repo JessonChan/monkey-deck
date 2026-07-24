@@ -448,7 +448,10 @@
       "addCapResume": "恢复能力",
       "addCapImage": "图片输入",
       "addMsgIdYes": "该 harness 发送 messageId(按 id 归并)",
-      "addMsgIdNo": "该 harness 不发 messageId(用工具边界归并,已支持)"
+      "addMsgIdNo": "该 harness 不发 messageId(用工具边界归并,已支持)",
+      "delete": "删除",
+      "delTip": "删除此自定义 harness(内置不可删);删后绑定它的会话不能再继续对话",
+      "delConfirm": "确定删除此自定义 harness?绑定它的会话将无法继续对话(历史保留)。"
     }
   }
 }
