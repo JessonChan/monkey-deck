@@ -149,8 +149,18 @@ func SwapRegistryForTest(next []Spec) (restore func()) {
 //   - UpgradeAvailable = Installed 且 LatestVersion 非空 且 compareVersions(Installed, Latest) < 0。
 //
 // Discover 本身纯函数;LatestVersion 的网络查询由 ctx 控制超时/取消(默认由调用方包)。
-// 整体阻塞 ≤ max(LookPath/Version 各 Spec 串行,Source 各 Spec 并行)。
+// Discover 内置 harness 发现(向后兼容;等价 DiscoverWith(ctx, nil))。
 func Discover(ctx context.Context) []Harness {
+	return DiscoverWith(ctx, nil)
+}
+
+// DiscoverWith 发现内置 + 用户声明的 harness。
+//
+// extra:用户 harness 行(已含 ID/Name/Command/Icon,由 service 层从 store 加载转入)。
+// 逐个 LookPath 命令首 token + 试 --version;无 Source/Upgrader(用户 harness 不查上游
+// 最新版、不升级 —— 降级可接受,见 docs/worklog/2026-07-24-probe-harness-acp-conformance)。
+// 整体阻塞 ≤ max(LookPath/Version 各 Spec 串行,Source 各 Spec 并行)。
+func DiscoverWith(ctx context.Context, extra []Harness) []Harness {
 	out := make([]Harness, 0, len(Registry))
 	// 预取静态元数据,供 Spec.ID 对齐。
 	byID := map[string]Harness{}
@@ -216,6 +226,21 @@ func Discover(ctx context.Context) []Harness {
 	}
 
 	out = append(out, inst...)
+	// 用户声明的 harness(extra):无 Registry Spec,只 LookPath 命令首 token + 试 --version。
+	// 无 Source/Upgrader → LatestVersion 空、无升级(降级,不阻断)。
+	for _, e := range extra {
+		h := e
+		if fields := strings.Fields(e.Command); len(fields) > 0 {
+			if path, err := p.LookPath(fields[0]); err == nil && path != "" {
+				h.Path = path
+				h.Installed = true
+				if v, err := p.Version(ctx, path, []string{"--version"}); err == nil {
+					h.InstalledVersion = v
+				}
+			}
+		}
+		out = append(out, h)
+	}
 	return out
 }
 

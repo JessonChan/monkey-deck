@@ -78,3 +78,14 @@ func Commands() []string {
 	}
 	return cmds
 }
+
+// IsBuiltin 判断 id 是否内置 harness(omp/opencode/goose)。声明即用流程用:
+// 用户声明的 id 不得与内置冲突;Normalize/Command 对非内置 id 由 service 层回退到用户行。
+func IsBuiltin(id string) bool {
+	for _, h := range Supported {
+		if h.ID == id {
+			return true
+		}
+	}
+	return false
+}
