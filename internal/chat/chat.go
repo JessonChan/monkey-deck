@@ -2166,6 +2166,86 @@ func (s *ChatService) refreshHarnessesAsync() {
 	s.emit(EventHarnesses, nil)
 }
 
+// ─── 声明即用:用户 harness 向导(Wails3 binding)─────────────────────────────
+
+// ProbeNewHarness 对候选 harness 命令跑 conformance 自检,返回体检单。
+// 前端向导:用户输命令(如 "jcode acp")→ 调此 → 展示报告 → CanAdd 才允许 AddUserHarness。
+// 严格门槛:end_turn 必须过(证当前环境真能跑完一轮)。探针各步带超时,整体上限 3min。
+func (s *ChatService) ProbeNewHarness(command string) (*acp.ConformanceReport, error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil, errors.New("harness 命令不能为空")
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 3*time.Minute)
+	defer cancel()
+	return acp.ProbeHarness(ctx, command), nil
+}
+
+// AddUserHarness 声明一个用户 harness 并落库。id 由命令首 token 派生("jcode acp" → "jcode");
+// name 可空(空则内部兜底 id);icon 可空(走通用兜底)。调前应已 ProbeNewHarness 通过(CanAdd)。
+// 成功后重注入 reaper 命令集 + 刷新 harness 缓存(前端立即可见)。
+func (s *ChatService) AddUserHarness(command, name, icon string) (*harness.Harness, error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil, errors.New("harness 命令不能为空")
+	}
+	id := harnessCommandID(command)
+	if id == "" {
+		return nil, errors.New("无法从命令解析 harness id")
+	}
+	if harness.IsBuiltin(id) {
+		return nil, fmt.Errorf("id %q 与内置 harness 冲突", id)
+	}
+	if s.st == nil {
+		return nil, errors.New("store 未就绪")
+	}
+	if existing, err := s.st.GetUserHarness(s.ctx, id); err != nil {
+		return nil, err
+	} else if existing != nil {
+		return nil, fmt.Errorf("harness %q 已存在", id)
+	}
+	if _, err := s.st.CreateUserHarness(s.ctx, id, strings.TrimSpace(name), command, strings.TrimSpace(icon)); err != nil {
+		return nil, err
+	}
+	s.reloadHarnessCommands()
+	list := harness.DiscoverWith(s.ctx, s.userHarnessRows())
+	s.harnessCache.Store(&list)
+	s.emit(EventHarnesses, nil)
+	for i := range list {
+		if list[i].ID == id {
+			h := list[i]
+			return &h, nil
+		}
+	}
+	return &harness.Harness{ID: id, Name: name, Command: command, Icon: icon}, nil
+}
+
+// RemoveUserHarness 删除一个用户 harness(内置不可删)。成功后重注入 reaper + 刷新缓存。
+func (s *ChatService) RemoveUserHarness(id string) error {
+	if harness.IsBuiltin(id) {
+		return fmt.Errorf("内置 harness %q 不可删除", id)
+	}
+	if s.st == nil {
+		return errors.New("store 未就绪")
+	}
+	if err := s.st.DeleteUserHarness(s.ctx, id); err != nil {
+		return err
+	}
+	s.reloadHarnessCommands()
+	list := harness.DiscoverWith(s.ctx, s.userHarnessRows())
+	s.harnessCache.Store(&list)
+	s.emit(EventHarnesses, nil)
+	return nil
+}
+
+// harnessCommandID 从启动命令派生 harness id:首个 token("jcode acp" → "jcode")。
+func harnessCommandID(command string) string {
+	if f := strings.Fields(command); len(f) > 0 {
+		return f[0]
+	}
+	return ""
+}
+
 // ─── harness 版本更新周期刷新(check_harness_updates 设置开关)──────────────────
 //
 // 周期重跑 refreshHarnessesAsync,持续刷新「上游最新版本」:用户装了新 harness、上游发了
