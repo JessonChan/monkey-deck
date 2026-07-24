@@ -129,6 +129,12 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   const loadMoreRef = useRef<HTMLButtonElement>(null);
   // onScroll 的 rAF 句柄:一帧内多个 scroll 事件合并处理一次,杜绝布局抖动。
   const scrollRafRef = useRef(0);
+  // 程序性滚动标记:仅 applyInitialPosition / scrollToBottom 用。
+  // 这两处用先验 total 算 scrollTop(偏小),触发 scroll 事件;其 rAF 可能在 RO 收敛后才执行,
+  // 读到「大 scrollHeight + 小 scrollTop」→ gap > 阈值 → stick 误翻 false → 后续贴底补底全被跳过。
+  // 标记后 rAF 跳过 stick 判定(仅重算窗口);RO/main effect 的写入不加标记——它们在 DOM 已提交后执行,
+  // rAF 此时读到的 scrollHeight 与 scrollTop 一致,stick 判定正确。
+  const programmaticScrollRef = useRef(false);
   // Floating scroll-to-bottom button visibility: true = show FAB (user is reading history).
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   // 文件预览覆盖层(Task #15084):对话/工具卡片里的路径点击 → 弹此覆盖层。
@@ -236,6 +242,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       anchorRef.current = null; // 明确要到底 → 清除锚点
       stickToBottomRef.current = true;
       const bottom = Math.max(0, layoutRef.current.total - el.clientHeight);
+      programmaticScrollRef.current = true;
       el.scrollTop = bottom;
       setShowScrollBtn(false);
       // 立即按底部 scrollTop 重算窗口(不等 scroll 事件回环)。
@@ -251,6 +258,13 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       const el = scrollRef.current;
       if (!el) return;
       const lay = layoutRef.current;
+      // 程序性滚动(仅 applyInitialPosition / scrollToBottom):跳过 stick 判定,仅重算窗口。
+      // 否则收敛期 rAF 读到「新 scrollHeight + 旧 scrollTop」会误翻 stick=false(根因,见声明注释)。
+      if (programmaticScrollRef.current) {
+        programmaticScrollRef.current = false;
+        setWinIfChanged(computeWinFor(lay, el.scrollTop));
+        return;
+      }
       const nearBottom = isAtBottom(el.scrollHeight, el.scrollTop, el.clientHeight);
       stickToBottomRef.current = nearBottom;
       // 仅在状态真正翻转时 setState(避免每帧无谓的 setter 调用)。
@@ -284,12 +298,14 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       stickToBottomRef.current = false;
       anchorRef.current = { iid: saved.iid, off: saved.off };
       setShowScrollBtn(true);
+      programmaticScrollRef.current = true;
       el.scrollTop = restored;
       setWinIfChanged(computeWinFor(lay, restored));
     } else {
       stickToBottomRef.current = true;
       anchorRef.current = null;
       setShowScrollBtn(false);
+      programmaticScrollRef.current = true;
       const bottom = Math.max(0, lay.total - el.clientHeight);
       el.scrollTop = bottom;
       setWinIfChanged(computeWinFor(lay, bottom));
@@ -404,7 +420,6 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       }
       if (!modelChanged && !viewportChanged && delta === 0) return;
       const newLay = computeLayout(rs, model, tailHRef.current, headHRef.current);
-      layoutRef.current = newLay;
       if (delta !== 0) el.scrollTop += delta; // A 不变量:锚点上方行变高 → 下推保持视觉位置
       if (stickToBottomRef.current) el.scrollTop = Math.max(0, newLay.total - el.clientHeight); // S 不变量
       setWinIfChanged(computeWinFor(newLay, el.scrollTop));
