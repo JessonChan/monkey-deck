@@ -16,7 +16,8 @@ import (
 func TestDiagResume(t *testing.T) {
 	runner := NewRunner("opencode acp --print-logs --log-level DEBUG", nil)
 	cwd := t.TempDir()
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
 
 	// 1. 新建 + 一轮对话,拿到 acp session id
 	cs1, err := runner.NewChatSession(ctx, cwd, func(SessionEvent) {}, nil)
@@ -25,7 +26,7 @@ func TestDiagResume(t *testing.T) {
 	}
 	sid := string(cs1.SessionID)
 	t.Logf("created session: %s", sid)
-	if _, err := cs1.Prompt(ctx, "只回复:hi", nil, 60*time.Second); err != nil {
+	if _, err := cs1.Prompt(ctx, "只回复:hi", nil); err != nil {
 		t.Fatalf("first prompt: %v", err)
 	}
 	cs1.Close()
@@ -42,7 +43,7 @@ func TestDiagResume(t *testing.T) {
 
 	// 3. resumed 后连发两轮(测 resume 后是否稳定)
 	for i := 1; i <= 2; i++ {
-		if _, err := cs2.Prompt(ctx, "只回复:ok"+strings.Repeat("!", i), nil, 60*time.Second); err != nil {
+		if _, err := cs2.Prompt(ctx, "只回复:ok"+strings.Repeat("!", i), nil); err != nil {
 			t.Fatalf("resume prompt #%d failed: %v", i, err)
 		}
 		t.Logf("resume prompt #%d ok", i)

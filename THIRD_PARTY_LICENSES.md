@@ -82,6 +82,19 @@ SOFTWARE.
 - **改动**:无;仅在文件顶部追加 XML 注释版权声明 + MIT 许可全文(§0.4 文件级——
   原文件无版权头,补登)
 
+### 2.4 `assets/harness-icons/goose.svg`(Apache-2.0)
+
+- **来源 / 版权**:[goose](https://github.com/aaif-goose/goose)
+  —— `ui/desktop/src/components/icons/Goose.tsx`(鹅剪影官方品牌图标)
+  (Copyright (c) Block / Agentic AI Foundation 及 goose 贡献者)
+- **协议**:Apache-2.0([LICENSE](https://github.com/aaif-goose/goose/blob/main/LICENSE);
+  全文 https://www.apache.org/licenses/LICENSE-2.0)
+- **借用方式**:改写 —— 原为 React 函数组件(`Goose.tsx`,SVG 嵌 JSX),
+  转为独立 `.svg` 文件(移除 `className` 属性);图形 path 未改绘。
+- **仓库路径**:`assets/harness-icons/goose.svg`(文件名对齐 harness ID `goose`)
+- **改动**:格式转换(React 组件 → 独立 SVG);按 Apache-2.0 §4b 已在文件顶部声明此修改。
+  ⚠️ 与 §2.2/§2.3(MIT)不同:Apache-2.0 要求声明对文件的修改,故此处非「原样拷贝」。
+
 > 未知 / 第三方 harness 不内置兜底图,前端用 `lucide-react` 的 `Bot` 兜底;
 > 命名约定 / 维护规则见 `assets/harness-icons/README.md`。
 

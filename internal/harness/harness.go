@@ -1,6 +1,6 @@
 // Package harness 提供受支持的 ACP harness 注册表与运行时发现/版本检测/升级管理。
 // monkey-deck 是纯 ACP client(§1.1):harness 是 peer,我们 spawn 它的 stdio ACP server。
-// 目前已知 harness:omp(默认)/ opencode。
+// 目前已知 harness:omp(默认)/ opencode / goose。
 //
 // 三层概念(分层以避免硬编码,§5.3 KISS):
 //   - Supported(var):注册表静态默认(ID/Name/Command/Icon 四段),供 Command/Normalize/进程回收/
@@ -43,6 +43,7 @@ type Harness struct {
 var Supported = []Harness{
 	{ID: "omp", Name: "Oh My Pi", Command: "omp acp", Icon: "assets/harness-icons/omp.svg"},
 	{ID: "opencode", Name: "OpenCode", Command: "opencode acp", Icon: "assets/harness-icons/opencode.svg"},
+	{ID: "goose", Name: "Goose", Command: "goose acp", Icon: "assets/harness-icons/goose.svg"},
 }
 
 // DefaultID 默认 harness(omp)。

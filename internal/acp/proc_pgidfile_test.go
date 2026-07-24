@@ -67,16 +67,17 @@ func TestReadPgidFile_Disabled(t *testing.T) {
 }
 
 // TestIsHarnessCmdline 回归:此前 listOpencodeProcs 写死 "opencode acp",omp 以 `bun …/omp acp`
-// 启动时被漏掉 → omp 孤儿从不被回收。验证现在按受支持命令子串匹配,覆盖 omp/opencode 两形态。
+// 启动时被漏掉 → omp 孤儿从不被回收。验证现在按受支持命令子串匹配,覆盖 omp/opencode/goose 三形态。
 // 不启真 harness,纯字符串匹配。
 func TestIsHarnessCmdline(t *testing.T) {
-	cmds := []string{"omp acp", "opencode acp"}
+	cmds := []string{"omp acp", "opencode acp", "goose acp"}
 	cases := []struct {
 		line string
 		want bool
 	}{
 		{"  2938  2938  bun /path/to/omp acp", true},          // omp 经 bun wrapper,"omp acp" 子串命中
 		{"  5251  5251  opencode acp", true},                  // opencode 裸命令
+		{"  6100  6100  goose acp", true},                     // goose 裸命令
 		{"  1234  1234  /usr/bin/ssh user@host", false},       // 无关进程
 		{"  1234  1234  /usr/bin/python3 http.server", false}, // 无关进程
 		{"  1234  1234  omp-compiler build", false},           // 子串 "omp acp" 不命中
