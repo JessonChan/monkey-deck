@@ -59,6 +59,13 @@ type ConformanceReport struct {
 	SawMessageChunk bool `json:"sawMessageChunk"`
 	EmitsMessageId  bool `json:"emitsMessageId"` // 有 message/thought chunk 且携带 messageId
 
+	// 功能覆盖(可选功能刻画;缺了只降级、不阻断,供体检单预警用户)。
+	ConfigOptions    int  `json:"configOptions"`    // NewSession 返回的 configOption 数
+	HasModelOption   bool `json:"hasModelOption"`   // 有 category:"model" 的 configOption(无→会话中不能切模型,如 jcode 靠 -p)
+	ReportedUsage    bool `json:"reportedUsage"`    // 发 usage_update 或 Usage 非空(无→不显示 token/成本)
+	StreamedThoughts bool `json:"streamedThoughts"` // 发 agent_thought_chunk(无→看不到 reasoning)
+	UsedTools        bool `json:"usedTools"`        // 发 tool_call(无害 prompt 下未必触发)
+
 	// ObservedKinds 本次 Prompt 期间观察到的事件 kind 集合(诊断用)。
 	ObservedKinds []string `json:"observedKinds,omitempty"`
 
@@ -86,6 +93,22 @@ func (r ConformanceReport) Summary() string {
 	fmt.Fprintf(&b, "[能力] resume=%v list=%v load=%v image=%v providers=%v\n",
 		mark(r.Resume), mark(r.List), mark(r.LoadSession), mark(r.Image), mark(r.Providers))
 	fmt.Fprintf(&b, "[行为] messageId=%s\n", messageIdVerdict(r))
+	// 功能覆盖:缺了的可选功能 → 预警(不阻断,仅降级;让用户添加前知情)。
+	fmt.Fprintf(&b, "[功能] 模型选择器=%s 用量=%s 思考流=%s (configOptions=%d)\n",
+		mark(r.HasModelOption), mark(r.ReportedUsage), mark(r.StreamedThoughts), r.ConfigOptions)
+	var gaps []string
+	if !r.HasModelOption {
+		gaps = append(gaps, "无模型选择器(模型靠启动命令定)")
+	}
+	if !r.ReportedUsage {
+		gaps = append(gaps, "不报 token 用量")
+	}
+	if !r.StreamedThoughts {
+		gaps = append(gaps, "无思考流")
+	}
+	if len(gaps) > 0 {
+		fmt.Fprintf(&b, "[预警] %s —— 可添加但功能受限\n", strings.Join(gaps, "、"))
+	}
 	fmt.Fprintf(&b, "结论: %s\n", verdict)
 	return b.String()
 }
@@ -135,18 +158,26 @@ func ProbeHarness(ctx context.Context, command string) *ConformanceReport {
 	// 事件收集:ACP 回调在独立 goroutine 触发,需线程安全。
 	var mu sync.Mutex
 	kinds := make(map[string]struct{})
-	var sawChunk, sawMessageID bool
+	var sawChunk, sawMessageID, sawThoughts, sawTools, sawUsage bool
 
 	var handler *Handler
 	onEvent := func(e SessionEvent) {
 		mu.Lock()
 		defer mu.Unlock()
 		kinds[e.Kind] = struct{}{}
-		if e.Kind == "agent_message_chunk" || e.Kind == "agent_thought_chunk" {
+		switch e.Kind {
+		case "agent_message_chunk", "agent_thought_chunk":
 			sawChunk = true
 			if e.MessageID != "" {
 				sawMessageID = true
 			}
+			if e.Kind == "agent_thought_chunk" {
+				sawThoughts = true
+			}
+		case "tool_call":
+			sawTools = true
+		case "usage_update":
+			sawUsage = true
 		}
 	}
 	onPermission := func(p PermissionPrompt) {
@@ -207,6 +238,13 @@ func ProbeHarness(ctx context.Context, command string) *ConformanceReport {
 		return rep
 	}
 	rep.NewSession = CheckResult{Pass: true, Note: fmt.Sprintf("sessionId=%s configOptions=%d", safeID(sess.SessionId), len(sess.ConfigOptions))}
+	// 功能覆盖刻画:configOptions 数 + 是否有模型选择器(category:"model")。
+	rep.ConfigOptions = len(sess.ConfigOptions)
+	for _, co := range sess.ConfigOptions {
+		if co.Select != nil && co.Select.Category != nil && string(*co.Select.Category) == "model" {
+			rep.HasModelOption = true
+		}
+	}
 
 	// 3. Prompt(无害消息,带超时)。期间 SessionUpdate 并发流入 onEvent。
 	turnCtx, cancelTurn := context.WithTimeout(ctx, probeTurnTimeout)
@@ -219,6 +257,8 @@ func ProbeHarness(ctx context.Context, command string) *ConformanceReport {
 	mu.Lock()
 	rep.SawMessageChunk = sawChunk
 	rep.EmitsMessageId = sawMessageID
+	rep.StreamedThoughts = sawThoughts
+	rep.UsedTools = sawTools
 	for k := range kinds {
 		rep.ObservedKinds = append(rep.ObservedKinds, k)
 	}
@@ -234,6 +274,7 @@ func ProbeHarness(ctx context.Context, command string) *ConformanceReport {
 	default:
 		rep.PromptTurn = CheckResult{Pass: false, Note: fmt.Sprintf("stopReason=%s", presp.StopReason)}
 	}
+	rep.ReportedUsage = sawUsage || presp.Usage != nil
 
 	// 4. 干净 teardown:尽力 close,再回收进程组。
 	closeCtx, cancelClose := context.WithTimeout(ctx, 5*time.Second)
