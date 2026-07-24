@@ -352,7 +352,17 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       el.scrollTop = bottom;
       setWinIfChanged(computeWinFor(layout, bottom));
     } else {
-      setWinIfChanged(computeWinFor(layout, el.scrollTop));
+      // A 不变量:锚点存在时,用 restoreScroll 重定位到锚点行(已提交高度下的正确 scrollTop)。
+      // RO 回调的 el.scrollTop += delta 可能被 clamp(DOM 高度尚未提交),
+      // 主 effect 在 React 提交新高度后运行,此时 restoreScroll 算出的是 clamp-proof 的正确值。
+      const anchor = anchorRef.current;
+      const restored = anchor ? restoreScroll(layout, rows, anchor.iid, anchor.off) : null;
+      if (restored !== null) {
+        el.scrollTop = restored;
+        setWinIfChanged(computeWinFor(layout, restored));
+      } else {
+        setWinIfChanged(computeWinFor(layout, el.scrollTop));
+      }
     }
     prevFirstIdRef.current = firstId;
   }, [items, props.session?.id, props.permission, rows, layout, computeWinFor, setWinIfChanged]);

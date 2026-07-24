@@ -36,13 +36,16 @@ const VIEWPORT = 600;
 let mockRowH = 100;
 let mockHeadH = 22;
 let mockTailH = 22;
+// 逐行高度覆盖:非空时按 data-iid 返回各自高度,模拟「元素类型多样」的真实会话
+//(user/agent/thought/tool/plan 高度悬殊,先验偏差大)。空 Map → 退回统一 mockRowH(旧测试不受影响)。
+const rowHeights = new Map<string, number>();
 Object.defineProperty(window.HTMLElement.prototype, "offsetHeight", {
   configurable: true,
   get(this: HTMLElement) {
     const iid = this.dataset?.iid;
     if (iid === "__head__") return mockHeadH;
     if (iid === "__tail__") return mockTailH;
-    if (this.classList?.contains("cv-item")) return mockRowH;
+    if (this.classList?.contains("cv-item")) return rowHeights.get(iid ?? "") ?? mockRowH;
     return 0;
   },
 });
@@ -133,6 +136,34 @@ function makeItems(n: number): ChatItem[] {
     );
   }
   return items;
+}
+
+// 「元素类型多样」的真实会话:user/agent/thought/tool(组)/plan 轮番出现,
+// 真实高度与先验(PRIOR_HEIGHT:user45/agent90/thought48/tool56/plan120)偏差悬殊——
+// 这正是用户实测「落点与元素种类相关」的维度,统一 mockRowH 的旧测试覆盖不到。
+// 返回 items + 每行真实高度(按 data-iid 键,tool 组用首条 id)。
+function makeDiverseItems(n: number): { items: ChatItem[]; heights: Record<string, number> } {
+  const items: ChatItem[] = [];
+  const heights: Record<string, number> = {};
+  // 一个「回合」= user → thought → tool×3(折叠成组)→ agent → plan,5 种元素类型全覆盖。
+  // 真实高度刻意偏离先验:user120(先验45)、agent300(90)、thought30(48)、tool组40(56)、plan250(120)。
+  const turn = (base: number) => {
+    items.push({ type: "user", id: `u${base}`, text: `user ${base}`, ts: 1000 + base });
+    heights[`u${base}`] = 120;
+    items.push({ type: "thought", id: `h${base + 1}`, text: `thought ${base + 1}`, ts: 1000 + base + 1 });
+    heights[`h${base + 1}`] = 30;
+    for (let k = 0; k < 3; k++) {
+      items.push({ type: "tool", id: `t${base + 2 + k}`, kind: "bash", title: `tool ${base + 2 + k}`, status: "completed", ts: 1000 + base + 2 + k } as never);
+    }
+    heights[`t${base + 2}`] = 40; // 组行键 = 首条 tool 的 id(buildRows 折叠规则)
+    items.push({ type: "agent", id: `a${base + 5}`, text: `agent ${base + 5}`, ts: 1000 + base + 5 });
+    heights[`a${base + 5}`] = 300;
+    items.push({ type: "plan", id: `p${base + 6}`, entries: [{ content: "step", status: "completed" }], ts: 1000 + base + 6 } as never);
+    heights[`p${base + 6}`] = 250;
+  };
+  let i = 0;
+  while (i + 7 <= n) { turn(i); i += 7; }
+  return { items, heights };
 }
 
 function baseProps(items: ChatItem[]) {
@@ -455,6 +486,76 @@ describe("ChatView 虚拟化(W 不变量:DOM 平台期)", () => {
     expect(body2.scrollTop).toBe(0);
     expect(host.querySelector(".scroll-bottom-btn")).toBeNull();
 
+    root.unmount();
+  });
+
+  test("多样元素类型会话:贴底收敛到真底部,FAB 不出现", async () => {
+    // 用户实测:落点偏上「与页面元素种类多少相关」。统一 mockRowH 的旧测试覆盖不到——
+    // 这里用真实高度严重偏离先验的多样会话(user120/agent300/thought30/tool组40/plan250),
+    // 验证 S 不变量在收敛后仍把视图钉在真底部,而非停在先验估算的偏上位置。
+    rowHeights.clear();
+    const { items, heights } = makeDiverseItems(210); // 30 回合,末行 = plan p209
+    for (const [k, v] of Object.entries(heights)) rowHeights.set(k, v);
+    const { host, root } = mount(items);
+    await flush();
+    await settle();
+    await settle();
+    await settle();
+    await settle();
+
+    const body = host.querySelector(".chat-body") as HTMLElement;
+    // 收敛后必在真底部:scrollTop = scrollHeight - viewport,FAB 绝不出现,末行在 DOM。
+    expect(body.scrollTop).toBe(body.scrollHeight - VIEWPORT);
+    expect(host.querySelector(".scroll-bottom-btn")).toBeNull();
+    expect(host.querySelector('[data-iid="p209"]')).not.toBeNull();
+
+    rowHeights.clear();
+    root.unmount();
+  });
+
+  test("多样元素类型会话:上翻后锚点稳定,测量收敛不漂移视觉位置", async () => {
+    // A 不变量:上翻到中部后,锚点行(视口顶部命中行)的视觉位置在后续测量收敛中保持不动。
+    // 多样高度下先验偏差大(user 先验45/真实120、agent 先验90/真实300),
+    // 若 Δh 补偿漏算锚点上方行,视觉位置会随每次测量跳动。
+    rowHeights.clear();
+    const { items, heights } = makeDiverseItems(210);
+    for (const [k, v] of Object.entries(heights)) rowHeights.set(k, v);
+    const { host, root } = mount(items);
+    await flush(); // 渲染完成,但尚未触发 RO 测量 → 高度仍是先验
+
+    const body = host.querySelector(".chat-body") as HTMLElement;
+    // 上翻到靠近先验坐标系底部(8000px 处),设置锚点。
+    // 选 8000 而非 4000:锚点上方行从先验→真实高度时 delta 很大,
+    // 8000 + delta > 旧 scrollHeight(~10852)→ RO 的 el.scrollTop += delta 被 clamp。
+    body.scrollTop = 8000;
+    body.dispatchEvent(new window.Event("scroll"));
+    await flush();
+
+    // 找到视口顶部命中的行(锚点行):style.top <= scrollTop < 下一行的 style.top。
+    // 注意:不是 DOM 中的第一个 .cv-item(那是 overscan 区域的起始行,可能在视口上方)。
+    const allItems = [...host.querySelectorAll<HTMLElement>(".cv-item")].sort((a, b) =>
+      parseFloat(a.style.top || "0") - parseFloat(b.style.top || "0")
+    );
+    const anchorEl = allItems.find((el, i) => {
+      const top = parseFloat(el.style.top || "0");
+      const nextTop = i + 1 < allItems.length ? parseFloat(allItems[i + 1].style.top || "0") : Infinity;
+      return top <= body.scrollTop && body.scrollTop < nextTop;
+    }) ?? null;
+    expect(anchorEl).not.toBeNull();
+    const anchorIid = anchorEl!.dataset.iid ?? "";
+    const relBefore = parseFloat(anchorEl!.style.top || "0") - body.scrollTop;
+
+    // 触发测量收敛:先验 → 真实高度,锚点上方行变高 → Δh 补偿应下推 scrollTop 保持视觉位置。
+    await settle();
+    await settle();
+
+    const anchorAfter = host.querySelector(`[data-iid="${anchorIid}"]`) as HTMLElement | null;
+    expect(anchorAfter).not.toBeNull();
+    const relAfter = parseFloat(anchorAfter!.style.top || "0") - body.scrollTop;
+    // 锚点行视觉位置不漂移(允许 1px 舍入)。
+    expect(Math.abs(relAfter - relBefore)).toBeLessThanOrEqual(1);
+
+    rowHeights.clear();
     root.unmount();
   });
 });
