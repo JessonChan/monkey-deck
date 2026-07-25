@@ -217,8 +217,6 @@
     "noMatch": "无匹配",
     "recentUsed": "最近使用",
     "searchPlaceholder": "搜索…",
-    "mentionEnter": "→ 进入",
-    "mentionBack": "← 返回",
     "cfgLabel": {
       "model": "模型",
       "mode": "模式",

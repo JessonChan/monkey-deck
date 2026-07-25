@@ -8,7 +8,7 @@
     "build:dev": "tsc && vite build --minify false --mode development",
     "build": "tsc && vite build --mode production",
     "preview": "vite preview",
-    "test": "bun test"
+    "test": "bun test --isolate"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

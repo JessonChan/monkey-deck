@@ -6,7 +6,7 @@ import type { ConfigOption, Mention, ImageAttachment, Usage } from "../types";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
-import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ImageIcon, ListPlus } from "lucide-react";
+import { Paperclip, X, Slash, Square, ArrowUp, File, ChevronDown, ChevronUp, ImageIcon, ListPlus } from "lucide-react";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -181,25 +181,20 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   };
   useEffect(() => { if (ref.current) autoGrow(ref.current); }, [value, collapsed]);
 
-  // @ 触发:每次 value 或光标位置变化,据光标位置判定是否在 @ 提及中,拉目录列表过滤。
+  // @ 触发:据光标位置判定是否在 @ 提及中,调后端 SessionFuzzyFind 在 session 工作目录全项目
+  // 范围按 query 子串模糊匹配文件路径(跨目录,仅文件),返回最多 12 个命中。
   const mentionInfo = useMemo(() => detectMention(value, cursorRef.current), [value, cursorPos]);
   useEffect(() => {
-    if (!sessionId || slashOpen) { setMentionOpen(false); return; }
-    if (!mentionInfo) { setMentionOpen(false); return; }
+    if (!sessionId || slashOpen || !mentionInfo) { setMentionOpen(false); return; }
     const q = mentionInfo.query;
-    const slash = q.lastIndexOf("/");
-    const dir = slash >= 0 ? q.slice(0, slash) : "";
-    const filter = slash >= 0 ? q.slice(slash + 1) : q;
+    // 空 query 无有用结果(FuzzyFind 后端对空 query 返回 nil)→ 直接关面板,不打后端 IPC。
+    if (!q.trim()) { setMentionItems([]); setMentionOpen(false); return; }
     let cancelled = false;
-    // 防抖:快打字时不每次按键都打后端 IPC,150ms 内的新 keystroke 取消上一次拉目录。
+    // 防抖:快打字时不每次按键都打后端 IPC,150ms 内的新 keystroke 取消上一次查询。
     const timer = setTimeout(() => {
-      ChatService.SessionListDir(sessionId, dir).then((nodes) => {
+      ChatService.SessionFuzzyFind(sessionId, q, 12).then((nodes) => {
         if (cancelled) return;
-        const list = (nodes || [])
-          .filter((n) => n.name !== ".git")
-          .filter((n) => n.name.toLowerCase().includes(filter.toLowerCase()))
-          .sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
-          .slice(0, 12);
+        const list = (nodes || []).slice(0, 12);
         setMentionItems(list);
         setMentionIdx(0);
         setMentionOpen(list.length > 0);
@@ -246,29 +241,6 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     requestAnimationFrame(() => ref.current?.focus());
   };
 
-  // 把当前光标所在的 @query 替换成 newQuery(不含 @),同步更新 cursorRef。
-  // 关键:cursorRef 必须在 onChange 前同步更新,否则 useMemo detectMention 用旧光标重开面板。
-  const setMentionQuery = (newQuery: string): boolean => {
-    const pos = cursorRef.current;
-    const m = detectMention(value, pos);
-    if (!m) return false;
-    const insert = "@" + newQuery;
-    cursorRef.current = m.start + insert.length;
-    onChange(value.slice(0, m.start) + insert + value.slice(pos));
-    setMentionIdx(0);
-    return true;
-  };
-  // 进入子文件夹:把 @query 改成 @folderPath/,列表随之刷新到该文件夹内容。
-  const descendMention = (node: FileNode) => setMentionQuery(node.path + "/");
-  // 返回上一级目录(←);已在根目录则不动作(返回 false 让光标正常左移)。
-  const ascendMention = (): boolean => {
-    const q = mentionInfo?.query ?? "";
-    const slash = q.lastIndexOf("/");
-    if (slash < 0) return false; // 已在根
-    const dir = q.slice(0, slash);
-    const upDir = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
-    return setMentionQuery(upDir ? upDir + "/" : "");
-  };
   // 选中一个 @ 候选:把 @query 替换成 @完整路径 + 尾随空格,记录提及,关闭面板。
   const pickMention = (node: FileNode) => {
     const pos = cursorRef.current;
@@ -300,20 +272,11 @@ export default function Composer({ value, onChange, disabled, prompting, configO
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickSlash(filtered[slashIdx]); return; }
       if (e.key === "Escape") { e.preventDefault(); setSlashOpen(false); return; }
     }
-    // @ 提及菜单(业界惯例:→/Tab/点击 进文件夹,← 返回上级,Enter 确认选中)
+    // @ 提及菜单:FuzzyFind 仅返回文件,无目录下钻语义。↑↓ 导航,Enter / Tab 选中,Esc 关闭。
     if (mentionOpen) {
       if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((i) => Math.min(i + 1, mentionItems.length - 1)); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => Math.max(i - 1, 0)); return; }
-      if (e.key === "Enter") { e.preventDefault(); pickMention(mentionItems[mentionIdx]); return; }
-      // Tab / → :文件夹 → 进入;文件 → 选中。
-      if (e.key === "Tab" || e.key === "ArrowRight") {
-        e.preventDefault();
-        const node = mentionItems[mentionIdx];
-        if (node?.isDir) descendMention(node); else pickMention(node);
-        return;
-      }
-      // ← :返回上一级(已在根则放行,让光标正常左移)。
-      if (e.key === "ArrowLeft" && ascendMention()) { e.preventDefault(); return; }
+      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickMention(mentionItems[mentionIdx]); return; }
       if (e.key === "Escape") { e.preventDefault(); setMentionOpen(false); return; }
     }
 
@@ -432,19 +395,20 @@ export default function Composer({ value, onChange, disabled, prompting, configO
       )}
       {mentionOpen && (
         <div className="slash-popover mention-popover" data-testid="mention-popover">
-          {(() => {
-            const q = mentionInfo?.query ?? "";
-            const s = q.lastIndexOf("/");
-            const dir = s >= 0 ? q.slice(0, s) : "";
-            return dir ? <div className="mention-cwd">📁 {dir}/ <span className="mention-hint">{t("composer.mentionBack")}</span></div> : null;
-          })()}
-          {mentionItems.map((n, i) => (
-            <button key={n.path} className={`slash-item ${i === mentionIdx ? "active" : ""}`} onMouseEnter={() => setMentionIdx(i)} onClick={() => (n.isDir ? descendMention(n) : pickMention(n))}>
-              {n.isDir ? <Folder size={13} /> : <File size={13} />}
-              <span className="slash-cmd">{n.name}</span>
-              <span className="slash-desc">{n.isDir ? t("composer.mentionEnter") : ""}</span>
-            </button>
-          ))}
+          {mentionItems.map((n, i) => {
+            // 跨目录结果可能撞名(src/foo.ts vs lib/foo.ts),显完整相对路径让用户区分:
+            // 目录前缀 dim + basename 正常色(§4.4 不裸露歧义字段)。
+            const dirPrefix = n.path.length > n.name.length ? n.path.slice(0, n.path.length - n.name.length) : "";
+            return (
+              <button key={n.path} className={`slash-item ${i === mentionIdx ? "active" : ""}`} onMouseEnter={() => setMentionIdx(i)} onClick={() => pickMention(n)}>
+                <File size={13} />
+                <span className="slash-cmd mention-path">
+                  {dirPrefix && <span className="mention-dir">{dirPrefix}</span>}
+                  {n.name}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
 

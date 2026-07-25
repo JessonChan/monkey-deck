@@ -22,7 +22,7 @@
 // wiring without depending on Radix FocusScope / cmdk internals in happy-dom. A faithful
 // native paste event (ClipboardEvent + DataTransfer) drives the real onPaste handler.
 
-import { describe, test, expect, mock } from "bun:test";
+import { describe, test, expect, mock, beforeEach } from "bun:test";
 import { Window } from "happy-dom";
 import React from "react";
 import { createRoot } from "react-dom/client";
@@ -91,6 +91,15 @@ mock.module("react-i18next", () => ({
   initReactI18next: { type: "3rd-party" },
   default: { useTranslation: () => ({ t: (k) => k }) },
 }));
+// Composer @ mention 现走 SessionFuzzyFind(跨目录模糊匹配,Task #23072)。
+// 用可观测 mock 替代真 binding(挂载期不触发真后端)。fuzzyFindResult 是可变返回值,
+// 测试用例在 mount 前赋值;mock 函数闭包在调用时读取,故重新赋值即时生效。
+let fuzzyFindResult: { path: string; name: string; isDir: boolean }[] = [];
+const chatServiceMock = {
+  PickFiles: mock(async () => []),
+  SessionFuzzyFind: mock(async (sessionID: string, query: string, limit: number) => fuzzyFindResult),
+};
+mock.module("../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice", () => chatServiceMock);
 
 const Composer = (await import("./Composer.tsx")).default;
 
@@ -209,5 +218,77 @@ describe("Composer active enqueue (Task #22131)", () => {
     await flush();
     expect(onEnqueue).toHaveBeenCalledTimes(1);
     expect(onSend).not.toHaveBeenCalled();
+  });
+});
+
+// Task #23072:@ mention 接 SessionFuzzyFind(跨目录模糊匹配 + 全路径展示)。
+// 旧实现解析 query 最后一个 / 作目录、调 SessionListDir 单目录 + 前端 includes,跨目录命中不到
+// (输入 @foo 找不到 src/foo.ts)。新实现把完整 query 交给后端 SessionFuzzyFind 全项目匹配,
+// 下拉项显完整相对路径(basename + dim 目录前缀)以区分 src/foo.ts 与 lib/foo.ts。
+//
+// happy-dom + React 19:受控 input/textarea 的 onChange 在 dispatchEvent 派发的 input 事件下不触发
+// (value-tracker + 事件代理不兼容)。但 React 的 onSelect 由 document 上的 selectionchange 实现,
+// 派发 selectionchange 可靠触发 handleSelect → cursorRef/cursorPos 同步。故受控挂载 value="@foo"
+// 后用 selectionchange 把光标定位到末尾,驱动 mentionInfo 重算为 {query:"foo"}。
+function positionCursor(ta: HTMLTextAreaElement, pos: number) {
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = pos;
+  document.dispatchEvent(new window.Event("selectionchange", { bubbles: true }));
+}
+
+describe("Composer @ mention cross-dir fuzzy find (Task #23072)", () => {
+  beforeEach(() => {
+    chatServiceMock.SessionFuzzyFind.mockClear();
+    fuzzyFindResult = [];
+  });
+  test("typing @foo debounces to SessionFuzzyFind and renders cross-dir results with full paths", async () => {
+    // 注入跨目录命中(src/foo.ts + lib/foo.ts,同名不同目录)。
+    fuzzyFindResult = [
+      { path: "src/foo.ts", name: "foo.ts", isDir: false },
+      { path: "lib/foo.ts", name: "foo.ts", isDir: false },
+    ];
+
+    const { host } = mount(<Composer value={"@foo"} {...STUB_PROPS} sessionId={"sid"} />);
+    await flush();
+
+    // 光标定位到末尾(pos=4)→ handleSelect → cursorRef/cursorPos 同步 → mentionInfo={query:"foo"}。
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    expect(ta).not.toBeNull();
+    positionCursor(ta, 4);
+    await flush();
+
+    // 防抖 150ms:等过再断言后端被调。
+    await new Promise((r) => setTimeout(r, 200));
+    await flush();
+
+    expect(chatServiceMock.SessionFuzzyFind).toHaveBeenCalledTimes(1);
+    // 完整 query 透传(不再 split 最后一个 /)、limit=12。
+    expect(chatServiceMock.SessionFuzzyFind).toHaveBeenCalledWith("sid", "foo", 12);
+
+    // 下拉应打开,渲染两项跨目录命中。
+    const popover = host.querySelector('[data-testid="mention-popover"]');
+    expect(popover).not.toBeNull();
+    const items = popover!.querySelectorAll("button.slash-item");
+    expect(items.length).toBe(2);
+    // 每项显完整相对路径(目录前缀 + basename),让用户能区分两个 foo.ts(§4.4)。
+    expect(items[0]!.querySelector(".mention-dir")!.textContent).toBe("src/");
+    expect(items[0]!.querySelector(".mention-path")!.textContent).toBe("src/foo.ts");
+    expect(items[1]!.querySelector(".mention-dir")!.textContent).toBe("lib/");
+    expect(items[1]!.querySelector(".mention-path")!.textContent).toBe("lib/foo.ts");
+  });
+
+  test("empty @query closes popover without hitting backend", async () => {
+    fuzzyFindResult = [];
+    const { host } = mount(<Composer value={"@"} {...STUB_PROPS} sessionId={"sid"} />);
+    await flush();
+
+    // 光标在 @ 之后(pos=1):query 为空 → 应直接关面板,不打后端。
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, 1);
+    await new Promise((r) => setTimeout(r, 200));
+    await flush();
+
+    expect(chatServiceMock.SessionFuzzyFind).not.toHaveBeenCalled();
+    expect(host.querySelector('[data-testid="mention-popover"]')).toBeNull();
   });
 });

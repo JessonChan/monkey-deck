@@ -70,6 +70,7 @@ mock.module("../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chat
   OpenURL: async () => {},
   SessionReadFile: async () => "",
   SessionListDir: async () => [],
+  SessionFuzzyFind: async () => [],
   PickFiles: async () => [],
 }));
 mock.module("react-tooltip", () => ({ Tooltip: () => null, default: () => null }));

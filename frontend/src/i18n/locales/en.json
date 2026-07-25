@@ -217,8 +217,6 @@
     "noMatch": "No match",
     "recentUsed": "Recently used",
     "searchPlaceholder": "Search…",
-    "mentionEnter": "→ Enter",
-    "mentionBack": "← Back",
     "cfgLabel": {
       "model": "Model",
       "mode": "Mode",
