@@ -319,7 +319,8 @@ func (s *ChatService) ServiceStartup(ctx context.Context, options application.Se
 	s.reconnectEnabled = true                                             // 启用断连自动重连(单测默认 false,不触发)
 	// 异步发现本机已安装 harness + 查上游最新版本(不阻塞启动;完成后推 EventHarnesses 让前端重拉)。
 	// 失败静默降级:ListHarnesses 会用静态 Supported 兜底,前端照常可选 harness(只是没版本信息)。
-	go s.refreshHarnessesAsync()
+	// 刷新完成后若 auto 开启,立即 maybeAutoUpgrade(不等首个 tick——默认周期 1h 太久)。
+	go s.refreshHarnessesThenMaybeAutoUpgrade()
 	// 周期刷新 harness 版本(check / auto 设置共用同一 ticker):按持久化设置决定是否起。
 	// check 负责「周期刷新上游版本」(红点),auto 负责「发现可升级且安全时静默 UpgradeHarness」。
 	// 二者任一开启即运行 ticker;都关闭则不耗资源。
@@ -2080,6 +2081,17 @@ func (s *ChatService) refreshHarnessesAsync() {
 	list := harness.Discover(ctx)
 	s.harnessCache.Store(&list)
 	s.emit(EventHarnesses, nil)
+}
+
+// refreshHarnessesThenMaybeAutoUpgrade 启动路径专用:跑完 refreshHarnessesAsync 后,
+// 若 auto_harness_upgrade 开启则立即 maybeAutoUpgrade(不等首个 tick——默认周期
+// harnessRefreshEvery=1h,等首 tick 才升级太久;用户开了 auto 即期望尽快自愈到最新)。
+// 复用 ticker 同样的「refresh → maybeAutoUpgrade」序列,只是把首跑从「等首 tick」提前到「启动 refresh 完即可」。
+func (s *ChatService) refreshHarnessesThenMaybeAutoUpgrade() {
+	s.refreshHarnessesAsync()
+	if s.autoHarnessUpgradeSetting() {
+		s.maybeAutoUpgrade()
+	}
 }
 
 // ─── harness 版本更新周期刷新(check_harness_updates 设置开关)──────────────────

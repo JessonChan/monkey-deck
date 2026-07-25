@@ -10,6 +10,7 @@ package chat
 //   - 失败冷却:首次失败置冷却,冷却期内不再重试;冷却到期后重试;成功清冷却。
 //   - ticker OR 语义:check 关 + auto 开 → ticker 仍运行;二者皆关 → ticker 停。
 //   - 端到端:周期 ticker tick → refreshHarnessesAsync(Discover 置 UpgradeAvailable)→ maybeAutoUpgrade 触发升级。
+//   - 启动路径:refreshHarnessesThenMaybeAutoUpgrade 完成后 auto 开则立即升级(不等首个 tick);auto 关则只 refresh。
 //
 // 不真启 harness(§5.1):注入 Probe / Source / Upgrader(均 stub)。
 
@@ -409,4 +410,67 @@ func TestAutoUpgradeTicker_EndToEnd(t *testing.T) {
 
 	// 等待 ticker 至少跑一轮(refresh + maybeAutoUpgrade)。
 	waitFor(t, 3*time.Second, func() bool { return up.called.Load() })
+}
+
+// ─── 启动路径:refresh 完即升级(不等首个 tick)──────────────────────────────
+
+// TestStartupRefresh_TriggersAutoUpgradeImmediately 启动路径专用:refreshHarnessesThenMaybeAutoUpgrade
+// 跑完 refreshHarnessesAsync 后,若 auto 开启立即 maybeAutoUpgrade——不等首个 tick(默认周期 1h 太久)。
+// 关键断言:ticker 被显式禁用(harnessRefreshEvery=0,startHarnessRefresh 直接返回),升级只能来自
+// 启动路径自身的同步调用,而非后台首 tick。证明「启动 refresh 完即升级」。
+func TestStartupRefresh_TriggersAutoUpgradeImmediately(t *testing.T) {
+	up := &stubUpgrader{}
+	prevReg := harness.SwapRegistryForTest([]harness.Spec{
+		{
+			ID: "opencode", BinaryName: "opencode",
+			Source:   stubReleaseSource{v: "2.0.0"},
+			Upgrader: up,
+		},
+	})
+	t.Cleanup(prevReg)
+	prevProbe := harness.SetProbeForTest(fakeStubProbe{
+		paths: map[string]string{"opencode": "/fake/bin/opencode"},
+		vers:  map[string]string{"opencode": "1.0.0"}, // 本地旧版本 → Discover 置 UpgradeAvailable
+	})
+	t.Cleanup(prevProbe)
+
+	svc := setupHarnessStoreSvc(t)
+	disableTicker(svc) // 禁 ticker:证明升级不靠首 tick,而靠启动 refresh 完即触发
+	if err := svc.SetAutoHarnessUpgrade(true); err != nil {
+		t.Fatalf("SetAutoHarnessUpgrade(true): %v", err)
+	}
+
+	// 同步调用启动路径(refresh + maybeAutoUpgrade);返回即应已升级。
+	svc.refreshHarnessesThenMaybeAutoUpgrade()
+	if !up.called.Load() {
+		t.Fatalf("Upgrader.Upgrade should be called immediately after startup refresh (auto on), without waiting for first tick")
+	}
+}
+
+// TestStartupRefresh_NoAutoUpgradeWhenDisabled auto 关闭时,启动路径只 refresh 不升级
+// (maybeAutoUpgrade 内部 autoHarnessUpgradeSetting() 早返;启动路径的 if 守卫是同一语义的显式短路)。
+func TestStartupRefresh_NoAutoUpgradeWhenDisabled(t *testing.T) {
+	up := &stubUpgrader{}
+	prevReg := harness.SwapRegistryForTest([]harness.Spec{
+		{
+			ID: "opencode", BinaryName: "opencode",
+			Source:   stubReleaseSource{v: "2.0.0"},
+			Upgrader: up,
+		},
+	})
+	t.Cleanup(prevReg)
+	prevProbe := harness.SetProbeForTest(fakeStubProbe{
+		paths: map[string]string{"opencode": "/fake/bin/opencode"},
+		vers:  map[string]string{"opencode": "1.0.0"},
+	})
+	t.Cleanup(prevProbe)
+
+	svc := setupHarnessStoreSvc(t)
+	disableTicker(svc)
+	// auto 默认关闭,不 SetAutoHarnessUpgrade(true)。
+
+	svc.refreshHarnessesThenMaybeAutoUpgrade()
+	if up.called.Load() {
+		t.Fatalf("Upgrader.Upgrade should NOT be called when auto disabled (startup refresh only)")
+	}
 }
