@@ -1278,6 +1278,7 @@ export default function App() {
               status={status}
               statusDetail={statusDetail}
               usage={usage}
+              branch={branchBySession[selectedSessionId] || activeSession?.branch || ""}
               error={error}
               permission={permission}
               onSend={sendMessage}

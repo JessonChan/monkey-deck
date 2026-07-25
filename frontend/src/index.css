@@ -1122,6 +1122,20 @@ input, textarea { font-family: inherit; }
 }
 @keyframes compose-history-badge-in { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
 
+/* ─── Composer 当前分支指示(只读 chip)─── */
+/* compose-tools 里的只读分支指示;空(非 git / 未取到)不渲染,故不占位。
+   视觉与 history-chip 同族(mono + elev-2 底 + sep 边),但不可点 → 默认色、默认光标。 */
+.compose-branch {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
+  background: var(--elev-2); border: 1px solid var(--sep);
+  padding: 2px 7px; border-radius: 5px; height: 20px; margin-left: 4px;
+  max-width: 180px;
+}
+.compose-branch-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* ─── Composer 长文本折叠(TUI 风格紧凑块)─── */
 .composer-meta-row {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;

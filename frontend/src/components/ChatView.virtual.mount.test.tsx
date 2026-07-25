@@ -206,6 +206,7 @@ function baseProps(items: ChatItem[]) {
     history: [],
     sessionId: "s1",
     configOptions: [],
+    branch: "",
     livePlan: null,
     onSetConfig: () => {},
     hasMore: false,

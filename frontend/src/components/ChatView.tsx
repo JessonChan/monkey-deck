@@ -25,6 +25,7 @@ interface Props {
   status: StatusPayload["status"] | "empty";
   statusDetail: string;
   usage: Usage;
+  branch: string;  // 透传给 Composer(空则不显示)
   error: string | null;
   permission: PermissionPrompt | null;
   mergeResult: string | null;
@@ -620,6 +621,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           onImagesChange={props.onImagesChange}
           imageSupported={props.imageSupported}
           usage={props.usage}
+          branch={props.branch}
           disabled={!props.session}
           prompting={props.status === "prompting"}
           configOptions={props.configOptions}

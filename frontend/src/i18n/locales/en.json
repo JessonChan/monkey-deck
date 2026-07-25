@@ -198,6 +198,7 @@
     "historyHintTip": "Use arrow keys to browse past messages of this session; edit or press Enter to resend",
     "historyBadge": "History {{idx}}/{{total}}",
     "historyBadgeTip": "↑ older · ↓ newer · past latest restores draft",
+    "branchTip": "Current git branch of this chat's working directory",
     "lineCharCount": "{{lines}} lines · {{chars}} chars",
     "linesFolded": "{{count}} lines folded",
     "longLineTruncated": "{{count}} chars · long line truncated",

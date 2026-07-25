@@ -198,6 +198,7 @@
     "historyHintTip": "上下方向键翻阅本会话发过的消息;选中后可编辑或直接 Enter 重发",
     "historyBadge": "历史 {{idx}}/{{total}}",
     "historyBadgeTip": "↑ 向旧 · ↓ 向新 · 翻过最新恢复草稿",
+    "branchTip": "本对话工作目录当前所在的 git 分支",
     "lineCharCount": "{{lines}} 行 · {{chars}} 字符",
     "linesFolded": "{{count}} 行已折叠",
     "longLineTruncated": "{{count}} 字符 · 长行已截断",

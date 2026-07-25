@@ -133,6 +133,7 @@ const STUB_PROPS = {
   onImagesChange: () => {},
   imageSupported: false,
   usage: { used: 0, size: 0, cost: 0 } as any,
+  branch: "",
   onSend: () => {},
   onEnqueue: () => {},
   onStop: () => {},
