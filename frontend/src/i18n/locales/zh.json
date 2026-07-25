@@ -265,7 +265,8 @@
     "scheduledSend": "⏰ {{time}}",
     "scheduledSendTip": "定时发送 —— 到点后才发送",
     "scheduleExpired": "所选时刻已过期,请选一个未来时间",
-    "reorderTip": "拖拽以调整发送顺序"
+    "reorderTip": "拖拽以调整发送顺序",
+    "hasScheduled": "队列中存在定时发送的消息"
   },
   "terminal": {
     "closeTabTip": "关闭终端",

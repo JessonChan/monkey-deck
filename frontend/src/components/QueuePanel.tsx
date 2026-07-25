@@ -82,6 +82,16 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
       <div className="queue-header">
         <span className="queue-title">{t("queue.title", { count: queue.length })}</span>
         <span className="queue-hint">{t("queue.hint")}</span>
+        {queue.some((q) => q.scheduledAt > Date.now()) && (
+          <span
+            className="queue-header-clock"
+            data-testid="queue-header-clock"
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("queue.hasScheduled")}
+          >
+            <Clock size={12} />
+          </span>
+        )}
       </div>
       {queue.map((item, idx) => {
         const pending = item.scheduledAt > Date.now();

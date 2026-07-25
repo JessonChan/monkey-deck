@@ -1189,6 +1189,11 @@ input, textarea { font-family: inherit; }
 }
 .queue-title { color: var(--amber); font-weight: 600; }
 .queue-hint { color: var(--text-3); }
+/* 右侧定时指示:队列中存在未到点的定时项时显示 Clock 图标 */
+.queue-header-clock {
+  margin-left: auto; color: var(--amber);
+  display: inline-flex; align-items: center;
+}
 .queue-item {
   display: flex; align-items: center; gap: 9px;
   background: var(--elev); border: 1px solid var(--sep-strong);
