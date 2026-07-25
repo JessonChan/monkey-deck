@@ -117,8 +117,9 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   // 虚拟化高度模型(唯一高度事实源,见 lib/virtualList.ts):实测 Map + 类型先验。
   // 按 session 切走 prune 防无界增长;切回重载后实测清空、由 RO 重测收敛。
   const modelRef = useRef(new HeightModel());
-  // 布局缓存:每次 render 由 (rows, model, tailH) 重算并写入;onScroll 的 rAF 回调读它判贴底/锚点,
-  // 不读 el.scrollHeight(虚拟化下 scrollHeight 恒 = 显式 total,读它无信息且触发强制布局)。
+  // 布局缓存:每次 render 由 (rows, model, tailH, headH) 重算并写入;rAF/RO 回调读它算锚点/窗口。
+  // 贴底判定例外:读 el.scrollHeight(DOM 真相)——收敛期 layoutRef.total 超前于已提交的 DOM 高度,
+  // 用它判贴底会把 RO re-pin 的 clamp 误判为「离底」,致 stick 误翻 false、停在偏上位置。
   const layoutRef = useRef<Layout>({ tops: [], heights: [], tailTop: 0, total: 0 });
   // 尾部区(加载更多/权限卡/实时 plan/打字指示)实测高度;未实测前用 TAIL_PRIOR。
   const tailHRef = useRef(TAIL_PRIOR);
@@ -130,6 +131,12 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   const loadMoreRef = useRef<HTMLButtonElement>(null);
   // onScroll 的 rAF 句柄:一帧内多个 scroll 事件合并处理一次,杜绝布局抖动。
   const scrollRafRef = useRef(0);
+  // 程序性滚动标记:仅 applyInitialPosition / scrollToBottom 用。
+  // 这两处用先验 total 算 scrollTop(偏小),触发 scroll 事件;其 rAF 可能在 RO 收敛后才执行,
+  // 读到「大 scrollHeight + 小 scrollTop」→ gap > 阈值 → stick 误翻 false → 后续贴底补底全被跳过。
+  // 标记后 rAF 跳过 stick 判定(仅重算窗口);RO/main effect 的写入不加标记——它们在 DOM 已提交后执行,
+  // rAF 此时读到的 scrollHeight 与 scrollTop 一致,stick 判定正确。
+  const programmaticScrollRef = useRef(false);
   // Floating scroll-to-bottom button visibility: true = show FAB (user is reading history).
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   // 头部「复制项目路径」按钮的 copied 反馈(1.5s 回落,与其它 copy 按钮一致)。
@@ -210,7 +217,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rows, modelVersion]
   );
-  // render 期写镜像:rAF/RO 回调读最新值(不读 el.scrollHeight,虚拟化下它恒 = 显式 total)。
+  // render 期写镜像:rAF/RO 回调读最新值算锚点/窗口(贴底判定例外,读 el.scrollHeight,见 layoutRef 注释)。
   layoutRef.current = layout;
   rowsRef.current = rows;
 
@@ -245,6 +252,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       anchorRef.current = null; // 明确要到底 → 清除锚点
       stickToBottomRef.current = true;
       const bottom = Math.max(0, layoutRef.current.total - el.clientHeight);
+      programmaticScrollRef.current = true;
       el.scrollTop = bottom;
       setShowScrollBtn(false);
       // 立即按底部 scrollTop 重算窗口(不等 scroll 事件回环)。
@@ -260,7 +268,14 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       const el = scrollRef.current;
       if (!el) return;
       const lay = layoutRef.current;
-      const nearBottom = isAtBottom(lay.total, el.scrollTop, el.clientHeight);
+      // 程序性滚动(仅 applyInitialPosition / scrollToBottom):跳过 stick 判定,仅重算窗口。
+      // 否则收敛期 rAF 读到「新 scrollHeight + 旧 scrollTop」会误翻 stick=false(根因,见声明注释)。
+      if (programmaticScrollRef.current) {
+        programmaticScrollRef.current = false;
+        setWinIfChanged(computeWinFor(lay, el.scrollTop));
+        return;
+      }
+      const nearBottom = isAtBottom(el.scrollHeight, el.scrollTop, el.clientHeight);
       stickToBottomRef.current = nearBottom;
       // 仅在状态真正翻转时 setState(避免每帧无谓的 setter 调用)。
       setShowScrollBtn((prev) => (prev === !nearBottom ? prev : !nearBottom));
@@ -293,12 +308,14 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       stickToBottomRef.current = false;
       anchorRef.current = { iid: saved.iid, off: saved.off };
       setShowScrollBtn(true);
+      programmaticScrollRef.current = true;
       el.scrollTop = restored;
       setWinIfChanged(computeWinFor(lay, restored));
     } else {
       stickToBottomRef.current = true;
       anchorRef.current = null;
       setShowScrollBtn(false);
+      programmaticScrollRef.current = true;
       const bottom = Math.max(0, lay.total - el.clientHeight);
       el.scrollTop = bottom;
       setWinIfChanged(computeWinFor(lay, bottom));
@@ -313,14 +330,23 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     if (prevSessionIdRef.current !== sessionId) {
       prevSessionIdRef.current = sessionId;
       // 实测高度剪枝到当前行集(防 Map 无界增长)。
-      modelRef.current.prune(new Set(rows.map((r) => r.id)));
+      modelRef.current.prune(rows);
+      // 头/尾区高度重置为先验:.chat-body 按 key 重挂载,新 session 的头/尾区是全新 DOM
+      // (内容随 session 变:权限卡/plan/打字指示有无可差上百 px),旧实测高不适用。
+      headHRef.current = HEAD_PRIOR;
+      tailHRef.current = TAIL_PRIOR;
       if (items.length > 0) {
         pendingScrollRef.current = null;
         applyInitialPosition(el, sessionId);
       } else {
-        // items 还没到(切走丢弃重载中 / 首次加载中):推迟定位,等 items 到来再补做,否则错位。
+        // items 还没到(切走丢弃重载中 / 首次加载中 / 全新空会话):推迟定位,等 items 到来再补做。
+        // 旧 session 的滚动态不带过切换:锚点清空、stick 复位为贴底、FAB 隐藏。
+        // 否则从「已上翻」的 A(stick=false、FAB 可见)切到空 D 时,FAB 与 stick=false 残留,
+        // 待 items 到达前视图停在错位且浮着小圆球(用户实测:新会话也「不在底部」)。
         pendingScrollRef.current = sessionId;
-        anchorRef.current = null; // 旧 session 的锚点不带过切换
+        anchorRef.current = null;
+        stickToBottomRef.current = true;
+        setShowScrollBtn(false);
       }
       prevFirstIdRef.current = items.length > 0 ? items[0].id : "";
       return; // 切换瞬间一次性定位,不走下面的逻辑。
@@ -352,7 +378,17 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       el.scrollTop = bottom;
       setWinIfChanged(computeWinFor(layout, bottom));
     } else {
-      setWinIfChanged(computeWinFor(layout, el.scrollTop));
+      // A 不变量:锚点存在时,用 restoreScroll 重定位到锚点行(已提交高度下的正确 scrollTop)。
+      // RO 回调的 el.scrollTop += delta 可能被 clamp(DOM 高度尚未提交),
+      // 主 effect 在 React 提交新高度后运行,此时 restoreScroll 算出的是 clamp-proof 的正确值。
+      const anchor = anchorRef.current;
+      const restored = anchor ? restoreScroll(layout, rows, anchor.iid, anchor.off) : null;
+      if (restored !== null) {
+        el.scrollTop = restored;
+        setWinIfChanged(computeWinFor(layout, restored));
+      } else {
+        setWinIfChanged(computeWinFor(layout, el.scrollTop));
+      }
     }
     prevFirstIdRef.current = firstId;
   }, [items, props.session?.id, props.permission, rows, layout, computeWinFor, setWinIfChanged]);
@@ -384,7 +420,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         } else if (iid) {
           const idx = idxById.get(iid) ?? -1;
           const prevH = idx >= 0 ? model.h(rs[idx]) : 0;
-          if (model.set(iid, h)) {
+          if (idx >= 0 && model.set(rs[idx], h)) {
             modelChanged = true;
             if (!stickToBottomRef.current && anchorIdx >= 0 && idx >= 0 && idx < anchorIdx) {
               delta += h - prevH;
@@ -394,7 +430,6 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       }
       if (!modelChanged && !viewportChanged && delta === 0) return;
       const newLay = computeLayout(rs, model, tailHRef.current, headHRef.current);
-      layoutRef.current = newLay;
       if (delta !== 0) el.scrollTop += delta; // A 不变量:锚点上方行变高 → 下推保持视觉位置
       if (stickToBottomRef.current) el.scrollTop = Math.max(0, newLay.total - el.clientHeight); // S 不变量
       setWinIfChanged(computeWinFor(newLay, el.scrollTop));

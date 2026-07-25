@@ -42,7 +42,7 @@ tasks:
       - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
 
   references:
-    summary: 拉取/同步外部只读参考库到 references/(gitignored;清单与用法见 scripts/references.sh)
+    summary: 拉取/同步外部只读参考库到机器级共享目录 /tmp/monkey-deck-reference(env MONKEY_DECK_REFERENCE_DIR 可覆盖;清单与用法见 scripts/references.sh)
     cmds:
       - bash scripts/references.sh {{.CLI_ARGS}}
 

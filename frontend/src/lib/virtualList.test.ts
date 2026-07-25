@@ -77,34 +77,62 @@ describe("HeightModel", () => {
   test("实测覆盖先验,且持久(再查仍是实测值)", () => {
     const m = new HeightModel();
     const row: VRow = { id: "x", kind: "agent", first: 0, last: 1 };
-    expect(m.set("x", 333)).toBe(true);
+    expect(m.set(row, 333)).toBe(true);
     expect(m.h(row)).toBe(333);
     expect(m.h(row)).toBe(333);
   });
 
   test("set 同值不报变化(防无谓 bump);变值报 true", () => {
     const m = new HeightModel();
-    expect(m.set("x", 100)).toBe(true);
-    expect(m.set("x", 100)).toBe(false);
-    expect(m.set("x", 100.4)).toBe(false); // 取整后同值
-    expect(m.set("x", 101)).toBe(true);
+    const row: VRow = { id: "x", kind: "agent", first: 0, last: 1 };
+    expect(m.set(row, 100)).toBe(true);
+    expect(m.set(row, 100)).toBe(false);
+    expect(m.set(row, 100.4)).toBe(false); // 取整后同值
+    expect(m.set(row, 101)).toBe(true);
   });
 
   test("忽略 0/负高度(挂载瞬间的无效读数)", () => {
     const m = new HeightModel();
-    expect(m.set("x", 0)).toBe(false);
-    expect(m.set("x", -5)).toBe(false);
-    expect(m.h({ id: "x", kind: "agent", first: 0, last: 1 })).toBe(PRIOR_HEIGHT.agent);
+    const row: VRow = { id: "x", kind: "agent", first: 0, last: 1 };
+    expect(m.set(row, 0)).toBe(false);
+    expect(m.set(row, -5)).toBe(false);
+    expect(m.h(row)).toBe(PRIOR_HEIGHT.agent);
   });
 
   test("prune 只丢不在存活集里的实测值", () => {
     const m = new HeightModel();
-    m.set("a", 10);
-    m.set("b", 20);
-    m.set("c", 30);
-    m.prune(new Set(["b"]));
-    expect(m.h({ id: "a", kind: "agent", first: 0, last: 1 })).toBe(PRIOR_HEIGHT.agent); // 已丢
-    expect(m.h({ id: "b", kind: "agent", first: 0, last: 1 })).toBe(20); // 保留
+    const ra: VRow = { id: "a", kind: "agent", first: 0, last: 1 };
+    const rb: VRow = { id: "b", kind: "agent", first: 1, last: 2 };
+    const rc: VRow = { id: "c", kind: "agent", first: 2, last: 3 };
+    m.set(ra, 10);
+    m.set(rb, 20);
+    m.set(rc, 30);
+    m.prune([rb]);
+    expect(m.h(ra)).toBe(PRIOR_HEIGHT.agent); // 已丢(且 prune 后样本 <3 → 退回固定先验)
+    expect(m.h(rb)).toBe(20); // 保留
+  });
+
+  test("动态类型先验:同类型实测 ≥3 样本 → 未测量行用均值而非固定先验", () => {
+    // 核心场景:虚拟化下窗口外行不在 DOM,无法实测。固定先验(P50 定标)对单个 session
+    // 可能严重偏小(如 agent 先验 90,真实 250)→ total 偏小 → scrollTop 到不了真底部。
+    // 动态先验:窗口内已测量的同类型行提供样本,均值远比固定 P50 准。
+    const m = new HeightModel();
+    // 测 4 个 agent 行(真实高度远超先验 90)
+    for (const id of ["a1", "a2", "a3", "a4"]) {
+      m.set({ id, kind: "agent", first: 0, last: 1 }, 240 + Number(id[1]) * 5);
+    }
+    // 未测量的 agent 行:均值 = (245+250+255+260)/4 = 252.5 → 253(四舍五入)
+    expect(m.h({ id: "a5", kind: "agent", first: 0, last: 1 })).toBe(253);
+    // user 行:无样本 → 固定先验
+    expect(m.h({ id: "u1", kind: "user", first: 0, last: 1 })).toBe(PRIOR_HEIGHT.user);
+  });
+
+  test("动态类型先验:样本不足 3 → 退回固定先验(防 1-2 个样本噪声)", () => {
+    const m = new HeightModel();
+    m.set({ id: "a1", kind: "agent", first: 0, last: 1 }, 300);
+    m.set({ id: "a2", kind: "agent", first: 0, last: 1 }, 310);
+    // 只 2 个样本 < 3 → 固定先验(不用均值 305)
+    expect(m.h({ id: "a3", kind: "agent", first: 0, last: 1 })).toBe(PRIOR_HEIGHT.agent);
   });
 });
 
@@ -137,11 +165,11 @@ describe("computeLayout", () => {
 
   test("实测高度参与布局(不等高)", () => {
     const m = new HeightModel(() => 50);
-    m.set("b", 500);
     const rows: VRow[] = [
       { id: "a", kind: "agent", first: 0, last: 1 },
       { id: "b", kind: "agent", first: 1, last: 2 },
     ];
+    m.set(rows[1], 500);
     const layout = computeLayout(rows, m, 0);
     expect(layout.tops).toEqual([0, 50]);
     expect(layout.total).toBe(550);
@@ -180,7 +208,7 @@ describe("computeWindow(W 不变量)", () => {
     const n = 200;
     const rows: VRow[] = Array.from({ length: n }, (_, i) => ({ id: `r${i}`, kind: "agent", first: i, last: i + 1 }));
     const m = new HeightModel(() => 40);
-    for (let i = 0; i < n; i++) m.set(`r${i}`, 20 + Math.floor(rand() * 300));
+    for (let i = 0; i < n; i++) m.set(rows[i], 20 + Math.floor(rand() * 300));
     const layout = computeLayout(rows, m, 0);
     const viewport = 600;
     const overscan = 150;
@@ -250,7 +278,7 @@ describe("anchorAt / restoreScroll(A 不变量)", () => {
     let layout = computeLayout(rows, m, 0);
     const a = anchorAt(layout, 250)!; // 锚在 r2,off=50
     // r0 长高 60:重算布局后,同一 (iid, off) 恢复到 310 = 250 + 60
-    m.set("r0", 160);
+    m.set(rows[0], 160);
     layout = computeLayout(rows, m, 0);
     expect(restoreScroll(layout, rows, rows[a.index].id, a.off)).toBe(310);
   });

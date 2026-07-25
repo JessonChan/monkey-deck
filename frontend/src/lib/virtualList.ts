@@ -68,11 +68,23 @@ export function buildRows(items: ChatItem[]): VRow[] {
 }
 
 /**
- * 高度模型:实测 Map + 类型先验。所有消费方(窗口/贴底/锚点/补偿)的唯一高度事实源。
+ * 高度模型:实测 Map + 动态类型先验。所有消费方(窗口/贴底/锚点/补偿)的唯一高度事实源。
+ *
+ * 动态类型先验(核心):虚拟化下窗口外的行永远不在 DOM,无法实测,只能用先验估算。
+ * 固定先验(PRIOR_HEIGHT)取全库 P50 定标,但单个 session 的消息高度分布可能远偏 P50
+ * (如长 agent 回复真实 250px,先验 90px)→ total 严重偏小 → scrollTop 到不了真底部。
+ * 解法:set 时按类型累积样本(均值),h() 未测量行优先用同类型已测量均值,样本不足才用固定先验。
+ * 窗口内的实测行越多,类型先验越准,total 越接近真实(R O 收敛后偏差从 ~50% 降到 <5%)。
+ *
  * 不变量:实测值一旦写入永远覆盖先验;set 返回是否变化,调用方据此决定是否 bump version。
  */
+/** 动态先验生效的最小样本数;不足时退回固定先验(避免 1-2 个样本的噪声)。 */
+const MIN_TYPE_SAMPLES = 3;
+
 export class HeightModel {
   private readonly measured = new Map<string, number>();
+  // 类型样本:按 row.kind 累积 (sum, count),用于推断同类型未测量行的高度。
+  private readonly typeStats = new Map<string, { sum: number; count: number }>();
   private readonly prior: (row: VRow) => number;
 
   constructor(prior: (row: VRow) => number = (r) => PRIOR_HEIGHT[r.kind] ?? PRIOR_HEIGHT.agent) {
@@ -80,23 +92,45 @@ export class HeightModel {
   }
 
   h(row: VRow): number {
-    return this.measured.get(row.id) ?? this.prior(row);
+    const m = this.measured.get(row.id);
+    if (m !== undefined) return m;
+    // 动态类型先验:同类型已测量行的均值(比固定 P50 准得多);样本不足退回固定先验。
+    const stats = this.typeStats.get(row.kind);
+    if (stats && stats.count >= MIN_TYPE_SAMPLES) return Math.round(stats.sum / stats.count);
+    return this.prior(row);
   }
 
   /** 写入实测高度;返回 true = 值变化(调用方 bump version 重算)。重复同值不触发。 */
-  set(id: string, height: number): boolean {
+  set(row: VRow, height: number): boolean {
     const rounded = Math.round(height);
     if (rounded <= 0) return false; // 挂载瞬间的 0 高读数无意义,忽略
-    const prev = this.measured.get(id);
+    const prev = this.measured.get(row.id);
     if (prev === rounded) return false;
-    this.measured.set(id, rounded);
+    this.measured.set(row.id, rounded);
+    // 增量更新类型统计:新行 +1 count、+height sum;已有行高度变化只调 sum。
+    let stats = this.typeStats.get(row.kind);
+    if (!stats) { stats = { sum: 0, count: 0 }; this.typeStats.set(row.kind, stats); }
+    stats.sum += rounded - (prev ?? 0);
+    stats.count += prev === undefined ? 1 : 0;
     return true;
   }
 
-  /** 丢弃不在当前行集里的实测值(切 session / 条目消失),防止 Map 无界增长。 */
-  prune(liveIds: Set<string>): void {
-    for (const id of this.measured.keys()) {
+  /** 丢弃不在当前行集里的实测值(切 session / 条目消失),防止 Map 无界增长;同步重建类型统计。 */
+  prune(liveRows: VRow[]): void {
+    const liveIds = new Set(liveRows.map((r) => r.id));
+    for (const id of [...this.measured.keys()]) {
       if (!liveIds.has(id)) this.measured.delete(id);
+    }
+    // 重建类型统计(prune 后 measured 变化,统计必须同步)
+    this.typeStats.clear();
+    for (const row of liveRows) {
+      const h = this.measured.get(row.id);
+      if (h !== undefined) {
+        let stats = this.typeStats.get(row.kind);
+        if (!stats) { stats = { sum: 0, count: 0 }; this.typeStats.set(row.kind, stats); }
+        stats.sum += h;
+        stats.count++;
+      }
     }
   }
 }

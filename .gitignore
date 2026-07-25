@@ -1,4 +1,4 @@
-# 外部只读参考(软链 / 外部仓库,永不入库 —— 见 AGENTS.md §0.2)
+# 外部只读参考(已迁至仓库外共享目录 /tmp/monkey-deck-reference,见 AGENTS.md §0.2;本条保留作防御性安全网,拦下误建的 references/)
 references/
 
 # Go 构建产物(`go build .` 在仓库根产出 bare 可执行文件 monkey-deck,不入库)
