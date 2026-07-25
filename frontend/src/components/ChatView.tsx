@@ -132,6 +132,8 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   const scrollRafRef = useRef(0);
   // Floating scroll-to-bottom button visibility: true = show FAB (user is reading history).
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  // 头部「复制项目路径」按钮的 copied 反馈(1.5s 回落,与其它 copy 按钮一致)。
+  const [copiedPath, setCopiedPath] = useState(false);
   // 文件预览覆盖层(Task #15084):对话/工具卡片里的路径点击 → 弹此覆盖层。
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
   // plan 展开/折叠偏好:按 session 持久化(localStorage)(Task #21298)。
@@ -158,6 +160,12 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     setPreviewTarget({ path, line });
   }, []);
   const closeFilePreview = useCallback(() => setPreviewTarget(null), []);
+  // 头部「复制项目路径」:写 project.path 到剪贴板;无 project 时不执行(disabled 兜底)。
+  const copyPath = useCallback(async () => {
+    const p = props.project?.path;
+    if (!p) return;
+    try { await navigator.clipboard.writeText(p); setCopiedPath(true); setTimeout(() => setCopiedPath(false), 1500); } catch { /* noop */ }
+  }, [props.project?.path]);
   // ─── 虚拟化:状态 / 派生数据 / 助手 ───
   // 窗口 [start, end):只有这些行进入 DOM。区间变化才 setState(W 不变量)。
   const [win, setWin] = useState({ start: 0, end: 0 });
@@ -439,6 +447,16 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         </div>
         <div className="chat-header-actions">
           {s.key && <span className={`status-badge ${s.cls}`}>{t(s.key)}</span>}
+          <button
+            className="icon-btn small"
+            onClick={copyPath}
+            disabled={!props.project}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={copiedPath ? t("chat.pathCopiedTip") : t("chat.copyPathTip")}
+            data-testid="copy-path-btn"
+          >
+            {copiedPath ? <Check size={15} /> : <Copy size={15} />}
+          </button>
           <button className="icon-btn small" onClick={props.onToggleTerminal} data-tooltip-id="md-tip" data-tooltip-content={t("chat.toggleTerminalTip")} aria-label={t("chat.toggleTerminal")}>
             <SquareTerminal size={15} />
           </button>
