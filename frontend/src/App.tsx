@@ -33,6 +33,23 @@ const EMPTY_USAGE: Usage = { used: 0, size: 0, cost: 0, cachedReadTokens: 0, cac
 // 分页:首次打开只加载最近 PAGE_SIZE 条,滚到顶部点「加载更多」继续往前翻(游标 = 最旧 seq)。
 const PAGE_SIZE = 30;
 
+// buildAttachments 把三类用户输入归一成后端 SendMessage/InterruptAndSend 接受的 Attachment[]
+// (与 internal/acp.Attachment 对齐)。显式带 Kind —— internal/acp/runner.go 的 attachmentBlock
+// switch 据此选 ContentBlock 类型:
+//   - mentions(@提及)/ 回形针文件 → "file" → ContentBlock::ResourceLink(协议 baseline,所有 agent MUST support)
+//   - images                       → "image" → ContentBlock::Image(内联 base64,需 image 能力)
+//   - audios                       → "audio" → ContentBlock::Audio(内联 base64,需 audio 能力)
+// mentions 与回形针文件在 Composer.submit 已合并为同一个 mentions 数组(两者都 → ResourceLink,
+// 协议无差别),此处统一带 kind:"file"。三处发送路径(sendMessage / drainSession / interruptQueue)
+// 共用本 helper,避免 Kind 漂移(§5.3:重复 3 次再抽象)。
+function buildAttachments(mentions?: Mention[], imgs?: ImageAttachment[], aus?: AudioAttachment[]) {
+  return [
+    ...(mentions || []).map((m) => ({ kind: "file", path: m.path, name: m.name })),
+    ...(imgs || []).map((im) => ({ kind: "image", name: im.name, data: im.data, mimeType: im.mimeType })),
+    ...(aus || []).map((au) => ({ kind: "audio", name: au.name, data: au.data, mimeType: au.mimeType })),
+  ];
+}
+
 export default function App() {
   const { t } = useTranslation();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -307,11 +324,7 @@ export default function App() {
     if (isViewing) setError(null);
     setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
     try {
-      await ChatService.SendMessage(sid, next.text, [
-        ...(next.mentions || []).map((m) => ({ path: m.path, name: m.name })),
-        ...(next.images || []).map((im) => ({ kind: "image", name: im.name, data: im.data, mimeType: im.mimeType })),
-        ...(next.audios || []).map((au) => ({ kind: "audio", name: au.name, data: au.data, mimeType: au.mimeType })),
-      ]);
+      await ChatService.SendMessage(sid, next.text, buildAttachments(next.mentions, next.images, next.audios));
     } catch (e) {
       if (isViewing) setError(String(e));
       setStatusBySession((prev) => ({ ...prev, [sid]: "idle" }));
@@ -698,10 +711,10 @@ export default function App() {
   }, [newSession, selectedProjectId, refreshSessions, openSession, selectProject]);
 
   // 发送消息:idle 直发;prompting(一轮进行中)入前端队列,回合结束自动续发(§5.4 协议无 queue)。
-  // mentions(@提及)经 ACP ContentBlock::ResourceLink 发给 agent;images(内联图片)经
+  // mentions(@提及 + 回形针文件)经 ACP ContentBlock::ResourceLink 发给 agent;images(内联图片)经
   // ContentBlock::Image 发(需 agent 声明 image 能力);audios(内联音频)经 ContentBlock::Audio 发
-  // (需 agent 声明 audio 能力)。入队时随 QueueItem 携带。只要按过发送键就记进输入框历史(上下键翻历史),
-  // 无论后端是否成功/排队。
+  // (需 agent 声明 audio 能力)。attachments 由 buildAttachments 构造,显式带 Kind。入队时随 QueueItem
+  // 携带。只要按过发送键就记进输入框历史(上下键翻历史),无论后端是否成功/排队。
   const sendMessage = useCallback(
     async (text: string, mentions: Mention[], imgs?: ImageAttachment[], aus?: AudioAttachment[]) => {
       if (!selectedSessionId || !text.trim()) return;
@@ -713,13 +726,6 @@ export default function App() {
         if (cur[cur.length - 1] === text) return prev; // 与最后一条相同则不重复
         return { ...prev, [selectedSessionId]: [...cur, text] };
       });
-      // 后端 attachments:@提及 + 回形针文件 → ResourceLink;内联图片 → Image 块;内联音频 → Audio 块。
-      // 显式带 Kind 与后端 Attachment.Kind 对齐(internal/acp/runner.go attachmentBlock switch)。
-      const attachments = [
-        ...mentions.map((m) => ({ path: m.path, name: m.name })),
-        ...(imgs || []).map((im) => ({ kind: "image", name: im.name, data: im.data, mimeType: im.mimeType })),
-        ...(aus || []).map((au) => ({ kind: "audio", name: au.name, data: au.data, mimeType: au.mimeType })),
-      ];
       // 回合进行中(statusRef 防 stale closure):入队而非直发,避免后端 busy 报错。
       // statusRef.current 始终反映最新 status,闭包锁的 status 可能在 re-render 前仍为旧值。
       if (statusRef.current === "prompting") {
@@ -731,11 +737,11 @@ export default function App() {
         setQueueBySession(queueBySessionRef.current);
         return;
       }
-      // idle 直发
+      // idle 直发(attachments 经 buildAttachments 构造,显式带 Kind,见模块顶部)。
       setError(null);
       setStatusBySession((prev) => ({ ...prev, [selectedSessionId]: "prompting" }));
       try {
-        await ChatService.SendMessage(selectedSessionId, text, attachments);
+        await ChatService.SendMessage(selectedSessionId, text, buildAttachments(mentions, imgs, aus));
       } catch (e) {
         setError(String(e));
         setStatusBySession((prev) => ({ ...prev, [selectedSessionId]: "idle" }));
@@ -777,11 +783,7 @@ export default function App() {
     userStoppedBySessionRef.current.delete(sid);
     setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
     try {
-      await ChatService.InterruptAndSend(sid, item.text, [
-        ...(item.mentions || []).map((m) => ({ path: m.path, name: m.name })),
-        ...(item.images || []).map((im) => ({ kind: "image", name: im.name, data: im.data, mimeType: im.mimeType })),
-        ...(item.audios || []).map((au) => ({ kind: "audio", name: au.name, data: au.data, mimeType: au.mimeType })),
-      ]);
+      await ChatService.InterruptAndSend(sid, item.text, buildAttachments(item.mentions, item.images, item.audios));
     } catch (e) {
       setError(String(e));
     }
