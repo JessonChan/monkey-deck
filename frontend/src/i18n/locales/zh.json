@@ -34,8 +34,6 @@
   "sidebar": {
     "collapse": "收起侧栏",
     "addProject": "添加项目目录",
-    "browseDirectory": "浏览目录",
-    "pastePathPlaceholder": "粘贴项目目录路径…",
     "noProjects": "还没有项目。点右上角 + 添加一个代码目录。",
     "searchOn": "关闭搜索",
     "searchOff": "搜索会话",

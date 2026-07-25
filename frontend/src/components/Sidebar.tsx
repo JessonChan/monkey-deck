@@ -26,7 +26,6 @@ interface Props {
   onSelectSession: (sessionId: string, projectId: string) => void;
   onCreateSession: (projectId: string) => void;
   onAddProject: () => void;
-  onAddProjectByPath?: (path: string) => void;
   onRemoveProject: (id: string) => void;
   onRemoveSession: (sessionId: string) => void;
   onTogglePin: (sessionId: string, pinned: boolean) => void;
@@ -90,8 +89,6 @@ const SESSION_PAGE = 25;
 export default function Sidebar(props: Props) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [adding, setAdding] = useState(false);
-  const [pathInput, setPathInput] = useState("");
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [confirm, setConfirm] = useState<ConfirmTarget | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -158,17 +155,6 @@ export default function Sidebar(props: Props) {
       await props.onSelectProject(p.id);
       setExpanded((prev) => new Set(prev).add(p.id));
     }
-  };
-
-  const startAdd = () => {
-    setAdding(true);
-    setPathInput("");
-  };
-  const submitPath = () => {
-    const p = pathInput.trim();
-    setAdding(false);
-    setPathInput("");
-    if (p) props.onAddProjectByPath?.(p);
   };
 
   const onTitleDoubleClick = (e: React.MouseEvent) => {
@@ -281,44 +267,16 @@ export default function Sidebar(props: Props) {
             <Settings size={16} />
             {props.harnessUpdateAvailable && <span className="update-dot" />}
           </button>
-          <button className="icon-btn" data-testid="add-project" onClick={startAdd} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.addProject")} data-tooltip-place="bottom">
+          <button className="icon-btn" data-testid="add-project" onClick={props.onAddProject} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.addProject")} data-tooltip-place="bottom">
             <Plus size={17} />
           </button>
         </span>
       </div>
 
-      {adding && (
-        <div className="add-path-row">
-          <input
-            className="add-path-input"
-            data-testid="add-path-input"
-            autoFocus
-            placeholder={t("sidebar.pastePathPlaceholder")}
-            value={pathInput}
-            onChange={(e) => setPathInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submitPath();
-              if (e.key === "Escape") setAdding(false);
-            }}
-            onBlur={() => setTimeout(() => setAdding(false), 200)}
-          />
-          <button
-            className="icon-btn small"
-            data-testid="browse-project-path"
-            data-tooltip-id="md-tip"
-            data-tooltip-content={t("sidebar.browseDirectory")}
-            data-tooltip-place="bottom"
-            onClick={() => { setAdding(false); props.onAddProject(); }}
-          >
-            <FolderOpen size={13} />
-          </button>
-        </div>
-      )}
-
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={handleDragCancel}>
       <SortableContext items={props.projects.map((p) => p.id)} strategy={verticalListSortingStrategy}>
       <div className="project-list">
-        {props.projects.length === 0 && !adding && (
+        {props.projects.length === 0 && (
           <div className="sidebar-empty">{t("sidebar.noProjects")}</div>
         )}
         {props.projects.map((p) => {

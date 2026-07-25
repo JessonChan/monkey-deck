@@ -34,8 +34,6 @@
   "sidebar": {
     "collapse": "Collapse sidebar",
     "addProject": "Add project directory",
-    "browseDirectory": "Browse directory",
-    "pastePathPlaceholder": "Paste project directory path…",
     "noProjects": "No projects yet. Click + above to add a code directory.",
     "searchOn": "Close search",
     "searchOff": "Search sessions",
