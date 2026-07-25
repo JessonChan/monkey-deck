@@ -29,12 +29,14 @@ type mockChatConn struct {
 func (m *mockChatConn) Prompt(ctx context.Context, message string, attachments []acp.Attachment) (acp.StopReason, error) {
 	return "", nil
 }
-func (m *mockChatConn) Close()                                       { m.closed.Store(true) }
-func (m *mockChatConn) IsAlive() bool                                { return !m.closed.Load() }
-func (m *mockChatConn) RespondPermission(id, optionID string) bool   { return false }
-func (m *mockChatConn) SessionTitle(ctx context.Context) (string, error) { return "", nil }
-func (m *mockChatConn) FlatConfigOptions() []acp.ConfigOption         { return nil }
-func (m *mockChatConn) SupportsImage() bool                           { return false }
+func (m *mockChatConn) Close()                                                            { m.closed.Store(true) }
+func (m *mockChatConn) IsAlive() bool                                                     { return !m.closed.Load() }
+func (m *mockChatConn) RespondPermission(id, optionID string) bool                        { return false }
+func (m *mockChatConn) SessionTitle(ctx context.Context) (string, error)                  { return "", nil }
+func (m *mockChatConn) FlatConfigOptions() []acp.ConfigOption                             { return nil }
+func (m *mockChatConn) SupportsImage() bool                                               { return false }
+func (m *mockChatConn) SupportsAudio() bool                                               { return false }
+func (m *mockChatConn) SupportsEmbeddedContext() bool                                     { return false }
 func (m *mockChatConn) SetConfigOption(ctx context.Context, configId, value string) error { return nil }
 func (m *mockChatConn) RefreshConfig(ctx context.Context) ([]acp.ConfigOption, error) {
 	return nil, nil
@@ -102,7 +104,7 @@ func TestCloseIdleSkipsBusySession(t *testing.T) {
 
 // 未超时的 session 不被关。
 func TestCloseIdleSkipsRecentSession(t *testing.T) {
-	svc := newIdleTestService(t, 10*time.Minute) // 长 timeout
+	svc := newIdleTestService(t, 10*time.Minute)          // 长 timeout
 	addMockLive(svc, "s1", time.Now().UnixMilli(), false) // 刚活动
 
 	svc.closeIdle()

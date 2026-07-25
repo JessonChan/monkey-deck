@@ -31,19 +31,30 @@ const maxListPages = 100
 // (§2.1:internal/acp 是 ACP 唯一封装层,业务包不直接 import SDK)。
 type StopReason = acp.StopReason
 
-// Attachment 是随 prompt 发给 agent 的引用(@提及 / 回形针文件 / 内联图片)。
-// 默认经 ACP ContentBlock::ResourceLink 发送 —— baseline 能力,所有 agent 必须支持
-// (协议:agent MUST support ContentBlock::ResourceLink in prompts)。
-// Path 相对 session cwd 或绝对路径;Name 是显示名(空则取 Path 基名)。
+// Attachment 是随 prompt 发给 agent 的引用(@提及 / 回形针文件 / 内联图片 / 音频 / 内联资源)。
 //
-// Data 非空时改发 ContentBlock::Image(内联 base64 图片)—— 需 agent 声明 image prompt
-// 能力(Initialize 响应的 promptCapabilities.image)。Data 与 Path 互斥:Data 优先。
+// Kind 决定发出的 ContentBlock 类型(baseline 之外的能力需 agent 声明对应 prompt 能力,§3.5):
+//   - "" / "file" → ContentBlock::ResourceLink(file:// URI,协议 baseline,所有 agent MUST support)
+//   - "image"     → ContentBlock::Image(内联 base64,需 image 能力)
+//   - "audio"     → ContentBlock::Audio(内联 base64,需 audio 能力)
+//   - "resource"  → ContentBlock::Resource(内联文本/二进制,需 embeddedContext 能力)
+//
+// 兼容旧调用:Kind 空且 Data 非空时按 image 处理(buildPromptBlocks 兜底,历史粘贴图片路径)。
+// 能力门控由前端依 SupportsImage/SupportsAudio/SupportsEmbeddedContext 决定,buildPromptBlocks
+// 只管按 Kind 构造(与 image 既有行为一致:构造不门控,门控在调用方)。
 type Attachment struct {
-	Path string `json:"path,omitempty"`
+	Kind string `json:"kind,omitempty"`
 	Name string `json:"name"`
-	// Data:base64 编码的内联图片数据(设置时发 Image 块,需 image 能力)。
-	Data     string `json:"data,omitempty"`
+	// Path:文件/目录路径(相对 session cwd 或绝对)。用于 ResourceLink 与 Resource 的 URI 兜底。
+	Path string `json:"path,omitempty"`
+	// Data:base64 编码的内联二进制数据。image/audio 的载体;resource 的 Blob 变体也用此字段。
+	Data string `json:"data,omitempty"`
+	// MimeType:Data/Text 的 MIME 类型(建议填写;image 默认 image/png,audio 默认 audio/wav)。
 	MimeType string `json:"mimeType,omitempty"`
+	// Text:resource 的内联文本内容(TextResourceContents 变体)。设置时优先于 Data。
+	Text string `json:"text,omitempty"`
+	// URI:resource 的标识 URI(可选)。空则按 Path(file:// 形式)或 Name(urn: 形式)兜底。
+	URI string `json:"uri,omitempty"`
 }
 
 // Runner 驱动单个 harness(其 stdio ACP server)。model 不在 spawn 注入:
@@ -227,27 +238,83 @@ func (cs *ChatSession) Prompt(ctx context.Context, message string, attachments [
 }
 
 // buildPromptBlocks 构造 session/prompt 的 ContentBlock 序列:
-// 首块是文本(用户输入),其后每个 attachment 一个块:
-//   - Data 非空 → ContentBlock::Image(内联 base64 图片,需 image 能力,§3.5)
-//   - 否则 → ContentBlock::ResourceLink(file:// URI,协议 baseline,所有 agent MUST support)
+// 首块恒为 TextBlock(用户输入);其后每个 attachment 一个块,Kind 决定块类型:
+//   - "image"    → ContentBlock::Image(内联 base64,需 image 能力,§3.5)
+//   - "audio"    → ContentBlock::Audio(内联 base64,需 audio 能力)
+//   - "resource" → ContentBlock::Resource(内联文本/二进制,需 embeddedContext 能力)
+//   - 其它/""    → ContentBlock::ResourceLink(file:// URI,协议 baseline,所有 agent MUST support)
+//
+// 兼容旧调用:Kind 空且 Data 非空时按 image 处理(历史粘贴图片路径,Data!= "" 即图片)。
 func buildPromptBlocks(message string, attachments []Attachment, workDir string) []acp.ContentBlock {
 	blocks := []acp.ContentBlock{acp.TextBlock(message)}
 	for _, a := range attachments {
-		if a.Data != "" {
-			mt := a.MimeType
-			if mt == "" {
-				mt = "image/png" // 兜底 mime:前端未给则按 png(粘贴图片常见)
-			}
-			blocks = append(blocks, acp.ImageBlock(a.Data, mt))
-			continue
+		blocks = append(blocks, attachmentBlock(a, workDir))
+	}
+	return blocks
+}
+
+// attachmentBlock 按 Attachment.Kind 构造单个 ContentBlock。
+func attachmentBlock(a Attachment, workDir string) acp.ContentBlock {
+	kind := a.Kind
+	if kind == "" && a.Data != "" {
+		kind = "image" // 兼容旧路径:未声明 Kind 但有 Data → 图片
+	}
+	switch kind {
+	case "image":
+		mt := a.MimeType
+		if mt == "" {
+			mt = "image/png" // 兜底 mime:前端未给则按 png(粘贴图片常见)
 		}
+		return acp.ImageBlock(a.Data, mt)
+	case "audio":
+		mt := a.MimeType
+		if mt == "" {
+			mt = "audio/wav" // 兜底 mime:前端未给则按 wav(录音常见)
+		}
+		return acp.AudioBlock(a.Data, mt)
+	case "resource":
+		return acp.ResourceBlock(buildEmbeddedResource(a, workDir))
+	default: // "" / "file" / 未知 → baseline ResourceLink
 		name := a.Name
 		if name == "" {
 			name = filepath.Base(a.Path)
 		}
-		blocks = append(blocks, acp.ResourceLinkBlock(name, fileURI(workDir, a.Path)))
+		return acp.ResourceLinkBlock(name, fileURI(workDir, a.Path))
 	}
-	return blocks
+}
+
+// buildEmbeddedResource 构造 ContentBlock::Resource 的 EmbeddedResourceResource:
+//   - Text 非空 → TextResourceContents(内联文本,mimeType 可选)
+//   - 否则 → BlobResourceContents(base64 blob,取自 Data)
+//
+// URI 来自 a.URI;空则按 Path 的 file:// 形式(workDir 兜底相对路径);都没有则用 Name 生成 urn。
+func buildEmbeddedResource(a Attachment, workDir string) acp.EmbeddedResourceResource {
+	uri := a.URI
+	if uri == "" {
+		switch {
+		case a.Path != "":
+			uri = fileURI(workDir, a.Path)
+		case a.Name != "":
+			uri = "urn:monkey-deck:" + a.Name
+		}
+	}
+	var mt *string
+	if a.MimeType != "" {
+		s := a.MimeType
+		mt = &s
+	}
+	if a.Text != "" {
+		return acp.EmbeddedResourceResource{TextResourceContents: &acp.TextResourceContents{
+			Text:     a.Text,
+			Uri:      uri,
+			MimeType: mt,
+		}}
+	}
+	return acp.EmbeddedResourceResource{BlobResourceContents: &acp.BlobResourceContents{
+		Blob:     a.Data,
+		Uri:      uri,
+		MimeType: mt,
+	}}
 }
 
 // fileURI 把(可能相对 workDir 的)路径转成 file:// 绝对 URI,供 agent 按协议访问。
@@ -337,6 +404,21 @@ func (cs *ChatSession) FlatConfigOptions() []ConfigOption {
 // 协议:ContentBlock::Image in prompts REQUIRES 'image' prompt capability。
 func (cs *ChatSession) SupportsImage() bool {
 	return cs.PromptCapabilities.Image
+}
+
+// SupportsAudio 报告 agent 是否声明了 audio prompt 能力(Initialize 响应的
+// promptCapabilities.audio)。前端据此门控音频输入入口:不支持则隐藏/禁用 + 提示。
+// 协议:ContentBlock::Audio in prompts REQUIRES 'audio' prompt capability。
+func (cs *ChatSession) SupportsAudio() bool {
+	return cs.PromptCapabilities.Audio
+}
+
+// SupportsEmbeddedContext 报告 agent 是否声明了 embeddedContext prompt 能力(Initialize 响应的
+// promptCapabilities.embeddedContext)。前端据此决定附件是否可内联(ContentBlock::Resource)发送 ——
+// 内联可省去 agent 读盘往返,协议推荐优先(when available, ContentBlock::Resource is preferred)。
+// 不支持时回退 ResourceLink(协议 baseline)。协议:ContentBlock::Resource REQUIRES 'embeddedContext'。
+func (cs *ChatSession) SupportsEmbeddedContext() bool {
+	return cs.PromptCapabilities.EmbeddedContext
 }
 
 // RefreshConfig 重新拉取最新 configOptions + prompt capabilities(同步外部配置改动)。

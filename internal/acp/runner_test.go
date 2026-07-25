@@ -185,6 +185,44 @@ func TestIsPeerDisconnectedDoesNotOvermatch(t *testing.T) {
 	}
 }
 
+// TestPromptCapabilityAccessors 校验 SupportsImage/SupportsAudio/SupportsEmbeddedContext
+// 直接映射 Initialize 响应里的 promptCapabilities(任务 #23076)。前端依此三态门控
+// 对应附件入口(image/audio/embeddedContext)。零值 ChatSession 三者皆 false(安全默认)。
+func TestPromptCapabilityAccessors(t *testing.T) {
+	t.Run("zero value all false", func(t *testing.T) {
+		cs := &ChatSession{}
+		if cs.SupportsImage() || cs.SupportsAudio() || cs.SupportsEmbeddedContext() {
+			t.Fatalf("zero ChatSession should report all capabilities false")
+		}
+	})
+	t.Run("reflects PromptCapabilities", func(t *testing.T) {
+		cs := &ChatSession{PromptCapabilities: acp.PromptCapabilities{
+			Image: true, Audio: true, EmbeddedContext: true,
+		}}
+		if !cs.SupportsImage() {
+			t.Errorf("SupportsImage want true")
+		}
+		if !cs.SupportsAudio() {
+			t.Errorf("SupportsAudio want true")
+		}
+		if !cs.SupportsEmbeddedContext() {
+			t.Errorf("SupportsEmbeddedContext want true")
+		}
+	})
+	t.Run("partial capabilities", func(t *testing.T) {
+		cs := &ChatSession{PromptCapabilities: acp.PromptCapabilities{Audio: true}}
+		if cs.SupportsImage() {
+			t.Errorf("SupportsImage want false")
+		}
+		if !cs.SupportsAudio() {
+			t.Errorf("SupportsAudio want true")
+		}
+		if cs.SupportsEmbeddedContext() {
+			t.Errorf("SupportsEmbeddedContext want false")
+		}
+	})
+}
+
 // TestRefreshConfigSpawnFailure 验证 probe harness spawn 失败时的错误路径:
 // harness 命令不存在 → spawnAndInit 返回 exec 错误 → RefreshConfig 包成
 // "spawn probe" 错误返回,不 panic、不留孤儿进程(killProcessGroup 幂等处理 nil cmd)。

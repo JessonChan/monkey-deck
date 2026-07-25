@@ -27,9 +27,9 @@ import (
 // 这里转成 JSON 友好的结构,由 service 层经 Wails3 event 推前端流式渲染。
 type SessionEvent struct {
 	SessionID string `json:"sessionId"`
-	Kind      string `json:"kind"` // agent_message_chunk | agent_thought_chunk | tool_call | tool_call_update | usage_update | plan | session_info | config_option
-	Text      string `json:"text"` // chunk 文本(message/thought);agent/thought 为累积全文
-	Seq       int64  `json:"seq,omitempty"` // 单调序号(防流式乱序,§4.3)
+	Kind      string `json:"kind"`                // agent_message_chunk | agent_thought_chunk | tool_call | tool_call_update | usage_update | plan | session_info | config_option
+	Text      string `json:"text"`                // chunk 文本(message/thought);agent/thought 为累积全文
+	Seq       int64  `json:"seq,omitempty"`       // 单调序号(防流式乱序,§4.3)
 	MessageID string `json:"messageId,omitempty"` // ACP messageId:同一条逻辑消息的所有 chunk 共享(§5.4 #11),主键归并用
 	// TurnID 标识事件所属的 turn(= 开启该 turn 的 user message ID,由 client 生成;
 	// 协议无 turnId 字段,见 docs/worklog/2026-07-22-plan-history-by-turn.md)。
@@ -43,30 +43,35 @@ type SessionEvent struct {
 	RawInput   any    `json:"rawInput,omitempty"`
 	RawOutput  any    `json:"rawOutput,omitempty"`
 
-	Used   int64    `json:"used,omitempty"`   // context tokens 已用
-	Size   int64    `json:"size,omitempty"`   // context window 总量
-	Cost   *float64 `json:"cost,omitempty"`   // 累积成本 USD
+	Used int64    `json:"used,omitempty"` // context tokens 已用
+	Size int64    `json:"size,omitempty"` // context window 总量
+	Cost *float64 `json:"cost,omitempty"` // 累积成本 USD
 	// token 明细(来自 PromptResponse.Usage,UNSTABLE;§1.6/Task #15138)。
 	// streaming UsageUpdate 只含 used/size/cost,明细只能从 Prompt 响应取。
 	// 这些字段已是 session 级累积值(SDK:Total X tokens across all turns),直接覆盖即可。
-	CachedReadTokens  int64 `json:"cachedReadTokens,omitempty"`
-	CachedWriteTokens int64 `json:"cachedWriteTokens,omitempty"`
-	InputTokens       int64 `json:"inputTokens,omitempty"`
-	OutputTokens      int64 `json:"outputTokens,omitempty"`
-	ThoughtTokens     int64 `json:"thoughtTokens,omitempty"`
-	TotalTokens       int64 `json:"totalTokens,omitempty"`
-	Title         string          `json:"title,omitempty"`  // session_info 标题
-	ConfigOptions []ConfigOption  `json:"configOptions,omitempty"` // config_option:model/mode/effort 等(agent 自报)
-	PlanEntries   []PlanEntry     `json:"planEntries,omitempty"` // plan:agent 执行计划(整表替换,ACP protocol)
+	CachedReadTokens  int64          `json:"cachedReadTokens,omitempty"`
+	CachedWriteTokens int64          `json:"cachedWriteTokens,omitempty"`
+	InputTokens       int64          `json:"inputTokens,omitempty"`
+	OutputTokens      int64          `json:"outputTokens,omitempty"`
+	ThoughtTokens     int64          `json:"thoughtTokens,omitempty"`
+	TotalTokens       int64          `json:"totalTokens,omitempty"`
+	Title             string         `json:"title,omitempty"`         // session_info 标题
+	ConfigOptions     []ConfigOption `json:"configOptions,omitempty"` // config_option:model/mode/effort 等(agent 自报)
+	PlanEntries       []PlanEntry    `json:"planEntries,omitempty"`   // plan:agent 执行计划(整表替换,ACP protocol)
 	// ImageSupported:agent 是否支持 image prompt 能力(Initialize 响应 promptCapabilities.image)。
 	// 随 config_option 事件下发,前端据此门控图片输入入口(不支持则隐藏/禁用,§3.5)。
 	ImageSupported bool `json:"imageSupported,omitempty"`
+	// AudioSupported:agent 是否支持 audio prompt 能力。前端据此门控音频输入入口。
+	AudioSupported bool `json:"audioSupported,omitempty"`
+	// EmbeddedContextSupported:agent 是否支持 embeddedContext prompt 能力。
+	// 前端据此决定附件是否可内联(ContentBlock::Resource)发送(省去 agent 读盘往返)。
+	EmbeddedContextSupported bool `json:"embeddedContextSupported,omitempty"`
 }
 
 // PlanEntry 是 agent 执行计划的一项(ACP PlanEntry 的扁平化)。
 // 整表替换模型:harness 每次 plan_update 发全量列表,client 直接替换。
 type PlanEntry struct {
-	Content  string `json:"content"`           // 任务描述
+	Content  string `json:"content"`            // 任务描述
 	Priority string `json:"priority,omitempty"` // high | medium | low
 	Status   string `json:"status"`             // pending | in_progress | completed
 }
@@ -185,10 +190,10 @@ type Handler struct {
 	// nil = 不持久化(handler 单测默认 nil,只验内存记忆 + 规则形状)。
 	OnGlobalRule func(permissions.Rule)
 
-	mu        sync.Mutex
-	pending   map[string]*pendingPermission // id → 待裁决
-	permSeq   int
-	permTTL   time.Duration // 权限裁决总等待预算(超时后按策略降级,§3.4)
+	mu      sync.Mutex
+	pending map[string]*pendingPermission // id → 待裁决
+	permSeq int
+	permTTL time.Duration // 权限裁决总等待预算(超时后按策略降级,§3.4)
 	// 权限回调失败自动恢复(§3.4 + Task #15115):
 	// permRetries:用户未响应时「重发提示」的额外次数(含首次共 retries+1 轮),
 	//   每轮把总预算 permTTL 均分;0=只发一次(等价旧行为)。应对「提示丢失/用户没看到」。
@@ -224,8 +229,8 @@ type pendingPermission struct {
 
 // 权限回调恢复默认(§3.4 + Task #15115)。
 const (
-	defaultPermRetries       = 1              // 用户未响应时额外重发 1 次(共 2 轮通知)
-	defaultPermTimeoutPolicy = "allow"        // 总预算耗尽:放行让对话继续(对齐 §3.4 桌面有人但走开了)
+	defaultPermRetries       = 1                      // 用户未响应时额外重发 1 次(共 2 轮通知)
+	defaultPermTimeoutPolicy = "allow"                // 总预算耗尽:放行让对话继续(对齐 §3.4 桌面有人但走开了)
 	permSubIntervalFloor     = 200 * time.Millisecond // 总预算切分下限,防极短 TTL 切出 0
 )
 
@@ -791,4 +796,3 @@ func (h *Handler) ReleaseTerminal(ctx context.Context, req acp.ReleaseTerminalRe
 func (h *Handler) WaitForTerminalExit(ctx context.Context, req acp.WaitForTerminalExitRequest) (acp.WaitForTerminalExitResponse, error) {
 	return acp.WaitForTerminalExitResponse{}, fmt.Errorf("terminal not supported")
 }
-
