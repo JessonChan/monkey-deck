@@ -208,6 +208,7 @@
     "collapsePreviewDivider": "⋯ {{note}}(点击展开) ⋯",
     "attachFilesTip": "附加文件(经 ACP ResourceLink 发送)",
     "addImageTip": "添加图片(经 ACP Image 块发送 · 也可直接粘贴)",
+    "addAudioTip": "添加音频(经 ACP Audio 块发送)",
     "slashMenuTip": "输入 / 召出命令菜单",
     "referencesCount": "{{count}} 引用",
     "stopTip": "停止当前生成(不清理队列)",

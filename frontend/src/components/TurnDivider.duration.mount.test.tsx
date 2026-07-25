@@ -96,6 +96,7 @@ function baseProps(items: ChatItem[], status: "idle" | "prompting") {
     onMerge: () => {}, queue: [], onInterruptQueue: () => {}, onRevokeQueue: () => {}, onEditQueue: () => {}, onScheduleQueue: () => {}, onReorderQueue: () => {},
     composerValue: "", onComposerChange: () => {}, attachments: [], onAttachmentsChange: () => {},
     mentions: [], onMentionsChange: () => {}, images: [], onImagesChange: () => {}, imageSupported: false,
+    audios: [], onAudiosChange: () => {}, audioSupported: false,
     history: [], sessionId: "s1", configOptions: [], branch: "", livePlan: null, onSetConfig: () => {},
     hasMore: false, loadingMore: false, onLoadMore: () => {},
   };

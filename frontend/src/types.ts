@@ -39,6 +39,10 @@ export interface SessionEvent {
   title?: string; // session_info 标题
   configOptions?: ConfigOption[]; // config_option:model/mode/effort(agent 自报)
   imageSupported?: boolean; // config_option 附带:agent 是否支持 image prompt 能力(门控图片输入)
+  // config_option 附带:agent 是否支持 audio / embeddedContext prompt 能力(门控音频入口 / 内联附件,
+  // 对齐后端 SupportsAudio/SupportsEmbeddedContext,见 internal/acp/runner.go)。
+  audioSupported?: boolean;
+  embeddedContextSupported?: boolean;
   planEntries?: PlanEntry[]; // plan:agent 执行计划(整表替换,ACP protocol)
 }
 
@@ -111,6 +115,14 @@ export interface ImageAttachment {
   mimeType: string;  // image/png | image/jpeg | image/webp | image/gif
 }
 
+// 内联音频附件,经 ACP ContentBlock::Audio 发给 agent(需 agent 声明 audio prompt 能力)。
+// 与后端 internal/acp.Attachment 的 Data/MimeType 对齐;发送时 Kind="audio"。
+export interface AudioAttachment {
+  name: string;      // 显示名(如 voice-<ts>.webm)
+  data: string;      // base64 编码(无前缀)
+  mimeType: string;  // audio/wav | audio/mpeg | audio/webm | audio/ogg
+}
+
 // 会话用量:context 占比(streaming UsageUpdate)+ token 明细(PromptResponse.Usage,Task #15138)。
 // 明细字段仅 Prompt 返回后填充,streaming 不含 → 全 0(前端据此决定是否展示明细)。
 export interface Usage {
@@ -129,6 +141,7 @@ export interface QueueItem {
   text: string;
   mentions?: Mention[];
   images?: ImageAttachment[];
+  audios?: AudioAttachment[];
   scheduledAt: number;
 }
 

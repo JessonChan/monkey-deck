@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { useTranslation } from "react-i18next";
 import * as Popover from "@radix-ui/react-popover";
 import { Command } from "cmdk";
-import type { ConfigOption, Mention, ImageAttachment, Usage } from "../types";
+import type { ConfigOption, Mention, ImageAttachment, AudioAttachment, Usage } from "../types";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
-import { Paperclip, X, Slash, Square, ArrowUp, File, ChevronDown, ChevronUp, ImageIcon, ListPlus, GitBranch } from "lucide-react";
+import { Paperclip, X, Slash, Square, ArrowUp, File, ChevronDown, ChevronUp, ImageIcon, Mic, ListPlus, GitBranch } from "lucide-react";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -25,10 +25,13 @@ interface Props {
   images: ImageAttachment[];  // 内联图片附件 — 按 session 隔离(App 持有)
   onImagesChange: (next: ImageAttachment[]) => void;
   imageSupported: boolean;    // agent 是否声明 image prompt 能力(门控图片输入入口)
+  audios: AudioAttachment[];  // 内联音频附件 — 按 session 隔离(App 持有)
+  onAudiosChange: (next: AudioAttachment[]) => void;
+  audioSupported: boolean;    // agent 是否声明 audio prompt 能力(门控音频输入入口)
   usage: Usage;  // 上下文用量(展示已用/上限 + 明细)
   branch: string;  // 当前 session 工作目录所在的 git 分支(空 = 非 git / 未取到 → 不显示)
-  onSend: (text: string, mentions: Mention[], images?: ImageAttachment[]) => void;
-  onEnqueue: (text: string, mentions: Mention[], images?: ImageAttachment[]) => void;  // 主动入队列(并列发送):无论 idle/prompting 都入队
+  onSend: (text: string, mentions: Mention[], images?: ImageAttachment[], audios?: AudioAttachment[]) => void;
+  onEnqueue: (text: string, mentions: Mention[], images?: ImageAttachment[], audios?: AudioAttachment[]) => void;  // 主动入队列(并列发送):无论 idle/prompting 都入队
   onStop: () => void;
   onAction: (action: "clear" | "new" | "stop") => void;
 }
@@ -97,7 +100,12 @@ const IMAGE_MIME_ALLOWED = ["image/png", "image/jpeg", "image/webp", "image/gif"
 // 单图大小上限(base64 前,字节):10MB。过大发不出去且占上下文,超过则拒收并提示。
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
-export default function Composer({ value, onChange, disabled, prompting, configOptions, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, usage, branch, onSend, onEnqueue, onStop, onAction }: Props) {
+// 接受的音频 mime 白名单(ACP ContentBlock::Audio 常见类型,对齐后端 attachmentBlock audio 兜底)。
+const AUDIO_MIME_ALLOWED = ["audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3", "audio/webm", "audio/ogg", "audio/x-m4a", "audio/m4a"];
+// 单音频大小上限(base64 前,字节):25MB。音频比图片体积更大,但仍需控量以不爆上下文。
+const AUDIO_MAX_BYTES = 25 * 1024 * 1024;
+
+export default function Composer({ value, onChange, disabled, prompting, configOptions, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, audios, onAudiosChange, audioSupported, usage, branch, onSend, onEnqueue, onStop, onAction }: Props) {
   const { t } = useTranslation();
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
@@ -205,7 +213,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   }, [mentionInfo, sessionId, slashOpen]);
 
   const baseName = (p: string) => p.split(/[/\\]/).pop() || p;
-  const empty = !value.trim() && attachments.length === 0 && mentions.length === 0 && images.length === 0;
+  const empty = !value.trim() && attachments.length === 0 && mentions.length === 0 && images.length === 0 && audios.length === 0;
 
   // mode: "send" = 默认发送(idle 直发 / prompting 入队由 App 决定);
   //       "enqueue" = 主动入队列(始终压入前端队列,与发送按钮并列的显式入口)。
@@ -223,12 +231,14 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     const clips = attachments.map((p) => ({ path: p, name: baseName(p) }));
     const all = [...inline, ...clips];
     const imgs = images.length > 0 ? images : undefined;
-    if (!t && all.length === 0 && images.length === 0) return;
-    (mode === "enqueue" ? onEnqueue : onSend)(t, all, imgs);
+    const aus = audios.length > 0 ? audios : undefined;
+    if (!t && all.length === 0 && images.length === 0 && audios.length === 0) return;
+    (mode === "enqueue" ? onEnqueue : onSend)(t, all, imgs, aus);
     onChange("");
     onAttachmentsChange([]);
     onMentionsChange([]);
     onImagesChange([]);
+    onAudiosChange([]);
     navRef.current = -1;
     setNavDisplay(-1);
     setMentionOpen(false);
@@ -382,6 +392,39 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     } catch { /* 取消静默 */ }
   };
 
+  // 把若干 File 转成 AudioAttachment 并入 audios。能力门控 + mime/大小校验。
+  // audioSupported=false 时静默丢弃(入口本身已禁用,这里是兜底)。
+  const addAudioFiles = async (files: File[]) => {
+    if (!audioSupported || disabled) return;
+    const accepted: AudioAttachment[] = [];
+    for (const f of files) {
+      if (!AUDIO_MIME_ALLOWED.includes(f.type)) continue;
+      if (f.size > AUDIO_MAX_BYTES) continue;
+      try {
+        const data = await fileToBase64(f);
+        const ext = (f.name.split(".").pop() || "wav").toLowerCase();
+        accepted.push({ name: f.name || `audio-${Date.now()}.${ext}`, data, mimeType: f.type });
+      } catch { /* 单条失败跳过,不阻断其余 */ }
+    }
+    if (accepted.length) onAudiosChange([...audios, ...accepted]);
+  };
+
+  // 音频选择入口:原生文件对话框(过滤音频)。能力门控:audioSupported=false 时按钮不渲染。
+  const addAudios = async () => {
+    if (!audioSupported) return;
+    try {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = AUDIO_MIME_ALLOWED.join(",");
+      input.multiple = true;
+      const chosen: File[] = await new Promise((resolve) => {
+        input.onchange = () => resolve(input.files ? Array.from(input.files) : []);
+        input.click();
+      });
+      if (chosen.length) await addAudioFiles(chosen);
+    } catch { /* 取消静默 */ }
+  };
+
   return (
     <div className="composer" data-testid="composer">
       {slashOpen && (
@@ -414,7 +457,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
       )}
 
       <div className="compose-card">
-        {(attachments.length > 0 || mentions.length > 0 || images.length > 0) && (
+        {(attachments.length > 0 || mentions.length > 0 || images.length > 0 || audios.length > 0) && (
           <div className="att-chips" data-testid="att-chips">
             {attachments.map((p) => (
               <span key={p} className="att-chip" title={p}>
@@ -444,6 +487,12 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                   {im.name}
                 </span>
                 <button className="att-chip-x" onClick={() => onImagesChange(images.filter((_, j) => j !== i))}><X size={11} /></button>
+              </span>
+            ))}
+            {audios.map((au, i) => (
+              <span key={au.name + i} className="att-chip att-chip-audio" title={au.name}>
+                <span className="att-chip-name"><Mic size={11} /> {au.name}</span>
+                <button className="att-chip-x" onClick={() => onAudiosChange(audios.filter((_, j) => j !== i))}><X size={11} /></button>
               </span>
             ))}
           </div>
@@ -550,6 +599,17 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                 <ImageIcon size={17} />
               </button>
             )}
+            {audioSupported && (
+              <button
+                className="tool-btn"
+                data-testid="audio-btn"
+                onClick={addAudios}
+                disabled={disabled}
+                title={t("composer.addAudioTip")}
+              >
+                <Mic size={17} />
+              </button>
+            )}
             <button
               className="tool-btn"
               onClick={() => { onChange(value.startsWith("/") ? value : "/" + value); requestAnimationFrame(() => ref.current?.focus()); }}
@@ -603,8 +663,8 @@ export default function Composer({ value, onChange, disabled, prompting, configO
           <div className="compose-right">
             <ModelSelect configOptions={configOptions} disabled={disabled} onSetConfig={onSetConfig} onRefreshConfig={onRefreshConfig} contextTokens={usage.used} />
             <ComposerUsage usage={usage} draftTokens={estimateTokens(value)} />
-            {(attachments.length > 0 || mentions.length > 0 || images.length > 0) && (
-              <span className="composer-count">{t("composer.referencesCount", { count: attachments.length + mentions.length + images.length })}</span>
+            {(attachments.length > 0 || mentions.length > 0 || images.length > 0 || audios.length > 0) && (
+              <span className="composer-count">{t("composer.referencesCount", { count: attachments.length + mentions.length + images.length + audios.length })}</span>
             )}
             {prompting && (
               <button className="send-btn stop" data-testid="stop-btn" onClick={onStop} title={t("composer.stopTip")}>

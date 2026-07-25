@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem, Mention, ImageAttachment, PlanEntry, LivePlan, Usage } from "../types";
+import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem, Mention, ImageAttachment, AudioAttachment, PlanEntry, LivePlan, Usage } from "../types";
 import Composer from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
@@ -30,8 +30,8 @@ interface Props {
   permission: PermissionPrompt | null;
   mergeResult: string | null;
   sessionDiff: string | null;
-  onSend: (text: string, mentions: Mention[], images?: ImageAttachment[]) => void;
-  onEnqueue: (text: string, mentions: Mention[], images?: ImageAttachment[]) => void;
+  onSend: (text: string, mentions: Mention[], images?: ImageAttachment[], audios?: AudioAttachment[]) => void;
+  onEnqueue: (text: string, mentions: Mention[], images?: ImageAttachment[], audios?: AudioAttachment[]) => void;
   onStop: () => void;
   onContinue: () => void;
   onAction: (action: "clear" | "new" | "stop") => void;
@@ -54,6 +54,9 @@ interface Props {
   images: ImageAttachment[];
   onImagesChange: (next: ImageAttachment[]) => void;
   imageSupported: boolean;
+  audios: AudioAttachment[];
+  onAudiosChange: (next: AudioAttachment[]) => void;
+  audioSupported: boolean;
   history: string[];
   sessionId: string;
   configOptions: ConfigOption[];
@@ -620,6 +623,9 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           images={props.images}
           onImagesChange={props.onImagesChange}
           imageSupported={props.imageSupported}
+          audios={props.audios}
+          onAudiosChange={props.onAudiosChange}
+          audioSupported={props.audioSupported}
           usage={props.usage}
           branch={props.branch}
           disabled={!props.session}

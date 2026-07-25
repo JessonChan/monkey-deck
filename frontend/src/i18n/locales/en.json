@@ -208,6 +208,7 @@
     "collapsePreviewDivider": "⋯ {{note}} (click to expand) ⋯",
     "attachFilesTip": "Attach files (sent as ACP ResourceLink)",
     "addImageTip": "Add image (sent as ACP Image block · paste also works)",
+    "addAudioTip": "Add audio (sent as ACP Audio block)",
     "slashMenuTip": "Type / for command menu",
     "referencesCount": "{{count}} refs",
     "stopTip": "Stop current generation (keeps queue)",
