@@ -13,6 +13,8 @@ import FilePreviewOverlay, { type PreviewTarget } from "./FilePreviewOverlay";
 import MermaidRenderer from "./MermaidRenderer";
 import PathLinkified from "./PathLinkified";
 import { countDiffLines, diffLineCls } from "../lib/diff";
+import { highlightToLines } from "../lib/highlight";
+import "../hljs-theme.css";
 import { buildRows, computeLayout, computeWindow, anchorAt, restoreScroll, isAtBottom, HeightModel, TAIL_PRIOR, HEAD_PRIOR, type VRow, type Layout } from "../lib/virtualList";
 import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus } from "lucide-react";
 
@@ -1461,17 +1463,27 @@ function CodeBox({ language, raw }: { language: string; raw: string }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
+    // copy 保持纯文本:始终写 raw(原始源码),不取高亮后的 HTML。
     try { await navigator.clipboard.writeText(raw); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* noop */ }
   };
+  // 复用 lib/highlight 的 highlightToLines(Task #15088):显式 language 优先,否则 highlightAuto。
+  // 流式下 raw 每次变化都会重算 —— highlight.js 同步快、对不完整代码也安全(不抛错、降级转义),
+  // 故边到边高亮,无需等 turn 结束。
+  const { lines, language: detected } = useMemo(
+    () => highlightToLines(raw, { language }),
+    [raw, language]
+  );
   return (
     <div className="code-box">
       <div className="code-box-head">
-        <span className="code-lang">{language}</span>
+        <span className="code-lang">{detected || language}</span>
         <button className="msg-action-btn" onClick={copy} data-testid="copy-code">
           {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? t("common.copied") : t("common.copy")}
         </button>
       </div>
-      <pre className="code-box-pre"><code>{raw}</code></pre>
+      <pre className="code-box-pre">
+        <code className="code-box-code hljs" dangerouslySetInnerHTML={{ __html: lines.join("\n") }} />
+      </pre>
     </div>
   );
 }

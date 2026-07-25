@@ -20,3 +20,13 @@
 .cv-code.hljs {
   color: #c9d1d9;
 }
+
+/* CodeBox(对话内联代码块,Task #23061):同样只取 token 配色,去块化。
+   .code-box-pre 已自带 padding/overflow 与等宽字体,这里清掉 github-dark 给 .hljs 的块级
+   背景/内边距,避免与 .code-box 的 #161617 底色产生接缝;token 配色(.hljs-keyword 等)沿用主题。 */
+.code-box-code.hljs {
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
