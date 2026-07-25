@@ -184,6 +184,161 @@ func TestListDirPlain(t *testing.T) {
 	}
 }
 
+// nodePaths 收集节点的 Path 字段。
+func nodePaths(nodes []FileNode) []string {
+	out := make([]string, len(nodes))
+	for i, n := range nodes {
+		out[i] = n.Path
+	}
+	return out
+}
+
+// 验证 git 仓库的模糊匹配:尊重 .gitignore、子串命中、按路径排序、limit 截断、大小写不敏感。
+func TestFuzzyFindGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, "src", "sub"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, "src", "a.go"), []byte("a"), 0o644))
+	must(t, os.WriteFile(filepath.Join(root, "src", "sub", "b.go"), []byte("b"), 0o644))
+	must(t, os.WriteFile(filepath.Join(root, "README.md"), []byte("r"), 0o644))
+	must(t, os.WriteFile(filepath.Join(root, ".gitignore"), []byte("*.log\nnode_modules/\n"), 0o644))
+	must(t, os.WriteFile(filepath.Join(root, "ignored.log"), []byte("x"), 0o644))
+	must(t, os.MkdirAll(filepath.Join(root, "node_modules", "pkg"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, "node_modules", "pkg", "index.js"), []byte("1"), 0o644))
+	mustGit(t, root, "init", "-q")
+	mustGit(t, root, "add", ".")
+	mustGit(t, root, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init")
+
+	// ".go" 命中两个 .go 文件(按路径序),不该有 ignored.log / node_modules(.gitignore)
+	got, err := FuzzyFind(root, ".go", 0)
+	if err != nil {
+		t.Fatalf("FuzzyFind .go: %v", err)
+	}
+	paths := nodePaths(got)
+	if len(paths) != 2 || paths[0] != "src/a.go" || paths[1] != "src/sub/b.go" {
+		t.Fatalf("FuzzyFind .go = %+v, want [src/a.go src/sub/b.go]", paths)
+	}
+	for _, n := range got {
+		if n.IsDir {
+			t.Fatalf("FuzzyFind should only return files, got dir %s", n.Path)
+		}
+		if n.Name != filepath.Base(n.Path) {
+			t.Fatalf("Name mismatch: %q vs %q", n.Name, filepath.Base(n.Path))
+		}
+	}
+
+	// "sub/b" 子串(含目录段)命中嵌套文件
+	got, err = FuzzyFind(root, "sub/b", 0)
+	if err != nil {
+		t.Fatalf("FuzzyFind sub/b: %v", err)
+	}
+	if len(got) != 1 || got[0].Path != "src/sub/b.go" {
+		t.Fatalf("FuzzyFind sub/b = %+v, want [src/sub/b.go]", nodePaths(got))
+	}
+
+	// 大小写不敏感:大写 "README" 命中 "README.md"
+	got, err = FuzzyFind(root, "README", 0)
+	if err != nil {
+		t.Fatalf("FuzzyFind README: %v", err)
+	}
+	if len(got) != 1 || got[0].Path != "README.md" {
+		t.Fatalf("FuzzyFind README = %+v, want [README.md]", nodePaths(got))
+	}
+
+	// limit 截断:limit=1 取路径序首个
+	got, err = FuzzyFind(root, ".go", 1)
+	if err != nil {
+		t.Fatalf("FuzzyFind .go limit=1: %v", err)
+	}
+	if len(got) != 1 || got[0].Path != "src/a.go" {
+		t.Fatalf("FuzzyFind .go limit=1 = %+v, want [src/a.go]", nodePaths(got))
+	}
+
+	// 无命中返回空
+	got, err = FuzzyFind(root, "zzznotfound", 0)
+	if err != nil {
+		t.Fatalf("FuzzyFind nope: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("FuzzyFind zzznotfound = %+v, want empty", nodePaths(got))
+	}
+}
+
+// 验证空 query 返回 nil,不报错。
+func TestFuzzyFindEmptyQuery(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o644))
+	for _, q := range []string{"", "   "} {
+		got, err := FuzzyFind(root, q, 10)
+		if err != nil {
+			t.Fatalf("FuzzyFind(%q): %v", q, err)
+		}
+		if got != nil {
+			t.Fatalf("FuzzyFind(%q) = %+v, want nil", q, got)
+		}
+	}
+}
+
+// 验证非 git 目录:WalkDir 跳过 .git / node_modules 等大目录,子串匹配、limit 截断、字母序。
+func TestFuzzyFindPlain(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.WriteFile(filepath.Join(root, "keep.txt"), []byte("1"), 0o644))
+	must(t, os.MkdirAll(filepath.Join(root, "deep", "nested"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, "deep", "nested", "file.txt"), []byte("2"), 0o644))
+	// 大目录:内容不应进结果
+	must(t, os.MkdirAll(filepath.Join(root, "node_modules", "pkg"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, "node_modules", "pkg", "index.js"), []byte("3"), 0o644))
+	must(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("4"), 0o644))
+
+	// "file" 只命中 deep/nested/file.txt
+	got, err := FuzzyFind(root, "file", 0)
+	if err != nil {
+		t.Fatalf("FuzzyFind plain file: %v", err)
+	}
+	paths := nodePaths(got)
+	if len(paths) != 1 || paths[0] != "deep/nested/file.txt" {
+		t.Fatalf("FuzzyFind plain file = %+v, want [deep/nested/file.txt]", paths)
+	}
+
+	// ".txt" 命中 keep.txt + deep/nested/file.txt(字母序:deep/... 在 keep 前)
+	got, err = FuzzyFind(root, ".txt", 0)
+	if err != nil {
+		t.Fatalf("FuzzyFind plain .txt: %v", err)
+	}
+	paths = nodePaths(got)
+	if len(paths) != 2 || paths[0] != "deep/nested/file.txt" || paths[1] != "keep.txt" {
+		t.Fatalf("FuzzyFind plain .txt = %+v, want [deep/nested/file.txt keep.txt]", paths)
+	}
+
+	// 大目录内容被过滤:node_modules/index.js、.git/config 都不含……即便 query 命中也不该出现
+	got, err = FuzzyFind(root, "index", 0)
+	if err != nil {
+		t.Fatalf("FuzzyFind plain index: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("node_modules should be skipped, got %+v", nodePaths(got))
+	}
+	got, err = FuzzyFind(root, "config", 0)
+	if err != nil {
+		t.Fatalf("FuzzyFind plain config: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf(".git should be skipped, got %+v", nodePaths(got))
+	}
+
+	// limit 截断
+	got, err = FuzzyFind(root, ".txt", 1)
+	if err != nil {
+		t.Fatalf("FuzzyFind plain .txt limit=1: %v", err)
+	}
+	if len(got) != 1 || got[0].Path != "deep/nested/file.txt" {
+		t.Fatalf("FuzzyFind plain .txt limit=1 = %+v", nodePaths(got))
+	}
+}
+
 func nodeNames(nodes []FileNode) []string {
 	out := make([]string, len(nodes))
 	for i, n := range nodes {

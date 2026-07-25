@@ -941,6 +941,17 @@ func (s *ChatService) SessionRenamePath(sessionID, rel, newName string) (string,
 	return fsview.RenamePath(root, rel, newName)
 }
 
+// SessionFuzzyFind 在 session 工作目录下按 query 子串模糊匹配文件路径,返回最多 limit 个命中。
+// git 仓库复用 fsview 可见集(尊重 .gitignore),非 git 目录跳过 .git / node_modules 等大目录。
+// 路径钉在 cwd;空 query 返回 nil;limit<=0 用默认上限。
+func (s *ChatService) SessionFuzzyFind(sessionID, query string, limit int) ([]fsview.FileNode, error) {
+	root, err := s.cwdOf(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return fsview.FuzzyFind(root, query, limit)
+}
+
 // OpenSession 打开已有 session。懒 spawn(§3.x):
 //   - 历史会话(已有消息):只读打开,不 spawn harness —— 仅从 DB 读历史展示,
 //     推 readonly 状态让前端给「只读 - 发消息以继续」提示。用户发新消息或点「继续会话」

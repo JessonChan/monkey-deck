@@ -9,6 +9,7 @@ package fsview
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -118,14 +119,32 @@ func isGitRoot(root string) bool {
 	return err == nil
 }
 
-// listGit 用 git ls-files 取得可见(非忽略)文件集合,据此构造直接子项。
-// dirSet 汇总含文件的子目录,fileSet 收集本层文件;目录与文件分别排序。
-func listGit(root, rel string) ([]FileNode, error) {
+// gitVisibleFiles 用 git ls-files 取得 root 下可见(非 gitignore 忽略)文件的相对路径(递归)。
+// 复用于 listGit(按层拆成直接子项)与 FuzzyFind(全量子串匹配);rel 为空取全部,非空仅取该子树。
+// 输出按路径字母序(git ls-files 默认排序),始终用 / 分隔。
+func gitVisibleFiles(root, rel string) ([]string, error) {
 	args := []string{"-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "--full-name"}
 	if rel != "" {
 		args = append(args, "--", rel)
 	}
 	out, err := gitRaw(root, args...)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(out, "\n") {
+		line = filepath.ToSlash(strings.TrimSpace(line))
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
+// listGit 用 git ls-files 取得可见(非忽略)文件集合,据此构造直接子项。
+// dirSet 汇总含文件的子目录,fileSet 收集本层文件;目录与文件分别排序。
+func listGit(root, rel string) ([]FileNode, error) {
+	files, err := gitVisibleFiles(root, rel)
 	if err != nil {
 		// git 不可用 / 异常时降级为普通目录列举,保证可用。
 		return listPlain(filepath.Join(root, rel), rel)
@@ -136,11 +155,7 @@ func listGit(root, rel string) ([]FileNode, error) {
 	}
 	dirSet := map[string]struct{}{}
 	fileSet := map[string]struct{}{}
-	for _, line := range strings.Split(out, "\n") {
-		line = filepath.ToSlash(strings.TrimSpace(line))
-		if line == "" {
-			continue
-		}
+	for _, line := range files {
 		rest := line
 		if prefix != "" {
 			if !strings.HasPrefix(line, prefix) {
@@ -219,6 +234,120 @@ func fileSize(p string) int64 {
 		return info.Size()
 	}
 	return 0
+}
+
+// heavyDirs 是非 git 目录 WalkDir 时整棵跳过的「大目录 / 噪声目录」黑名单。
+// git 仓库由 git ls-files --exclude-standard(尊重 .gitignore)负责过滤,不走这里;
+// 此处只兜底非 git 项目(没有 .gitignore 的场景),避免把 node_modules / vendor 等灌进结果。
+var heavyDirs = map[string]struct{}{
+	".git":              {},
+	"node_modules":      {},
+	"bower_components":  {},
+	"vendor":            {},
+	"dist":              {},
+	"build":             {},
+	".next":             {},
+	".nuxt":             {},
+	".sveltekit":        {},
+	".turbo":            {},
+	"target":            {},
+	"__pycache__":       {},
+	".venv":             {},
+	"venv":              {},
+	".cache":            {},
+}
+
+// defaultFuzzyLimit 是 limit<=0 时采用的结果上限。
+const defaultFuzzyLimit = 100
+
+// FuzzyFind 在 root 下按 query 子串模糊匹配文件相对路径,返回最多 limit 个命中(仅文件)。
+//
+// 大小写不敏感,按整条相对路径(含目录)子串匹配 —— 例如 "sub/b" 命中 "src/sub/b.go","go" 命中所有 .go。
+//
+// 数据源分两条:
+//   - git 仓库:复用 listGit 的可见集(gitVisibleFiles = git ls-files --exclude-standard),
+//     天然尊重 .gitignore,输出已按路径排序。
+//   - 非 git 目录:filepath.WalkDir 递归,跳过 heavyDirs(.git / node_modules 等)整棵子树,
+//     遍历顺序本身即字母序。
+//
+// limit<=0 取 defaultFuzzyLimit;空 query 返回 nil。结果按路径字母序。
+func FuzzyFind(root, query string, limit int) ([]FileNode, error) {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = defaultFuzzyLimit
+	}
+	if isGitRoot(root) {
+		return fuzzyGit(root, query, limit)
+	}
+	return fuzzyWalk(root, query, limit)
+}
+
+// fuzzyGit 在 git 仓库里匹配:复用 gitVisibleFiles(尊重 .gitignore),逐行子串匹配,够 limit 即止。
+// git ls-files 失败时降级 fuzzyWalk,保证可用。
+func fuzzyGit(root, query string, limit int) ([]FileNode, error) {
+	files, err := gitVisibleFiles(root, "")
+	if err != nil {
+		return fuzzyWalk(root, query, limit)
+	}
+	matches := make([]FileNode, 0, limit)
+	for _, rel := range files {
+		if len(matches) >= limit {
+			break
+		}
+		if !strings.Contains(strings.ToLower(rel), query) {
+			continue
+		}
+		matches = append(matches, FileNode{
+			Name:  filepath.Base(rel),
+			Path:  rel,
+			IsDir: false,
+			Size:  fileSize(filepath.Join(root, rel)),
+		})
+	}
+	return matches, nil
+}
+
+// fuzzyWalk 在非 git 目录里匹配:WalkDir 跳过 heavyDirs 子树,子串匹配,够 limit 即止。
+func fuzzyWalk(root, query string, limit int) ([]FileNode, error) {
+	matches := make([]FileNode, 0, limit)
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // 跳过不可读项
+		}
+		if d.IsDir() {
+			if p == root {
+				return nil
+			}
+			if _, skip := heavyDirs[d.Name()]; skip {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, rerr := filepath.Rel(root, p)
+		if rerr != nil {
+			rel = d.Name()
+		}
+		rel = filepath.ToSlash(rel)
+		if strings.Contains(strings.ToLower(rel), query) {
+			matches = append(matches, FileNode{
+				Name:  d.Name(),
+				Path:  rel,
+				IsDir: false,
+				Size:  fileSize(p),
+			})
+			if len(matches) >= limit {
+				return fs.SkipAll
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return matches, nil
 }
 
 // ReadFile 读取 root/rel 的文本内容。过大或二进制不返回内容,只给提示。
