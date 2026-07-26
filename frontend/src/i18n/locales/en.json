@@ -451,7 +451,28 @@
       "autoUpgradeTitle": "Auto-upgrade harnesses",
       "autoUpgradeDesc": "When an upgrade is found, silently run each harness's own install script in the background (off by default). Skips harnesses with a running session; failed upgrades cool down for an hour.",
       "autoUpgradeRiskTip": "Risky: this runs each harness's official install script unattended (network, disk writes, may restart services or change your environment). Enable only if you trust the upstream installers.",
-      "updateDotTip": "A harness update is available"
+      "updateDotTip": "A harness update is available",
+      "addBtn": "Add harness",
+      "addBtnTip": "Manually add an ACP-capable harness (ID / name / start command)",
+      "addTitle": "Add harness",
+      "addDesc": "Add an ACP-capable coding agent. Provide its stdio ACP start command; after adding it is auto-scanned for install and probed for capabilities.",
+      "addIdLabel": "ID",
+      "addIdPlaceholder": "e.g. junie / jcode / goose / kimi",
+      "addNameLabel": "Display name",
+      "addNamePlaceholder": "e.g. Junie",
+      "addCmdLabel": "Start command",
+      "addCmdPlaceholder": "e.g. junie acp",
+      "addCmdHint": "(command format)",
+      "addCmdTip": "stdio ACP start command, arguments separated by spaces. The first token is the executable to run (used by the process reaper). e.g. junie acp / /usr/local/bin/goose --stdio acp",
+      "addIconLabel": "Icon (optional)",
+      "addIconPlaceholder": "Leave empty for default icon",
+      "addIconHint": "(optional)",
+      "addIconTip": "Optional; falls back to the default agent icon when empty. User-added harnesses do not participate in upstream version checks or upgrades.",
+      "addConfirm": "Add",
+      "addErrIdEmpty": "ID must not be empty",
+      "addErrIdConflict": "This ID already exists; choose another",
+      "addErrNameEmpty": "Display name must not be empty",
+      "addErrCmdEmpty": "Start command must not be empty"
     }
   }
 }

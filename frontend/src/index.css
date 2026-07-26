@@ -1674,6 +1674,20 @@ input, textarea { font-family: inherit; }
 .modal-btn.danger { background: var(--red); color: #fff; }
 .modal-btn.danger:hover { filter: brightness(1.1); }
 
+/* ─── 添加 harness 弹窗(文本表单:ID/Name/Command/Icon) ─── */
+.add-harness-card { max-width: 360px; gap: 11px; }
+.ah-desc { font-size: 11.5px; color: var(--text-3); line-height: 1.5; }
+.ah-field { display: flex; flex-direction: column; gap: 5px; }
+.ah-label {
+  font-size: 12px; font-weight: 600; color: var(--text-2);
+  display: flex; align-items: center; gap: 6px;
+}
+.ah-required { font-weight: 400; font-size: 11px; color: var(--text-3); }
+.ah-hint {
+  font-weight: 400; font-size: 10.5px; color: var(--text-3); opacity: 0.85;
+  cursor: help; text-decoration: underline dotted;
+}
+
 /* ─── 统一设置中心面板(收敛分散设置项) ─── */
 .settings-card {
   width: 100%; max-width: 720px; height: clamp(360px, 82vh, 82vh);
@@ -1703,6 +1717,7 @@ input, textarea { font-family: inherit; }
 .settings-pane { display: flex; flex-direction: column; gap: 10px; }
 .pane-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .pane-desc { font-size: 11.5px; color: var(--text-3); line-height: 1.5; flex: 1; }
+.pane-head-acts { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .pane-actions { display: flex; gap: 8px; }
 .settings-row {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;

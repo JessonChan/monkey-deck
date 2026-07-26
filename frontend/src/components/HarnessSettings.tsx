@@ -4,7 +4,8 @@ import { Events } from "@wailsio/runtime";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import type { CapabilityMatrix } from "../../bindings/github.com/jessonchan/monkey-deck/internal/acp/models";
-import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download, AlertTriangle } from "lucide-react";
+import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download, AlertTriangle, Plus } from "lucide-react";
+import AddHarnessModal from "./AddHarnessModal";
 
 // harness 能力位定义:field = CapabilityMatrix 字段名,key = i18n capability.<key> 后缀。
 // declared 位(prompt*/config*/sessionList)来自 Initialize/NewSession 声明,确定 ✓/✗;
@@ -50,6 +51,8 @@ export default function HarnessPane() {
   // 见顶部注释)。后端探测未就绪时返回 nil → {} ;ProbeErr 非空表示该 harness 探测失败。
   const [caps, setCaps] = useState<Record<string, CapabilityMatrix | undefined>>({});
   const [error, setError] = useState<string | null>(null);
+  // 「添加 harness」弹窗开关:HarnessPane 自管(不在 App 渲染链上,见顶部注释),镜像 FilePanel 范式。
+  const [adding, setAdding] = useState(false);
 
   // 拉后端开关当前值:经 GetConfig 一次取回 checkHarnessUpdates / autoHarnessUpgrade 两个字段
   // (单一真相源 = 后端 SQLite;GetConfig 是后端聚合的只读快照,Task #22385 已暴露 autoHarnessUpgrade)。
@@ -153,16 +156,27 @@ export default function HarnessPane() {
     <div className="settings-pane" data-testid="harness-pane">
       <div className="pane-head">
         <div className="pane-desc">{t("settings.harness.desc")}</div>
-        <button
-          className="modal-btn ghost"
-          data-testid="harness-refresh"
-          disabled={refreshing}
-          data-tooltip-id="md-tip"
-          data-tooltip-content={t("settings.harness.refreshTip")}
-          onClick={() => void refresh()}
-        >
-          <RefreshCw size={13} className={refreshing ? "spin" : ""} /> {t("settings.harness.refresh")}
-        </button>
+        <div className="pane-head-acts">
+          <button
+            className="modal-btn ghost"
+            data-testid="add-harness-btn"
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("settings.harness.addBtnTip")}
+            onClick={() => setAdding(true)}
+          >
+            <Plus size={13} /> {t("settings.harness.addBtn")}
+          </button>
+          <button
+            className="modal-btn ghost"
+            data-testid="harness-refresh"
+            disabled={refreshing}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("settings.harness.refreshTip")}
+            onClick={() => void refresh()}
+          >
+            <RefreshCw size={13} className={refreshing ? "spin" : ""} /> {t("settings.harness.refresh")}
+          </button>
+        </div>
       </div>
 
       {error && <div className="modal-del-err">{error}</div>}
@@ -225,6 +239,18 @@ export default function HarnessPane() {
           />
         ))}
       </div>
+
+      {adding && (
+        <AddHarnessModal
+          existing={list}
+          onDone={(updated) => {
+            setList(updated);
+            setAdding(false);
+            setError(null);
+          }}
+          onCancel={() => setAdding(false)}
+        />
+      )}
     </div>
   );
 }
