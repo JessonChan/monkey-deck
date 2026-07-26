@@ -192,7 +192,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
 
   // rows = 把 items 折叠成渲染行(连续 tool 成组);layout = 前缀和几何(唯一坐标事实,含 headPad 与 scrollTop 同系)。
   const rows = useMemo(() => buildRows(items), [items]);
-  // 每个回合的起止时间,供 TurnDivider 显示本轮持续时间。
+  // 每个回合的起止时间,供 user 消息 msg-meta 显示本轮持续时间(格式化历时)。
   // turn start = user 消息 ts(发送时刻落库);turn end = 该回合最后一条消息的 ts
   // —— persistTurn 在回合结束时统一写库,最后一条 createdAt ≈ 回合结束时刻(§5.3 尊重数据源)。
   // 仅「已结束」回合算出 end:有后续 user 消息(下回合已开)必为结束;最后一回合在非 prompting
@@ -547,11 +547,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
               const tb = userItem ? turnBounds.get(row.first) : undefined;
               const durationMs = tb?.start && tb?.end && tb.end > tb.start ? tb.end - tb.start : undefined;
               content = (
-                <>
-                  {/* 回合分隔:每条用户消息前插一条带时间的分隔线(首轮亦显示),让每轮对话边界清晰。 */}
-                  {userItem && row.first >= 0 && <TurnDivider ts={userItem.ts} durationMs={durationMs} />}
-                  <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} />
-                </>
+                <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} durationMs={userItem ? durationMs : undefined} />
               );
             }
             return (
@@ -638,13 +634,21 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
 });
 
 
-const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview }: { item: ChatItem; sessionId: string; onOpenFilePreview: (path: string, line?: number) => void }) {
+const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview, durationMs }: { item: ChatItem; sessionId: string; onOpenFilePreview: (path: string, line?: number) => void; durationMs?: number }) {
   if (item.type === "user") {
+    const dur = formatDuration(durationMs);
     return (
       <div className="row row-user" data-testid="msg-user">
         <div className="bubble-user-wrap">
-          <MessageActions text={item.text} className="user-msg-actions" testId="copy-user-msg" />
           <UserBubble text={item.text} onOpenFilePreview={onOpenFilePreview} />
+          <div className="msg-meta">
+            {item.ts && (
+              <span className="msg-time">
+                {formatTime(item.ts)}{dur && <span className="msg-dur"> · {dur}</span>}
+              </span>
+            )}
+            {item.text && <MessageActions text={item.text} testId="copy-user-msg" />}
+          </div>
         </div>
       </div>
     );
@@ -1549,22 +1553,6 @@ function extractCodeChild(children: ComponentPropsWithoutRef<"pre">["children"])
   const lang = /language-(\w[\w+-]*)/.exec(cls)?.[1] || "";
   const text = typeof props.children === "string" ? props.children : String(props.children ?? "");
   return { language: lang || "code", text: text.replace(/\n$/, "") };
-}
-
-// 回合分隔:发丝线 + 时间 + 本轮持续时间,清晰划分每一轮对话(用户消息前的锚点)。
-function TurnDivider({ ts, durationMs }: { ts?: number; durationMs?: number }) {
-  const dur = formatDuration(durationMs);
-  return (
-    <div className="turn-divider">
-      <span className="turn-divider-line" />
-      {ts && (
-        <span className="turn-divider-time">
-          {formatTime(ts)}{dur && <span className="turn-divider-dur"> · {dur}</span>}
-        </span>
-      )}
-      <span className="turn-divider-line" />
-    </div>
-  );
 }
 
 // 时长格式化:<60s → "Ns";<60m → "Mm SSs"(SS 零填充);≥60m → "Hh MMm"。不足 1s 返回空。
