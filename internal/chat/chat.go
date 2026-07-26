@@ -2092,6 +2092,48 @@ func (s *ChatService) RefreshHarnesses() ([]harness.Harness, error) {
 	return list, nil
 }
 
+// AddHarness 添加用户自建 harness,持久化到 DataDir/harnesses.json 并合并进内存注册表。
+//
+// 流程(§5.3 复用现有 Discover/probe 路径,不另起体系):
+//  1. 加载现有用户 harness 列表(文件不存在 = 空)。
+//  2. 校验(id/name/command 非空 + id 不与静态或已有用户冲突)—— 失败返明确哨兵错误。
+//  3. 追加 + 原子写文件(tmp+rename)。
+//  4. SetUserHarnesses 刷内存合并视图(Discover/Command/Normalize/进程回收 据此识别新 harness)。
+//  5. acp.SetHarnessCommands 刷新进程回收层的命令白名单(§3.2:启动时注入一次,加新 harness 后要补)。
+//  6. Discover 刷 Path/Installed(新 harness 是否已在本机)→ 缓存 + 推 EventHarnesses。
+//  7. 异步 probeCapabilitiesAsync:Discover 只告诉我们装没装,能力位(prompt/session/mcp)要 spawn
+//     问 harness 自己。refreshHarnessesThenMaybeAutoUpgrade 的 probe hook 只在启动跑一次,
+//     AddHarness 路径不经过它,故这里显式 go 一次(§5.4:确认 probe 触发点)。
+//
+// 返回更新后的全量 harness 列表(前端据此刷新);error 非空时列表为 nil。
+func (s *ChatService) AddHarness(id, name, command, icon string) ([]harness.Harness, error) {
+	id = strings.TrimSpace(id)
+	name = strings.TrimSpace(name)
+	command = strings.TrimSpace(command)
+	icon = strings.TrimSpace(icon)
+
+	path := filepath.Join(s.cfg.DataDir, harness.UserHarnessesFile)
+	list, err := harness.LoadUserHarnesses(path)
+	if err != nil {
+		return nil, fmt.Errorf("load user harnesses: %w", err)
+	}
+	if err := harness.ValidateUserHarness(id, name, command, list); err != nil {
+		return nil, err
+	}
+	list = append(list, harness.UserHarness{ID: id, Name: name, Command: command, Icon: icon})
+	if err := harness.SaveUserHarnesses(path, list); err != nil {
+		return nil, fmt.Errorf("save user harnesses: %w", err)
+	}
+	harness.SetUserHarnesses(list)
+	acp.SetHarnessCommands(harness.Commands())
+
+	refreshed := harness.Discover(s.ctx)
+	s.harnessCache.Store(&refreshed)
+	s.emit(EventHarnesses, nil)
+	go s.probeCapabilitiesAsync()
+	return refreshed, nil
+}
+
 // refreshHarnessesAsync 启动时后台发现:限时 5s(网络/超时不阻塞应用启动太长)。
 // 出错也写空缓存 → ListHarnesses 拿到 nil 走 Supported 静态兜底,前端体验不退化。
 func (s *ChatService) refreshHarnessesAsync() {
@@ -2497,6 +2539,14 @@ func (s *ChatService) SetDefaultModel(model string) error {
 func (s *ChatService) loadPersistedConfig() {
 	if m, _ := s.st.GetSetting(s.ctx, "defaultModel"); m != "" {
 		s.cfg.DefaultModel = m
+	}
+	// 用户自添加 harness:从 DataDir/harnesses.json 加载,合并进内存注册表(§5.3 复用)。
+	// 必须在 acp.SetHarnessCommands(ServiceStartup 后续行)之前完成,使进程回收层一并认得用户 harness。
+	// 文件不存在 = 空(开箱即用);损坏 = 告警 + 忽略(不阻塞启动,用户可重建)。
+	if user, err := harness.LoadUserHarnesses(filepath.Join(s.cfg.DataDir, harness.UserHarnessesFile)); err != nil {
+		slog.Warn("load user harnesses", "err", err)
+	} else {
+		harness.SetUserHarnesses(user)
 	}
 	// 权限规则:表空时写入默认规则(§3.4),否则保留用户已定制。
 	if _, err := s.st.SeedDefaultPermissionRules(s.ctx, defaultPermissionRulesForStore()); err != nil {

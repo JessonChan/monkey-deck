@@ -143,25 +143,28 @@ func SwapRegistryForTest(next []Spec) (restore func()) {
 // Discover 在本机扫 Registry 里的每个 Spec,返回运行时 Harness 列表(顺序与 Registry 对齐)。
 //
 // 行为:
-//   - 静态元数据(ID/Name/Command)从 Supported 复制(单一事实源:Supported 是 ID/Name/Command 的真相)。
+//   - 静态元数据(ID/Name/Command)从 effectiveSupported(静态 Supported + 用户 harness 合并视图)复制
+//     (单一事实源:Supported 是 ID/Name/Command 的真相,用户 harness 追加在后)。
 //   - Path/Installed/InstalledVersion 经 Probe(默认 exec.LookPath + 真跑版本命令)得到。
 //   - LatestVersion 经 Spec.Source(可空)异步查;无 Source 或失败 → 空 + 不报错(降级)。
 //   - UpgradeAvailable = Installed 且 LatestVersion 非空 且 compareVersions(Installed, Latest) < 0。
 //
-// Discover 本身纯函数;LatestVersion 的网络查询由 ctx 控制超时/取消(默认由调用方包)。
+// Discover 不写包级状态(纯函数):用户 harness 经 SetUserHarnesses 注入,Discover 只读合并视图。
+// LatestVersion 的网络查询由 ctx 控制超时/取消(默认由调用方包)。
 // 整体阻塞 ≤ max(LookPath/Version 各 Spec 串行,Source 各 Spec 并行)。
 func Discover(ctx context.Context) []Harness {
-	out := make([]Harness, 0, len(Registry))
-	// 预取静态元数据,供 Spec.ID 对齐。
+	reg := effectiveRegistry()
+	out := make([]Harness, 0, len(reg))
+	// 预取静态元数据(含用户 harness),供 Spec.ID 对齐。
 	byID := map[string]Harness{}
-	for _, h := range Supported {
+	for _, h := range effectiveSupported() {
 		byID[h.ID] = h
 	}
 
 	// 阶段 1:本地发现(PATH + 版本),顺序执行(快速、确定性;每个 ~几 ms 到几十 ms)。
-	inst := make([]Harness, len(Registry))
+	inst := make([]Harness, len(reg))
 	p := currentProbe()
-	for i, sp := range Registry {
+	for i, sp := range reg {
 		h := byID[sp.ID]
 		if h.ID == "" {
 			// Registry 与 Supported 不一致(开发期疏漏)—— 防御:给个最小回退。
@@ -183,15 +186,15 @@ func Discover(ctx context.Context) []Harness {
 		idx int
 		v   string
 	}
-	res := make(chan latestRes, len(Registry))
+	res := make(chan latestRes, len(reg))
 	pending := 0
-	for i, sp := range Registry {
+	for i, sp := range reg {
 		if sp.Source == nil {
 			continue
 		}
 		pending++
 		go func(i int) {
-			sp := Registry[i]
+			sp := reg[i]
 			r, err := sp.Source.Latest(ctx)
 			if err == nil {
 				res <- latestRes{i, r.Version}
@@ -208,7 +211,8 @@ func Discover(ctx context.Context) []Harness {
 		}
 	}
 
-	// 阶段 3:派生 UpgradeAvailable(已装 + 有最新 + 当前 < 最新)。
+	// 阶段 3:派生 UpgradeAvailable(已装 + 有最新 + 当前 < 最新)。用户 harness 无 Source,
+	// LatestVersion 恒空 → UpgradeAvailable 恒 false(用户 harness 不参与升级,符合预期)。
 	for i := range inst {
 		if inst[i].Installed && inst[i].InstalledVersion != "" && inst[i].LatestVersion != "" {
 			inst[i].UpgradeAvailable = compareVersions(inst[i].InstalledVersion, inst[i].LatestVersion) < 0

@@ -49,8 +49,10 @@ var Supported = []Harness{
 const DefaultID = "omp"
 
 // Normalize 把 harness id 归一化:空或未知回退到默认(omp)。
+// 在 effectiveSupported(静态 + 用户 harness 合并视图)上判定 —— 用户加的 harness 也算「已知」,
+// 不被误判回退到默认(否则用户 session 的 harness 会丢)。
 func Normalize(id string) string {
-	for _, h := range Supported {
+	for _, h := range effectiveSupported() {
 		if h.ID == id {
 			return id
 		}
@@ -59,8 +61,9 @@ func Normalize(id string) string {
 }
 
 // Command 返回 harness id 对应的 stdio ACP 启动命令;未知 id 回退到默认 harness。
+// 在 effectiveSupported 上判定(含用户 harness),用户 harness 的 Command 由用户在 AddHarness 时填。
 func Command(id string) string {
-	for _, h := range Supported {
+	for _, h := range effectiveSupported() {
 		if h.ID == id {
 			return h.Command
 		}
@@ -68,11 +71,13 @@ func Command(id string) string {
 	return Command(DefaultID)
 }
 
-// Commands 返回所有受支持 harness 的 stdio ACP 启动命令(如 ["omp acp","opencode acp"])。
-// 供进程回收层识别本应用派生的 harness(§3.2):启动时注入 acp.SetHarnessCommands。
+// Commands 返回所有受支持 harness(静态 + 用户)的 stdio ACP 启动命令(如 ["omp acp","opencode acp"])。
+// 供进程回收层识别本应用派生的 harness(§3.2):启动 + AddHarness 时注入 acp.SetHarnessCommands,
+// 使回收层也认得用户加的 harness(回收 harness 无关化,§3.2)。
 func Commands() []string {
-	cmds := make([]string, 0, len(Supported))
-	for _, h := range Supported {
+	src := effectiveSupported()
+	cmds := make([]string, 0, len(src))
+	for _, h := range src {
 		cmds = append(cmds, h.Command)
 	}
 	return cmds
