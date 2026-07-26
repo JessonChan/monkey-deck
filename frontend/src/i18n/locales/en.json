@@ -146,6 +146,8 @@
     "usageCachedWrite": "Cached write",
     "usageThought": "Thought",
     "usageTotal": "Total",
+    "usageNotReported": "—(Not reported)",
+    "usageNotReportedTip": "Harness hasn't reported usage yet",
     "planTitle": "Execution plan",
     "planProgressAria": "{{pct}}% completed",
     "planPriorityHigh": "High",

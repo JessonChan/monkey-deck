@@ -627,7 +627,10 @@ export default function Composer({ value, onChange, disabled, prompting, configO
 //  - 费用:累计 $cost(harness 自报)。
 // 配色按 usageLevel 分级(绿 → 琥珀 → 红),hover tooltip 展示 token 明细(输入/输出/缓存/思考/合计)。
 // §4.5:统一用 react-tooltip(md-tip),禁用原生 title。
-// 仅在有内容可报时渲染(全空则返回 null,不占位)。
+// 「未上报」态:harness 上报的用量全 0(used/size/cost/明细均 0)时,展示灰色「—(未上报)」,
+// 让用户看到「用量入口在,只是 harness 没报」而非入口消失。判定**只看实际数据是否全 0,
+// 不依赖 CapabilityMatrix.emitsUsage**(§5.3 尊重数据源:capability 位是能力声明,数据才是真相;
+// 声明会报但实际全 0 仍应显示未上报,反之亦然)。草稿预估是本地估算,不计入「是否上报」判定。
 function ComposerUsage({ usage, draftTokens }: {
   usage: Usage;
   draftTokens: number;
@@ -636,24 +639,27 @@ function ComposerUsage({ usage, draftTokens }: {
   const hasDraft = draftTokens > 0;
   const hasCtx = usage.used > 0 || usage.size > 0;
   const hasCost = usage.cost > 0;
-  if (!hasDraft && !hasCtx && !hasCost) return null;
+  const hasBreakdown = usage.totalTokens > 0 || usage.inputTokens > 0 || usage.outputTokens > 0
+    || usage.cachedReadTokens > 0 || usage.cachedWriteTokens > 0 || usage.thoughtTokens > 0;
+  // harness 是否上报了任何用量数据:上下文 / 费用 / token 明细 任一非 0 即「已上报」。
+  const hasUsageReported = hasCtx || hasCost || hasBreakdown;
   const pct = usage.size > 0 ? Math.min(100, Math.round((usage.used / usage.size) * 100)) : 0;
   // 分级配色:上下文越满越警示(绿 → 琥珀 → 红),让占比一眼可读。
   const level = pct >= 85 ? "crit" : pct >= 60 ? "high" : pct >= 30 ? "mid" : "low";
-  // token 明细 tooltip(§4.5 react-tooltip):仅在有明细时附加,用 \n 多行(pre-line 渲染)。
-  const hasBreakdown = usage.totalTokens > 0 || usage.inputTokens > 0 || usage.outputTokens > 0
-    || usage.cachedReadTokens > 0 || usage.cachedWriteTokens > 0 || usage.thoughtTokens > 0;
-  const usageTip = hasBreakdown
-    ? [
-        t("chat.usageTitle"),
-        `${t("chat.usageInput")}: ${fmtTokens(usage.inputTokens)}`,
-        `${t("chat.usageOutput")}: ${fmtTokens(usage.outputTokens)}`,
-        usage.cachedReadTokens > 0 ? `${t("chat.usageCachedRead")}: ${fmtTokens(usage.cachedReadTokens)}` : "",
-        usage.cachedWriteTokens > 0 ? `${t("chat.usageCachedWrite")}: ${fmtTokens(usage.cachedWriteTokens)}` : "",
-        usage.thoughtTokens > 0 ? `${t("chat.usageThought")}: ${fmtTokens(usage.thoughtTokens)}` : "",
-        `${t("chat.usageTotal")}: ${fmtTokens(usage.totalTokens)}`,
-      ].filter(Boolean).join("\n")
-    : t("chat.usageTitle");
+  // token 明细 tooltip(§4.5 react-tooltip):有明细 → 多行;已上报无明细 → 标题;未上报 → 未上报说明。
+  const usageTip = !hasUsageReported
+    ? t("chat.usageNotReportedTip")
+    : hasBreakdown
+      ? [
+          t("chat.usageTitle"),
+          `${t("chat.usageInput")}: ${fmtTokens(usage.inputTokens)}`,
+          `${t("chat.usageOutput")}: ${fmtTokens(usage.outputTokens)}`,
+          usage.cachedReadTokens > 0 ? `${t("chat.usageCachedRead")}: ${fmtTokens(usage.cachedReadTokens)}` : "",
+          usage.cachedWriteTokens > 0 ? `${t("chat.usageCachedWrite")}: ${fmtTokens(usage.cachedWriteTokens)}` : "",
+          usage.thoughtTokens > 0 ? `${t("chat.usageThought")}: ${fmtTokens(usage.thoughtTokens)}` : "",
+          `${t("chat.usageTotal")}: ${fmtTokens(usage.totalTokens)}`,
+        ].filter(Boolean).join("\n")
+      : t("chat.usageTitle");
   return (
     <span
       className={`composer-usage composer-usage-${level}`}
@@ -663,13 +669,19 @@ function ComposerUsage({ usage, draftTokens }: {
       data-tooltip-place="top"
     >
       {hasDraft && <span className="cu-draft">~{fmtTokens(draftTokens)}</span>}
-      {hasDraft && (hasCtx || hasCost) && <span className="cu-sep">·</span>}
-      {hasCtx && (
-        <span className="cu-ctx">
-          {fmtTokens(usage.used)}{usage.size > 0 ? ` / ${fmtTokens(usage.size)}` : ""}{usage.size > 0 ? ` · ${pct}%` : ""}
-        </span>
+      {hasDraft && hasUsageReported && <span className="cu-sep">·</span>}
+      {hasUsageReported ? (
+        <>
+          {hasCtx && (
+            <span className="cu-ctx">
+              {fmtTokens(usage.used)}{usage.size > 0 ? ` / ${fmtTokens(usage.size)}` : ""}{usage.size > 0 ? ` · ${pct}%` : ""}
+            </span>
+          )}
+          {hasCost && <span className="cu-cost">${usage.cost.toFixed(4)}</span>}
+        </>
+      ) : (
+        <span className="cu-none">{t("chat.usageNotReported")}</span>
       )}
-      {hasCost && <span className="cu-cost">${usage.cost.toFixed(4)}</span>}
     </span>
   );
 }

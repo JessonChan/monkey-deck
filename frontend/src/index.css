@@ -976,6 +976,8 @@ input, textarea { font-family: inherit; }
 .composer-usage .cu-draft { color: var(--text-3); }
 .composer-usage .cu-ctx { color: var(--text-2); }
 .composer-usage .cu-cost { color: var(--green); opacity: 0.85; }
+/* 未上报态:harness 用量全 0,灰色降饱和(区别于有数据时的 text-2/text-3)。 */
+.composer-usage .cu-none { color: var(--text-3); opacity: 0.6; }
 .composer-usage-mid .cu-ctx { color: #d99a00; }
 .composer-usage-high .cu-ctx { color: #e06a1f; }
 .composer-usage-crit .cu-ctx { color: var(--red); }

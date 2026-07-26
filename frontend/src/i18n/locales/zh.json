@@ -146,6 +146,8 @@
     "usageCachedWrite": "缓存写",
     "usageThought": "思考",
     "usageTotal": "合计",
+    "usageNotReported": "—(未上报)",
+    "usageNotReportedTip": "harness 尚未上报用量",
     "planTitle": "执行计划",
     "planProgressAria": "已完成 {{pct}}%",
     "planPriorityHigh": "高",
