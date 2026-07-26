@@ -115,6 +115,11 @@ type chatConn interface {
 	FlatConfigOptions() []acp.ConfigOption
 	// SupportsImage 报告 agent 是否声明了 image prompt 能力(前端据此门控图片输入入口)。
 	SupportsImage() bool
+	// SupportsAudio 报告 agent 是否声明了 audio prompt 能力(前端据此门控音频输入入口)。
+	SupportsAudio() bool
+	// SupportsEmbeddedContext 报告 agent 是否声明了 embeddedContext prompt 能力
+	// (前端据此决定附件可否内联 ContentBlock::Resource 发送)。
+	SupportsEmbeddedContext() bool
 	// SetConfigOption 切换 config option(model/mode/effort),热切同 session 即时生效。
 	SetConfigOption(ctx context.Context, configId, value string) error
 	// RefreshConfig 重新 spawn probe harness 拉最新 configOptions(同步外部配置改动),
@@ -1116,14 +1121,16 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 	}
 	s.emitStatus(se.ID, "started", "")
 	// 推送 agent 自报的 config options(model/mode/effort),前端据此渲染下拉。
-	// 同时附带 image prompt 能力门控(前端据此决定是否展示图片输入入口,§3.5)。
-	// 即使无 config options 也要发,以投递 imageSupported(去掉 len>0 守卫)。
+	// 同时附带 prompt 能力门控(image/audio/embeddedContext,前端据此决定各类附件入口,§3.5)。
+	// 即使无 config options 也要发,以投递能力标志(去掉 len>0 守卫)。
 	flatOpts := chat.FlatConfigOptions()
 	s.emit(EventUpdate, acp.SessionEvent{
-		SessionID:      se.ID,
-		Kind:           "config_option",
-		ConfigOptions:  flatOpts,
-		ImageSupported: chat.SupportsImage(),
+		SessionID:                se.ID,
+		Kind:                     "config_option",
+		ConfigOptions:            flatOpts,
+		ImageSupported:           chat.SupportsImage(),
+		AudioSupported:           chat.SupportsAudio(),
+		EmbeddedContextSupported: chat.SupportsEmbeddedContext(),
 	})
 	// 持久化 config options 快照(懒 spawn:只读态用缓存渲染 ModelSelect,§3.x)。
 	s.persistConfigCache(se.ID, flatOpts)
@@ -2039,10 +2046,12 @@ func (s *ChatService) RefreshSessionConfig(sessionID string) ([]acp.ConfigOption
 	// 持久化刷新后的 config options 快照(懒 spawn:只读态用缓存渲染 ModelSelect)。
 	s.persistConfigCache(sessionID, flat)
 	s.emit(EventUpdate, acp.SessionEvent{
-		SessionID:      sessionID,
-		Kind:           "config_option",
-		ConfigOptions:  flat,
-		ImageSupported: ls.chat.SupportsImage(),
+		SessionID:                sessionID,
+		Kind:                     "config_option",
+		ConfigOptions:            flat,
+		ImageSupported:           ls.chat.SupportsImage(),
+		AudioSupported:           ls.chat.SupportsAudio(),
+		EmbeddedContextSupported: ls.chat.SupportsEmbeddedContext(),
 	})
 	return flat, nil
 }

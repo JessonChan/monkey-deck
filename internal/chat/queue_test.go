@@ -28,13 +28,13 @@ type fakeChat struct {
 	mu         sync.Mutex
 	prompts    []string
 	cancelled  int
-	block      chan struct{} // 关闭则所有阻塞 Prompt 返回 end_turn
-	started    chan struct{} // 每次 Prompt 进入时发信号(buffered,防丢)
-	title      string        // SessionTitle 返回值(模拟 harness 经 session/list 给的标题)
+	block      chan struct{}    // 关闭则所有阻塞 Prompt 返回 end_turn
+	started    chan struct{}    // 每次 Prompt 进入时发信号(buffered,防丢)
+	title      string           // SessionTitle 返回值(模拟 harness 经 session/list 给的标题)
 	emitHook   func(msg string) // 成功返回前回调(模拟 agent 产出一条消息,避免空 turn)
-	configSets []string      // 记录 SetConfigOption 调用("configId=value")
-	promptErr  error         // 非空则 Prompt 立即返回该错(模拟 peer 断连 / 崩溃,触发 emitError 路由)
-	alive      atomic.Bool   // IsAlive 返回值(默认 true;kill 置 false 模拟 harness 死)
+	configSets []string         // 记录 SetConfigOption 调用("configId=value")
+	promptErr  error            // 非空则 Prompt 立即返回该错(模拟 peer 断连 / 崩溃,触发 emitError 路由)
+	alive      atomic.Bool      // IsAlive 返回值(默认 true;kill 置 false 模拟 harness 死)
 }
 
 func newFakeChat() *fakeChat {
@@ -77,12 +77,14 @@ func (f *fakeChat) Prompt(ctx context.Context, msg string, _ []acp.Attachment) (
 	}
 }
 
-func (f *fakeChat) Close()                                               {}
-func (f *fakeChat) IsAlive() bool                                        { return f.alive.Load() }
-func (f *fakeChat) RespondPermission(_, _ string) bool                   { return true }
-func (f *fakeChat) SessionTitle(_ context.Context) (string, error)       { return f.title, nil }
-func (f *fakeChat) FlatConfigOptions() []acp.ConfigOption                { return nil }
-func (f *fakeChat) SupportsImage() bool                                  { return false }
+func (f *fakeChat) Close()                                         {}
+func (f *fakeChat) IsAlive() bool                                  { return f.alive.Load() }
+func (f *fakeChat) RespondPermission(_, _ string) bool             { return true }
+func (f *fakeChat) SessionTitle(_ context.Context) (string, error) { return f.title, nil }
+func (f *fakeChat) FlatConfigOptions() []acp.ConfigOption          { return nil }
+func (f *fakeChat) SupportsImage() bool                            { return false }
+func (f *fakeChat) SupportsAudio() bool                            { return false }
+func (f *fakeChat) SupportsEmbeddedContext() bool                  { return false }
 func (f *fakeChat) SetConfigOption(_ context.Context, configId, value string) error {
 	f.mu.Lock()
 	f.configSets = append(f.configSets, configId+"="+value)
