@@ -32,6 +32,9 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   const [overId, setOverId] = useState<string | null>(null);   // 拖拽悬停的目标条目 id
   const editRef = useRef<HTMLTextAreaElement>(null);
   const scheduleRef = useRef<HTMLInputElement>(null);
+  // IME 合成追踪:compositionStart/End 手动记录,配合 isComposing + keyCode===229 三重保险,
+  // 彻底防中文输入法选词确认的 Enter 被误判为保存(部分 macOS IME 下 isComposing 不可靠)。仿 Composer。
+  const composingRef = useRef(false);
 
   if (queue.length === 0) return null;
 
@@ -45,6 +48,9 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   };
   // 编辑态键盘:Enter 保存(无 Shift)、Esc 取消(AGENTS §4.2 弹窗可 Esc 关闭约束延伸)。
   const onEditKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // 中文输入法(IME)composing 中:Enter 用于选词,不保存/不取消。
+    // 三重检查:手动 ref 追踪(最可靠)+ isComposing(标准)+ keyCode 229(已废弃但兜底)。
+    if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       saveEdit();
@@ -123,6 +129,8 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                 defaultValue={item.text}
                 ref={editRef}
                 onKeyDown={onEditKey}
+                onCompositionStart={() => { composingRef.current = true; }}
+                onCompositionEnd={() => { composingRef.current = false; }}
                 rows={2}
                 autoFocus
               />
