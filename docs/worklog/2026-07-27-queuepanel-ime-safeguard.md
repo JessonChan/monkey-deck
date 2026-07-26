@@ -2,6 +2,8 @@
 
 **类型**:fix(queue)
 
+> Task #23422(初版)/ #23423(重做,落 main 未合 goose-exp)/ **#23424(重做2:补回归测试 + 合并存活验证)**。前两次 artifact 被判 phantom(代码已落库但缺回归测试、未验证合并存活),本次补齐:新增 IME 回归测试,并在当前 worktree 完整重验 build/test。
+
 ## 起因
 
 QueuePanel 的 inline 编辑 textarea(`queue-edit-input`)的 `onEditKey`:Enter(无 Shift)保存、Esc 取消。但**没做 IME 合成态判断** —— 中文输入法选词确认时按下的 Enter 会被直接当成「保存」,导致用户还没选完词、内容就被误提交写回队列。
@@ -23,12 +25,26 @@ QueuePanel 的编辑框与 Composer 输入框是同一种交互(Enter 提交),�
 ## 改了哪些文件
 
 - `frontend/src/components/QueuePanel.tsx`:加 `composingRef` + `onEditKey` IME 守卫 + 编辑 textarea 的 `onCompositionStart`/`onCompositionEnd`(共 +8 行)。
+- `frontend/src/components/QueuePanel.ime.mount.test.tsx`(**Task #23424 新增**):IME 三重保险回归测试,4 个用例(详见下节)。
+
+## 回归测试(Task #23424 补)
+
+AGENTS §5.3「每个 bug 修复必须配一个能复现该 bug 的测试」——前两次漏了,本次补。新增 `QueuePanel.ime.mount.test.tsx`,4 用例:
+
+1. `KeyboardEvent.isComposing=true` → Enter 不保存;同一输入框 `isComposing=false` → Enter 恢复正常保存(证明标准信号路径生效)。
+2. `keyCode===229` → Enter 不保存(证明兜底信号路径生效)。
+3. 非合成 Enter 仍正常保存(回归:守卫不误伤正常路径)。
+4. composition 接线冒烟:编辑 textarea 派发 `compositionstart`/`compositionend` 不抛异常、组件稳定。
+
+**测试环境局限(已验证并记录在测试文件头)**:React 19 + happy-dom 下,手动 dispatch 的 `compositionstart` 能触发原生 `addEventListener` 回调,但**不触发 React 合成 `onCompositionStart`**(React 事件系统差异)。故 `composingRef` 路径(生产主信号)无法在 happy-dom 端到端模拟;改测可直接从 `KeyboardEvent.nativeEvent` 读到的另两条等价信号(`isComposing`/`keyCode===229`),它们各自独立命中守卫即证明 OR 逻辑生效。`composingRef` 接线由冒烟用例兜底。
 
 ## 验证
 
-- `npm run build`(frontend):零 TS / 编译错误。
-- `npm run lint`(frontend):clean。
-- 定时输入框不受影响(无 Enter 提交路径),无需额外改动。
+- `bun test src/components/QueuePanel`(frontend):全部 14 pass(edit/schedule/reorder/ime 四个文件)。
+- `npm run build`(frontend,= `tsc && vite build`):零 TS / 编译错误(需先 `wails3 generate bindings` 生成未入库的 bindings)。
+- 全量 `bun test`:7 个 fail 全在 `HarnessUpdateAwareness.mount.test.tsx`(`ChatService.GetConfig is not a function` —— HarnessPane 的 mock/binding 问题,与本改动无关,历史既有)。
+- 定时(`datetime-local`)输入框不受影响(提交走按钮点击,无 Enter 提交路径,无 IME 误触发面)。
+- **合并存活验证**:当前 worktree HEAD = `f6a2e77`(已合 `agent/coder/517f705d`);`git branch --contains df12b06` 显示 IME 代码改动已存在于 `main` + 当前分支,工作树中 `QueuePanel.tsx` 的 `composingRef` + 三重守卫 + composition 接线均健在(非 phantom)。
 
 ## 下一步
 
