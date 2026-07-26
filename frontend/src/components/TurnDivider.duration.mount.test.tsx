@@ -2,9 +2,9 @@
 // 真实 React 树挂载 ChatView,断言 `.turn-divider-dur` 渲染出本轮耗时,且进行中(prompting)
 // 的回合不显示时长(零回归)。复用 virtual.mount.test 的 happy-dom 套路。
 //
-// 语义(实现 / 设计一致):每条 user 消息(首条除外)前的 TurnDivider 标注「该 user 开启的这轮」
-// 的开始时刻 + 持续时间(Option A:divider 标注它所衔接的那一轮)。故 user2 前的分隔线显示 turn2
-// (user2→agent3)的耗时;turn1(user0→agent1)无分隔线(首条无 divider,与改动前一致)。
+// 语义(实现 / 设计一致):每条 user 消息前(含首轮)的 TurnDivider 标注「该 user 开启的这轮」
+// 的开始时刻 + 持续时间(Option A:divider 标注它所衔接的那一轮)。故 user0 前的分隔线显示 turn1
+// (user0→agent1)的耗时;user2 前的分隔线显示 turn2(user2→agent3)的耗时。
 
 import { describe, test, expect, mock } from "bun:test";
 import { Window } from "happy-dom";
@@ -118,30 +118,35 @@ async function flush() { for (let i = 0; i < 10; i++) await delay(2); }
 async function settle() { await flush(); }
 
 describe("TurnDivider 显示本轮持续时间(端到端验收)", () => {
-  test("多轮(idle):user2 前的分隔线显示 turn2 耗时(83s → 1m 23s)", async () => {
+  test("多轮(idle):每条 user 前的分隔线显示对应回合耗时(turn1 90s→1m 30s,turn2 83s→1m 23s)", async () => {
     const { host, root } = mount(twoTurnItems(), "idle");
     await flush();
     await settle();
 
     const durs = host.querySelectorAll(".turn-divider-dur");
-    // 仅 user2 前有分隔线(首条 user0 无 divider);它标注 turn2(user2→agent3)= 83s = "1m 23s"。
-    expect(durs.length).toBe(1);
-    expect(durs[0].textContent).toContain("1m 23s");
-    const time = host.querySelector(".turn-divider-time");
-    expect(time).not.toBeNull();
-    expect(time!.textContent).toContain(" · 1m 23s");
+    // 两条 user 都有分隔线(首轮亦显示):durs[0] = user0 前 = turn1(90s = "1m 30s");
+    // durs[1] = user2 前 = turn2(83s = "1m 23s")。
+    expect(durs.length).toBe(2);
+    expect(durs[0].textContent).toContain("1m 30s");
+    expect(durs[1].textContent).toContain("1m 23s");
+    const times = host.querySelectorAll(".turn-divider-time");
+    expect(times.length).toBe(2);
+    expect(times[1].textContent).toContain(" · 1m 23s");
 
     root.unmount();
   });
 
   test("进行中(prompting)的最后一回合不显示时长(零回归)", async () => {
-    // 两轮,turn2 仍在 prompting → user2 前的分隔线不显示时长;turn1 无 divider。
+    // 两轮,turn2 仍在 prompting → user2 前的分隔线不显示时长;turn1 已结束(user0 前有时长)。
     const { host, root } = mount(twoTurnItems(), "prompting");
     await flush();
     await settle();
-    expect(host.querySelectorAll(".turn-divider-dur").length).toBe(0);
-    // 分隔线本身仍在(时间戳还在),只是没有 dur 段。
-    expect(host.querySelectorAll(".turn-divider").length).toBe(1);
+    const durs = host.querySelectorAll(".turn-divider-dur");
+    // 仅 turn1 有时长(90s = "1m 30s");turn2 进行中无 dur 段。
+    expect(durs.length).toBe(1);
+    expect(durs[0].textContent).toContain("1m 30s");
+    // 两条分隔线本身都在(时间戳还在),只是 turn2 的没有 dur 段。
+    expect(host.querySelectorAll(".turn-divider").length).toBe(2);
     root.unmount();
   });
 
@@ -149,20 +154,23 @@ describe("TurnDivider 显示本轮持续时间(端到端验收)", () => {
     const { host, root } = mount(twoTurnItems(), "prompting");
     await flush();
     await settle();
-    expect(host.querySelectorAll(".turn-divider-dur").length).toBe(0);
+    // prompting:turn1 有时长,turn2 无 → 仅 1 条 dur。
+    expect(host.querySelectorAll(".turn-divider-dur").length).toBe(1);
 
     root.render(<ChatView {...(baseProps(twoTurnItems(), "idle") as never)} />);
     await flush();
     await settle();
     const durs = host.querySelectorAll(".turn-divider-dur");
-    expect(durs.length).toBe(1);
-    expect(durs[0].textContent).toContain("1m 23s");
+    // idle:两回合均结束 → 2 条 dur;turn1 = "1m 30s",turn2 = "1m 23s"。
+    expect(durs.length).toBe(2);
+    expect(durs[0].textContent).toContain("1m 30s");
+    expect(durs[1].textContent).toContain("1m 23s");
 
     root.unmount();
   });
 
   test("时长格式化边界:<1s 不显示;90s→1m 30s;3661s→1h 01m", async () => {
-    // <1s:turn 时长 500ms → 不渲染 dur。
+    // <1s:两回合时长均 500ms → 均不渲染 dur(两条分隔线在,但无 dur 段)。
     const tiny: ChatItem[] = [
       { type: "user", id: "u0", text: "a", ts: T0 },
       { type: "agent", id: "a1", text: "b", ts: T0 + 500 },
@@ -174,7 +182,7 @@ describe("TurnDivider 显示本轮持续时间(端到端验收)", () => {
     expect(h1.querySelectorAll(".turn-divider-dur").length).toBe(0);
     r1.unmount();
 
-    // 90s → "1m 30s"
+    // 90s → "1m 30s"(turn2;turn1 时长 1s → "1s")
     const m90: ChatItem[] = [
       { type: "user", id: "u0", text: "a", ts: T0 },
       { type: "agent", id: "a1", text: "b", ts: T0 + 1000 },
@@ -183,10 +191,11 @@ describe("TurnDivider 显示本轮持续时间(端到端验收)", () => {
     ];
     const { host: h2, root: r2 } = mount(m90, "idle");
     await flush(); await settle();
-    expect(h2.querySelector(".turn-divider-dur")!.textContent).toContain("1m 30s");
+    const durs2 = h2.querySelectorAll(".turn-divider-dur");
+    expect(durs2[1].textContent).toContain("1m 30s");
     r2.unmount();
 
-    // 3661s → "1h 01m"
+    // 3661s → "1h 01m"(turn2)
     const h3661: ChatItem[] = [
       { type: "user", id: "u0", text: "a", ts: T0 },
       { type: "agent", id: "a1", text: "b", ts: T0 + 1000 },
@@ -195,7 +204,8 @@ describe("TurnDivider 显示本轮持续时间(端到端验收)", () => {
     ];
     const { host: h3, root: r3 } = mount(h3661, "idle");
     await flush(); await settle();
-    expect(h3.querySelector(".turn-divider-dur")!.textContent).toContain("1h 01m");
+    const durs3 = h3.querySelectorAll(".turn-divider-dur");
+    expect(durs3[1].textContent).toContain("1h 01m");
     r3.unmount();
   });
 });

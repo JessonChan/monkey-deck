@@ -548,8 +548,8 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
               const durationMs = tb?.start && tb?.end && tb.end > tb.start ? tb.end - tb.start : undefined;
               content = (
                 <>
-                  {/* 回合分隔:每条用户消息(首条除外)前插一条带时间的分隔线,让多轮对话边界清晰。 */}
-                  {userItem && row.first > 0 && <TurnDivider ts={userItem.ts} durationMs={durationMs} />}
+                  {/* 回合分隔:每条用户消息前插一条带时间的分隔线(首轮亦显示),让每轮对话边界清晰。 */}
+                  {userItem && row.first >= 0 && <TurnDivider ts={userItem.ts} durationMs={durationMs} />}
                   <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} />
                 </>
               );
