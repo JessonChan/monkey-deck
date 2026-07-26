@@ -1824,6 +1824,37 @@ input, textarea { font-family: inherit; }
 .harness-status-ok { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: #34c759; }
 .harness-status-err { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--red); }
 
+/* ─── 能力矩阵 chip 行(HarnessSettings 每行下方) ─── */
+/* 紧凑 chip 行可 wrap,不挤压 harness 名/命令/版本/升级按钮(§4.6 三端一致)。 */
+.harness-cap { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.harness-cap.probing,
+.harness-cap.failed {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10.5px; padding: 2px 7px; border-radius: 10px; width: fit-content;
+}
+.harness-cap.probing { color: var(--text-3); background: var(--elev); border: 1px solid var(--sep); }
+.harness-cap.failed { color: var(--red); background: rgba(255, 69, 58, 0.08); border: 1px solid rgba(255, 69, 58, 0.25); cursor: help; }
+.harness-cap-chip {
+  display: inline-flex; align-items: center; gap: 3px; cursor: help;
+  font-size: 10.5px; padding: 1px 6px; border-radius: 10px; line-height: 1.5;
+  border: 1px solid var(--sep);
+}
+.harness-cap-chip.yes { color: #34c759; background: rgba(52, 199, 89, 0.10); border-color: rgba(52, 199, 89, 0.25); }
+.harness-cap-chip.no { color: var(--text-3); background: var(--bg); }
+.harness-cap-chip.unknown { color: var(--text-3); background: var(--elev); border-style: dashed; }
+.harness-cap-chip.unknown svg.dim { opacity: 0.5; }
+
+/* ─── 新建对话弹窗:能力摘要(精简 model + usage) ─── */
+.ns-cap-summary { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.ns-cap-bit {
+  display: inline-flex; align-items: center; gap: 2px; cursor: help;
+  font-size: 10.5px; padding: 1px 6px; border-radius: 8px; line-height: 1.5;
+  border: 1px solid var(--sep); white-space: nowrap;
+}
+.ns-cap-bit.yes { color: #34c759; background: rgba(52, 199, 89, 0.10); border-color: rgba(52, 199, 89, 0.25); }
+.ns-cap-bit.no { color: var(--text-3); background: var(--bg); }
+.ns-cap-bit.unknown { color: var(--text-3); background: var(--elev); border-style: dashed; }
+
 /* ─── 新建对话弹窗(harness 选择 + worktree 二选一) ─── */
 .new-session-card { max-width: 380px; gap: 14px; }
 .ns-field { display: flex; flex-direction: column; gap: 7px; }

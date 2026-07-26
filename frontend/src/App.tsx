@@ -1421,6 +1421,7 @@ export default function App() {
     {newSession && (
       <NewSessionModal
         harnesses={harnesses}
+        harnessCapabilities={harnessCapabilities}
         isGit={newSession.isGit}
         lastHarness={newSession.lastHarness}
         onConfirm={confirmNewSession}
