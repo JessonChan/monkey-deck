@@ -16,7 +16,7 @@ import { countDiffLines, diffLineCls } from "../lib/diff";
 import { highlightToLines } from "../lib/highlight";
 import "../hljs-theme.css";
 import { buildRows, computeLayout, computeWindow, anchorAt, restoreScroll, isAtBottom, HeightModel, TAIL_PRIOR, HEAD_PRIOR, type VRow, type Layout } from "../lib/virtualList";
-import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus } from "lucide-react";
+import { SquareTerminal, Sparkles, Brain, Check, Copy, FolderOpen, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus } from "lucide-react";
 
 interface Props {
   project: Project | null;
@@ -167,12 +167,47 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     setPreviewTarget({ path, line });
   }, []);
   const closeFilePreview = useCallback(() => setPreviewTarget(null), []);
-  // 头部「复制项目路径」:写 project.path 到剪贴板;无 project 时不执行(disabled 兜底)。
+  // 当前生效的工作目录:优先 session.worktreePath(独立 worktree),降级 project.path(共享目录)。
+  // 与 App.tsx 的 termCwdRef 同一套优先级(worktree 优先 → 项目目录)。
+  const activePath = props.session?.worktreePath || props.project?.path || "";
+  // 头部「复制工作目录」:写 activePath 到剪贴板;无路径时不执行(disabled 兜底)。
   const copyPath = useCallback(async () => {
-    const p = props.project?.path;
-    if (!p) return;
-    try { await navigator.clipboard.writeText(p); setCopiedPath(true); setTimeout(() => setCopiedPath(false), 1500); } catch { /* noop */ }
-  }, [props.project?.path]);
+    if (!activePath) return;
+    try { await navigator.clipboard.writeText(activePath); setCopiedPath(true); setTimeout(() => setCopiedPath(false), 1500); } catch { /* noop */ }
+  }, [activePath]);
+  // ─── 对话区右键菜单(复用 Sidebar ctx-menu 范式:fixed 定位 + 全局 Esc / outside-mousedown / resize 关闭 + 视口裁剪)───
+  // 仅放与工作目录相关的项(复制路径 / 在 Finder 打开),与 Sidebar 项目菜单的路径项对齐。
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement>(null);
+  const openCtxMenu = useCallback((e: React.MouseEvent) => {
+    if (!activePath) return; // 无路径则交给浏览器默认菜单
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  }, [activePath]);
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setCtxMenu(null); };
+    const close = () => setCtxMenu(null);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", close);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("resize", close);
+    };
+  }, [ctxMenu]);
+  useLayoutEffect(() => {
+    const el = ctxMenuRef.current;
+    if (!el || !ctxMenu) return;
+    const pad = 8;
+    const w = el.offsetWidth, h = el.offsetHeight;
+    let left = ctxMenu.x, top = ctxMenu.y;
+    if (left + w > window.innerWidth - pad) left = Math.max(pad, window.innerWidth - w - pad);
+    if (top + h > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - h - pad);
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }, [ctxMenu]);
   // ─── 虚拟化:状态 / 派生数据 / 助手 ───
   // 窗口 [start, end):只有这些行进入 DOM。区间变化才 setState(W 不变量)。
   const [win, setWin] = useState({ start: 0, end: 0 });
@@ -485,7 +520,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           <button
             className="icon-btn small"
             onClick={copyPath}
-            disabled={!props.project}
+            disabled={!activePath}
             data-tooltip-id="md-tip"
             data-tooltip-content={copiedPath ? t("chat.pathCopiedTip") : t("chat.copyPathTip")}
             data-testid="copy-path-btn"
@@ -517,7 +552,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         </div>
       )}
 
-      <div className="chat-body" key={props.sessionId} ref={scrollRef} onScroll={onScroll} data-testid="chat-body">
+      <div className="chat-body" key={props.sessionId} ref={scrollRef} onScroll={onScroll} onContextMenu={openCtxMenu} data-testid="chat-body">
         {/* 内容层:显式高度 = 布局 total(撑开滚动条),行绝对定位(top = layout.tops,与 scrollTop 同系)。 */}
         <div className="chat-content" ref={contentRef} style={{ height: layout.total }}>
           {/* 头部区:顶部留白 + 加载更多 + 占位。实测高度 headHRef(data-iid=__head__)。 */}
@@ -593,6 +628,21 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           </div>
         )}
       </div>
+      {ctxMenu && (
+        <div
+          ref={ctxMenuRef}
+          className="ctx-menu"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button className="ctx-item" onClick={() => { void copyPath(); setCtxMenu(null); }}>
+            <Copy size={13} /> {t("sidebar.copyWorkdir")}
+          </button>
+          <button className="ctx-item" onClick={() => { void ChatService.RevealPath(activePath); setCtxMenu(null); }}>
+            <FolderOpen size={13} /> {t("sidebar.revealInFinder")}
+          </button>
+        </div>
+      )}
       {props.error && <div className="error-bar">⚠ {props.error}</div>}
       {props.mergeResult && <div className={`merge-result ${props.mergeResult.startsWith("✅") ? "ok" : "fail"}`}>{props.mergeResult}</div>}
       <FilePreviewOverlay sessionId={props.sessionId} target={previewTarget} onClose={closeFilePreview} />
