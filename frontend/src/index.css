@@ -1521,14 +1521,16 @@ input, textarea { font-family: inherit; }
 }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 .preview-card {
-  /* Task #23063:resize:both + min 约束,并去掉 max-width/max-height —— 让用户能
-     把卡片拖大到接近视口(原 900px/80vh 上限被 .preview-overlay 的 padding:40px 自然兜底)。
+  /* resize:both + min 约束(360×220,正常视口不溢出窗口),并加回 max-height:85vh ——
+     卡片高度上限 85vh < 视口减去 .preview-overlay 的 padding:40px(需求视口 ≥ ~533px 高,
+     桌面环境均满足),既允许用户向上拖大、又保证顶部 .preview-head(含关闭按钮)始终可见,
+     不会被居中布局顶出可视区。宽度仍不限,由 padding 自然兜底。
      overflow:hidden 满足 resize 的 overflow≠visible 要求;内部 .preview-pre / CodeViewer
      各自处理滚动。 */
   width: 100%; background: var(--elev);
   border: 1px solid var(--sep-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop);
   display: flex; flex-direction: column; overflow: hidden;
-  resize: both; min-width: 360px; min-height: 220px;
+  resize: both; min-width: 360px; min-height: 220px; max-height: 85vh;
 }
 /* Task #23063:resize 把手可见化 —— WebKit(macOS)/ WebView2(Win)默认把手在深色
    底上几乎不可见,用 ::-webkit-resizer 画两条对角发丝纹,统一两处卡片外观。 */
