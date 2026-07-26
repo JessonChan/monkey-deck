@@ -144,3 +144,86 @@ func TestProbeCapabilities_WithProbeSpawnFailure(t *testing.T) {
 		t.Fatalf("EmitsUsage/EmitsPlan should be false on spawn failure, got usage=%v plan=%v", m.EmitsUsage, m.EmitsPlan)
 	}
 }
+
+// cfgCat / cfgID 辅助构造带 category / id 的 Select config option(注入用)。
+func cfgCat(category string) *acp.SessionConfigOptionCategory {
+	c := acp.SessionConfigOptionCategory(category)
+	return &c
+}
+
+// TestConfigBitsFromOptions 验证从 NewSession ConfigOptions 抽模型选择位:
+//   - 三类齐全(category=model/mode/thought_level)→ 三位全 true。
+//   - category 缺省时按 spec 字面量 id 兜底(model/mode/thought_level)。
+//   - 空 / 只 Boolean / 私有 id(如 thinking_budget 且无 category)→ 不误判。
+//   - 混在 Grouped/Ungrouped 之外的结构不影响(只看 Select 顶层 category/id)。
+func TestConfigBitsFromOptions(t *testing.T) {
+	t.Run("all three via category", func(t *testing.T) {
+		opts := []acp.SessionConfigOption{
+			{Select: &acp.SessionConfigOptionSelect{Id: "model", Category: cfgCat("model")}},
+			{Select: &acp.SessionConfigOptionSelect{Id: "mode", Category: cfgCat("mode")}},
+			{Select: &acp.SessionConfigOptionSelect{Id: "thought_level", Category: cfgCat("thought_level")}},
+		}
+		model, mode, effort := configBitsFromOptions(opts)
+		if !model || !mode || !effort {
+			t.Fatalf("all true expected, got model=%v mode=%v effort=%v", model, mode, effort)
+		}
+	})
+
+	t.Run("category absent falls back to spec id", func(t *testing.T) {
+		// category 缺省(协议允许):按 id=model/mode/thought_level 兜底匹配。
+		opts := []acp.SessionConfigOption{
+			{Select: &acp.SessionConfigOptionSelect{Id: "model"}},
+			{Select: &acp.SessionConfigOptionSelect{Id: "mode"}},
+			{Select: &acp.SessionConfigOptionSelect{Id: "thought_level"}},
+		}
+		model, mode, effort := configBitsFromOptions(opts)
+		if !model || !mode || !effort {
+			t.Fatalf("id fallback expected all true, got model=%v mode=%v effort=%v", model, mode, effort)
+		}
+	})
+
+	t.Run("private id without category not misclassified", func(t *testing.T) {
+		// agent 私有 id(如 thinking_budget)且无 category:不应被当 effort(避免硬编码私有 id)。
+		opts := []acp.SessionConfigOption{
+			{Select: &acp.SessionConfigOptionSelect{Id: "thinking_budget"}},
+		}
+		model, mode, effort := configBitsFromOptions(opts)
+		if model || mode || effort {
+			t.Fatalf("private id without category should not match, got model=%v mode=%v effort=%v", model, mode, effort)
+		}
+	})
+
+	t.Run("private id WITH thought_level category matches effort", func(t *testing.T) {
+		// 真实 opencode 场景:id 可能是私有名(如 thinking_budget),但 category=thought_level
+		// 才是语义信号 → 应判 effort(尊重数据源:category 优先,§5.3)。
+		opts := []acp.SessionConfigOption{
+			{Select: &acp.SessionConfigOptionSelect{Id: "thinking_budget", Category: cfgCat("thought_level")}},
+		}
+		_, _, effort := configBitsFromOptions(opts)
+		if !effort {
+			t.Fatalf("thought_level category should set effort even with private id")
+		}
+	})
+
+	t.Run("empty and boolean ignored", func(t *testing.T) {
+		// 空 / Boolean(unstable)不算模型选择位。
+		opts := []acp.SessionConfigOption{
+			{Boolean: &acp.SessionConfigOptionBoolean{Id: "model", Category: cfgCat("model")}},
+		}
+		model, mode, effort := configBitsFromOptions(opts)
+		if model || mode || effort {
+			t.Fatalf("boolean option should be ignored, got model=%v mode=%v effort=%v", model, mode, effort)
+		}
+	})
+
+	t.Run("only model present", func(t *testing.T) {
+		opts := []acp.SessionConfigOption{
+			{Select: &acp.SessionConfigOptionSelect{Id: "model", Category: cfgCat("model")}},
+		}
+		model, mode, effort := configBitsFromOptions(opts)
+		if !model || mode || effort {
+			t.Fatalf("only model expected, got model=%v mode=%v effort=%v", model, mode, effort)
+		}
+	})
+}
+

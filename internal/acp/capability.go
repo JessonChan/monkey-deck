@@ -53,9 +53,53 @@ type CapabilityMatrix struct {
 	McpHttp               bool `json:"mcpHttp"`                // McpServer::Http
 	McpSse                bool `json:"mcpSse"`                 // McpServer::Sse
 
+	// --- 模型选择位(来自 NewSession/LoadSession 响应的 ConfigOptions)---
+	// 协议声明位只覆盖 Initialize;model/mode/thought_level 这三类「可下拉切换的 session config」
+	// 只在 NewSession 响应里自报(SessionConfigOption,runner.go:85)。这是 issue 核心诉求:
+	// 「有的 harness 没模型选择」——前端据此门控 model-select / mode / effort 入口的显隐。
+	// 由 ProbeCapabilities 在 NewSession 成功后用 configBitsFromOptions 填充(零 token 成本)。
+	ConfigModel  bool `json:"configModel"`  // 至少一个 category=model(或 id=model)的 Select option
+	ConfigMode   bool `json:"configMode"`   // 至少一个 category=mode(或 id=mode)的 Select option
+	ConfigEffort bool `json:"configEffort"` // 至少一个 category=thought_level 的 Select option(UI 称 effort)
+
 	// --- 行为观测位(仅 withProbe=true 且 noop Prompt 成功时填)---
 	EmitsUsage bool `json:"emitsUsage,omitempty"` // noop Prompt 期间至少收到一次 usage_update
 	EmitsPlan  bool `json:"emitsPlan,omitempty"`  // noop Prompt 期间至少收到一次 plan / plan_update
+}
+
+// configBitsFromOptions 从 NewSession/LoadSession 响应的 ConfigOptions 抽出模型选择位(纯函数)。
+//
+// 不变量(§5.3):按协议语义信号 category 判别——SessionConfigOptionCategory 是协议枚举
+// (model/mode/thought_level),是「这是哪类选择器」的权威答案,不靠事件形状启发式。
+// category 缺省时(协议允许,spec:Clients MUST handle missing categories gracefully)
+// 退化到按 id 匹配 spec 字面量(model/mode/thought_level);不硬编码 agent 私有 id
+// (如 thinking_budget——那是旧前端的 bug,见 ModelSelect.mount.test.tsx)。
+//
+// 只看 Select(单值下拉,稳定);Boolean(unstable)不算模型选择位。
+func configBitsFromOptions(opts []acp.SessionConfigOption) (model, mode, effort bool) {
+	for _, o := range opts {
+		s := o.Select
+		if s == nil {
+			continue
+		}
+		key := ""
+		if s.Category != nil {
+			key = string(*s.Category)
+		}
+		if key == "" {
+			// category 缺省:按 spec 字面量 id 兜底。
+			key = string(s.Id)
+		}
+		switch key {
+		case string(acp.SessionConfigOptionCategoryModel):
+			model = true
+		case string(acp.SessionConfigOptionCategoryMode):
+			mode = true
+		case string(acp.SessionConfigOptionCategoryThoughtLevel):
+			effort = true
+		}
+	}
+	return
 }
 
 // matrixFromInit 从 Initialize 响应里抽出协议声明的能力位(纯函数,便于单测注入)。
@@ -136,6 +180,10 @@ func (r *Runner) ProbeCapabilities(ctx context.Context, harnessID, workDir strin
 		m.ProbeErr = err.Error()
 		return m, fmt.Errorf("probe capabilities: new session: %w", err)
 	}
+
+	// 模型选择位:NewSession 响应的 ConfigOptions 自报 model/mode/thought_level 选择器。
+	// 零 token 成本(不发 Prompt),与声明位同属默认探测路径(§3.5/issue 核心诉求)。
+	m.ConfigModel, m.ConfigMode, m.ConfigEffort = configBitsFromOptions(sess.ConfigOptions)
 
 	if withProbe {
 		// noop Prompt:发极简 prompt 观察实际事件流。失败不致命(harness 可能需鉴权/配置),
