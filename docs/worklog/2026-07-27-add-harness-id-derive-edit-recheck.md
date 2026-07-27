@@ -68,3 +68,15 @@
 **验证**:`go test ./internal/chat/` 通过(新增 `TestAddHarness_DisambiguatesBuiltinConflict` —— `omp acp`→`omp-2`、`opencode acp`→`opencode-2`;`TestAddHarness_DisambiguatesExistingConflict` —— 同命令第二次→`junie-2`)。
 
 **新 OPEN**:消歧后**完全相同的命令**也能加成第二条(`omp acp` → `omp-2`,与内置 omp 命令一样)。无害(id 不同、列表里能看到两条),但属于无意义重复;未做"命令完全重复才拒绝"的特判(KISS,且删除 UI 尚未接,用户可自纠)。
+
+## 补丁 2(同日):UI 拥挤 + 弹窗关闭体验
+
+**起因**:用户反馈两个 UI 问题——① harness 行的自检/编辑按钮位置导致 harness-row-acts 区拥挤;② 编辑弹窗没有关闭按钮,只能点遮罩关闭(编辑中误触丢数据,不友好)。
+
+**改法**:
+- HarnessRow 自检/编辑改 **icon-only**(`tool-btn` 26×26 + tooltip),与 CapabilityMatrixButton 同款;原带文字标签把 acts 区(还有升级/状态)挤爆。
+- AddHarnessModal/EditHarnessModal 加 **X 关闭按钮**(modal-card 右上角,`position:absolute`),**去掉 overlay 点击关闭**。关闭路径收敛为 X / Esc / 底部取消,三者皆显式——编辑中误点遮罩不再丢数据。
+- CSS:`.modal-card` 加 `position: relative`;新增 `.modal-close`。
+
+**改了哪些文件**:`HarnessSettings.tsx`(按钮 icon-only)、`AddHarnessModal.tsx`/`EditHarnessModal.tsx`(X + 去 overlay onClick)、`index.css`。
+**验证**:`tsc --noEmit` 通过;`bun test` 147 pass。
