@@ -464,7 +464,7 @@
       "addBtn": "Add harness",
       "addBtnTip": "Manually add an ACP-capable harness (ID / name / start command)",
       "addTitle": "Add harness",
-      "addDesc": "Add an ACP-capable coding agent. Provide its stdio ACP start command; after adding it is auto-scanned for install and probed for capabilities.",
+      "addDesc": "Add an ACP-capable coding agent. Provide its stdio ACP start command, run \"Self-check\" to verify the ACP contract, then add.",
       "addIdLabel": "ID",
       "addIdPlaceholder": "e.g. junie / jcode / goose / kimi",
       "addNameLabel": "Display name",
@@ -477,7 +477,23 @@
       "addErrIdEmpty": "ID must not be empty",
       "addErrIdConflict": "This ID already exists; choose another",
       "addErrNameEmpty": "Display name must not be empty",
-      "addErrCmdEmpty": "Start command must not be empty"
+      "addErrCmdEmpty": "Start command must not be empty",
+      "addProbe": "Self-check",
+      "addProbing": "Checking…",
+      "addVerdictOk": "Self-check passed",
+      "addVerdictFail": "Self-check failed",
+      "addTierInit": "Init",
+      "addTierSess": "Session",
+      "addTierStream": "Stream",
+      "addTierTurn": "Full turn",
+      "addCapResume": "Resume",
+      "addCapImage": "Image",
+      "addCapList": "List",
+      "addGapModel": "no model selector",
+      "addGapUsage": "no usage",
+      "addGapThought": "no thoughts",
+      "addWarnPrefix": "Limited: ",
+      "addNeedProbe": "Run \"Self-check\" above and pass before adding"
     }
   }
 }
