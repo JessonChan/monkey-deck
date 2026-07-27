@@ -227,13 +227,15 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
 
   // rows = 把 items 折叠成渲染行(连续 tool 成组);layout = 前缀和几何(唯一坐标事实,含 headPad 与 scrollTop 同系)。
   const rows = useMemo(() => buildRows(items), [items]);
-  // 每个回合的起止时间,供 user 消息 msg-meta 显示本轮持续时间(格式化历时)。
-  // turn start = user 消息 ts(发送时刻落库);turn end = 该回合最后一条消息的 ts
-  // —— persistTurn 在回合结束时统一写库,最后一条 createdAt ≈ 回合结束时刻(§5.3 尊重数据源)。
-  // 仅「已结束」回合算出 end:有后续 user 消息(下回合已开)必为结束;最后一回合在非 prompting
-  // (idle/error/…)时视为结束。进行中(prompting)的回合不显示时长(无结束时刻)。
-  const turnBounds = useMemo(() => {
-    const m = new Map<number, { start?: number; end?: number }>();
+  // 每个回合的持续时间,挂到该回合「最后一条 agent 回复」的 msg-meta(需求钉死 #68:
+  // duration 不许放 user 消息,只挂 agent 回复)。turn start = user 消息 ts(发送时刻落库);
+  // turn end = 该回合最后一条消息的 ts —— persistTurn 在回合结束时统一写库,最后一条
+  // createdAt ≈ 回合结束时刻(§5.3 尊重数据源)。
+  // 仅「已结束」回合算出 duration:有后续 user 消息(下回合已开)必为结束;最后一回合在非
+  // prompting(idle/error/…)时视为结束。进行中(prompting)的回合不显示时长(无结束时刻)。
+  // 返回 map:agent 消息下标 → 本回合 durationMs(仅每回合最后一条 agent 进入 map)。
+  const agentTurnDuration = useMemo(() => {
+    const m = new Map<number, number>();
     const userIdx: number[] = [];
     for (let i = 0; i < items.length; i++) if (items[i].type === "user") userIdx.push(i);
     for (let k = 0; k < userIdx.length; k++) {
@@ -242,7 +244,14 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       const isLast = k === userIdx.length - 1;
       const endIdx = isLast ? items.length - 1 : userIdx[k + 1] - 1;
       const complete = !isLast || props.status !== "prompting";
-      m.set(start, { start: startTs, end: complete ? items[endIdx]?.ts : undefined });
+      const endTs = complete ? items[endIdx]?.ts : undefined;
+      if (!(startTs && endTs && endTs > startTs)) continue;
+      // 找该回合 [start, endIdx] 内最后一条 agent 消息,把 duration 挂它(最终回复 = turn 锚点)。
+      let lastAgent = -1;
+      for (let i = endIdx; i >= start; i--) {
+        if (items[i].type === "agent") { lastAgent = i; break; }
+      }
+      if (lastAgent >= 0) m.set(lastAgent, endTs - startTs);
     }
     return m;
   }, [items, props.status]);
@@ -578,11 +587,10 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
               // 历史 turn 的 plan(静态展示,无 spinner —— turn 已结束,plan 是定格快照)。
               content = <PlanTimeline entries={(items[row.first] as Extract<ChatItem, { type: "plan" }>).entries} prompting={false} isOpen={planOpen} onToggle={onTogglePlanOpen} />;
             } else {
-              const userItem = row.kind === "user" ? (items[row.first] as Extract<ChatItem, { type: "user" }>) : undefined;
-              const tb = userItem ? turnBounds.get(row.first) : undefined;
-              const durationMs = tb?.start && tb?.end && tb.end > tb.start ? tb.end - tb.start : undefined;
+              // duration 挂最后一条 agent 回复(非 user,需求钉死 #68):仅 agent 行查 map。
+              const durationMs = row.kind === "agent" ? agentTurnDuration.get(row.first) : undefined;
               content = (
-                <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} durationMs={userItem ? durationMs : undefined} />
+                <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} durationMs={durationMs} />
               );
             }
             return (
@@ -686,17 +694,12 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
 
 const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview, durationMs }: { item: ChatItem; sessionId: string; onOpenFilePreview: (path: string, line?: number) => void; durationMs?: number }) {
   if (item.type === "user") {
-    const dur = formatDuration(durationMs);
     return (
       <div className="row row-user" data-testid="msg-user">
         <div className="bubble-user-wrap">
           <UserBubble text={item.text} onOpenFilePreview={onOpenFilePreview} />
           <div className="msg-meta">
-            {item.ts && (
-              <span className="msg-time">
-                {formatTime(item.ts)}{dur && <span className="msg-dur"> · {dur}</span>}
-              </span>
-            )}
+            {item.ts && <span className="msg-time">{formatTime(item.ts)}</span>}
             {item.text && <MessageActions text={item.text} testId="copy-user-msg" />}
           </div>
         </div>
@@ -704,6 +707,7 @@ const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview, dura
     );
   }
   if (item.type === "agent") {
+    const dur = formatDuration(durationMs);
     return (
       <div className="row row-agent" data-testid="msg-agent">
         <div className="avatar"><Sparkles size={15} /></div>
@@ -712,7 +716,11 @@ const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview, dura
             <AgentMarkdown text={item.text + (item.streaming ? " ▋" : "")} onOpenFilePreview={onOpenFilePreview} streaming={item.streaming} />
           </div>
           <div className="msg-meta">
-            {item.ts && <span className="msg-time">{formatTime(item.ts)}</span>}
+            {item.ts && (
+              <span className="msg-time">
+                {formatTime(item.ts)}{dur && <span className="msg-dur"> · {dur}</span>}
+              </span>
+            )}
             {!item.streaming && item.text && <MessageActions text={item.text} />}
           </div>
         </div>
