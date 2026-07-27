@@ -1,14 +1,13 @@
 package chat
 
-// user_harness_test.go:ChatService.AddHarness + 启动加载用户 harness 的测试。
+// user_harness_test.go:ChatService.AddHarness(声明即用 + 自检门槛)+ 启动加载用户 harness 的测试。
 //
+// 持久化走 SQLite(user_harnesses 表,迁移 0012);测试用 setupHarnessStoreSvc 的临时 DB。
 // 不真起 harness(§5.1):注入空 fakeStubProbe 让 Discover 标记全部未装 →
 // AddHarness 末尾 go probeCapabilitiesAsync() 因无 Installed 项直接 no-op,不 spawn。
 
 import (
-	"os"
-	"path/filepath"
-	"strings"
+	"context"
 	"testing"
 
 	"github.com/jessonchan/monkey-deck/internal/harness"
@@ -23,8 +22,8 @@ func resetUserHarnessesForTest(t *testing.T) {
 	t.Cleanup(func() { harness.SetUserHarnesses(prev) })
 }
 
-// TestAddHarness_PersistsAndReturns AddHarness 成功路径:校验通过 → 写文件 →
-// 合并进内存 → 返回的列表含新 harness + 文件落盘正确。
+// TestAddHarness_PersistsAndReturns AddHarness 成功路径:校验通过 → 落 SQLite →
+// 合并进内存 → 返回的列表含新 harness + DB 落库正确。
 func TestAddHarness_PersistsAndReturns(t *testing.T) {
 	resetUserHarnessesForTest(t)
 	// 空 fakeProbe:Discover 全标未装(避免真实 PATH 命中本机已装 opencode/omp 触发 probe spawn)。
@@ -50,13 +49,23 @@ func TestAddHarness_PersistsAndReturns(t *testing.T) {
 		t.Fatalf("junie metadata wrong: %+v", got)
 	}
 
-	// 文件落盘:DataDir/harnesses.json 含一条 junie。
-	data, err := os.ReadFile(filepath.Join(svc.cfg.DataDir, harness.UserHarnessesFile))
+	// DB 落库:user_harnesses 表含一条 junie。
+	rows, err := svc.st.ListUserHarnesses(context.Background())
 	if err != nil {
-		t.Fatalf("read harnesses.json: %v", err)
+		t.Fatalf("ListUserHarnesses: %v", err)
 	}
-	if !strings.Contains(string(data), "junie") {
-		t.Fatalf("harnesses.json missing junie: %s", data)
+	var dbRow *harness.UserHarness
+	for _, r := range rows {
+		if r.ID == "junie" {
+			r := r
+			dbRow = &harness.UserHarness{ID: r.ID, Name: r.Name, Command: r.Command, Icon: r.Icon}
+		}
+	}
+	if dbRow == nil {
+		t.Fatalf("user_harnesses table missing junie: %+v", rows)
+	}
+	if dbRow.Name != "Junie" || dbRow.Command != "junie acp" {
+		t.Fatalf("junie DB row wrong: %+v", dbRow)
 	}
 	// 内存合并视图:UserHarnesses() 含 junie。
 	found := false
@@ -97,7 +106,7 @@ func TestAddHarness_IDConflictExistingUser(t *testing.T) {
 	}
 }
 
-// TestAddHarness_Validation 校验各字段空值 → 对应哨兵错误,且不写文件。
+// TestAddHarness_Validation 校验各字段空值 → 对应哨兵错误,且不落库。
 func TestAddHarness_Validation(t *testing.T) {
 	resetUserHarnessesForTest(t)
 	cases := []struct {
@@ -118,23 +127,26 @@ func TestAddHarness_Validation(t *testing.T) {
 			if err != tc.wantErr {
 				t.Fatalf("AddHarness err=%v, want %v", err, tc.wantErr)
 			}
-			// 不应落盘文件。
-			if _, statErr := os.Stat(filepath.Join(svc.cfg.DataDir, harness.UserHarnessesFile)); statErr == nil {
-				t.Fatalf("harnesses.json should not be created on validation failure")
+			// 不应落库。
+			rows, lerr := svc.st.ListUserHarnesses(context.Background())
+			if lerr != nil {
+				t.Fatalf("ListUserHarnesses: %v", lerr)
+			}
+			if len(rows) != 0 {
+				t.Fatalf("validation failure should not persist, got %+v", rows)
 			}
 		})
 	}
 }
 
-// TestLoadPersistedConfig_LoadsUserHarnesses 启动加载:DataDir/harnesses.json 预置 →
-// loadPersistedConfig 把它合并进内存(UserHarnesses() 含之)。
+// TestLoadPersistedConfig_LoadsUserHarnesses 启动加载:user_harnesses 表预置 →
+// loadPersistedConfig 把它灌进内存(UserHarnesses() 含之)。
 func TestLoadPersistedConfig_LoadsUserHarnesses(t *testing.T) {
 	resetUserHarnessesForTest(t)
 	svc := setupHarnessStoreSvc(t)
-	// 预置 harnesses.json。
-	preset := []harness.UserHarness{{ID: "kimi", Name: "Kimi", Command: "kimi acp"}}
-	if err := harness.SaveUserHarnesses(filepath.Join(svc.cfg.DataDir, harness.UserHarnessesFile), preset); err != nil {
-		t.Fatalf("SaveUserHarnesses: %v", err)
+	// 预置 DB 行。
+	if _, err := svc.st.CreateUserHarness(context.Background(), "kimi", "Kimi", "kimi acp", ""); err != nil {
+		t.Fatalf("CreateUserHarness: %v", err)
 	}
 	svc.loadPersistedConfig()
 
@@ -149,13 +161,13 @@ func TestLoadPersistedConfig_LoadsUserHarnesses(t *testing.T) {
 	}
 }
 
-// TestLoadPersistedConfig_MissingFileNoError 文件不存在时 loadPersistedConfig 不报错(空列表,不阻塞启动)。
-func TestLoadPersistedConfig_MissingFileNoError(t *testing.T) {
+// TestLoadPersistedConfig_EmptyDBNoError 表空时 loadPersistedConfig 不报错(空列表,不阻塞启动)。
+func TestLoadPersistedConfig_EmptyDBNoError(t *testing.T) {
 	resetUserHarnessesForTest(t)
 	svc := setupHarnessStoreSvc(t)
-	// 不预置文件;loadPersistedConfig 不应 panic / 不应留任何用户 harness。
+	// 不预置行;loadPersistedConfig 不应 panic / 不应留任何用户 harness。
 	svc.loadPersistedConfig()
 	if got := harness.UserHarnesses(); got != nil {
-		t.Fatalf("missing file should yield empty user list, got %+v", got)
+		t.Fatalf("empty DB should yield empty user list, got %+v", got)
 	}
 }

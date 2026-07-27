@@ -2113,40 +2113,85 @@ func (s *ChatService) RefreshHarnesses() ([]harness.Harness, error) {
 	return list, nil
 }
 
-// AddHarness 添加用户自建 harness,持久化到 DataDir/harnesses.json 并合并进内存注册表。
+// reloadUserHarnesses 从 SQLite 重新加载用户 harness 列表,灌进 harness 包内存合并视图,
+// 并重注入进程回收命令集(§3.2)。启动(loadPersistedConfig)+ AddHarness 调:
+// 让 Discover/Command/Normalize/进程回收 据此识别用户 harness(§5.3 复用,不另起体系)。
+func (s *ChatService) reloadUserHarnesses() {
+	if s.st == nil {
+		return
+	}
+	rows, err := s.st.ListUserHarnesses(s.ctx)
+	if err != nil {
+		slog.Warn("list user harnesses", "err", err)
+		return
+	}
+	// 空 = nil(保持 UserHarnesses() 的 "空=未设置" 约定,effectiveSupported/Registry 对 nil 安全)。
+	var out []harness.UserHarness
+	if len(rows) > 0 {
+		out = make([]harness.UserHarness, len(rows))
+		for i, r := range rows {
+			out[i] = harness.UserHarness{ID: r.ID, Name: r.Name, Command: r.Command, Icon: r.Icon}
+		}
+	}
+	harness.SetUserHarnesses(out)
+	acp.SetHarnessCommands(harness.Commands())
+}
+
+// ProbeNewHarness 对候选 harness 命令跑 ACP conformance 自检,返回体检单(ConformanceReport)。
+// 前端「添加 harness」弹窗流程:填命令 → 自检(调本 binding)→ 展示体检单 →
+// ConformanceReport.CanAdd 为真才允许点「添加」调 AddHarness。
 //
-// 流程(§5.3 复用现有 Discover/probe 路径,不另起体系):
-//  1. 加载现有用户 harness 列表(文件不存在 = 空)。
-//  2. 校验(id/name/command 非空 + id 不与静态或已有用户冲突)—— 失败返明确哨兵错误。
-//  3. 追加 + 原子写文件(tmp+rename)。
-//  4. SetUserHarnesses 刷内存合并视图(Discover/Command/Normalize/进程回收 据此识别新 harness)。
-//  5. acp.SetHarnessCommands 刷新进程回收层的命令白名单(§3.2:启动时注入一次,加新 harness 后要补)。
-//  6. Discover 刷 Path/Installed(新 harness 是否已在本机)→ 缓存 + 推 EventHarnesses。
-//  7. 异步 probeCapabilitiesAsync:Discover 只告诉我们装没装,能力位(prompt/session/mcp)要 spawn
-//     问 harness 自己。refreshHarnessesThenMaybeAutoUpgrade 的 probe hook 只在启动跑一次,
-//     AddHarness 路径不经过它,故这里显式 go 一次(§5.4:确认 probe 触发点)。
+// 严格门槛(见 acp.ProbeHarness):要求完整 end_turn —— 不仅证 ACP 契约健康,
+// 还证该 harness 在当前环境真能跑完一轮(模型/key/网络就绪)。各步带硬超时,整体上限 3min
+// (诊断场景的硬超时,与活 turn 的 §3.3 no-timeout 无关)。零 per-harness 身份分支。
+func (s *ChatService) ProbeNewHarness(command string) (*acp.ConformanceReport, error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil, errors.New("harness 命令不能为空")
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 3*time.Minute)
+	defer cancel()
+	return acp.ProbeHarness(ctx, command), nil
+}
+
+// AddHarness 添加用户自建 harness:结构性校验 → 落 SQLite(user_harnesses 表)→ 刷内存合并视图
+// → Discover 刷新 → 异步能力探测。
+//
+// 自检门槛:前端在调本 binding 前应已 ProbeNewHarness 通过(ConformanceReport.CanAdd 为真)。
+// 本处不再服务端重跑 probe(探针含一轮完整 Prompt,90s+;前端已显式自检过,重跑既慢又费 token),
+// 只做结构性校验(非空 + ID 与静态/已有用户冲突)—— 复用 harness.ValidateUserHarness 纯函数。
+//
+// 流程:
+//  1. 从 store 读现有用户列表 → 转 harness.UserHarness → ValidateUserHarness 校验(哨兵错误)。
+//  2. store.CreateUserHarness 落库(id 主键冲突由 SQLite UNIQUE 约束兜底)。
+//  3. reloadUserHarnesses 灌内存 + 重注入 reaper 命令集。
+//  4. Discover 刷 Path/Installed(新 harness 是否已在本机)→ 缓存 + 推 EventHarnesses。
+//  5. 异步 probeCapabilitiesAsync:Discover 只告诉我们装没装,能力位要 spawn 问 harness 自己
+//     (refreshHarnessesThenMaybeAutoUpgrade 的 probe hook 只在启动跑,本路径显式 go 一次)。
 //
 // 返回更新后的全量 harness 列表(前端据此刷新);error 非空时列表为 nil。
 func (s *ChatService) AddHarness(id, name, command string) ([]harness.Harness, error) {
 	id = strings.TrimSpace(id)
 	name = strings.TrimSpace(name)
 	command = strings.TrimSpace(command)
-
-	path := filepath.Join(s.cfg.DataDir, harness.UserHarnessesFile)
-	list, err := harness.LoadUserHarnesses(path)
-	if err != nil {
-		return nil, fmt.Errorf("load user harnesses: %w", err)
+	if s.st == nil {
+		return nil, errors.New("store 未就绪")
 	}
-	if err := harness.ValidateUserHarness(id, name, command, list); err != nil {
+	existing, err := s.st.ListUserHarnesses(s.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list user harnesses: %w", err)
+	}
+	userExisting := make([]harness.UserHarness, len(existing))
+	for i, u := range existing {
+		userExisting[i] = harness.UserHarness{ID: u.ID, Name: u.Name, Command: u.Command, Icon: u.Icon}
+	}
+	if err := harness.ValidateUserHarness(id, name, command, userExisting); err != nil {
 		return nil, err
 	}
-	list = append(list, harness.UserHarness{ID: id, Name: name, Command: command})
-	if err := harness.SaveUserHarnesses(path, list); err != nil {
-		return nil, fmt.Errorf("save user harnesses: %w", err)
+	if _, err := s.st.CreateUserHarness(s.ctx, id, name, command, ""); err != nil {
+		return nil, fmt.Errorf("create user harness: %w", err)
 	}
-	harness.SetUserHarnesses(list)
-	acp.SetHarnessCommands(harness.Commands())
-
+	s.reloadUserHarnesses()
 	refreshed := harness.Discover(s.ctx)
 	s.harnessCache.Store(&refreshed)
 	s.emit(EventHarnesses, nil)
@@ -2560,14 +2605,10 @@ func (s *ChatService) loadPersistedConfig() {
 	if m, _ := s.st.GetSetting(s.ctx, "defaultModel"); m != "" {
 		s.cfg.DefaultModel = m
 	}
-	// 用户自添加 harness:从 DataDir/harnesses.json 加载,合并进内存注册表(§5.3 复用)。
-	// 必须在 acp.SetHarnessCommands(ServiceStartup 后续行)之前完成,使进程回收层一并认得用户 harness。
-	// 文件不存在 = 空(开箱即用);损坏 = 告警 + 忽略(不阻塞启动,用户可重建)。
-	if user, err := harness.LoadUserHarnesses(filepath.Join(s.cfg.DataDir, harness.UserHarnessesFile)); err != nil {
-		slog.Warn("load user harnesses", "err", err)
-	} else {
-		harness.SetUserHarnesses(user)
-	}
+	// 用户自添加 harness:从 SQLite(user_harnesses 表)加载,灌进内存合并视图 + 重注入 reaper
+	// 命令集(§5.3 复用)。必须在 ServiceStartup 后续的 acp.SetHarnessCommands 之前完成,使进程
+	// 回收层一并认得用户 harness。store 未就绪/读失败 → 告警 + 忽略(不阻塞启动)。
+	s.reloadUserHarnesses()
 	// 权限规则:表空时写入默认规则(§3.4),否则保留用户已定制。
 	if _, err := s.st.SeedDefaultPermissionRules(s.ctx, defaultPermissionRulesForStore()); err != nil {
 		slog.Warn("seed default permission rules", "err", err)

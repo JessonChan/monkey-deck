@@ -2,8 +2,6 @@ package harness
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -46,69 +44,8 @@ func TestUserHarnessValidate(t *testing.T) {
 	}
 }
 
-// TestUserHarnessLoadSaveRoundTrip 写入 → 读回 = 原始列表(原子写 + JSON 序列化 + 父目录自动建)。
-func TestUserHarnessLoadSaveRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "sub", UserHarnessesFile) // 测父目录自动建
-	want := []UserHarness{
-		{ID: "junie", Name: "Junie", Command: "junie acp", Icon: ""},
-		{ID: "goose", Name: "Goose", Command: "goose acp", Icon: "assets/harness-icons/goose.svg"},
-	}
-	if err := SaveUserHarnesses(path, want); err != nil {
-		t.Fatalf("SaveUserHarnesses: %v", err)
-	}
-	got, err := LoadUserHarnesses(path)
-	if err != nil {
-		t.Fatalf("LoadUserHarnesses: %v", err)
-	}
-	if len(got) != len(want) {
-		t.Fatalf("round-trip len: got %d want %d", len(got), len(want))
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("round-trip[%d]: got %+v want %+v", i, got[i], want[i])
-		}
-	}
-}
-
-// TestUserHarnessLoadMissingFile 文件不存在 = 空列表 + 无错(开箱即用,不强迫先建文件)。
-func TestUserHarnessLoadMissingFile(t *testing.T) {
-	got, err := LoadUserHarnesses(filepath.Join(t.TempDir(), "nope.json"))
-	if err != nil {
-		t.Fatalf("missing file should not error, got %v", err)
-	}
-	if got != nil {
-		t.Fatalf("missing file should yield nil, got %+v", got)
-	}
-}
-
-// TestUserHarnessLoadEmptyFile 空文件 = 空列表 + 无错(不报 parse 错)。
-func TestUserHarnessLoadEmptyFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "empty.json")
-	if err := os.WriteFile(path, []byte{}, 0o644); err != nil {
-		t.Fatalf("write empty: %v", err)
-	}
-	got, err := LoadUserHarnesses(path)
-	if err != nil {
-		t.Fatalf("empty file should not error, got %v", err)
-	}
-	if got != nil {
-		t.Fatalf("empty file should yield nil, got %+v", got)
-	}
-}
-
-// TestUserHarnessLoadCorrupt 损坏 JSON = 明确报错(不静默吞损坏数据)。
-func TestUserHarnessLoadCorrupt(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "bad.json")
-	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
-		t.Fatalf("write bad: %v", err)
-	}
-	if _, err := LoadUserHarnesses(path); err == nil {
-		t.Fatalf("corrupt json should error")
-	}
-}
+// 注:user harness 的持久化(JSON 落盘)测试已随持久化层迁移到 SQLite(store 包)删除。
+// harness 包不再做 I/O,只持有内存合并视图;CRUD 落库由 store.UserHarness 测试覆盖。
 
 // TestEffectiveSupportedMerge 校验合并视图:静态优先 + 用户追加 + 按 ID 去重(静态赢,用户覆盖无效)。
 func TestEffectiveSupportedMerge(t *testing.T) {

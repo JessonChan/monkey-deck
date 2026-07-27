@@ -1,38 +1,33 @@
-// user.go:用户自添加 harness 的持久化 + 校验 + 合并进静态注册表。
+// user.go:用户自添加 harness 的内存合并视图 + 校验。
 //
 // 静态 Supported/Registry(omp/opencode)写死在源码里,用户要加新 harness(junie/jcode/goose/
-// kimi 等)只能改代码。本文件提供「用户 harness」机制:把用户加的 harness 元数据持久化到
-// config.DataDir/harnesses.json,启动 + AddHarness 时合并进内存的 Supported/Registry 视图,
+// kimi 等)只能改代码。本文件提供「用户 harness」机制:service 层从 SQLite(store.user_harnesses
+// 表,迁移 0012)加载用户 harness 元数据,灌进本包的内存合并视图(SetUserHarnesses),
 // 让 Discover/Command/Normalize/进程回收 都能识别它们(§5.3 复用,不另起注册体系)。
 //
 // 设计要点:
 //   - 用户 harness 也是 ACP peer(§1.2),AddHarness 只记元数据,spawn/probe 走现有 ACP 路径。
 //   - 用户 harness 不查上游、不升级(无 Source/Upgrader):只做 spawn + 本地版本检测 + 能力探测。
 //   - 合并只在内存(不改静态 Supported/Registry 源码);去重 by ID,静态优先,用户追加在后。
-//   - 持久化是纯 JSON 文件(跨平台放 config.DataDir,§2.1),不引入新 DB 表/migration(KISS)。
+//   - 持久化走 SQLite(store 层,§2.1 store 是 SQL 唯一入口),本包不直接碰 DB —— 保持 store-free,
+//     由 service 层(chat)在启动 / 增删时调 SetUserHarnesses 灌入。
 package harness
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 )
 
-// UserHarness 用户自添加 harness 的持久化结构(只存静态元数据四段)。
+// UserHarness 用户自添加 harness 的内存结构(只存静态元数据四段)。
 // 运行时数据(安装路径/版本/升级)由 Discover 在合并后的视图上统一填,不在此存。
+// 持久化落 store.UserHarness(多一个 created_at);service 层在加载时做转换。
 type UserHarness struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Command string `json:"command"`
 	Icon    string `json:"icon,omitempty"` // 空 = 前端兜底(lucide Bot)
 }
-
-// UserHarnessesFile 持久化文件名(放在 config.DataDir 下)。
-const UserHarnessesFile = "harnesses.json"
 
 // 用户 harness 校验错误。后端返明确串(英文),前端做 i18n 映射或直接兜底显示。
 var (
@@ -57,47 +52,6 @@ func SetUserHarnesses(u []UserHarness) {
 func UserHarnesses() []UserHarness {
 	if p := userHarnessesHolder.Load(); p != nil {
 		return *p
-	}
-	return nil
-}
-
-// LoadUserHarnesses 从 path 读 JSON。文件不存在 = 空列表 + 无错(开箱即用,不强迫用户先建文件)。
-// 空文件 / 非法 JSON 按错误返回(避免静默吞掉损坏数据)。
-func LoadUserHarnesses(path string) ([]UserHarness, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read user harnesses %s: %w", path, err)
-	}
-	if len(strings.TrimSpace(string(data))) == 0 {
-		return nil, nil
-	}
-	var list []UserHarness
-	if err := json.Unmarshal(data, &list); err != nil {
-		return nil, fmt.Errorf("parse user harnesses %s: %w", path, err)
-	}
-	return list, nil
-}
-
-// SaveUserHarnesses 把列表写 JSON 到 path(创建父目录;原子写 tmp+rename 防中途崩溃留下半截文件)。
-func SaveUserHarnesses(path string, list []UserHarness) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("mkdir user harnesses dir: %w", err)
-		}
-	}
-	data, err := json.MarshalIndent(list, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal user harnesses: %w", err)
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("write user harnesses tmp: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("rename user harnesses: %w", err)
 	}
 	return nil
 }
