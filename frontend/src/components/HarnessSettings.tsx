@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import * as Popover from "@radix-ui/react-popover";
 import { Events } from "@wailsio/runtime";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import type { CapabilityMatrix } from "../../bindings/github.com/jessonchan/monkey-deck/internal/acp/models";
-import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download, AlertTriangle, Plus } from "lucide-react";
+import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download, AlertTriangle, Plus, ChartBar } from "lucide-react";
 import AddHarnessModal from "./AddHarnessModal";
 
 // harness 能力位定义:field = CapabilityMatrix 字段名,key = i18n capability.<key> 后缀。
@@ -301,9 +302,8 @@ function HarnessRow({
             </span>
           )}
         </div>
-        {/* 能力矩阵列(复用 HarnessRow 结构,不另起 panel):紧凑 chip 行,溢出由 tooltip 补全。
-            matrix 未就绪(cap undefined)→「检测中」;ProbeErr 非空 →「检测失败」。 */}
-        <CapabilityChips cap={cap} harnessId={h.id} />
+        {/* 能力矩阵已收进 harness-row-acts 的 ChartBar 触发按钮(popover 展开,见 CapabilityMatrixButton)。
+            原先这里有一行常驻 chip,行高随 wrap 变化 + 视觉重;收进按钮后行高一致、信息按需查看。 */}
         {h.path && (
           <div className="harness-path" data-tooltip-id="md-tip" data-tooltip-content={h.path}>
             <span className="harness-cmd-label">{t("settings.harness.path")}</span>
@@ -315,6 +315,9 @@ function HarnessRow({
         )}
       </div>
       <div className="harness-row-acts">
+        {/* 能力矩阵触发按钮:ChartBar 图标。cap 未就绪(probing)/ 失败(failed)→ 禁用 + 状态图标;
+            就绪 → 点击打开 popover 展开完整能力位 chip 行。放在升级按钮之前(信息查看型操作)。 */}
+        <CapabilityMatrixButton cap={cap} harnessId={h.id} />
         {/* 升级按钮:有最新版本或未装时显示;后端无 Upgrader 配置时点上去会返 ErrUpgraderNotConfigured,错误进 error 区。 */}
         {(h.upgradeAvailable || !h.installed) && (
           <button
@@ -355,38 +358,96 @@ function HarnessRow({
   );
 }
 
-// 能力矩阵 chip 行:每项 ✓/✗ + react-tooltip(md-tip,§4.5)+ 人话说明(§4.4)。
-// 形态选式(coder 判断,§5.3):一行紧凑 chip(溢出 wrap),不另起 panel / 不用 grid——HarnessRow
-// 已较密(名/命令/版本/升级按钮),grid 会纵向撑高挤压;chip 行可 wrap、信息密度高、三端一致(§4.6)。
+// 能力矩阵「收进按钮」(Task #23440):把原先常驻在 harness-row-main 的一行 chip 收进
+// harness-row-acts 的 ChartBar 触发按钮,点击用 Radix popover 展开完整矩阵。
 //
-// 状态判定:
-//   - cap undefined:harnessId 不在 map / 后端探测未就绪 →「检测中…」(不空白)。
-//   - cap.probeErr 非空:探测失败 →「检测失败」(读 ProbeErr,§1.6 尊重数据源)。
-//   - declared 位(prompt*/config*/sessionList):true=✓ / false=✗(确定)。
-//   - observed 位(emitsUsage/emitsPlan):undefined=中性「未观测」(withProbe=false 默认值,不误判 ✗)。
-function CapabilityChips({ cap, harnessId }: { cap: CapabilityMatrix | undefined; harnessId: string }) {
+// 形态选式(coder 判断,§5.3 / §4.6):
+//   - popover(非 collapsible):collapsible 展开会撑高本行、挤压相邻 harness 行;popover 浮在
+//     之上不顶布局,信息按需查看,三端一致(Radix 已在 Composer 用,已验证)。
+//   - 触发按钮在 harness-row-acts(与升级按钮同行):信息查看型操作归一处,行高恒定。
+//   - ChartBar 图标(非 Info):「矩阵 / 指标」语义比通用 info 更贴。
+//
+// 三态(与原 CapabilityChips 一致,尊重数据源 / 不误判,§5.3):
+//   - cap undefined:harnessId 不在 map / 后端探测未就绪 → 禁用按钮 + spinner。
+//   - cap.probeErr 非空:探测失败 → 禁用按钮 + 警告图标 + 错误 tooltip(读 ProbeErr,§1.6)。
+//   - 就绪:ChartBar 按钮,点击 popover 展开能力位 chip(declared ✓/✗;observed 中性「未观测」)。
+function CapabilityMatrixButton({
+  cap,
+  harnessId,
+}: {
+  cap: CapabilityMatrix | undefined;
+  harnessId: string;
+}) {
   const { t } = useTranslation();
 
+  // 检测中:cap 未就绪 → 禁用 + spinner + ChartBar(提示「有这项能力,正在测」)。
   if (!cap) {
     return (
-      <div className="harness-cap probing" data-testid={`harness-cap-probing-${harnessId}`}>
-        <RefreshCw size={11} className="spin" /> {t("capability.probing")}
-      </div>
+      <button
+        className="harness-cap-trigger probing"
+        disabled
+        data-testid={`harness-cap-probing-${harnessId}`}
+        data-tooltip-id="md-tip"
+        data-tooltip-content={t("capability.probing")}
+      >
+        <RefreshCw size={13} className="spin" />
+      </button>
     );
   }
+
+  // 检测失败:probeErr 非空 → 禁用 + 警告图标 + 错误 tooltip。
   if (cap.probeErr) {
     return (
-      <div
-        className="harness-cap failed"
+      <button
+        className="harness-cap-trigger failed"
+        disabled
         data-testid={`harness-cap-failed-${harnessId}`}
         data-tooltip-id="md-tip"
         data-tooltip-content={`${t("capability.probeFailedTip")}\n${cap.probeErr}`}
       >
-        <AlertCircle size={11} /> {t("capability.probeFailed")}
-      </div>
+        <AlertCircle size={13} />
+      </button>
     );
   }
 
+  // 就绪:ChartBar 触发按钮 + popover 展开完整能力位。
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <button
+          className="harness-cap-trigger"
+          data-testid={`harness-cap-trigger-${harnessId}`}
+          data-tooltip-id="md-tip"
+          data-tooltip-content={t("capability.matrixBtnTip")}
+        >
+          <ChartBar size={14} />
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          side="left"
+          align="center"
+          sideOffset={6}
+          className="harness-cap-popover"
+          data-testid={`harness-cap-popover-${harnessId}`}
+        >
+          <div className="harness-cap-popover-title">{t("capability.matrixTitle")}</div>
+          <CapabilityChips cap={cap} harnessId={harnessId} />
+          <Popover.Arrow className="harness-cap-popover-arrow" />
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+// 能力矩阵 chip 行(在 popover 内渲染):每项 ✓/✗ + react-tooltip(md-tip,§4.5)+ 人话说明(§4.4)。
+// 调用方(CapabilityMatrixButton)保证 cap 已就绪(非 undefined 且无 probeErr),此处只管渲染 chip。
+//
+// 状态判定:
+//   - declared 位(prompt*/config*/sessionList):true=✓ / false=✗(确定)。
+//   - observed 位(emitsUsage/emitsPlan):undefined=中性「未观测」(withProbe=false 默认值,不误判 ✗)。
+function CapabilityChips({ cap, harnessId }: { cap: CapabilityMatrix; harnessId: string }) {
+  const { t } = useTranslation();
   return (
     <div className="harness-cap" data-testid={`harness-cap-${harnessId}`}>
       {CAP_BITS.map((bit) => {
