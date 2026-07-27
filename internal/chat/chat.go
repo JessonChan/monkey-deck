@@ -959,15 +959,17 @@ func (s *ChatService) SessionRenamePath(sessionID, rel, newName string) (string,
 	return fsview.RenamePath(root, rel, newName)
 }
 
-// SessionFuzzyFind 在 session 工作目录下按 query 子串模糊匹配文件路径,返回最多 limit 个命中。
+// SessionFuzzyFind 在 session 工作目录下按 query 子串模糊匹配路径,返回最多 limit 个命中。
+// scope 限定搜索子树(相对 cwd 的路径,空表示整棵 cwd 树),透传给 fsview.FuzzyFind。
 // git 仓库复用 fsview 可见集(尊重 .gitignore),非 git 目录跳过 .git / node_modules 等大目录。
-// 路径钉在 cwd;空 query 返回 nil;limit<=0 用默认上限。
-func (s *ChatService) SessionFuzzyFind(sessionID, query string, limit int) ([]fsview.FileNode, error) {
+// 文件与目录都参与匹配;空 query 返回 scope 的直接子项(含目录);limit<=0 用默认上限。
+// 路径钉在 cwd(safeJoin 防越界)。
+func (s *ChatService) SessionFuzzyFind(sessionID, scope, query string, limit int) ([]fsview.FileNode, error) {
 	root, err := s.cwdOf(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	return fsview.FuzzyFind(root, query, limit)
+	return fsview.FuzzyFind(root, scope, query, limit)
 }
 
 // OpenSession 打开已有 session。懒 spawn(§3.x):

@@ -262,94 +262,147 @@ var heavyDirs = map[string]struct{}{
 // defaultFuzzyLimit 是 limit<=0 时采用的结果上限。
 const defaultFuzzyLimit = 100
 
-// FuzzyFind 在 root 下按 query 子串模糊匹配文件相对路径,返回最多 limit 个命中(仅文件)。
+// FuzzyFind 在 root 的 scope 子树下按 query 子串模糊匹配路径,返回最多 limit 个命中
+// (文件与目录都参与匹配)。
 //
-// 大小写不敏感,按整条相对路径(含目录)子串匹配 —— 例如 "sub/b" 命中 "src/sub/b.go","go" 命中所有 .go。
+// scope 限定搜索范围(相对 root 的路径,空表示整棵 root 树);先经 safeJoin 校验防越界。
+//
+// query 行为:
+//   - 空 / 纯空白:返回 scope 的直接子项(含目录,等价 ListDir),作为 picker 初始态
+//     —— 用户打开查找器还没输入时直接看到顶层可选项。
+//   - 非空:在 scope 子树内按整条相对路径(含目录段)子串匹配,大小写不敏感,命中含目录。
+//     例如 "sub/b" 命中 "src/sub/b.go","go" 命中所有 .go 文件与名为 xxxgo 的目录。
 //
 // 数据源分两条:
-//   - git 仓库:复用 listGit 的可见集(gitVisibleFiles = git ls-files --exclude-standard),
-//     天然尊重 .gitignore,输出已按路径排序。
-//   - 非 git 目录:filepath.WalkDir 递归,跳过 heavyDirs(.git / node_modules 等)整棵子树,
-//     遍历顺序本身即字母序。
+//   - git 仓库:复用 gitVisibleFiles(尊重 .gitignore);目录从文件路径隐式推导
+//     (git 不跟踪目录,但含文件的目录必然存在)。
+//   - 非 git 目录:filepath.WalkDir 跳过 heavyDirs(.git / node_modules 等)整棵子树。
 //
-// limit<=0 取 defaultFuzzyLimit;空 query 返回 nil。结果按路径字母序。
-func FuzzyFind(root, query string, limit int) ([]FileNode, error) {
-	query = strings.ToLower(strings.TrimSpace(query))
-	if query == "" {
-		return nil, nil
+// 返回路径始终相对 root(与 ListDir 一致,前端原样回传)。limit<=0 取 defaultFuzzyLimit。
+// 结果按路径字母序(大小写不敏感),目录与文件混合排序(fuzzy finder 语义,非 ListDir 的目录优先)。
+func FuzzyFind(root, scope, query string, limit int) ([]FileNode, error) {
+	if _, err := safeJoin(root, scope); err != nil {
+		return nil, err
 	}
+	query = strings.ToLower(strings.TrimSpace(query))
 	if limit <= 0 {
 		limit = defaultFuzzyLimit
 	}
-	if isGitRoot(root) {
-		return fuzzyGit(root, query, limit)
+	// 空 query:返 scope 直接子项(含目录),picker 初始态。
+	if query == "" {
+		return ListDir(root, scope)
 	}
-	return fuzzyWalk(root, query, limit)
+	if isGitRoot(root) {
+		return fuzzyGit(root, scope, query, limit)
+	}
+	return fuzzyWalk(root, scope, query, limit)
 }
 
-// fuzzyGit 在 git 仓库里匹配:复用 gitVisibleFiles(尊重 .gitignore),逐行子串匹配,够 limit 即止。
-// git ls-files 失败时降级 fuzzyWalk,保证可用。
-func fuzzyGit(root, query string, limit int) ([]FileNode, error) {
-	files, err := gitVisibleFiles(root, "")
-	if err != nil {
-		return fuzzyWalk(root, query, limit)
-	}
-	matches := make([]FileNode, 0, limit)
-	for _, rel := range files {
-		if len(matches) >= limit {
+// fuzzyCand 是 FuzzyFind 内部候选条目:相对 root 的路径 + 是否目录。
+type fuzzyCand struct {
+	path  string
+	isDir bool
+}
+
+// matchAndLimit 把候选集按 query 子串过滤(大小写不敏感,匹配整条 root-相对路径)、
+// 按路径字母序(大小写不敏感)排序、截断到 limit,构造 FileNode 列表。
+// fuzzyGit / fuzzyWalk 共用此收尾逻辑,保证两路数据源的结果形状一致。
+func matchAndLimit(root string, cands []fuzzyCand, query string, limit int) []FileNode {
+	sort.Slice(cands, func(i, j int) bool {
+		return strings.ToLower(cands[i].path) < strings.ToLower(cands[j].path)
+	})
+	out := make([]FileNode, 0, limit)
+	for _, c := range cands {
+		if len(out) >= limit {
 			break
 		}
-		if !strings.Contains(strings.ToLower(rel), query) {
+		if !strings.Contains(strings.ToLower(c.path), query) {
 			continue
 		}
-		matches = append(matches, FileNode{
-			Name:  filepath.Base(rel),
-			Path:  rel,
-			IsDir: false,
-			Size:  fileSize(filepath.Join(root, rel)),
-		})
+		n := FileNode{Name: filepath.Base(c.path), Path: c.path, IsDir: c.isDir}
+		if !c.isDir {
+			n.Size = fileSize(filepath.Join(root, c.path))
+		}
+		out = append(out, n)
 	}
-	return matches, nil
+	return out
 }
 
-// fuzzyWalk 在非 git 目录里匹配:WalkDir 跳过 heavyDirs 子树,子串匹配,够 limit 即止。
-func fuzzyWalk(root, query string, limit int) ([]FileNode, error) {
-	matches := make([]FileNode, 0, limit)
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
+// collectGitCands 从 git 文件列表构造候选集(文件 + 从路径隐式推导的目录)。
+// 推导出的目录限于 scope 子树内(不含 scope 本身,scope 是搜索根不是候选)。
+// 例:scope="src"、文件 "src/sub/b.go" 推导出目录 "src/sub";scope="" 同文件推导出 "src" + "src/sub"。
+// 结果未排序(matchAndLimit 统一排序)。
+func collectGitCands(files []string, scope string) []fuzzyCand {
+	dirSet := map[string]struct{}{}
+	for _, f := range files {
+		// 逐级向上取祖先目录,遇 scope 或越出 scope 即止。
+		dir := f
+		for {
+			i := strings.LastIndexByte(dir, '/')
+			if i < 0 {
+				break
+			}
+			dir = dir[:i]
+			if dir == scope {
+				break // scope 本身不作为候选
+			}
+			if scope == "" || strings.HasPrefix(dir, scope+"/") {
+				dirSet[dir] = struct{}{}
+			} else {
+				break // 越出 scope(理论不会出现,gitVisibleFiles 已按 scope 过滤)
+			}
+		}
+	}
+	cands := make([]fuzzyCand, 0, len(files)+len(dirSet))
+	for d := range dirSet {
+		cands = append(cands, fuzzyCand{d, true})
+	}
+	for _, f := range files {
+		cands = append(cands, fuzzyCand{f, false})
+	}
+	return cands
+}
+
+// fuzzyGit 在 git 仓库里匹配:复用 gitVisibleFiles(尊重 .gitignore),文件 + 隐式推导的目录都参与。
+// git ls-files 失败时降级 fuzzyWalk,保证可用。
+func fuzzyGit(root, scope, query string, limit int) ([]FileNode, error) {
+	files, err := gitVisibleFiles(root, scope)
+	if err != nil {
+		return fuzzyWalk(root, scope, query, limit)
+	}
+	return matchAndLimit(root, collectGitCands(files, scope), query, limit), nil
+}
+
+// fuzzyWalk 在非 git 目录里匹配:WalkDir 从 scope 起遍历,跳过 heavyDirs 子树,
+// 文件与目录都参与。scope 越界由 FuzzyFind 先前的 safeJoin 拦下;此处直接 Join
+// (不解析符号链接)以保持 walk 产生的 p 与 root 在同一路径命名空间,filepath.Rel 才能算出干净的相对路径
+// (macOS 上 root=/var/... 与 safeJoin 解析出的 /private/var/... 混用会让 Rel 产生 ../ 串)。
+func fuzzyWalk(root, scope, query string, limit int) ([]FileNode, error) {
+	scopeAbs := filepath.Join(root, filepath.FromSlash(scope))
+	var cands []fuzzyCand
+	werr := filepath.WalkDir(scopeAbs, func(p string, d fs.DirEntry, werr error) error {
+		if werr != nil {
 			return nil // 跳过不可读项
 		}
+		if p == scopeAbs {
+			return nil // 跳过 scope 根本身
+		}
 		if d.IsDir() {
-			if p == root {
-				return nil
-			}
 			if _, skip := heavyDirs[d.Name()]; skip {
 				return filepath.SkipDir
 			}
-			return nil
 		}
 		rel, rerr := filepath.Rel(root, p)
 		if rerr != nil {
 			rel = d.Name()
 		}
-		rel = filepath.ToSlash(rel)
-		if strings.Contains(strings.ToLower(rel), query) {
-			matches = append(matches, FileNode{
-				Name:  d.Name(),
-				Path:  rel,
-				IsDir: false,
-				Size:  fileSize(p),
-			})
-			if len(matches) >= limit {
-				return fs.SkipAll
-			}
-		}
+		cands = append(cands, fuzzyCand{filepath.ToSlash(rel), d.IsDir()})
 		return nil
 	})
-	if err != nil {
-		return nil, err
+	if werr != nil {
+		return nil, werr
 	}
-	return matches, nil
+	return matchAndLimit(root, cands, query, limit), nil
 }
 
 // ReadFile 读取 root/rel 的文本内容。过大或二进制不返回内容,只给提示。
