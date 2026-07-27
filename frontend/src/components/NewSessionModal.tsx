@@ -1,15 +1,10 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import type { CapabilityMatrix } from "../../bindings/github.com/jessonchan/monkey-deck/internal/acp/models";
 import HarnessIcon from "./HarnessIcon";
 
 interface Props {
   harnesses: Harness[];
-  // harness 能力矩阵(可选):来自 App 启动拉取 + chat:harness-capabilities 订阅(App.tsx)。
-  // 用于在选择项右侧显示精简能力摘要(model + usage)。未就绪(harnessId 不在 map / ProbeErr)
-  // 不显示摘要,不阻塞选择(KISS:少一次重复拉,App 已直接渲染本组件,prop 已通)。
-  harnessCapabilities?: Record<string, CapabilityMatrix | undefined>;
   isGit: boolean;
   lastHarness: string;
   onConfirm: (harness: string, useWorktree: boolean) => void;
@@ -21,7 +16,7 @@ interface Props {
 // harness 与 worktree 都要求显式选择(null = 未选):没选过(lastHarness 空/失效/列表多 harness)不设默认,
 // 未选时「新建」按钮禁用 + label 旁显示 ns-required 提示。单 harness 无歧义,自动选中免纯摩擦。
 // 非 git 项目不展示 worktree 选项(无法建分支)。
-export default function NewSessionModal({ harnesses, harnessCapabilities, isGit, lastHarness, onConfirm, onCancel }: Props) {
+export default function NewSessionModal({ harnesses, isGit, lastHarness, onConfirm, onCancel }: Props) {
   const { t } = useTranslation();
   // harness 必须显式选择:null = 未选。lastHarness 仍可选时默认选它;单 harness 无歧义自动选;否则 null。
   const [harness, setHarness] = useState<string | null>(() => {
@@ -55,23 +50,19 @@ export default function NewSessionModal({ harnesses, harnessCapabilities, isGit,
             {harness === null && <span className="ns-required">{t("newSession.required")}</span>}
           </div>
           <div className="ns-harness-list">
-            {harnesses.map((h) => {
-              const cap = harnessCapabilities?.[h.id];
-              return (
-                <button
-                  key={h.id}
-                  className={`ns-harness ${harness === h.id ? "active" : ""}`}
-                  onClick={() => setHarness(h.id)}
-                  data-testid={`ns-harness-${h.id}`}
-                >
-                  <span className={`ns-radio ${harness === h.id ? "on" : ""}`} />
-                  <HarnessIcon harnessId={h.id} size={16} className="ns-harness-icon" />
-                  <span className="ns-harness-name">{h.name}</span>
-                  <NsCapabilitySummary cap={cap} harnessId={h.id} />
-                  <span className="ns-harness-cmd" data-tooltip-id="md-tip" data-tooltip-content={h.command}>{h.command}</span>
-                </button>
-              );
-            })}
+            {harnesses.map((h) => (
+              <button
+                key={h.id}
+                className={`ns-harness ${harness === h.id ? "active" : ""}`}
+                onClick={() => setHarness(h.id)}
+                data-testid={`ns-harness-${h.id}`}
+              >
+                <span className={`ns-radio ${harness === h.id ? "on" : ""}`} />
+                <HarnessIcon harnessId={h.id} size={16} className="ns-harness-icon" />
+                <span className="ns-harness-name">{h.name}</span>
+                <span className="ns-harness-cmd" data-tooltip-id="md-tip" data-tooltip-content={h.command}>{h.command}</span>
+              </button>
+            ))}
           </div>
         </div>
 
@@ -125,48 +116,5 @@ export default function NewSessionModal({ harnesses, harnessCapabilities, isGit,
         </div>
       </div>
     </div>
-  );
-}
-
-// 精简能力摘要(放在 harness 名右侧、命令左侧):只显示 model + usage 两项(issue 核心诉求
-// 「有的没模型选择,有的没 token 用量」),完整矩阵在 HarnessSettings 看。
-//
-// 取舍(coder 判断,§5.3):
-//   - 未就绪(cap undefined)/ ProbeErr 非空 → 不显示摘要(不阻塞选择,弹窗本就轻量)。
-//   - model(configModel):declared 位,true=✓ false=✗。
-//   - usage(emitsUsage):observed 位,withProbe=false 默认 undefined → 显示中性「·」(不误判 ✗)。
-function NsCapabilitySummary({ cap, harnessId }: { cap: CapabilityMatrix | undefined; harnessId: string }) {
-  const { t } = useTranslation();
-  if (!cap || cap.probeErr) return null;
-
-  const bits: { key: string; raw: boolean | undefined }[] = [
-    { key: "model", raw: cap.configModel },
-    { key: "usage", raw: cap.emitsUsage },
-  ];
-
-  return (
-    <span className="ns-cap-summary" data-testid={`ns-cap-summary-${harnessId}`}>
-      {bits.map((b) => {
-        const state: "yes" | "no" | "unknown" =
-          b.raw === true ? "yes" : b.raw === false ? "no" : "unknown";
-        const tipState =
-          state === "yes"
-            ? t("capability.supported")
-            : state === "no"
-              ? t("capability.notSupported")
-              : t("capability.notObserved");
-        return (
-          <span
-            key={b.key}
-            className={`ns-cap-bit ${state}`}
-            data-tooltip-id="md-tip"
-            data-tooltip-content={`${t(`capability.${b.key}`)}: ${tipState}\n${t(`capability.${b.key}Tip`)}`}
-            data-testid={`ns-cap-${harnessId}-${b.key}`}
-          >
-            {state === "yes" ? "✓" : state === "no" ? "✗" : "·"} {t(`capability.${b.key}`)}
-          </span>
-        );
-      })}
-    </span>
   );
 }
