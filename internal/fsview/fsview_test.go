@@ -280,6 +280,17 @@ func TestReadImageMissing(t *testing.T) {
 	}
 }
 
+// 验证两张 mime 映射表的反向一致性不变量:extToImageMime 的每个 value 都必须是
+// imageMimeToExt 的 key。否则某扩展名的「内容嗅探兜底」会反推不出扩展名,该格式
+// 在「无扩展名 / 改名」场景下静默失败。锚定不变量,防未来给一张表加项漏改另一张。
+func TestImageMimeMapsReverseConsistent(t *testing.T) {
+	for ext, mime := range extToImageMime {
+		if _, ok := imageMimeToExt[mime]; !ok {
+			t.Errorf("extToImageMime[%q]=%q 缺反向映射(imageMimeToExt 无该 key)", ext, mime)
+		}
+	}
+}
+
 // 验证增删改:新建文件/目录、改名、删除。
 func TestManage(t *testing.T) {
 	root := t.TempDir()
