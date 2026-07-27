@@ -94,3 +94,22 @@ func (s *Store) DeleteUserHarness(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+// UpdateUserHarness 改一个用户 harness 的 name + command(id 不变 —— session 钉在 id 上,
+// 改 id 会断开既有 session 的关联)。name 空则兜底为 id(与 Create 一致)。返回受影响行数:
+// 0 表示该 id 不存在(调用方应先 GetUserHarness 校验存在性)。
+func (s *Store) UpdateUserHarness(ctx context.Context, id, name, command string) (int64, error) {
+	if command == "" {
+		return 0, fmt.Errorf("update user harness: command is required")
+	}
+	if name == "" {
+		name = id
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE user_harnesses SET name=?, command=? WHERE id=?`, name, command, id)
+	if err != nil {
+		return 0, fmt.Errorf("update user harness: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
