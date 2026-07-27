@@ -380,7 +380,7 @@ function CapabilityMatrixButton({
 }) {
   const { t } = useTranslation();
 
-  // 检测中:cap 未就绪 → 禁用 + spinner + ChartBar(提示「有这项能力,正在测」)。
+  // 检测中:cap 未就绪 → 禁用 + spinner(tooltip 提示「能力检测中…」)。
   if (!cap) {
     return (
       <button
