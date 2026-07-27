@@ -1721,7 +1721,7 @@ input, textarea { font-family: inherit; }
 .modal-btn.danger { background: var(--red); color: #fff; }
 .modal-btn.danger:hover { filter: brightness(1.1); }
 
-/* ─── 添加 harness 弹窗(文本表单:ID/Name/Command/Icon) ─── */
+/* ─── 添加 harness 弹窗(文本表单:ID/Name/Command) ─── */
 .add-harness-card { max-width: 360px; gap: 11px; }
 .ah-desc { font-size: 11.5px; color: var(--text-3); line-height: 1.5; }
 .ah-field { display: flex; flex-direction: column; gap: 5px; }
