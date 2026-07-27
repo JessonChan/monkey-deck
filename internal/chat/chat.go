@@ -2154,42 +2154,82 @@ func (s *ChatService) ProbeNewHarness(command string) (*acp.ConformanceReport, e
 	return acp.ProbeHarness(ctx, command), nil
 }
 
-// AddHarness 添加用户自建 harness:结构性校验 → 落 SQLite(user_harnesses 表)→ 刷内存合并视图
+// harnessCommandID 从启动命令派生 harness id:首个 token 的 basename。
+// "junie acp" → "junie";"/usr/local/bin/goose --stdio acp" → "goose"。id 是内部主键
+// (session 钉它、查找用它),用户无需也不该手填——从命令自动派生即可(§4.4 不裸露技术格式)。
+func harnessCommandID(command string) string {
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return ""
+	}
+	return filepath.Base(fields[0])
+}
+
+// AddHarness 添加用户自建 harness:命令派生 id → 冲突校验 → 落 SQLite → 刷内存合并视图
 // → Discover 刷新 → 异步能力探测。
 //
+// id 由命令首段 basename 自动派生(用户不提供);name 可空(空则 store 兜底成 id)。
 // 自检门槛:前端在调本 binding 前应已 ProbeNewHarness 通过(ConformanceReport.CanAdd 为真)。
-// 本处不再服务端重跑 probe(探针含一轮完整 Prompt,90s+;前端已显式自检过,重跑既慢又费 token),
-// 只做结构性校验(非空 + ID 与静态/已有用户冲突)—— 复用 harness.ValidateUserHarness 纯函数。
-//
-// 流程:
-//  1. 从 store 读现有用户列表 → 转 harness.UserHarness → ValidateUserHarness 校验(哨兵错误)。
-//  2. store.CreateUserHarness 落库(id 主键冲突由 SQLite UNIQUE 约束兜底)。
-//  3. reloadUserHarnesses 灌内存 + 重注入 reaper 命令集。
-//  4. Discover 刷 Path/Installed(新 harness 是否已在本机)→ 缓存 + 推 EventHarnesses。
-//  5. 异步 probeCapabilitiesAsync:Discover 只告诉我们装没装,能力位要 spawn 问 harness 自己
-//     (refreshHarnessesThenMaybeAutoUpgrade 的 probe hook 只在启动跑,本路径显式 go 一次)。
+// 本处不再服务端重跑 probe(探针含一轮完整 Prompt,90s+;前端已自检过,重跑既慢又费 token),
+// 只做结构性校验(命令非空 + 派生 id 不与内置/已有用户冲突)。
 //
 // 返回更新后的全量 harness 列表(前端据此刷新);error 非空时列表为 nil。
-func (s *ChatService) AddHarness(id, name, command string) ([]harness.Harness, error) {
-	id = strings.TrimSpace(id)
-	name = strings.TrimSpace(name)
+func (s *ChatService) AddHarness(command, name string) ([]harness.Harness, error) {
 	command = strings.TrimSpace(command)
+	name = strings.TrimSpace(name)
+	if command == "" {
+		return nil, harness.ErrUserCommandEmpty
+	}
 	if s.st == nil {
 		return nil, errors.New("store 未就绪")
 	}
-	existing, err := s.st.ListUserHarnesses(s.ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list user harnesses: %w", err)
+	id := harnessCommandID(command)
+	if id == "" {
+		return nil, errors.New("无法从命令解析 harness id")
 	}
-	userExisting := make([]harness.UserHarness, len(existing))
-	for i, u := range existing {
-		userExisting[i] = harness.UserHarness{ID: u.ID, Name: u.Name, Command: u.Command, Icon: u.Icon}
+	if harness.IsBuiltin(id) {
+		return nil, fmt.Errorf("id %q 与内置 harness 冲突,请换一个启动命令", id)
 	}
-	if err := harness.ValidateUserHarness(id, name, command, userExisting); err != nil {
+	if existing, err := s.st.GetUserHarness(s.ctx, id); err != nil {
 		return nil, err
+	} else if existing != nil {
+		return nil, fmt.Errorf("harness %q 已存在(id 由命令首段派生)", id)
 	}
 	if _, err := s.st.CreateUserHarness(s.ctx, id, name, command, ""); err != nil {
 		return nil, fmt.Errorf("create user harness: %w", err)
+	}
+	s.reloadUserHarnesses()
+	refreshed := harness.Discover(s.ctx)
+	s.harnessCache.Store(&refreshed)
+	s.emit(EventHarnesses, nil)
+	go s.probeCapabilitiesAsync()
+	return refreshed, nil
+}
+
+// UpdateUserHarness 改一个用户自添加 harness 的 name + command(id 不变:session 钉在 id 上,
+// 改 id 会断开既有 session 关联)。内置 harness 不可改(IsBuiltin → 拒绝)。name 可空(兜底 id)。
+// 改 command 后应重新 ProbeNewHarness 验证(前端编辑弹窗提供自检按钮)。
+// 返回更新后的全量 harness 列表。
+func (s *ChatService) UpdateUserHarness(id, name, command string) ([]harness.Harness, error) {
+	id = strings.TrimSpace(id)
+	name = strings.TrimSpace(name)
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil, harness.ErrUserCommandEmpty
+	}
+	if harness.IsBuiltin(id) {
+		return nil, fmt.Errorf("内置 harness %q 不可编辑", id)
+	}
+	if s.st == nil {
+		return nil, errors.New("store 未就绪")
+	}
+	if existing, err := s.st.GetUserHarness(s.ctx, id); err != nil {
+		return nil, err
+	} else if existing == nil {
+		return nil, fmt.Errorf("harness %q 不存在", id)
+	}
+	if _, err := s.st.UpdateUserHarness(s.ctx, id, name, command); err != nil {
+		return nil, err
 	}
 	s.reloadUserHarnesses()
 	refreshed := harness.Discover(s.ctx)

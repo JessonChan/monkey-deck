@@ -20,17 +20,18 @@ package harness
 //   - 运行时(Discovered 填充):Path/Installed/InstalledVersion/LatestVersion/UpgradeAvailable/
 //     UpgradeError,在静态基础上补充本地安装状态与上游版本信息。
 type Harness struct {
-	ID      string `json:"id"`      // 标识(omp/opencode),存进 session.harness
-	Name    string `json:"name"`    // 显示名
-	Command string `json:"command"` // stdio ACP 启动命令(规范形,如 "omp acp")
-	Icon    string `json:"icon"`    // 官方图标资源路径(如 "assets/harness-icons/omp.svg");空 = 无 / 走兜底
+	ID          string `json:"id"`          // 标识(omp/opencode),存进 session.harness
+	Name        string `json:"name"`        // 显示名
+	Command     string `json:"command"`     // stdio ACP 启动命令(规范形,如 "omp acp")
+	Icon        string `json:"icon"`        // 官方图标资源路径(如 "assets/harness-icons/omp.svg");空 = 无 / 走兜底
+	UserDefined bool   `json:"userDefined"` // 用户自添加(可改名/改命令/删除);内置为 false
 
 	// 运行时(发现 + 版本检测填充)。Supported 静态默认里这些为零值。
 	Path             string `json:"path,omitempty"`             // 可执行文件绝对路径(空 = 未发现)
-	Installed        bool   `json:"installed"`                   // 本地是否已安装(能 LookPath 到)
+	Installed        bool   `json:"installed"`                  // 本地是否已安装(能 LookPath 到)
 	InstalledVersion string `json:"installedVersion,omitempty"` // `<bin> --version` 解析版本(空 = 未装/解析失败)
 	LatestVersion    string `json:"latestVersion,omitempty"`    // 上游 release 最新版本(空 = 未查/无源)
-	UpgradeAvailable bool   `json:"upgradeAvailable"`            // InstalledVersion < LatestVersion
+	UpgradeAvailable bool   `json:"upgradeAvailable"`           // InstalledVersion < LatestVersion
 	UpgradeError     string `json:"upgradeError,omitempty"`     // 上次升级报错(前端展示;空 = 无)
 }
 
@@ -81,4 +82,15 @@ func Commands() []string {
 		cmds = append(cmds, h.Command)
 	}
 	return cmds
+}
+
+// IsBuiltin 判断 id 是否内置 harness(写死在 Supported,如 omp/opencode)。
+// 编辑 / 删除只对用户自添加的 harness 开放(内置不可改);前端据此决定编辑按钮是否出现。
+func IsBuiltin(id string) bool {
+	for _, h := range Supported {
+		if h.ID == id {
+			return true
+		}
+	}
+	return false
 }

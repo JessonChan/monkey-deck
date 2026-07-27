@@ -29,13 +29,8 @@ type UserHarness struct {
 	Icon    string `json:"icon,omitempty"` // 空 = 前端兜底(lucide Bot)
 }
 
-// 用户 harness 校验错误。后端返明确串(英文),前端做 i18n 映射或直接兜底显示。
-var (
-	ErrUserIDEmpty      = errors.New("harness id must not be empty")
-	ErrUserIDConflict   = errors.New("harness id already exists")
-	ErrUserNameEmpty    = errors.New("harness name must not be empty")
-	ErrUserCommandEmpty = errors.New("harness command must not be empty")
-)
+// ErrUserCommandEmpty 用户 harness 命令为空(AddHarness 唯一的结构性硬错;name 可空、id 由命令派生)。
+var ErrUserCommandEmpty = errors.New("harness command must not be empty")
 
 // userHarnessesHolder 持有当前内存里的用户 harness 列表(启动加载 + AddHarness 更新)。
 // atomic.Pointer 保证并发安全(AddHarness 写、Discover 读并行)。
@@ -52,33 +47,6 @@ func SetUserHarnesses(u []UserHarness) {
 func UserHarnesses() []UserHarness {
 	if p := userHarnessesHolder.Load(); p != nil {
 		return *p
-	}
-	return nil
-}
-
-// ValidateUserHarness 校验候选用户 harness:ID/Name/Command 非空 + ID 不与静态(Supported)或
-// 已有用户列表冲突。trim 后判定。返回上述 ErrUser* 哨兵错误之一(空 = 合法)。
-// 纯函数(不读包级状态),existing 由调用方传入(便于测试注入)。
-func ValidateUserHarness(id, name, command string, existing []UserHarness) error {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return ErrUserIDEmpty
-	}
-	for _, h := range Supported {
-		if h.ID == id {
-			return ErrUserIDConflict
-		}
-	}
-	for _, u := range existing {
-		if u.ID == id {
-			return ErrUserIDConflict
-		}
-	}
-	if strings.TrimSpace(name) == "" {
-		return ErrUserNameEmpty
-	}
-	if len(strings.Fields(strings.TrimSpace(command))) == 0 {
-		return ErrUserCommandEmpty
 	}
 	return nil
 }
@@ -102,7 +70,7 @@ func effectiveSupported() []Harness {
 		if _, ok := seen[u.ID]; ok {
 			continue
 		}
-		out = append(out, Harness{ID: u.ID, Name: u.Name, Command: u.Command, Icon: u.Icon})
+		out = append(out, Harness{ID: u.ID, Name: u.Name, Command: u.Command, Icon: u.Icon, UserDefined: true})
 		seen[u.ID] = struct{}{}
 	}
 	return out

@@ -13,37 +13,6 @@ func restoreUserHarnesses(t *testing.T) {
 	t.Cleanup(func() { SetUserHarnesses(prev) })
 }
 
-// TestUserHarnessValidate 校验 ValidateUserHarness 的纯函数逻辑(不读包级 user 状态)。
-func TestUserHarnessValidate(t *testing.T) {
-	cases := []struct {
-		name     string
-		id       string
-		nm       string
-		cmd      string
-		existing []UserHarness
-		wantErr  error
-	}{
-		{"valid", "junie", "Junie", "junie acp", nil, nil},
-		{"id empty", "  ", "Junie", "junie acp", nil, ErrUserIDEmpty},
-		{"name empty", "junie", "  ", "junie acp", nil, ErrUserNameEmpty},
-		{"command empty", "junie", "Junie", "   ", nil, ErrUserCommandEmpty},
-		{"command only whitespace splits to nothing", "junie", "Junie", " \t ", nil, ErrUserCommandEmpty},
-		{"conflict with static Supported", "omp", "OMP", "omp acp", nil, ErrUserIDConflict},
-		{"conflict with static opencode", "opencode", "OC", "opencode acp", nil, ErrUserIDConflict},
-		{"conflict with existing user", "junie", "Junie", "junie acp", []UserHarness{{ID: "junie"}}, ErrUserIDConflict},
-		{"trim then valid", "  junie  ", "  Junie  ", "  junie   acp  ", nil, nil},
-		{"multi-arg command valid", "goose", "Goose", "/usr/local/bin/goose --stdio acp", nil, nil},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := ValidateUserHarness(tc.id, tc.nm, tc.cmd, tc.existing)
-			if err != tc.wantErr {
-				t.Fatalf("ValidateUserHarness(%q,%q,%q) err=%v, want %v", tc.id, tc.nm, tc.cmd, err, tc.wantErr)
-			}
-		})
-	}
-}
-
 // 注:user harness 的持久化(JSON 落盘)测试已随持久化层迁移到 SQLite(store 包)删除。
 // harness 包不再做 I/O,只持有内存合并视图;CRUD 落库由 store.UserHarness 测试覆盖。
 
