@@ -51,6 +51,20 @@
 
 ## 下一步 / OPEN
 
-- **派生 id 撞内置**的体验:用户填 `"omp acp"` → 派生 id `omp` → IsBuiltin 拒绝,报「与内置冲突,请换命令」。前端在 AddHarness 失败时显示后端错误串,但没做命令→id 的即时预判(需后端派生才知道)。可接受(id 不可见,用户改命令即可)。
+- ~~**派生 id 撞内置**的体验~~(已解决,见下方补丁):改为自动消歧,`omp acp`→`omp-2`,不再报错。
 - **删除闭环**仍未接 UI:`store.DeleteUserHarness` 已具备,编辑弹窗可顺带加删除按钮(按需)。
 - **复检的 token 成本**:行内自检同样会发一轮真实 Prompt,与添加时自检同代价;属用户主动诊断,可接受。
+
+## 补丁(同日):id 冲突自动消歧
+
+**起因**:上条 OPEN —— 派生 id 从命令首段 basename 来,撞内置(omp/opencode)或已有用户 harness 时原报错。这对 `omp acp --profile X` 这种**命令不同但首段相同**的合法变体是误伤(用户根本看不见 id,却被迫改命令)。复杂度评估后确认改动极小,直接做。
+
+**改法**:`AddHarness` 派生 id 后,新增 `resolveHarnessID(derived)` —— 依次试 `derived`、`derived-2`、`derived-3`…,跳过 IsBuiltin + GetUserHarness 命中,返回首个空位。原"撞内置报错""撞已有报错"两段删除,换成一次 resolve 调用。上限 99 纯防御(实际撞 2-3 次)。name 兜底由 store 按最终 id 处理(`omp-2` 空 name → name=`omp-2`,够区分,可用编辑功能改)。
+
+**为何零波及**:`Command(id)`/`Normalize(id)`/进程回收全按库里 id / command 首段走,不假设 id==命令首段,故改动完全收敛在 AddHarness 派生那一步。前端、binding 签名都不变。
+
+**改了哪些文件**:`internal/chat/chat.go`(AddHarness + 新 `resolveHarnessID`)、`internal/chat/user_harness_test.go`(冲突用例改消歧用例,删不再用的 strings 导入)。
+
+**验证**:`go test ./internal/chat/` 通过(新增 `TestAddHarness_DisambiguatesBuiltinConflict` —— `omp acp`→`omp-2`、`opencode acp`→`opencode-2`;`TestAddHarness_DisambiguatesExistingConflict` —— 同命令第二次→`junie-2`)。
+
+**新 OPEN**:消歧后**完全相同的命令**也能加成第二条(`omp acp` → `omp-2`,与内置 omp 命令一样)。无害(id 不同、列表里能看到两条),但属于无意义重复;未做"命令完全重复才拒绝"的特判(KISS,且删除 UI 尚未接,用户可自纠)。

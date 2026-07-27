@@ -9,7 +9,6 @@ package chat
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/jessonchan/monkey-deck/internal/harness"
@@ -123,20 +122,34 @@ func TestAddHarness_NameOptionalDefaultsToID(t *testing.T) {
 	}
 }
 
-// TestAddHarness_ConflictBuiltin 派生 id 撞内置(omp/opencode)→ 报错。
-func TestAddHarness_ConflictBuiltin(t *testing.T) {
+// TestAddHarness_DisambiguatesBuiltinConflict 派生 id 撞内置(omp/opencode)→ 自动加后缀:
+// "omp acp" → id "omp-2","opencode acp" → "opencode-2"。不报错(id 对用户不可见,内部唯一即可)。
+func TestAddHarness_DisambiguatesBuiltinConflict(t *testing.T) {
 	resetUserHarnessesForTest(t)
+	restoreProbe := harness.SetProbeForTest(fakeStubProbe{})
+	t.Cleanup(restoreProbe)
+
 	svc := setupHarnessStoreSvc(t)
 	for _, cmd := range []string{"omp acp", "opencode acp"} {
-		_, err := svc.AddHarness(cmd, "X")
-		if err == nil || !strings.Contains(err.Error(), "内置") {
-			t.Fatalf("AddHarness(%q) err=%v, want builtin conflict", cmd, err)
+		list, err := svc.AddHarness(cmd, "X")
+		if err != nil {
+			t.Fatalf("AddHarness(%q) err=%v, want auto-disambiguate", cmd, err)
+		}
+		want := harnessCommandID(cmd) + "-2"
+		found := false
+		for _, h := range list {
+			if h.ID == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("AddHarness(%q) want disambiguated id %q in list: %+v", cmd, want, list)
 		}
 	}
 }
 
-// TestAddHarness_ConflictExisting 同命令再加 → 派生同 id → 报已存在。
-func TestAddHarness_ConflictExisting(t *testing.T) {
+// TestAddHarness_DisambiguatesExistingConflict 同命令再加 → 派生同 id → 自动消歧成 -2/-3。
+func TestAddHarness_DisambiguatesExistingConflict(t *testing.T) {
 	resetUserHarnessesForTest(t)
 	restoreProbe := harness.SetProbeForTest(fakeStubProbe{})
 	t.Cleanup(restoreProbe)
@@ -145,9 +158,18 @@ func TestAddHarness_ConflictExisting(t *testing.T) {
 	if _, err := svc.AddHarness("junie acp", "Junie"); err != nil {
 		t.Fatalf("first AddHarness: %v", err)
 	}
-	_, err := svc.AddHarness("junie acp", "Junie2")
-	if err == nil || !strings.Contains(err.Error(), "已存在") {
-		t.Fatalf("second AddHarness err=%v, want already-exists", err)
+	list, err := svc.AddHarness("junie acp", "Junie2")
+	if err != nil {
+		t.Fatalf("second AddHarness err=%v, want auto-disambiguate", err)
+	}
+	found := false
+	for _, h := range list {
+		if h.ID == "junie-2" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("second AddHarness want disambiguated id 'junie-2': %+v", list)
 	}
 }
 

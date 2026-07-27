@@ -2171,7 +2171,7 @@ func harnessCommandID(command string) string {
 // id 由命令首段 basename 自动派生(用户不提供);name 可空(空则 store 兜底成 id)。
 // 自检门槛:前端在调本 binding 前应已 ProbeNewHarness 通过(ConformanceReport.CanAdd 为真)。
 // 本处不再服务端重跑 probe(探针含一轮完整 Prompt,90s+;前端已自检过,重跑既慢又费 token),
-// 只做结构性校验(命令非空 + 派生 id 不与内置/已有用户冲突)。
+// 只做结构性校验(命令非空);派生 id 撞内置/已有用户时自动加 -2/-3 后缀消歧(id 对用户不可见)。
 //
 // 返回更新后的全量 harness 列表(前端据此刷新);error 非空时列表为 nil。
 func (s *ChatService) AddHarness(command, name string) ([]harness.Harness, error) {
@@ -2187,13 +2187,11 @@ func (s *ChatService) AddHarness(command, name string) ([]harness.Harness, error
 	if id == "" {
 		return nil, errors.New("无法从命令解析 harness id")
 	}
-	if harness.IsBuiltin(id) {
-		return nil, fmt.Errorf("id %q 与内置 harness 冲突,请换一个启动命令", id)
-	}
-	if existing, err := s.st.GetUserHarness(s.ctx, id); err != nil {
+	// 派生 id 冲突(撞内置 omp/opencode 或已有用户 harness)时自动加后缀消歧:
+	// omp → omp-2 → omp-3 …,直到找到空位。id 对用户始终不可见,内部主键保证唯一即可。
+	id, err := s.resolveHarnessID(id)
+	if err != nil {
 		return nil, err
-	} else if existing != nil {
-		return nil, fmt.Errorf("harness %q 已存在(id 由命令首段派生)", id)
 	}
 	if _, err := s.st.CreateUserHarness(s.ctx, id, name, command, ""); err != nil {
 		return nil, fmt.Errorf("create user harness: %w", err)
@@ -2204,6 +2202,28 @@ func (s *ChatService) AddHarness(command, name string) ([]harness.Harness, error
 	s.emit(EventHarnesses, nil)
 	go s.probeCapabilitiesAsync()
 	return refreshed, nil
+}
+
+// resolveHarnessID 把派生 id 解析成不冲突的最终 id:被内置 / 已有用户占用时依次试 -2/-3… 后缀,
+// 返回首个空位。上限纯防御(实际撞 2-3 次顶天);超限报错而非死循环。name 兜底由 store 层按最终 id 处理。
+func (s *ChatService) resolveHarnessID(derived string) (string, error) {
+	for n := 1; n < 100; n++ {
+		id := derived
+		if n > 1 {
+			id = fmt.Sprintf("%s-%d", derived, n)
+		}
+		if harness.IsBuiltin(id) {
+			continue
+		}
+		existing, err := s.st.GetUserHarness(s.ctx, id)
+		if err != nil {
+			return "", err
+		}
+		if existing == nil {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("harness id %q 消歧失败:候选耗尽", derived)
 }
 
 // UpdateUserHarness 改一个用户自添加 harness 的 name + command(id 不变:session 钉在 id 上,
