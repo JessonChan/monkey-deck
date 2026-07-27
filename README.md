@@ -12,7 +12,7 @@
 
 ## Harness 适配 / 多 harness 支持
 
-当前 `main` 分支内置 opencode / omp 两个 harness。**多 harness 适配工作在 [`goose-exp`](https://github.com/JessonChan/monkey-deck/tree/goose-exp) 分支推进**，已包含：goose 作为第三个内置 harness、声明即用 harness 向导（用户自定义 harness 命令 + 自检 + 体检）、ACP 契约自检探针 ProbeHarness（接入新 harness 前自动校验协议一致性）。**如需支持更多 harness，请基于该分支继续开发。**
+内置 opencode / omp 两个 harness;并支持用户在「添加 harness」弹窗里接入任意实现了 ACP 的编码型 agent —— 填 ID / 名称 / stdio ACP 启动命令,先跑 **ACP 契约自检**(ProbeHarness:受控 spawn → Initialize → NewSession → Prompt 跑到 end_turn,产出体检单),Tier1 硬门槛全过才允许添加,落 SQLite。这让「ACP 是接口、harness 是可互换实例」从论断变成可证伪的接入门槛。
 
 ## 参考与致谢
 
