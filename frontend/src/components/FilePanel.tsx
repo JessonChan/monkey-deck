@@ -4,6 +4,7 @@ import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/i
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import type { FileChange } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import CodeViewer from "./CodeViewer";
+import { isImageFile } from "../utils";
 import {
   ChevronRight,
   ChevronDown,
@@ -36,6 +37,11 @@ type Modal =
 
 const joinPath = (dir: string, name: string) => (dir === "" ? name : dir + "/" + name);
 
+// 预览:文本走 CodeViewer,图片走 <img>(Task #23445)。kind 决定渲染分流与头部按钮。
+type Preview =
+  | { kind: "text"; name: string; path: string; content: string }
+  | { kind: "image"; name: string; path: string; url: string };
+
 export default function FilePanel({ sessionId, rootName, changes, status }: Props) {
   const { t } = useTranslation();
   const [children, setChildren] = useState<ChildrenMap>({});
@@ -43,7 +49,7 @@ export default function FilePanel({ sessionId, rootName, changes, status }: Prop
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ name: string; path: string; content: string } | null>(null);
+  const [preview, setPreview] = useState<Preview | null>(null);
   const [modal, setModal] = useState<Modal | null>(null);
   const [modalName, setModalName] = useState("");
   const [tick, setTick] = useState(0);
@@ -127,11 +133,22 @@ export default function FilePanel({ sessionId, rootName, changes, status }: Prop
 
   const openFile = async (node: FileNode) => {
     setSelected(node.path);
+    const image = isImageFile(node.name);
     try {
-      const content = await ChatService.SessionReadFile(sessionId, node.path);
-      setPreview({ name: node.name, path: node.path, content });
+      if (image) {
+        const d = await ChatService.SessionReadImage(sessionId, node.path);
+        setPreview({ kind: "image", name: node.name, path: node.path, url: d?.dataUrl ?? "" });
+      } else {
+        const content = await ChatService.SessionReadFile(sessionId, node.path);
+        setPreview({ kind: "text", name: node.name, path: node.path, content });
+      }
     } catch (e) {
-      setPreview({ name: node.name, path: node.path, content: t("filePanel.readFailed", { error: String(e) }) });
+      setPreview({
+        kind: "text",
+        name: node.name,
+        path: node.path,
+        content: t("filePanel.readFailed", { error: String(e) }),
+      });
     }
   };
 
@@ -248,10 +265,25 @@ export default function FilePanel({ sessionId, rootName, changes, status }: Prop
               <FileIcon size={14} />
               <span className="preview-name" title={preview.path}>{preview.name}</span>
               <span className="preview-path">{preview.path}</span>
-              <button className="tool-btn" title={t("filePanel.copyContent")} onClick={() => { void navigator.clipboard?.writeText(preview.content); }}><Copy size={14} /></button>
+              {preview.kind === "text" && (
+                <button className="tool-btn" title={t("filePanel.copyContent")} onClick={() => { void navigator.clipboard?.writeText(preview.content); }}><Copy size={14} /></button>
+              )}
               <button className="tool-btn" title={t("common.closeEsc")} onClick={() => setPreview(null)}><X size={16} /></button>
             </div>
-            <CodeViewer content={preview.content} filename={preview.name} testId="file-panel-viewer" />
+            {preview.kind === "image" ? (
+              <div className="preview-img-scroll" data-testid="file-panel-img-scroll">
+                {preview.url && (
+                  <img
+                    className="preview-img"
+                    src={preview.url}
+                    alt={preview.name}
+                    data-testid="file-panel-img"
+                  />
+                )}
+              </div>
+            ) : (
+              <CodeViewer content={preview.content} filename={preview.name} testId="file-panel-viewer" />
+            )}
           </div>
         </div>
       )}

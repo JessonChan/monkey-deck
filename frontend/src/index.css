@@ -1578,6 +1578,26 @@ input, textarea { font-family: inherit; }
 }
 .preview-error { color: var(--red); }
 
+/* ─── 图片预览(Task #23445):<img> 分流容器 ─── */
+/* 与 .preview-pre / .cv-scroll 同级,占据卡片主体(flex:1);大图走自然尺寸 + 居中,
+   超过卡片时可滚动(自定义细滚动条见下方 .cv-scroll 规则块)。 */
+.preview-img-scroll {
+  flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+  background:
+    linear-gradient(45deg, var(--elev-2) 25%, transparent 25%, transparent 75%, var(--elev-2) 75%) 0 0 / 16px 16px,
+    linear-gradient(45deg, var(--elev-2) 25%, transparent 25%, transparent 75%, var(--elev-2) 75%) 8px 8px / 16px 16px,
+    var(--elev);
+}
+.preview-img {
+  max-width: 100%; max-height: 100%; object-fit: contain;
+  user-select: none; -webkit-user-drag: none; pointer-events: auto;
+  background: var(--elev);
+  border-radius: 4px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+
 /* ─── 代码阅读器 CodeViewer(语法高亮 + 行号 + 虚拟化,Task #15088) ─── */
 /* 行号槽与代码同行 flex,共用 .cv-scroll 滚动容器 → 天然对齐、同步滚动。 */
 .cv { position: relative; display: flex; flex-direction: column; min-height: 0; flex: 1; }
@@ -1590,6 +1610,28 @@ input, textarea { font-family: inherit; }
 .cv-scroll {
   flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain;
   font-family: var(--mono); font-size: 12px; color: var(--text);
+}
+/* Task #23445:CodeViewer 与图片预览容器恢复可见细滚动条。
+   全局规则把滚动条隐掉(macOS overlay 风格),但代码 / 图片是长内容阅读场景,
+   「正在读第几行 / 看到整图的哪个区域」的方位感对用户有价值,故这两处单独恢复。
+   细(thin)+ 半透明 thumb + hover 加深;track 透明,不抢内容对比度。
+   仅对 .cv-scroll 与 .preview-img-scroll 生效,不影响其余面板(列表 / 滚动区仍隐)。 */
+.cv-scroll, .preview-img-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sep-strong) transparent;
+}
+.cv-scroll::-webkit-scrollbar, .preview-img-scroll::-webkit-scrollbar {
+  width: 8px; height: 8px; display: block;
+}
+.cv-scroll::-webkit-scrollbar-track, .preview-img-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cv-scroll::-webkit-scrollbar-thumb, .preview-img-scroll::-webkit-scrollbar-thumb {
+  background: var(--sep-strong); border-radius: 4px; border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.cv-scroll::-webkit-scrollbar-thumb:hover, .preview-img-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3); background-clip: padding-box;
 }
 .cv-body { margin: 0; padding: 8px 0; white-space: pre; user-select: text; }
 /* 定高行:与 CodeViewer 的 LINE_HEIGHT 严格一致(虚拟化按此换算像素)。 */

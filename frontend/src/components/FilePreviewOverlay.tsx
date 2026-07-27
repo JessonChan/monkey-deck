@@ -3,10 +3,13 @@ import { useTranslation } from "react-i18next";
 import { File as FileIcon, Copy, X } from "lucide-react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import CodeViewer from "./CodeViewer";
+import { isImageFile } from "../utils";
 
 // 文件预览覆盖层(Task #15084;Task #15088 升级为 CodeViewer —— 语法高亮 + 行号 + 目标行)。
 // 由对话/工具卡片里的路径点击触发:加载文件内容,展示;有行号则定位/滚动/高亮该行。
 // 高亮 / 行号对齐 / 目标行滚入视野 / 大文件虚拟化均由 CodeViewer 统一负责,这里只管加载与外壳。
+// 图片(Task #23445)走 <img> 分流:SessionReadImage 拿 dataURL,直接喂 <img src>,
+// 不进 CodeViewer 的文本 / 行号管线(行号对图片无意义)。
 // 行号是 1-based。
 export interface PreviewTarget {
   path: string;
@@ -23,15 +26,17 @@ export default function FilePreviewOverlay({
   onClose: () => void;
 }) {
   const [content, setContent] = useState<string>("");
+  const [imgUrl, setImgUrl] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
-  // 切换目标:重新加载。
+  // 切换目标:重新加载。图片走 SessionReadImage,其余走 SessionReadFile。
   useEffect(() => {
     if (!target) {
       setContent("");
+      setImgUrl("");
       setError(null);
       return;
     }
@@ -39,10 +44,15 @@ export default function FilePreviewOverlay({
     setLoading(true);
     setError(null);
     setContent("");
-    ChatService.SessionReadFile(sessionId, target.path)
-      .then((c) => {
+    setImgUrl("");
+    const image = isImageFile(target.path);
+    const p = image
+      ? ChatService.SessionReadImage(sessionId, target.path).then((d) => d?.dataUrl ?? "")
+      : ChatService.SessionReadFile(sessionId, target.path);
+    p.then((c) => {
         if (cancelled) return;
-        setContent(c ?? "");
+        if (image) setImgUrl(c ?? "");
+        else setContent(c ?? "");
       })
       .catch((e) => {
         if (cancelled) return;
@@ -79,6 +89,7 @@ export default function FilePreviewOverlay({
   if (!target) return null;
   const name = target.path.split("/").pop() || target.path;
   const lineNum = target.line;
+  const image = isImageFile(target.path);
 
   return (
     <div className="preview-overlay" onClick={onClose} data-testid="file-preview-overlay">
@@ -89,15 +100,17 @@ export default function FilePreviewOverlay({
           <span className="preview-path">
             {target.path}{lineNum ? `:${lineNum}` : ""}
           </span>
-          <button
-            className="tool-btn"
-            onClick={copy}
-            data-tooltip-id="md-tip"
-            data-tooltip-content={copied ? t("common.copied") : t("filePreview.copyTip")}
-            aria-label={t("filePreview.copyTip")}
-          >
-            {copied ? <span style={{ fontSize: 11 }}>✓</span> : <Copy size={14} />}
-          </button>
+          {!image && (
+            <button
+              className="tool-btn"
+              onClick={copy}
+              data-tooltip-id="md-tip"
+              data-tooltip-content={copied ? t("common.copied") : t("filePreview.copyTip")}
+              aria-label={t("filePreview.copyTip")}
+            >
+              {copied ? <span style={{ fontSize: 11 }}>✓</span> : <Copy size={14} />}
+            </button>
+          )}
           <button
             className="tool-btn"
             onClick={onClose}
@@ -112,6 +125,17 @@ export default function FilePreviewOverlay({
           <div className="preview-error">{t("filePreview.readFailed", { error })}</div>
         ) : loading ? (
           <div className="preview-loading">{t("filePreview.loading")}</div>
+        ) : image ? (
+          <div className="preview-img-scroll" data-testid="file-preview-img-scroll">
+            {imgUrl && (
+              <img
+                className="preview-img"
+                src={imgUrl}
+                alt={name}
+                data-testid="file-preview-img"
+              />
+            )}
+          </div>
         ) : (
           <CodeViewer
             content={content}

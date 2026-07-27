@@ -25,3 +25,13 @@ export function formatDateTime(ts: number): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+
+// 文件名是否走图片预览(<img>)分支。扩展名白名单与后端 fsview.ReadImage 对齐
+// (internal/fsview/fsview.go 的 extToImageMime):大小写不敏感、无扩展名返回 false。
+// 图片预览由 SessionReadImage 提供 dataURL,绕过 CodeViewer 的文本渲染路径。
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico"]);
+export function isImageFile(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0 || dot === name.length - 1) return false;
+  return IMAGE_EXTS.has(name.slice(dot + 1).toLowerCase());
+}
