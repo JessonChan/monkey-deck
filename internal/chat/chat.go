@@ -2118,11 +2118,10 @@ func (s *ChatService) RefreshHarnesses() ([]harness.Harness, error) {
 //     AddHarness 路径不经过它,故这里显式 go 一次(§5.4:确认 probe 触发点)。
 //
 // 返回更新后的全量 harness 列表(前端据此刷新);error 非空时列表为 nil。
-func (s *ChatService) AddHarness(id, name, command, icon string) ([]harness.Harness, error) {
+func (s *ChatService) AddHarness(id, name, command string) ([]harness.Harness, error) {
 	id = strings.TrimSpace(id)
 	name = strings.TrimSpace(name)
 	command = strings.TrimSpace(command)
-	icon = strings.TrimSpace(icon)
 
 	path := filepath.Join(s.cfg.DataDir, harness.UserHarnessesFile)
 	list, err := harness.LoadUserHarnesses(path)
@@ -2132,7 +2131,7 @@ func (s *ChatService) AddHarness(id, name, command, icon string) ([]harness.Harn
 	if err := harness.ValidateUserHarness(id, name, command, list); err != nil {
 		return nil, err
 	}
-	list = append(list, harness.UserHarness{ID: id, Name: name, Command: command, Icon: icon})
+	list = append(list, harness.UserHarness{ID: id, Name: name, Command: command})
 	if err := harness.SaveUserHarnesses(path, list); err != nil {
 		return nil, fmt.Errorf("save user harnesses: %w", err)
 	}
