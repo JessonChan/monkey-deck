@@ -1,13 +1,37 @@
 import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { Events } from "@wailsio/runtime";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download, AlertTriangle } from "lucide-react";
+import type { CapabilityMatrix } from "../../bindings/github.com/jessonchan/monkey-deck/internal/acp/models";
+import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download, AlertTriangle, Plus } from "lucide-react";
+import AddHarnessModal from "./AddHarnessModal";
+
+// harness 能力位定义:field = CapabilityMatrix 字段名,key = i18n capability.<key> 后缀。
+// declared 位(prompt*/config*/sessionList)来自 Initialize/NewSession 声明,确定 ✓/✗;
+// observed 位(emitsUsage/emitsPlan)来自 noop Prompt 行为观测,withProbe=false 默认 undefined
+// → 渲染中性「未观测」态,不误判为 ✗。
+const CAP_BITS: { field: keyof CapabilityMatrix; key: string }[] = [
+  { field: "promptImage", key: "image" },
+  { field: "promptAudio", key: "audio" },
+  { field: "promptEmbeddedContext", key: "embeddedContext" },
+  { field: "configModel", key: "model" },
+  { field: "configMode", key: "mode" },
+  { field: "configEffort", key: "effort" },
+  { field: "sessionList", key: "sessionList" },
+  { field: "emitsUsage", key: "usage" },
+  { field: "emitsPlan", key: "plan" },
+];
 
 // harness 管理 pane(发现 / 版本检测 / 升级)。
-// 展示每个已知 harness 的:名称 + 启动命令 + 本地版本 + 上游最新版本 + 升级按钮 / 状态。
-// 数据来自后端 Discover(扫 PATH + 跑 --version + 查 GitHub Releases)。
+// 展示每个已知 harness 的:名称 + 启动命令 + 本地版本 + 上游最新版本 + 升级按钮 / 状态 + 能力矩阵。
+// 数据来自后端 Discover(扫 PATH + 跑 --version + 查 GitHub Releases)+ ProbeCapabilities(能力位)。
 // 本组件只渲染 pane 内容,由设置中心面板承载。
+//
+// 能力矩阵数据源选式(§5.3 复用):HarnessPane 由设置中心面板承载,不在 App 直接渲染链上,
+// 不走 prop-drilling。镜像它现有 ListHarnesses 的「自己拉」范式 + App.tsx 的「订阅 chat:* 重拉」
+// 范式,自己调 ListHarnessCapabilities + 订阅 chat:harness-capabilities。与 App 那份
+// harnessCapabilities state 并行存在(两处各自拉,数据源单一 = 后端;前端两份只读快照无写冲突,KISS)。
 export default function HarnessPane() {
   const { t } = useTranslation();
   const [list, setList] = useState<Harness[]>([]);
@@ -23,7 +47,12 @@ export default function HarnessPane() {
   const [autoUpgrade, setAutoUpgrade] = useState<boolean>(false);
   // per-harness 升级状态:id → "running" | "ok" | "err"
   const [upgrading, setUpgrading] = useState<Record<string, "running" | "ok" | "err">>({});
+  // per-harness 能力矩阵:harnessID → CapabilityMatrix | undefined。自己拉(不靠 App prop 下传,
+  // 见顶部注释)。后端探测未就绪时返回 nil → {} ;ProbeErr 非空表示该 harness 探测失败。
+  const [caps, setCaps] = useState<Record<string, CapabilityMatrix | undefined>>({});
   const [error, setError] = useState<string | null>(null);
+  // 「添加 harness」弹窗开关:HarnessPane 自管(不在 App 渲染链上,见顶部注释),镜像 FilePanel 范式。
+  const [adding, setAdding] = useState(false);
 
   // 拉后端开关当前值:经 GetConfig 一次取回 checkHarnessUpdates / autoHarnessUpgrade 两个字段
   // (单一真相源 = 后端 SQLite;GetConfig 是后端聚合的只读快照,Task #22385 已暴露 autoHarnessUpgrade)。
@@ -50,6 +79,23 @@ export default function HarnessPane() {
   }, []);
 
   useEffect(() => { void reload(); }, [reload]);
+
+  // 能力矩阵:启动拉一次快照(可能 nil = 未就绪),后端探测完成后推 chat:harness-capabilities
+  // 据此重拉(镜像 App.tsx 的范式)。失败静默(caps 保持 {},HarnessRow 显示「检测中」)。
+  const reloadCaps = useCallback(async () => {
+    try {
+      const m = await ChatService.ListHarnessCapabilities();
+      setCaps(m ?? {});
+    } catch {
+      /* 静默:保持原值,HarnessRow 显示「检测中」态 */
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadCaps();
+    const off = Events.On("chat:harness-capabilities", () => { void reloadCaps(); });
+    return () => { off(); };
+  }, [reloadCaps]);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -110,16 +156,27 @@ export default function HarnessPane() {
     <div className="settings-pane" data-testid="harness-pane">
       <div className="pane-head">
         <div className="pane-desc">{t("settings.harness.desc")}</div>
-        <button
-          className="modal-btn ghost"
-          data-testid="harness-refresh"
-          disabled={refreshing}
-          data-tooltip-id="md-tip"
-          data-tooltip-content={t("settings.harness.refreshTip")}
-          onClick={() => void refresh()}
-        >
-          <RefreshCw size={13} className={refreshing ? "spin" : ""} /> {t("settings.harness.refresh")}
-        </button>
+        <div className="pane-head-acts">
+          <button
+            className="modal-btn ghost"
+            data-testid="add-harness-btn"
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("settings.harness.addBtnTip")}
+            onClick={() => setAdding(true)}
+          >
+            <Plus size={13} /> {t("settings.harness.addBtn")}
+          </button>
+          <button
+            className="modal-btn ghost"
+            data-testid="harness-refresh"
+            disabled={refreshing}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("settings.harness.refreshTip")}
+            onClick={() => void refresh()}
+          >
+            <RefreshCw size={13} className={refreshing ? "spin" : ""} /> {t("settings.harness.refresh")}
+          </button>
+        </div>
       </div>
 
       {error && <div className="modal-del-err">{error}</div>}
@@ -177,10 +234,23 @@ export default function HarnessPane() {
             key={h.id}
             h={h}
             upgrading={upgrading[h.id]}
+            cap={caps[h.id]}
             onUpgrade={() => void upgrade(h.id)}
           />
         ))}
       </div>
+
+      {adding && (
+        <AddHarnessModal
+          existing={list}
+          onDone={(updated) => {
+            setList(updated);
+            setAdding(false);
+            setError(null);
+          }}
+          onCancel={() => setAdding(false)}
+        />
+      )}
     </div>
   );
 }
@@ -188,10 +258,12 @@ export default function HarnessPane() {
 function HarnessRow({
   h,
   upgrading,
+  cap,
   onUpgrade,
 }: {
   h: Harness;
   upgrading: "running" | "ok" | "err" | undefined;
+  cap: CapabilityMatrix | undefined;
   onUpgrade: () => void;
 }) {
   const { t } = useTranslation();
@@ -229,6 +301,9 @@ function HarnessRow({
             </span>
           )}
         </div>
+        {/* 能力矩阵列(复用 HarnessRow 结构,不另起 panel):紧凑 chip 行,溢出由 tooltip 补全。
+            matrix 未就绪(cap undefined)→「检测中」;ProbeErr 非空 →「检测失败」。 */}
+        <CapabilityChips cap={cap} harnessId={h.id} />
         {h.path && (
           <div className="harness-path" data-tooltip-id="md-tip" data-tooltip-content={h.path}>
             <span className="harness-cmd-label">{t("settings.harness.path")}</span>
@@ -276,6 +351,69 @@ function HarnessRow({
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+// 能力矩阵 chip 行:每项 ✓/✗ + react-tooltip(md-tip,§4.5)+ 人话说明(§4.4)。
+// 形态选式(coder 判断,§5.3):一行紧凑 chip(溢出 wrap),不另起 panel / 不用 grid——HarnessRow
+// 已较密(名/命令/版本/升级按钮),grid 会纵向撑高挤压;chip 行可 wrap、信息密度高、三端一致(§4.6)。
+//
+// 状态判定:
+//   - cap undefined:harnessId 不在 map / 后端探测未就绪 →「检测中…」(不空白)。
+//   - cap.probeErr 非空:探测失败 →「检测失败」(读 ProbeErr,§1.6 尊重数据源)。
+//   - declared 位(prompt*/config*/sessionList):true=✓ / false=✗(确定)。
+//   - observed 位(emitsUsage/emitsPlan):undefined=中性「未观测」(withProbe=false 默认值,不误判 ✗)。
+function CapabilityChips({ cap, harnessId }: { cap: CapabilityMatrix | undefined; harnessId: string }) {
+  const { t } = useTranslation();
+
+  if (!cap) {
+    return (
+      <div className="harness-cap probing" data-testid={`harness-cap-probing-${harnessId}`}>
+        <RefreshCw size={11} className="spin" /> {t("capability.probing")}
+      </div>
+    );
+  }
+  if (cap.probeErr) {
+    return (
+      <div
+        className="harness-cap failed"
+        data-testid={`harness-cap-failed-${harnessId}`}
+        data-tooltip-id="md-tip"
+        data-tooltip-content={`${t("capability.probeFailedTip")}\n${cap.probeErr}`}
+      >
+        <AlertCircle size={11} /> {t("capability.probeFailed")}
+      </div>
+    );
+  }
+
+  return (
+    <div className="harness-cap" data-testid={`harness-cap-${harnessId}`}>
+      {CAP_BITS.map((bit) => {
+        const raw = cap[bit.field];
+        // 观测位(emitsUsage/emitsPlan)undefined = 未观测(中性);declared 位 true/false → ✓/✗。
+        const state: "yes" | "no" | "unknown" =
+          raw === true ? "yes" : raw === false ? "no" : "unknown";
+        const tipBase = t(`capability.${bit.key}Tip`);
+        const tipState =
+          state === "yes"
+            ? t("capability.supported")
+            : state === "no"
+              ? t("capability.notSupported")
+              : t("capability.notObserved");
+        return (
+          <span
+            key={String(bit.field)}
+            className={`harness-cap-chip ${state}`}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={`${t(`capability.${bit.key}`)}: ${tipState}\n${tipBase}`}
+            data-testid={`harness-cap-${harnessId}-${bit.key}`}
+          >
+            {state === "yes" ? <CheckCircle2 size={11} /> : state === "no" ? <AlertCircle size={11} /> : <AlertCircle size={11} className="dim" />}
+            {t(`capability.${bit.key}`)}
+          </span>
+        );
+      })}
     </div>
   );
 }

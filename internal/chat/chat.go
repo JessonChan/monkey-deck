@@ -38,6 +38,9 @@ const (
 	EventStatus      = "chat:status"       // StatusPayload(会话状态:started/prompting/idle/error/closed)
 	EventSessionMeta = "chat:session-meta" // SessionMetaPayload(标题等元信息更新)
 	EventHarnesses   = "chat:harnesses"    // harness 发现/版本变更(前端据此重拉 ListHarnesses)
+	// EventHarnessCapabilities:harness 能力探测完成(ProbeCapabilities 后),前端据此重拉
+	// ListHarnessCapabilities。异步触发(Discover 之后),独立于 EventHarnesses。
+	EventHarnessCapabilities = "chat:harness-capabilities"
 )
 
 // StatusPayload 会话状态变更。
@@ -238,6 +241,11 @@ type ChatService struct {
 	// harness 缓存:Discover 的运行时结果(已发现/版本/可升级)。启动后异步填充;
 	// 前端经 ListHarnesses 读快照、RefreshHarnesses 触发重刷。nil = 用静态 Supported 兜底。
 	harnessCache atomic.Pointer[[]harness.Harness]
+
+	// harness 能力缓存:ProbeCapabilities 的结果(harnessID → 能力位)。Discover 完成后异步
+	// probe 已安装 harness 的真实 ACP 能力(Initialize + NewSession 声明位 + 可选 noop Prompt
+	// 行为观测)。nil = 未探测/未就绪,前端经 ListHarnessCapabilities 读快照。
+	capabilityCache atomic.Pointer[map[string]acp.CapabilityMatrix]
 
 	// idle reaper:超 idleTimeout 未活动且非 busy 的 session 自动 CloseSession,释放资源(B 方案)。
 	// ServiceStartup 起 goroutine,ServiceShutdown 优雅停。测试注入短 timeout。
@@ -2093,6 +2101,48 @@ func (s *ChatService) RefreshHarnesses() ([]harness.Harness, error) {
 	return list, nil
 }
 
+// AddHarness 添加用户自建 harness,持久化到 DataDir/harnesses.json 并合并进内存注册表。
+//
+// 流程(§5.3 复用现有 Discover/probe 路径,不另起体系):
+//  1. 加载现有用户 harness 列表(文件不存在 = 空)。
+//  2. 校验(id/name/command 非空 + id 不与静态或已有用户冲突)—— 失败返明确哨兵错误。
+//  3. 追加 + 原子写文件(tmp+rename)。
+//  4. SetUserHarnesses 刷内存合并视图(Discover/Command/Normalize/进程回收 据此识别新 harness)。
+//  5. acp.SetHarnessCommands 刷新进程回收层的命令白名单(§3.2:启动时注入一次,加新 harness 后要补)。
+//  6. Discover 刷 Path/Installed(新 harness 是否已在本机)→ 缓存 + 推 EventHarnesses。
+//  7. 异步 probeCapabilitiesAsync:Discover 只告诉我们装没装,能力位(prompt/session/mcp)要 spawn
+//     问 harness 自己。refreshHarnessesThenMaybeAutoUpgrade 的 probe hook 只在启动跑一次,
+//     AddHarness 路径不经过它,故这里显式 go 一次(§5.4:确认 probe 触发点)。
+//
+// 返回更新后的全量 harness 列表(前端据此刷新);error 非空时列表为 nil。
+func (s *ChatService) AddHarness(id, name, command, icon string) ([]harness.Harness, error) {
+	id = strings.TrimSpace(id)
+	name = strings.TrimSpace(name)
+	command = strings.TrimSpace(command)
+	icon = strings.TrimSpace(icon)
+
+	path := filepath.Join(s.cfg.DataDir, harness.UserHarnessesFile)
+	list, err := harness.LoadUserHarnesses(path)
+	if err != nil {
+		return nil, fmt.Errorf("load user harnesses: %w", err)
+	}
+	if err := harness.ValidateUserHarness(id, name, command, list); err != nil {
+		return nil, err
+	}
+	list = append(list, harness.UserHarness{ID: id, Name: name, Command: command, Icon: icon})
+	if err := harness.SaveUserHarnesses(path, list); err != nil {
+		return nil, fmt.Errorf("save user harnesses: %w", err)
+	}
+	harness.SetUserHarnesses(list)
+	acp.SetHarnessCommands(harness.Commands())
+
+	refreshed := harness.Discover(s.ctx)
+	s.harnessCache.Store(&refreshed)
+	s.emit(EventHarnesses, nil)
+	go s.probeCapabilitiesAsync()
+	return refreshed, nil
+}
+
 // refreshHarnessesAsync 启动时后台发现:限时 5s(网络/超时不阻塞应用启动太长)。
 // 出错也写空缓存 → ListHarnesses 拿到 nil 走 Supported 静态兜底,前端体验不退化。
 func (s *ChatService) refreshHarnessesAsync() {
@@ -2103,12 +2153,112 @@ func (s *ChatService) refreshHarnessesAsync() {
 	s.emit(EventHarnesses, nil)
 }
 
+// ─── harness ACP 能力探测(ProbeCapabilities)─────────────────────────────────
+//
+// Discover 只告诉我们「harness 装在哪 / 什么版本」,不告诉我们「这个版本到底支持哪些 ACP 特性」。
+// probeCapabilitiesAsync 在 Discover 之后异步 spawn 每个 Installed harness,经 Initialize +
+// NewSession 拿协议声明的能力位(prompt/session/mcp/loadSession),失败静默降级(ProbeErr 填错误串)。
+// 默认 withProbe=false(零 token 成本):noop Prompt 观测实际事件流默认关闭(消耗 token、
+// 且声明了未必发),将来需要时再开。
+//
+// 各 harness probe 各自独立 spawn(独立进程组,§3.2),互不影响;整体限时防某个慢 harness 拖全部。
+// 结果合并进 capabilityCache,推 EventHarnessCapabilities 让前端重拉 ListHarnessCapabilities。
+
+// probeCapTimeout 单次 probe(含 spawn + Initialize + NewSession)的整体预算上限。
+// harness 启动 + Initialize 通常 ≤ 数秒;给宽松上限防慢机/慢 harness 拖死全部。
+const probeCapTimeout = 30 * time.Second
+
+// probeCapabilitiesAsync 对 harnessCache 里所有 Installed=true 的 harness 异步做能力探测。
+// 在 refreshHarnessesAsync(Discover)完成后调(启动路径 + 周期 ticker 各自触发)。
+//
+// 行为:
+//   - 读 harnessCache 快照;nil(未 Discover)或无 Installed 项 → 直接返回(无操作)。
+//   - 对每个 Installed harness 起独立 goroutine 并行 probe(各自 spawn,互不阻塞)。
+//   - 每个 probe 用独立 ctx(限时 probeCapTimeout,防慢 harness 拖死)。
+//   - probe 失败(harness 命令不存在 / Initialize 报错 / NewSession 报错)静默降级:
+//     矩阵的 ProbeErr 填错误串,前端可据此显示「上次检测失败」,不影响其它 harness。
+//   - 合并结果进 capabilityCache(覆盖旧值),推 EventHarnessCapabilities。
+//
+// workDir 用 cfg.CachesDir 下的稳定 probe 目录(EnsureDir 已建 CachesDir;probe 子目录惰性创建,
+// 复用避免反复建/删)。多数 harness 对 cwd 无副作用要求,稳定目录足够。
+func (s *ChatService) probeCapabilitiesAsync() {
+	p := s.harnessCache.Load()
+	if p == nil {
+		return
+	}
+	var installed []harness.Harness
+	for _, h := range *p {
+		if h.Installed {
+			installed = append(installed, h)
+		}
+	}
+	if len(installed) == 0 {
+		return
+	}
+	workDir := filepath.Join(s.cfg.CachesDir, "probe")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		slog.Warn("probe capabilities: mkdir workDir failed", "err", err)
+		return
+	}
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		results = make(map[string]acp.CapabilityMatrix, len(installed))
+	)
+	for _, h := range installed {
+		wg.Add(1)
+		go func(h harness.Harness) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(s.ctx, probeCapTimeout)
+			defer cancel()
+			r := acp.NewRunner(h.Command, nil)
+			m, err := r.ProbeCapabilities(ctx, h.ID, workDir, false)
+			if err != nil {
+				// 静默降级:ProbeErr 已填,m 仍带部分声明位(Initialize 成功但 NewSession 失败时)。
+				slog.Warn("probe capabilities failed", "harness", h.ID, "err", err)
+			}
+			mu.Lock()
+			results[h.ID] = m
+			mu.Unlock()
+		}(h)
+	}
+	wg.Wait()
+
+	// 合并:保留旧缓存里不在本次 installed 集合中的项(避免某 harness 临时未装就抹掉历史探测结果)。
+	prev := s.capabilityCache.Load()
+	merged := make(map[string]acp.CapabilityMatrix, len(results))
+	if prev != nil {
+		for k, v := range *prev {
+			merged[k] = v
+		}
+	}
+	for k, v := range results {
+		merged[k] = v
+	}
+	s.capabilityCache.Store(&merged)
+	s.emit(EventHarnessCapabilities, nil)
+}
+
+// ListHarnessCapabilities 返回已探测 harness 的能力位快照(harnessID → CapabilityMatrix)。
+// 启动后异步填充(Discover 之后);未就绪时返回 nil(前端按需展示「检测中」或不展示)。
+// 前端监听 EventHarnessCapabilities 事件以在探测完成后重拉。
+func (s *ChatService) ListHarnessCapabilities() map[string]acp.CapabilityMatrix {
+	if p := s.capabilityCache.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
 // refreshHarnessesThenMaybeAutoUpgrade 启动路径专用:跑完 refreshHarnessesAsync 后,
 // 若 auto_harness_upgrade 开启则立即 maybeAutoUpgrade(不等首个 tick——默认周期
 // harnessRefreshEvery=1h,等首 tick 才升级太久;用户开了 auto 即期望尽快自愈到最新)。
 // 复用 ticker 同样的「refresh → maybeAutoUpgrade」序列,只是把首跑从「等首 tick」提前到「启动 refresh 完即可」。
 func (s *ChatService) refreshHarnessesThenMaybeAutoUpgrade() {
 	s.refreshHarnessesAsync()
+	// Discover 完成后异步 probe 已安装 harness 的 ACP 能力(独立 spawn,不阻塞主流程;
+	// 失败静默降级,前端 ListHarnessCapabilities 拿不到结果时返回空 map)。
+	go s.probeCapabilitiesAsync()
 	if s.autoHarnessUpgradeSetting() {
 		s.maybeAutoUpgrade()
 	}
@@ -2398,6 +2548,14 @@ func (s *ChatService) SetDefaultModel(model string) error {
 func (s *ChatService) loadPersistedConfig() {
 	if m, _ := s.st.GetSetting(s.ctx, "defaultModel"); m != "" {
 		s.cfg.DefaultModel = m
+	}
+	// 用户自添加 harness:从 DataDir/harnesses.json 加载,合并进内存注册表(§5.3 复用)。
+	// 必须在 acp.SetHarnessCommands(ServiceStartup 后续行)之前完成,使进程回收层一并认得用户 harness。
+	// 文件不存在 = 空(开箱即用);损坏 = 告警 + 忽略(不阻塞启动,用户可重建)。
+	if user, err := harness.LoadUserHarnesses(filepath.Join(s.cfg.DataDir, harness.UserHarnessesFile)); err != nil {
+		slog.Warn("load user harnesses", "err", err)
+	} else {
+		harness.SetUserHarnesses(user)
 	}
 	// 权限规则:表空时写入默认规则(§3.4),否则保留用户已定制。
 	if _, err := s.st.SeedDefaultPermissionRules(s.ctx, defaultPermissionRulesForStore()); err != nil {
