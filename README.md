@@ -12,7 +12,7 @@
 
 ## Harness 适配 / 多 harness 支持
 
-内置 opencode / omp 两个 harness;并支持用户在「添加 harness」弹窗里接入任意实现了 ACP 的编码型 agent —— 填 ID / 名称 / stdio ACP 启动命令,先跑 **ACP 契约自检**(ProbeHarness:受控 spawn → Initialize → NewSession → Prompt 跑到 end_turn,产出体检单),Tier1 硬门槛全过才允许添加,落 SQLite。这让「ACP 是接口、harness 是可互换实例」从论断变成可证伪的接入门槛。
+内置 opencode / omp 两个 harness;并支持用户在「添加 harness」弹窗里接入任意实现了 ACP 的编码型 agent —— 填 stdio ACP 启动命令(+ 可选显示名;标识 ID 由命令首段自动派生,用户无需关心),先跑 **ACP 契约自检**(ProbeHarness:受控 spawn → Initialize → NewSession → Prompt 跑到 end_turn,产出体检单),Tier1 硬门槛全过才允许添加,落 SQLite。已添加的 harness 可随时改名 / 改命令、重新自检。这让「ACP 是接口、harness 是可互换实例」从论断变成可证伪的接入门槛。
 
 ## 参考与致谢
 
