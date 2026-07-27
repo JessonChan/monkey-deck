@@ -440,6 +440,16 @@ export default function Sidebar(props: Props) {
           <button className="ctx-item" onClick={() => { void navigator.clipboard?.writeText(ctx.session.id); closeCtx(); }}>
             <Copy size={13} /> {t("sidebar.copySessionId")}
           </button>
+          <button
+            className="ctx-item"
+            onClick={() => {
+              const project = props.projects.find((p) => p.id === ctx.session.projectId);
+              void navigator.clipboard?.writeText(ctx.session.worktreePath || project?.path || "");
+              closeCtx();
+            }}
+          >
+            <Copy size={13} /> {t("sidebar.copyWorkdir")}
+          </button>
           {ctx.session.worktreePath && (
             <button className="ctx-item" onClick={() => { void ChatService.RevealPath(ctx.session.worktreePath); closeCtx(); }}>
               <FolderOpen size={13} /> {t("sidebar.revealWorktree")}
