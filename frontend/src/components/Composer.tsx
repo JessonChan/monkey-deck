@@ -463,7 +463,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
           {/* 返回上一级:scope 非空(drill 态)时显示,退到父目录。data-testid 供测试点击。 */}
           {mentionScope !== "" && (
             <button
-              className="slash-item mention-up"
+              className={`slash-item mention-up ${mentionIdx < 0 ? "active" : ""}`}
               data-testid="mention-go-up"
               onMouseEnter={() => setMentionIdx(-1)}
               onClick={goUpMention}

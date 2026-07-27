@@ -420,4 +420,31 @@ describe("Composer @ mention drill-down + scope + go-up (Task #23449)", () => {
     const mentioned = onMentionsChange.mock.calls[onMentionsChange.mock.calls.length - 1][0] as { path: string; name: string }[];
     expect(mentioned.some((m) => m.path === "src/foo.ts")).toBe(true);
   });
+
+  // Review #23447:go-up 行可被键盘聚焦(ArrowUp 从首项 → mentionIdx=-1),必须有可视高亮,
+  // 否则键盘用户停在 go-up 上毫无反馈(仅 hover 有样式)。锚定 .active 类随 mentionIdx=-1 落到 go-up。
+  test("ArrowUp from first item focuses go-up row and toggles its .active class", async () => {
+    fuzzyFindResult = [{ path: "src/foo.ts", name: "foo.ts", isDir: false }];
+    const { host } = mount(<Composer value={"@src/"} {...STUB_PROPS} sessionId={"sid"} />);
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, 5);
+    await new Promise((r) => setTimeout(r, 200));
+    await flush();
+
+    const goUp = host.querySelector('[data-testid="mention-go-up"]') as HTMLElement;
+    expect(goUp).not.toBeNull();
+    // 初始:焦点在首项(idx=0),go-up 无 active。
+    expect(goUp.classList.contains("active")).toBe(false);
+
+    ta.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    await flush();
+    // ArrowUp 从 0 → -1:go-up 行获得 active(键盘可视高亮,与普通项一致)。
+    expect(goUp.classList.contains("active")).toBe(true);
+
+    // 再 ArrowDown 回到首项,go-up 失去 active。
+    ta.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    await flush();
+    expect(goUp.classList.contains("active")).toBe(false);
+  });
 });
