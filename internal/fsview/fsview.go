@@ -7,9 +7,11 @@
 package fsview
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -374,6 +376,91 @@ func ReadFile(root, rel string) (string, error) {
 		return "二进制文件,不预览。", nil
 	}
 	return string(data), nil
+}
+
+// maxImageSize 读图大小上限(超出报错;避免把大文件 base64 灌进 webview)。
+const maxImageSize = 8 * 1024 * 1024
+
+// extToImageMime 常见图片扩展名 → mime。优先按扩展名判定,覆盖 SVG 等无法靠内容嗅探的文本格式。
+var extToImageMime = map[string]string{
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif":  "image/gif",
+	".webp": "image/webp",
+	".bmp":  "image/bmp",
+	".svg":  "image/svg+xml",
+	".ico":  "image/x-icon",
+}
+
+// imageMimeToExt mime → 扩展名(不含点)。内容嗅探命中后反推扩展名用。
+var imageMimeToExt = map[string]string{
+	"image/png":     "png",
+	"image/jpeg":    "jpg",
+	"image/gif":     "gif",
+	"image/webp":    "webp",
+	"image/bmp":     "bmp",
+	"image/svg+xml": "svg",
+	"image/x-icon":  "ico",
+}
+
+// ImageData 是 ReadImage 的返回:dataURL 可直接喂 <img src>,扩展名供前端下载名 / 分类。
+type ImageData struct {
+	DataURL   string `json:"dataUrl"`   // data:<mime>;base64,<b64>
+	Extension string `json:"extension"` // 不含点,如 "png"
+}
+
+// ReadImage 读取 root/rel 的图片,返回 dataURL(data:<mime>;base64,<b64>)与扩展名。
+// 路径钉在 root(safeJoin 防 ../ 与符号链接越界);过大或非图片报错。
+//
+// mime 推断:先按扩展名(覆盖 SVG 等文本格式),扩展名缺失/未知时按内容嗅探
+// (http.DetectContentType);二者都拿不到 image/* 视为非图片。
+func ReadImage(root, rel string) (ImageData, error) {
+	target, err := safeJoin(root, rel)
+	if err != nil {
+		return ImageData{}, err
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		return ImageData{}, err
+	}
+	if info.IsDir() {
+		return ImageData{}, fmt.Errorf("是目录: %s", rel)
+	}
+	if info.Size() > maxImageSize {
+		return ImageData{}, fmt.Errorf("图片过大(%d 字节),不读取", info.Size())
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return ImageData{}, err
+	}
+	mime, ext, ok := inferImage(rel, data)
+	if !ok {
+		return ImageData{}, fmt.Errorf("不是图片: %s", rel)
+	}
+	return ImageData{
+		DataURL:   "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data),
+		Extension: ext,
+	}, nil
+}
+
+// inferImage 推断图片 mime 与扩展名。先按扩展名;扩展名缺失/未在白名单时按内容嗅探并反推扩展名。
+// 返回 ok=false 表示非图片。
+func inferImage(rel string, data []byte) (mime, ext string, ok bool) {
+	if e := strings.ToLower(filepath.Ext(rel)); e != "" {
+		if m, hit := extToImageMime[e]; hit {
+			return m, strings.TrimPrefix(e, "."), true
+		}
+	}
+	sniffed := http.DetectContentType(data)
+	// DetectContentType 可能带 "; charset=utf-8",取分号前。
+	if i := strings.IndexByte(sniffed, ';'); i >= 0 {
+		sniffed = strings.TrimSpace(sniffed[:i])
+	}
+	if e, hit := imageMimeToExt[sniffed]; hit {
+		return sniffed, e, true
+	}
+	return "", "", false
 }
 
 // isBinary 前 8000 字节含 NUL 视为二进制。

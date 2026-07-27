@@ -912,6 +912,16 @@ func (s *ChatService) SessionReadFile(sessionID, rel string) (string, error) {
 	return fsview.ReadFile(root, rel)
 }
 
+// SessionReadImage 读取 session 工作目录下 rel 的图片,返回 dataURL(data:<mime>;base64,<b64>)
+// 与扩展名(不含点)。路径钉在 cwd(safeJoin 防 ../ 与符号链接越界);非图片 / 过大 / 越界报错。
+func (s *ChatService) SessionReadImage(sessionID, rel string) (fsview.ImageData, error) {
+	root, err := s.cwdOf(sessionID)
+	if err != nil {
+		return fsview.ImageData{}, err
+	}
+	return fsview.ReadImage(root, rel)
+}
+
 // SessionCreateFile 在 session 工作目录下新建文件(含内容)。
 func (s *ChatService) SessionCreateFile(sessionID, rel, content string) error {
 	root, err := s.cwdOf(sessionID)

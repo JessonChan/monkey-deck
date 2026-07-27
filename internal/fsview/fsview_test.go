@@ -1,6 +1,10 @@
 package fsview
 
 import (
+	"bytes"
+	"encoding/base64"
+	"image"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,6 +124,159 @@ func TestReadFile(t *testing.T) {
 	}
 	if _, err := ReadFile(root, "../x"); err == nil {
 		t.Fatal("read escape should error")
+	}
+}
+
+// encodePNG 生成 1x1 透明 PNG 字节,供 ReadImage 测试。
+func encodePNG(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// 验证读图(PNG,有扩展名):返回 dataURL 前缀正确 + 扩展名 png + 内容可解回原字节。
+func TestReadImagePNGByExt(t *testing.T) {
+	root := t.TempDir()
+	pngBytes := encodePNG(t)
+	must(t, os.WriteFile(filepath.Join(root, "a.png"), pngBytes, 0o644))
+
+	img, err := ReadImage(root, "a.png")
+	if err != nil {
+		t.Fatalf("ReadImage a.png: %v", err)
+	}
+	if img.Extension != "png" {
+		t.Fatalf("extension = %q, want png", img.Extension)
+	}
+	wantPrefix := "data:image/png;base64,"
+	if !strings.HasPrefix(img.DataURL, wantPrefix) {
+		t.Fatalf("dataURL prefix = %q, want %q", img.DataURL[:len(wantPrefix)], wantPrefix)
+	}
+	b64 := strings.TrimPrefix(img.DataURL, wantPrefix)
+	got, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatalf("decode b64: %v", err)
+	}
+	if !bytes.Equal(got, pngBytes) {
+		t.Fatalf("roundtrip mismatch: got %d bytes, want %d", len(got), len(pngBytes))
+	}
+}
+
+// 验证扩展名优先:文件名 .jpg 但内容是 PNG → 按 .jpg 判定(image/jpeg)。
+func TestReadImageExtBeatsSniff(t *testing.T) {
+	root := t.TempDir()
+	pngBytes := encodePNG(t)
+	must(t, os.WriteFile(filepath.Join(root, "a.jpg"), pngBytes, 0o644))
+
+	img, err := ReadImage(root, "a.jpg")
+	if err != nil {
+		t.Fatalf("ReadImage a.jpg: %v", err)
+	}
+	if !strings.HasPrefix(img.DataURL, "data:image/jpeg;base64,") {
+		t.Fatalf("mime should be image/jpeg by ext, got %q", img.DataURL)
+	}
+	if img.Extension != "jpg" {
+		t.Fatalf("extension = %q, want jpg", img.Extension)
+	}
+}
+
+// 验证内容嗅探:无扩展名 / 未知扩展名,但内容是 PNG → 嗅探出 image/png + 反推扩展名 png。
+func TestReadImageSniffFallback(t *testing.T) {
+	root := t.TempDir()
+	pngBytes := encodePNG(t)
+	must(t, os.WriteFile(filepath.Join(root, "blob"), pngBytes, 0o644))
+
+	img, err := ReadImage(root, "blob")
+	if err != nil {
+		t.Fatalf("ReadImage blob: %v", err)
+	}
+	if !strings.HasPrefix(img.DataURL, "data:image/png;base64,") {
+		t.Fatalf("mime should sniff to image/png, got %q", img.DataURL)
+	}
+	if img.Extension != "png" {
+		t.Fatalf("extension = %q, want png", img.Extension)
+	}
+}
+
+// SVG 只能靠扩展名(文本格式无法嗅探):验证 .svg 命中 image/svg+xml。
+func TestReadImageSVGByExt(t *testing.T) {
+	root := t.TempDir()
+	svg := []byte("<svg xmlns='http://www.w3.org/2000/svg'/>")
+	must(t, os.WriteFile(filepath.Join(root, "i.svg"), svg, 0o644))
+
+	img, err := ReadImage(root, "i.svg")
+	if err != nil {
+		t.Fatalf("ReadImage i.svg: %v", err)
+	}
+	if !strings.HasPrefix(img.DataURL, "data:image/svg+xml;base64,") {
+		t.Fatalf("mime should be image/svg+xml, got %q", img.DataURL)
+	}
+	if img.Extension != "svg" {
+		t.Fatalf("extension = %q, want svg", img.Extension)
+	}
+}
+
+// 验证非图片(纯文本 + 未知扩展名)报错。
+func TestReadImageNotImage(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello"), 0o644))
+	if _, err := ReadImage(root, "a.txt"); err == nil {
+		t.Fatal("read text as image should error")
+	}
+}
+
+// 验证路径钉:目录、../、符号链接逃逸都被拒。
+func TestReadImagePathGuard(t *testing.T) {
+	root := t.TempDir()
+	pngBytes := encodePNG(t)
+	must(t, os.WriteFile(filepath.Join(root, "a.png"), pngBytes, 0o644))
+	must(t, os.MkdirAll(filepath.Join(root, "d"), 0o755))
+
+	if _, err := ReadImage(root, "d"); err == nil {
+		t.Fatal("read dir should error")
+	}
+	if _, err := ReadImage(root, "../x.png"); err == nil {
+		t.Fatal("read ../ escape should error")
+	}
+
+	outside := t.TempDir()
+	outPNG := encodePNG(t)
+	must(t, os.WriteFile(filepath.Join(outside, "secret.png"), outPNG, 0o644))
+	must(t, os.Symlink(outside, filepath.Join(root, "escape")))
+	if _, err := ReadImage(root, "escape/secret.png"); err == nil {
+		t.Fatal("symlink escape should be rejected")
+	}
+}
+
+// 验证过大文件报错(不 base64 灌进 webview)。
+func TestReadImageTooLarge(t *testing.T) {
+	root := t.TempDir()
+	// 造一个 maxImageSize+1 的文件(用 truncate,不真写内容)。
+	p := filepath.Join(root, "big.png")
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxImageSize + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+	if _, err := ReadImage(root, "big.png"); err == nil {
+		t.Fatal("oversized image should error")
+	}
+}
+
+// 验证不存在 / 空 rel(指向根,是目录)报错。
+func TestReadImageMissing(t *testing.T) {
+	root := t.TempDir()
+	if _, err := ReadImage(root, "nope.png"); err == nil {
+		t.Fatal("missing file should error")
+	}
+	if _, err := ReadImage(root, ""); err == nil {
+		t.Fatal("empty rel (root is dir) should error")
 	}
 }
 
