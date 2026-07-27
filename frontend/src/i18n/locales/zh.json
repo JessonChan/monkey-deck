@@ -493,7 +493,14 @@
       "addGapUsage": "不报用量",
       "addGapThought": "无思考流",
       "addWarnPrefix": "功能受限: ",
-      "addNeedProbe": "请先点上方「自检」并通过后再添加"
+      "addNeedProbe": "请先点上方「自检」并通过后再添加",
+      "editTitle": "编辑 harness",
+      "editDesc": "改显示名或启动命令。标识 ID 不可改(session 锚定它);改命令后建议重新自检。",
+      "editSave": "保存",
+      "editBtn": "编辑",
+      "editTip": "修改显示名 / 启动命令(仅用户自添加的 harness 可编辑)",
+      "probeBtn": "自检",
+      "probeTip": "对这个 harness 重跑 ACP 契约自检,产出体检单"
     }
   }
 }

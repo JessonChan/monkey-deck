@@ -493,7 +493,14 @@
       "addGapUsage": "no usage",
       "addGapThought": "no thoughts",
       "addWarnPrefix": "Limited: ",
-      "addNeedProbe": "Run \"Self-check\" above and pass before adding"
+      "addNeedProbe": "Run \"Self-check\" above and pass before adding",
+      "editTitle": "Edit harness",
+      "editDesc": "Change display name or start command. The ID cannot change (sessions pin to it); re-run self-check after editing the command.",
+      "editSave": "Save",
+      "editBtn": "Edit",
+      "editTip": "Edit display name / start command (only user-added harnesses)",
+      "probeBtn": "Self-check",
+      "probeTip": "Re-run the ACP conformance self-check on this harness"
     }
   }
 }

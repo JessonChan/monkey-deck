@@ -5,8 +5,11 @@ import { Events } from "@wailsio/runtime";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import type { CapabilityMatrix } from "../../bindings/github.com/jessonchan/monkey-deck/internal/acp/models";
-import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download, AlertTriangle, Plus, ChartBar } from "lucide-react";
+import { RefreshCw, ArrowUpCircle, CheckCircle2, AlertCircle, Download, AlertTriangle, Plus, ChartBar, ShieldCheck, Loader2, Pencil } from "lucide-react";
+import type { ConformanceReport } from "../../bindings/github.com/jessonchan/monkey-deck/internal/acp/models";
 import AddHarnessModal from "./AddHarnessModal";
+import EditHarnessModal from "./EditHarnessModal";
+import ProbeReport from "./ProbeReport";
 
 // harness 能力位定义:field = CapabilityMatrix 字段名,key = i18n capability.<key> 后缀。
 // declared 位(prompt*/config*/sessionList)来自 Initialize/NewSession 声明,确定 ✓/✗;
@@ -54,6 +57,8 @@ export default function HarnessPane() {
   const [error, setError] = useState<string | null>(null);
   // 「添加 harness」弹窗开关:HarnessPane 自管(不在 App 渲染链上,见顶部注释),镜像 FilePanel 范式。
   const [adding, setAdding] = useState(false);
+  // 「编辑 harness」弹窗:正在编辑的 harness(null = 关闭)。仅用户自添加 harness 可编辑。
+  const [editing, setEditing] = useState<Harness | null>(null);
 
   // 拉后端开关当前值:经 GetConfig 一次取回 checkHarnessUpdates / autoHarnessUpgrade 两个字段
   // (单一真相源 = 后端 SQLite;GetConfig 是后端聚合的只读快照,Task #22385 已暴露 autoHarnessUpgrade)。
@@ -237,19 +242,31 @@ export default function HarnessPane() {
             upgrading={upgrading[h.id]}
             cap={caps[h.id]}
             onUpgrade={() => void upgrade(h.id)}
+            onEdit={() => setEditing(h)}
           />
         ))}
       </div>
 
       {adding && (
         <AddHarnessModal
-          existing={list}
           onDone={(updated) => {
             setList(updated);
             setAdding(false);
             setError(null);
           }}
           onCancel={() => setAdding(false)}
+        />
+      )}
+
+      {editing && (
+        <EditHarnessModal
+          h={editing}
+          onDone={(updated) => {
+            setList(updated);
+            setEditing(null);
+            setError(null);
+          }}
+          onCancel={() => setEditing(null)}
         />
       )}
     </div>
@@ -261,13 +278,32 @@ function HarnessRow({
   upgrading,
   cap,
   onUpgrade,
+  onEdit,
 }: {
   h: Harness;
   upgrading: "running" | "ok" | "err" | undefined;
   cap: CapabilityMatrix | undefined;
   onUpgrade: () => void;
+  onEdit: () => void;
 }) {
   const { t } = useTranslation();
+  // 行内自检(复检):用本行 command 跑 ProbeNewHarness,结果就近展示(体检单)。所有 harness 都可复检。
+  const [probing, setProbing] = useState(false);
+  const [report, setReport] = useState<ConformanceReport | null>(null);
+
+  const probe = async () => {
+    setReport(null);
+    setProbing(true);
+    try {
+      const r = await ChatService.ProbeNewHarness(h.command);
+      setReport(r);
+    } catch {
+      /* 静默:report 留 null,不展示体检单 */
+    } finally {
+      setProbing(false);
+    }
+  };
+
   return (
     <div className={`harness-row${h.installed ? "" : " not-installed"}`} data-testid={`harness-row-${h.id}`}>
       <div className="harness-row-main">
@@ -302,8 +338,6 @@ function HarnessRow({
             </span>
           )}
         </div>
-        {/* 能力矩阵已收进 harness-row-acts 的 ChartBar 触发按钮(popover 展开,见 CapabilityMatrixButton)。
-            原先这里有一行常驻 chip,行高随 wrap 变化 + 视觉重;收进按钮后行高一致、信息按需查看。 */}
         {h.path && (
           <div className="harness-path" data-tooltip-id="md-tip" data-tooltip-content={h.path}>
             <span className="harness-cmd-label">{t("settings.harness.path")}</span>
@@ -313,12 +347,39 @@ function HarnessRow({
         {h.upgradeError && (
           <div className="harness-err" data-testid={`harness-upgradeerr-${h.id}`}>{h.upgradeError}</div>
         )}
+        {/* 行内自检体检单(复检结果):点击「自检」后就近展示。report.command === h.command 恒真(用本行命令跑)。 */}
+        {report && (
+          <div className="harness-row-probe" data-testid={`harness-probe-${h.id}`}>
+            <ProbeReport report={report} />
+          </div>
+        )}
       </div>
       <div className="harness-row-acts">
-        {/* 能力矩阵触发按钮:ChartBar 图标。cap 未就绪(probing)/ 失败(failed)→ 禁用 + 状态图标;
-            就绪 → 点击打开 popover 展开完整能力位 chip 行。放在升级按钮之前(信息查看型操作)。 */}
         <CapabilityMatrixButton cap={cap} harnessId={h.id} />
-        {/* 升级按钮:有最新版本或未装时显示;后端无 Upgrader 配置时点上去会返 ErrUpgraderNotConfigured,错误进 error 区。 */}
+        {/* 自检(复检)按钮:所有 harness 都有 —— 不只添加时能自检,已加的也能随时重跑诊断。 */}
+        <button
+          className="modal-btn ghost"
+          data-testid={`harness-probe-btn-${h.id}`}
+          disabled={probing}
+          data-tooltip-id="md-tip"
+          data-tooltip-content={t("settings.harness.probeTip")}
+          onClick={() => void probe()}
+        >
+          {probing ? <Loader2 size={13} className="spin" /> : <ShieldCheck size={13} />}
+          {probing ? t("settings.harness.addProbing") : t("settings.harness.probeBtn")}
+        </button>
+        {/* 编辑按钮:仅用户自添加 harness(内置不可改)。改 name + command(id 不变)。 */}
+        {h.userDefined && (
+          <button
+            className="modal-btn ghost"
+            data-testid={`harness-edit-${h.id}`}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("settings.harness.editTip")}
+            onClick={onEdit}
+          >
+            <Pencil size={13} /> {t("settings.harness.editBtn")}
+          </button>
+        )}
         {(h.upgradeAvailable || !h.installed) && (
           <button
             className={`modal-btn ${h.upgradeAvailable ? "primary" : "ghost"}`}
@@ -347,7 +408,6 @@ function HarnessRow({
             <AlertCircle size={14} /> {t("settings.harness.upgradeFailed")}
           </span>
         )}
-        {/* 已装且无可用升级 + 无错误 → 显示「已是最新」。 */}
         {h.installed && !h.upgradeAvailable && !h.upgradeError && upgrading !== "running" && (
           <span className="harness-status-ok" data-testid={`harness-uptodate-${h.id}`}>
             <CheckCircle2 size={14} /> {t("settings.harness.upToDate")}

@@ -1771,6 +1771,7 @@ input, textarea { font-family: inherit; }
 .ah-caps { font-size: 11px; color: var(--text-3); line-height: 1.5; }
 .ah-warn { font-size: 10.5px; color: var(--text-3); line-height: 1.5; opacity: 0.9; }
 .ah-need-probe { font-size: 11px; color: var(--text-3); }
+.harness-row-probe { margin-top: 8px; }
 
 /* ─── 统一设置中心面板(收敛分散设置项) ─── */
 .settings-card {

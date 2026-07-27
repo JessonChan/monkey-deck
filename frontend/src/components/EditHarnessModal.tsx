@@ -4,31 +4,25 @@ import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/i
 import type { ConformanceReport } from "../../bindings/github.com/jessonchan/monkey-deck/internal/acp/models";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import { Loader2, ShieldCheck } from "lucide-react";
-import ProbeReport, { canAddFromReport } from "./ProbeReport";
+import ProbeReport from "./ProbeReport";
 
 interface Props {
-  // 添加成功:后端返回更新后的全量列表,交给 pane 刷新 + 关闭 modal。
+  h: Harness; // 待编辑的用户 harness(仅 user-defined)。
   onDone: (list: Harness[]) => void;
   onCancel: () => void;
 }
 
-// 添加 harness 弹窗(声明即用 + 自检门槛):用户填启动命令(+ 可选显示名)→ 点「自检」跑
-// ProbeHarness conformance 探针 → 展示体检单 → CanAdd(Tier1 全过)才允许「添加」。
-//
-// ID 不由用户填:后端从命令首段 basename 自动派生(用户根本不需要关心内部主键,§4.4)。
-// Name 可选(空则后端兜底成派生 ID)。复用现有 modal 范式 + ProbeReport 共享体检单组件。
-//
-// 命令改动后体检单失效(report.command !== 当前命令),需重新自检 —— 防止用过期报告蒙混门槛。
-export default function AddHarnessModal({ onDone, onCancel }: Props) {
+// 编辑 harness 弹窗:改显示名 + 启动命令(可选先「自检」验证)。id 不可改(session 钉它)。
+// 保存不强制要求自检通过(改名这种轻量改动不必跑 90s probe),但提供「自检」按钮供改命令后验证。
+export default function EditHarnessModal({ h, onDone, onCancel }: Props) {
   const { t } = useTranslation();
-  const [name, setName] = useState("");
-  const [command, setCommand] = useState("");
+  const [name, setName] = useState(h.name);
+  const [command, setCommand] = useState(h.command);
   const [err, setErr] = useState<string | null>(null);
   const [report, setReport] = useState<ConformanceReport | null>(null);
   const [probing, setProbing] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  // Esc 关闭(§4.2)。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onCancel();
@@ -38,10 +32,9 @@ export default function AddHarnessModal({ onDone, onCancel }: Props) {
   }, [onCancel]);
 
   const cmd = command.trim();
-  // 体检单有效性:存在且针对当前命令(命令改了 → 失效)。
+  // 命令改了 → 旧体检单失效。
   const reportValid = !!report && report.command === cmd;
-  const canAdd = reportValid && canAddFromReport(report);
-  const canSubmit = cmd !== "" && canAdd && !submitting && !probing;
+  const canSave = cmd !== "" && !saving && !probing;
 
   const probe = async () => {
     setErr(null);
@@ -62,32 +55,43 @@ export default function AddHarnessModal({ onDone, onCancel }: Props) {
     }
   };
 
-  const submit = async () => {
-    if (!canAdd) {
-      setErr(t("settings.harness.addNeedProbe"));
-      return;
-    }
+  const save = async () => {
     setErr(null);
-    setSubmitting(true);
+    setSaving(true);
     try {
-      const list = await ChatService.AddHarness(cmd, name.trim());
+      const list = await ChatService.UpdateUserHarness(h.id, name.trim(), cmd);
       onDone(list ?? []);
     } catch (e) {
-      // 后端兜底校验失败(如:派生 id 撞内置 / 已有)——直接显示后端错误串。
       setErr(String(e));
     } finally {
-      setSubmitting(false);
+      setSaving(false);
     }
   };
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal-card add-harness-card" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-title">{t("settings.harness.addTitle")}</div>
-        <div className="ah-desc">{t("settings.harness.addDesc")}</div>
+        <div className="modal-title">{t("settings.harness.editTitle")}</div>
+        <div className="ah-desc">{t("settings.harness.editDesc")}</div>
 
         <div className="ah-field">
-          <label className="ah-label" htmlFor="ah-command">
+          <label className="ah-label" htmlFor="eh-name">
+            {t("settings.harness.addNameLabel")}
+          </label>
+          <input
+            id="eh-name"
+            className="modal-input"
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={h.id}
+            data-testid="eh-name"
+            disabled={probing || saving}
+          />
+        </div>
+
+        <div className="ah-field">
+          <label className="ah-label" htmlFor="eh-command">
             {t("settings.harness.addCmdLabel")}
             <span className="ah-required">*</span>
             <span
@@ -99,40 +103,24 @@ export default function AddHarnessModal({ onDone, onCancel }: Props) {
             </span>
           </label>
           <input
-            id="ah-command"
+            id="eh-command"
             className="modal-input"
-            autoFocus
             value={command}
             onChange={(e) => setCommand(e.target.value)}
             placeholder={t("settings.harness.addCmdPlaceholder")}
             onKeyDown={(e) => {
               if (e.key === "Enter") void probe();
             }}
-            data-testid="ah-command"
-            disabled={probing || submitting}
-          />
-        </div>
-
-        <div className="ah-field">
-          <label className="ah-label" htmlFor="ah-name">
-            {t("settings.harness.addNameLabel")}
-          </label>
-          <input
-            id="ah-name"
-            className="modal-input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={t("settings.harness.addNamePlaceholder")}
-            data-testid="ah-name"
-            disabled={probing || submitting}
+            data-testid="eh-command"
+            disabled={probing || saving}
           />
         </div>
 
         <div className="ah-probe-row">
           <button
             className="modal-btn ghost"
-            data-testid="ah-probe"
-            disabled={probing || submitting || !cmd}
+            data-testid="eh-probe"
+            disabled={probing || saving || !cmd}
             onClick={() => void probe()}
           >
             {probing ? <Loader2 size={13} className="spin" /> : <ShieldCheck size={13} />}
@@ -140,31 +128,27 @@ export default function AddHarnessModal({ onDone, onCancel }: Props) {
           </button>
         </div>
 
-        {err && <div className="modal-del-err" data-testid="ah-err">{err}</div>}
+        {err && <div className="modal-del-err" data-testid="eh-err">{err}</div>}
 
         {reportValid && report && <ProbeReport report={report} />}
-
-        {cmd !== "" && !canAdd && !probing && (
-          <div className="ah-need-probe">{t("settings.harness.addNeedProbe")}</div>
-        )}
 
         <div className="modal-actions">
           <button
             className="modal-btn ghost"
             onClick={onCancel}
-            data-testid="ah-cancel"
-            disabled={submitting || probing}
+            data-testid="eh-cancel"
+            disabled={saving || probing}
           >
             {t("common.cancel")}
           </button>
           <button
             className="modal-btn primary"
-            disabled={!canSubmit}
-            onClick={() => void submit()}
-            data-testid="ah-confirm"
+            disabled={!canSave}
+            onClick={() => void save()}
+            data-testid="eh-save"
           >
-            {submitting ? <Loader2 size={13} className="spin" /> : null}
-            {t("settings.harness.addConfirm")}
+            {saving ? <Loader2 size={13} className="spin" /> : null}
+            {t("settings.harness.editSave")}
           </button>
         </div>
       </div>
