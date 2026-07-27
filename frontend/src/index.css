@@ -1523,9 +1523,11 @@ input, textarea { font-family: inherit; }
 .tree-badge.st-d { color: var(--red); }
 .tree-badge.st-r { color: var(--accent-2); }
 .tree-acts {
-  margin-left: auto; display: none; gap: 1px; flex-shrink: 0;
+  margin-left: auto; display: inline-flex; gap: 1px; flex-shrink: 0;
+  opacity: 0; transition: opacity 0.1s;
 }
-.tree-row:hover .tree-acts { display: inline-flex; }
+.tree-row:hover .tree-acts,
+.tree-row.sel .tree-acts { opacity: 1; }
 .tree-act {
   display: inline-flex; align-items: center; justify-content: center;
   width: 20px; height: 20px; border-radius: 4px; color: var(--text-3);
