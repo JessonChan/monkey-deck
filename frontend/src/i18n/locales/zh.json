@@ -268,6 +268,11 @@
       "newDesc": "新对话",
       "clearDesc": "清空(新会话)",
       "stopDesc": "停止生成"
+    },
+    "mention": {
+      "goUp": "返回上级",
+      "goUpTip": "返回上一级目录(Backspace 在空 query 时亦可)",
+      "drillTip": "进入目录 {{dir}}(Enter 或点击)"
     }
   },
   "queue": {

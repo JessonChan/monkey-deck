@@ -941,6 +941,16 @@ input, textarea { font-family: inherit; }
 .mention-popover .slash-item { padding: 5px 9px; gap: 8px; }
 .mention-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-dir { color: var(--text-3); font-weight: 400; }
+/* 目录项:文件夹图标用强调色,右侧 drill chevron 提示「可下钻」(点击/Enter 钻进,不引用)。 */
+.mention-item.is-dir .mention-ico-dir { color: var(--accent-2); flex-shrink: 0; }
+.mention-item.is-file .mention-ico-file { color: var(--text-3); flex-shrink: 0; }
+.mention-drill-chev { color: var(--text-3); margin-left: auto; flex-shrink: 0; }
+.mention-item.active .mention-drill-chev,
+.mention-item:hover .mention-drill-chev { color: var(--text-2); }
+/* 返回上一级行:用 text-3 弱化(非主体选项),与普通项区分;图标 + 文案。 */
+.mention-up { color: var(--text-3); font-size: 11.5px; }
+.mention-up.active, .mention-up:hover { color: var(--text-2); }
+.mention-up .mention-up-label { font-family: var(--mono); font-weight: 400; }
 
 .att-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
 .att-chip {

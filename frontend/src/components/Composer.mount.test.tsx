@@ -91,13 +91,13 @@ mock.module("react-i18next", () => ({
   initReactI18next: { type: "3rd-party" },
   default: { useTranslation: () => ({ t: (k) => k }) },
 }));
-// Composer @ mention 现走 SessionFuzzyFind(跨目录模糊匹配,Task #23072)。
+// Composer @ mention 现走 SessionFuzzyFind(scope + query,Task #23449)。
 // 用可观测 mock 替代真 binding(挂载期不触发真后端)。fuzzyFindResult 是可变返回值,
 // 测试用例在 mount 前赋值;mock 函数闭包在调用时读取,故重新赋值即时生效。
 let fuzzyFindResult: { path: string; name: string; isDir: boolean }[] = [];
 const chatServiceMock = {
   PickFiles: mock(async () => []),
-  SessionFuzzyFind: mock(async (sessionID: string, query: string, limit: number) => fuzzyFindResult),
+  SessionFuzzyFind: mock(async (sessionID: string, scope: string, query: string, limit: number) => fuzzyFindResult),
 };
 mock.module("../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice", () => chatServiceMock);
 
@@ -236,12 +236,12 @@ function positionCursor(ta: HTMLTextAreaElement, pos: number) {
   document.dispatchEvent(new window.Event("selectionchange", { bubbles: true }));
 }
 
-describe("Composer @ mention cross-dir fuzzy find (Task #23072)", () => {
+describe("Composer @ mention cross-dir fuzzy find (Task #23072 / #23449)", () => {
   beforeEach(() => {
     chatServiceMock.SessionFuzzyFind.mockClear();
     fuzzyFindResult = [];
   });
-  test("typing @foo debounces to SessionFuzzyFind and renders cross-dir results with full paths", async () => {
+  test("typing @foo debounces to SessionFuzzyFind(scope='', query='foo') and renders cross-dir results with full paths", async () => {
     // 注入跨目录命中(src/foo.ts + lib/foo.ts,同名不同目录)。
     fuzzyFindResult = [
       { path: "src/foo.ts", name: "foo.ts", isDir: false },
@@ -262,33 +262,162 @@ describe("Composer @ mention cross-dir fuzzy find (Task #23072)", () => {
     await flush();
 
     expect(chatServiceMock.SessionFuzzyFind).toHaveBeenCalledTimes(1);
-    // 完整 query 透传(不再 split 最后一个 /)、limit=12。
-    expect(chatServiceMock.SessionFuzzyFind).toHaveBeenCalledWith("sid", "foo", 12);
+    // scope 由 splitScopeTerm 推导:无 / → scope="" ;完整 term 透传;limit=12。
+    expect(chatServiceMock.SessionFuzzyFind).toHaveBeenCalledWith("sid", "", "foo", 12);
 
     // 下拉应打开,渲染两项跨目录命中。
     const popover = host.querySelector('[data-testid="mention-popover"]');
     expect(popover).not.toBeNull();
     const items = popover!.querySelectorAll("button.slash-item");
-    expect(items.length).toBe(2);
+    // 仅命中项(不含 go-up:scope="" 时不渲染 go-up)。
+    const hitItems = Array.from(items).filter((b) => !b.classList.contains("mention-up"));
+    expect(hitItems.length).toBe(2);
     // 每项显完整相对路径(目录前缀 + basename),让用户能区分两个 foo.ts(§4.4)。
-    expect(items[0]!.querySelector(".mention-dir")!.textContent).toBe("src/");
-    expect(items[0]!.querySelector(".mention-path")!.textContent).toBe("src/foo.ts");
-    expect(items[1]!.querySelector(".mention-dir")!.textContent).toBe("lib/");
-    expect(items[1]!.querySelector(".mention-path")!.textContent).toBe("lib/foo.ts");
+    expect(hitItems[0]!.querySelector(".mention-dir")!.textContent).toBe("src/");
+    expect(hitItems[0]!.querySelector(".mention-path")!.textContent).toBe("src/foo.ts");
+    expect(hitItems[1]!.querySelector(".mention-dir")!.textContent).toBe("lib/");
+    expect(hitItems[1]!.querySelector(".mention-path")!.textContent).toBe("lib/foo.ts");
   });
 
-  test("empty @query closes popover without hitting backend", async () => {
-    fuzzyFindResult = [];
+  // Task #23449:空 query 即弹 —— 后端对空 query 返根子项(含目录),@ 后立即展示让用户挑/钻。
+  test("typing @ alone pops the panel with root children (empty term -> scope='', term='')", async () => {
+    fuzzyFindResult = [
+      { path: "src", name: "src", isDir: true },
+      { path: "README.md", name: "README.md", isDir: false },
+    ];
     const { host } = mount(<Composer value={"@"} {...STUB_PROPS} sessionId={"sid"} />);
     await flush();
 
-    // 光标在 @ 之后(pos=1):query 为空 → 应直接关面板,不打后端。
     const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
     positionCursor(ta, 1);
     await new Promise((r) => setTimeout(r, 200));
     await flush();
 
-    expect(chatServiceMock.SessionFuzzyFind).not.toHaveBeenCalled();
-    expect(host.querySelector('[data-testid="mention-popover"]')).toBeNull();
+    // 空 term 也打后端:scope="", term=""。
+    expect(chatServiceMock.SessionFuzzyFind).toHaveBeenCalledWith("sid", "", "", 12);
+    const popover = host.querySelector('[data-testid="mention-popover"]');
+    expect(popover).not.toBeNull();
+    // 目录项含 is-dir 类 + drill chevron;文件项含 is-file 类。
+    const dirItem = popover!.querySelector("button.slash-item.is-dir");
+    const fileItem = popover!.querySelector("button.slash-item.is-file");
+    expect(dirItem).not.toBeNull();
+    expect(fileItem).not.toBeNull();
+    expect(dirItem!.querySelector(".mention-drill-chev")).not.toBeNull();
+    // 根目录(scope="")不渲染 go-up。
+    expect(popover!.querySelector('[data-testid="mention-go-up"]')).toBeNull();
+  });
+});
+
+// Task #23449:选中目录下钻 + scope 透传 + 返回上一级。文本是唯一事实源:@ token 的尾随 /
+// 标记 drill 态,scope 从 splitScopeTerm 推导,刷新/恢复都能复现(§5.3 找不变量)。
+describe("Composer @ mention drill-down + scope + go-up (Task #23449)", () => {
+  beforeEach(() => {
+    chatServiceMock.SessionFuzzyFind.mockClear();
+    fuzzyFindResult = [];
+  });
+
+  test("selecting a directory drills in: text becomes '@src/', scope='src' on next query", async () => {
+    // 初始 @ → 列根子项(含 src 目录)。
+    fuzzyFindResult = [{ path: "src", name: "src", isDir: true }];
+    const onChange = mock(() => {});
+    const { host } = mount(<Composer value={"@"} {...STUB_PROPS} sessionId={"sid"} onChange={onChange} />);
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, 1);
+    await new Promise((r) => setTimeout(r, 200));
+    await flush();
+    expect(chatServiceMock.SessionFuzzyFind).toHaveBeenLastCalledWith("sid", "", "", 12);
+
+    // 点目录项 → 钻进:onChange 收到 "@src/"(@query 替换为 @src/)。
+    const dirItem = host.querySelector('button.slash-item.is-dir') as HTMLElement;
+    expect(dirItem).not.toBeNull();
+    dirItem.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    expect(onChange).toHaveBeenCalled();
+    const last = onChange.mock.calls[onChange.mock.calls.length - 1][0] as string;
+    expect(last).toBe("@src/");
+  });
+
+  test("drilled state (@src/) queries scope='src' term='' and renders go-up; go-up returns to root", async () => {
+    fuzzyFindResult = [{ path: "src/foo.ts", name: "foo.ts", isDir: false }];
+    const onChange = mock(() => {});
+    const { host } = mount(<Composer value={"@src/"} {...STUB_PROPS} sessionId={"sid"} onChange={onChange} />);
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, 5); // 光标在 "@src/" 末尾
+    await new Promise((r) => setTimeout(r, 200));
+    await flush();
+
+    // scope 由 splitScopeTerm("src/") 推导 = "src";term=""。
+    expect(chatServiceMock.SessionFuzzyFind).toHaveBeenLastCalledWith("sid", "src", "", 12);
+    const popover = host.querySelector('[data-testid="mention-popover"]');
+    expect(popover).not.toBeNull();
+    // scope 非空 → 渲染 go-up。
+    const goUp = popover!.querySelector('[data-testid="mention-go-up"]') as HTMLElement;
+    expect(goUp).not.toBeNull();
+
+    goUp.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    // go-up:剥末尾一段 → query 退到 ""(根)。
+    const last = onChange.mock.calls[onChange.mock.calls.length - 1][0] as string;
+    expect(last).toBe("@");
+  });
+
+  test("typing @src/foo narrows scope to 'src' and term to 'foo'", async () => {
+    fuzzyFindResult = [{ path: "src/foo.ts", name: "foo.ts", isDir: false }];
+    const { host } = mount(<Composer value={"@src/foo"} {...STUB_PROPS} sessionId={"sid"} />);
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, 8);
+    await new Promise((r) => setTimeout(r, 200));
+    await flush();
+    // splitScopeTerm("src/foo") = { scope:"src", term:"foo" }。
+    expect(chatServiceMock.SessionFuzzyFind).toHaveBeenLastCalledWith("sid", "src", "foo", 12);
+  });
+
+  test("Backspace on empty term (cursor right after '/') goes up one level", async () => {
+    // 面板需打开(mentionOpen=true)才进 Backspace 分支;给非空结果。
+    fuzzyFindResult = [{ path: "src/sub/inner.ts", name: "inner.ts", isDir: false }];
+    const onChange = mock(() => {});
+    const { host } = mount(<Composer value={"@src/sub/"} {...STUB_PROPS} sessionId={"sid"} onChange={onChange} />);
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, 9); // 末尾
+    await new Promise((r) => setTimeout(r, 200));
+    await flush();
+
+    ta.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Backspace", bubbles: true }));
+    await flush();
+    const last = onChange.mock.calls[onChange.mock.calls.length - 1][0] as string;
+    // "src/sub/" → 剥末段 → "src/"。
+    expect(last).toBe("@src/");
+  });
+
+  test("selecting a file in drilled scope picks it as a mention and closes panel", async () => {
+    fuzzyFindResult = [{ path: "src/foo.ts", name: "foo.ts", isDir: false }];
+    const onChange = mock(() => {});
+    const onMentionsChange = mock(() => {});
+    const { host } = mount(
+      <Composer value={"@src/"} {...STUB_PROPS} sessionId={"sid"} onChange={onChange} onMentionsChange={onMentionsChange} />
+    );
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, 5);
+    await new Promise((r) => setTimeout(r, 200));
+    await flush();
+
+    const fileItem = host.querySelector('button.slash-item.is-file') as HTMLElement;
+    expect(fileItem).not.toBeNull();
+    fileItem.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    // 选中文件:文本替换为 @src/foo.ts + 尾随空格。
+    const lastText = onChange.mock.calls[onChange.mock.calls.length - 1][0] as string;
+    expect(lastText).toBe("@src/foo.ts ");
+    // 记为提及。
+    expect(onMentionsChange).toHaveBeenCalled();
+    const mentioned = onMentionsChange.mock.calls[onMentionsChange.mock.calls.length - 1][0] as { path: string; name: string }[];
+    expect(mentioned.some((m) => m.path === "src/foo.ts")).toBe(true);
   });
 });
