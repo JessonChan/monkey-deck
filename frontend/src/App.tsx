@@ -15,7 +15,6 @@ import { disposeTerminal } from "./lib/termRegistry";
 import NewSessionModal from "./components/NewSessionModal";
 import SettingsPanel from "./components/SettingsPanel";
 import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import type { CapabilityMatrix } from "../bindings/github.com/jessonchan/monkey-deck/internal/acp/models";
 import { Group, Panel, Separator, useDefaultLayout, usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
 import { Tooltip } from "react-tooltip";
 import { PanelLeftOpen, PanelRightOpen } from "lucide-react";
@@ -67,10 +66,6 @@ export default function App() {
   // messagesToItems 转为 type:'plan' ChatItem 内联渲染。null = 当前无实时 plan。
   const [livePlanBySession, setLivePlanBySession] = useState<Record<string, LivePlan | null>>({});
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
-  // harness 能力矩阵(harnessID → CapabilityMatrix):后端 ProbeCapabilities 异步填充。
-  // 启动调 ListHarnessCapabilities 拿快照 + 订阅 chat:harness-capabilities 事件重拉
-  // (镜像 harnesses/EventHarnesses 范式)。Task 3 据此按能力位门控 UI(model-select / effort 入口)。
-  const [harnessCapabilities, setHarnessCapabilities] = useState<Record<string, CapabilityMatrix | undefined>>({});
   // 任一 harness 有新版 → 设置入口齿轮 + 设置内 harness 菜单亮红点(§设置入口/harness 菜单红点)。
   const harnessUpdateAvailable = useMemo(
     () => harnesses.some((h) => h.upgradeAvailable),
@@ -344,12 +339,6 @@ export default function App() {
     const offHarnesses = Events.On("chat:harnesses", () => {
       ChatService.ListHarnesses().then((h) => setHarnesses(h ?? [])).catch(() => {});
     });
-    // harness 能力探测(Discover 之后异步 spawn):启动拉一次快照(可能 nil = 未就绪),
-    // 探测完成后后端推 chat:harness-capabilities,据此重拉。镜像上面 harnesses 范式。
-    ChatService.ListHarnessCapabilities().then((m) => setHarnessCapabilities(m ?? {})).catch(() => {});
-    const offHarnessCaps = Events.On("chat:harness-capabilities", () => {
-      ChatService.ListHarnessCapabilities().then((m) => setHarnessCapabilities(m ?? {})).catch(() => {});
-    });
     const offUpdate = Events.On("chat:event", (e: { data: SessionEvent }) => {
       if (!e.data) return;
       applyEvent(e.data);
@@ -482,7 +471,6 @@ export default function App() {
       offStatus();
       offMeta();
       offHarnesses();
-      offHarnessCaps();
     };
   }, [refreshProjects, applyEvent, refreshSessions, drainSession]);
 
@@ -1270,7 +1258,6 @@ export default function App() {
           activityBySession={activityBySession}
           unreadBySession={unreadBySession}
           harnesses={harnesses}
-          harnessCapabilities={harnessCapabilities}
           onReorderProjects={reorderProjects}
           onCollapse={collapseSidebar}
           onOpenSettings={() => setSettingsOpen(true)}

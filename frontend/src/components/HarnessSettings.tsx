@@ -30,9 +30,9 @@ const CAP_BITS: { field: keyof CapabilityMatrix; key: string }[] = [
 // 本组件只渲染 pane 内容,由设置中心面板承载。
 //
 // 能力矩阵数据源选式(§5.3 复用):HarnessPane 由设置中心面板承载,不在 App 直接渲染链上,
-// 不走 prop-drilling。镜像它现有 ListHarnesses 的「自己拉」范式 + App.tsx 的「订阅 chat:* 重拉」
-// 范式,自己调 ListHarnessCapabilities + 订阅 chat:harness-capabilities。与 App 那份
-// harnessCapabilities state 并行存在(两处各自拉,数据源单一 = 后端;前端两份只读快照无写冲突,KISS)。
+// 不走 prop-drilling。镜像它现有 ListHarnesses 的「自己拉」范式 + 「订阅 chat:* 重拉」
+// 范式,自己调 ListHarnessCapabilities + 订阅 chat:harness-capabilities。本 pane 是前端
+// 能力矩阵的唯一消费者(NewSessionModal/Sidebar 的旧 prop 链已删,App 不再持有此 state)。
 export default function HarnessPane() {
   const { t } = useTranslation();
   const [list, setList] = useState<Harness[]>([]);
