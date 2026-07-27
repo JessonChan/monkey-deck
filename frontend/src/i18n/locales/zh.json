@@ -112,8 +112,6 @@
     "newSessionTitle": "新对话",
     "toggleTerminalTip": "终端 (⌘J)",
     "toggleTerminal": "切换终端",
-    "copyPathTip": "复制项目路径",
-    "pathCopiedTip": "项目路径已复制",
     "refreshConfigFailed": "刷新模型列表失败",
     "placeholder": "发一条消息开始对话…",
     "loadMore": "加载更多",
