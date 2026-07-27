@@ -86,6 +86,8 @@
     "probing": "能力检测中…",
     "probeFailed": "上次检测失败",
     "probeFailedTip": "探测此 harness 时出错，能力位可能不准",
+    "matrixTitle": "能力矩阵",
+    "matrixBtnTip": "能力矩阵（点击查看详情）",
     "supported": "支持",
     "notSupported": "不支持",
     "notObserved": "未观测（需深度探测）",

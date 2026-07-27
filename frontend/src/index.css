@@ -1834,16 +1834,38 @@ input, textarea { font-family: inherit; }
 .harness-status-ok { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: #34c759; }
 .harness-status-err { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--red); }
 
-/* ─── 能力矩阵 chip 行(HarnessSettings 每行下方) ─── */
-/* 紧凑 chip 行可 wrap,不挤压 harness 名/命令/版本/升级按钮(§4.6 三端一致)。 */
-.harness-cap { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
-.harness-cap.probing,
-.harness-cap.failed {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-size: 10.5px; padding: 2px 7px; border-radius: 10px; width: fit-content;
+/* ─── 能力矩阵「收进按钮」+ popover(HarnessSettings harness-row-acts) ─── */
+/* 触发按钮:紧凑图标按钮,放在 harness-row-acts(与升级按钮同行)。三态:
+     默认 = 就绪(ChartBar,可点开 popover);probing = 检测中(spinner,禁用);failed = 失败(alert,禁用)。 */
+.harness-cap-trigger {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; flex-shrink: 0;
+  border: 1px solid var(--sep); border-radius: 6px;
+  background: var(--bg); color: var(--text-2);
+  cursor: pointer; transition: background 0.1s, color 0.1s, border-color 0.1s;
 }
-.harness-cap.probing { color: var(--text-3); background: var(--elev); border: 1px solid var(--sep); }
-.harness-cap.failed { color: var(--red); background: rgba(255, 69, 58, 0.08); border: 1px solid rgba(255, 69, 58, 0.25); cursor: help; }
+.harness-cap-trigger:hover:not(:disabled) { background: var(--hover); color: var(--text); border-color: var(--sep-strong); }
+.harness-cap-trigger:disabled { cursor: default; opacity: 0.85; }
+.harness-cap-trigger.probing { color: var(--text-3); }
+.harness-cap-trigger.failed { color: var(--red); border-color: rgba(255, 69, 58, 0.3); background: rgba(255, 69, 58, 0.06); }
+
+/* Radix Popover.Content 经 Portal 渲染到 body。向左展开(触发按钮在行右侧),不顶布局。 */
+.harness-cap-popover {
+  background: var(--elev-2); border: 1px solid var(--sep-strong);
+  border-radius: var(--r-md); box-shadow: var(--shadow-pop);
+  padding: 8px; max-width: 300px;
+  animation: harness-cap-pop-in 0.12s ease-out;
+}
+@keyframes harness-cap-pop-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+.harness-cap-popover-arrow { fill: var(--elev-2); }
+.harness-cap-popover-title {
+  font-size: 10.5px; font-weight: 600; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;
+}
+
+/* ─── 能力矩阵 chip 行(popover 内) ─── */
+/* 紧凑 chip 行可 wrap(§4.6 三端一致)。 */
+.harness-cap { display: flex; flex-wrap: wrap; gap: 4px; }
 .harness-cap-chip {
   display: inline-flex; align-items: center; gap: 3px; cursor: help;
   font-size: 10.5px; padding: 1px 6px; border-radius: 10px; line-height: 1.5;

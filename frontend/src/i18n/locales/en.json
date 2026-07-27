@@ -86,6 +86,8 @@
     "probing": "Detecting capabilities…",
     "probeFailed": "Last detection failed",
     "probeFailedTip": "Probing this harness errored; capability bits may be inaccurate",
+    "matrixTitle": "Capability matrix",
+    "matrixBtnTip": "Capability matrix (click for details)",
     "supported": "Supported",
     "notSupported": "Not supported",
     "notObserved": "Not observed (needs deep probe)",
