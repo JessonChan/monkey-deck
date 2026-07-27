@@ -86,6 +86,8 @@
     "probing": "能力检测中…",
     "probeFailed": "上次检测失败",
     "probeFailedTip": "探测此 harness 时出错，能力位可能不准",
+    "matrixTitle": "能力矩阵",
+    "matrixBtnTip": "能力矩阵（点击查看详情）",
     "supported": "支持",
     "notSupported": "不支持",
     "notObserved": "未观测（需深度探测）",
@@ -112,8 +114,6 @@
     "newSessionTitle": "新对话",
     "toggleTerminalTip": "终端 (⌘J)",
     "toggleTerminal": "切换终端",
-    "copyPathTip": "复制项目路径",
-    "pathCopiedTip": "项目路径已复制",
     "refreshConfigFailed": "刷新模型列表失败",
     "placeholder": "发一条消息开始对话…",
     "loadMore": "加载更多",
@@ -146,6 +146,8 @@
     "usageCachedWrite": "缓存写",
     "usageThought": "思考",
     "usageTotal": "合计",
+    "usageNotReported": "—(未上报)",
+    "usageNotReportedTip": "harness 尚未上报用量",
     "planTitle": "执行计划",
     "planProgressAria": "已完成 {{pct}}%",
     "planPriorityHigh": "高",
@@ -268,6 +270,11 @@
       "newDesc": "新对话",
       "clearDesc": "清空(新会话)",
       "stopDesc": "停止生成"
+    },
+    "mention": {
+      "goUp": "返回上级",
+      "goUpTip": "返回上一级目录(Backspace 在空 query 时亦可)",
+      "drillTip": "进入目录 {{dir}}(Enter 或点击)"
     }
   },
   "queue": {
@@ -466,10 +473,6 @@
       "addCmdPlaceholder": "如 junie acp",
       "addCmdHint": "(命令格式)",
       "addCmdTip": "stdio ACP 启动命令,按空格分隔参数。第一段是要执行的可执行文件(进程回收据此识别)。如:junie acp / /usr/local/bin/goose --stdio acp",
-      "addIconLabel": "图标(可选)",
-      "addIconPlaceholder": "留空使用默认图标",
-      "addIconHint": "(可选)",
-      "addIconTip": "可留空,留空时使用默认 agent 图标。用户 harness 不参与上游版本检查与升级。",
       "addConfirm": "添加",
       "addErrIdEmpty": "标识 ID 不能为空",
       "addErrIdConflict": "该 ID 已存在,请换一个",

@@ -32,7 +32,7 @@ func TestAddHarness_PersistsAndReturns(t *testing.T) {
 	t.Cleanup(restoreProbe)
 
 	svc := setupHarnessStoreSvc(t)
-	list, err := svc.AddHarness("junie", "Junie", "junie acp", "")
+	list, err := svc.AddHarness("junie", "Junie", "junie acp")
 	if err != nil {
 		t.Fatalf("AddHarness: %v", err)
 	}
@@ -74,10 +74,10 @@ func TestAddHarness_PersistsAndReturns(t *testing.T) {
 func TestAddHarness_IDConflictStatic(t *testing.T) {
 	resetUserHarnessesForTest(t)
 	svc := setupHarnessStoreSvc(t)
-	if _, err := svc.AddHarness("omp", "OMP", "omp acp", ""); err != harness.ErrUserIDConflict {
+	if _, err := svc.AddHarness("omp", "OMP", "omp acp"); err != harness.ErrUserIDConflict {
 		t.Fatalf("AddHarness(omp) err=%v, want ErrUserIDConflict", err)
 	}
-	if _, err := svc.AddHarness("opencode", "OC", "opencode acp", ""); err != harness.ErrUserIDConflict {
+	if _, err := svc.AddHarness("opencode", "OC", "opencode acp"); err != harness.ErrUserIDConflict {
 		t.Fatalf("AddHarness(opencode) err=%v, want ErrUserIDConflict", err)
 	}
 }
@@ -89,10 +89,10 @@ func TestAddHarness_IDConflictExistingUser(t *testing.T) {
 	t.Cleanup(restoreProbe)
 
 	svc := setupHarnessStoreSvc(t)
-	if _, err := svc.AddHarness("junie", "Junie", "junie acp", ""); err != nil {
+	if _, err := svc.AddHarness("junie", "Junie", "junie acp"); err != nil {
 		t.Fatalf("first AddHarness: %v", err)
 	}
-	if _, err := svc.AddHarness("junie", "Junie2", "junie acp", ""); err != harness.ErrUserIDConflict {
+	if _, err := svc.AddHarness("junie", "Junie2", "junie acp"); err != harness.ErrUserIDConflict {
 		t.Fatalf("second AddHarness(junie) err=%v, want ErrUserIDConflict", err)
 	}
 }
@@ -114,7 +114,7 @@ func TestAddHarness_Validation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := setupHarnessStoreSvc(t)
-			_, err := svc.AddHarness(tc.id, tc.nm, tc.cmd, "")
+			_, err := svc.AddHarness(tc.id, tc.nm, tc.cmd)
 			if err != tc.wantErr {
 				t.Fatalf("AddHarness err=%v, want %v", err, tc.wantErr)
 			}

@@ -86,6 +86,8 @@
     "probing": "Detecting capabilities…",
     "probeFailed": "Last detection failed",
     "probeFailedTip": "Probing this harness errored; capability bits may be inaccurate",
+    "matrixTitle": "Capability matrix",
+    "matrixBtnTip": "Capability matrix (click for details)",
     "supported": "Supported",
     "notSupported": "Not supported",
     "notObserved": "Not observed (needs deep probe)",
@@ -112,8 +114,6 @@
     "newSessionTitle": "New chat",
     "toggleTerminalTip": "Terminal (⌘J)",
     "toggleTerminal": "Toggle terminal",
-    "copyPathTip": "Copy project path",
-    "pathCopiedTip": "Project path copied",
     "refreshConfigFailed": "Failed to refresh model list",
     "placeholder": "Send a message to start…",
     "loadMore": "Load more",
@@ -146,6 +146,8 @@
     "usageCachedWrite": "Cached write",
     "usageThought": "Thought",
     "usageTotal": "Total",
+    "usageNotReported": "—(Not reported)",
+    "usageNotReportedTip": "Harness hasn't reported usage yet",
     "planTitle": "Execution plan",
     "planProgressAria": "{{pct}}% completed",
     "planPriorityHigh": "High",
@@ -268,6 +270,11 @@
       "newDesc": "New chat",
       "clearDesc": "Clear (new session)",
       "stopDesc": "Stop generation"
+    },
+    "mention": {
+      "goUp": "Go up",
+      "goUpTip": "Go to parent directory (Backspace on empty query also works)",
+      "drillTip": "Open directory {{dir}} (Enter or click)"
     }
   },
   "queue": {
@@ -466,10 +473,6 @@
       "addCmdPlaceholder": "e.g. junie acp",
       "addCmdHint": "(command format)",
       "addCmdTip": "stdio ACP start command, arguments separated by spaces. The first token is the executable to run (used by the process reaper). e.g. junie acp / /usr/local/bin/goose --stdio acp",
-      "addIconLabel": "Icon (optional)",
-      "addIconPlaceholder": "Leave empty for default icon",
-      "addIconHint": "(optional)",
-      "addIconTip": "Optional; falls back to the default agent icon when empty. User-added harnesses do not participate in upstream version checks or upgrades.",
       "addConfirm": "Add",
       "addErrIdEmpty": "ID must not be empty",
       "addErrIdConflict": "This ID already exists; choose another",

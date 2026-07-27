@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import type { CapabilityMatrix } from "../../bindings/github.com/jessonchan/monkey-deck/internal/acp/models";
 import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X, Pin, PinOff, PanelLeftClose, Settings, SquareTerminal } from "lucide-react";
 import {
   DndContext,
@@ -39,10 +38,6 @@ interface Props {
   // 已知 harness 列表(供 session 行 harness 图标的 tooltip 用 ID → 显示名查表;
   // session.harness 仅 ID,显示名「Oh My Pi / OpenCode」更友好)。
   harnesses?: Harness[];
-  // harness 能力矩阵(harnessID → CapabilityMatrix):后端 ProbeCapabilities 异步探测的结果。
-  // Task 3 据此按能力位门控 UI(如 per-harness 能力徽标 / model-select 入口显隐)。
-  // 接线:App 启动调 ListHarnessCapabilities + 订阅 chat:harness-capabilities 重拉。
-  harnessCapabilities?: Record<string, CapabilityMatrix | undefined>;
   onReorderProjects: (ids: string[]) => void;
   onCollapse?: () => void;
   onOpenSettings: () => void;
@@ -439,6 +434,16 @@ export default function Sidebar(props: Props) {
           </button>
           <button className="ctx-item" onClick={() => { void navigator.clipboard?.writeText(ctx.session.id); closeCtx(); }}>
             <Copy size={13} /> {t("sidebar.copySessionId")}
+          </button>
+          <button
+            className="ctx-item"
+            onClick={() => {
+              const project = props.projects.find((p) => p.id === ctx.session.projectId);
+              void navigator.clipboard?.writeText(ctx.session.worktreePath || project?.path || "");
+              closeCtx();
+            }}
+          >
+            <Copy size={13} /> {t("sidebar.copyWorkdir")}
           </button>
           {ctx.session.worktreePath && (
             <button className="ctx-item" onClick={() => { void ChatService.RevealPath(ctx.session.worktreePath); closeCtx(); }}>

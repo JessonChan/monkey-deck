@@ -16,7 +16,7 @@ import { countDiffLines, diffLineCls } from "../lib/diff";
 import { highlightToLines } from "../lib/highlight";
 import "../hljs-theme.css";
 import { buildRows, computeLayout, computeWindow, anchorAt, restoreScroll, isAtBottom, HeightModel, TAIL_PRIOR, HEAD_PRIOR, type VRow, type Layout } from "../lib/virtualList";
-import { SquareTerminal, Sparkles, Brain, Check, Copy, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus } from "lucide-react";
+import { SquareTerminal, Sparkles, Brain, Check, Copy, FolderOpen, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus } from "lucide-react";
 
 interface Props {
   project: Project | null;
@@ -143,8 +143,6 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   const programmaticScrollRef = useRef(false);
   // Floating scroll-to-bottom button visibility: true = show FAB (user is reading history).
   const [showScrollBtn, setShowScrollBtn] = useState(false);
-  // 头部「复制项目路径」按钮的 copied 反馈(1.5s 回落,与其它 copy 按钮一致)。
-  const [copiedPath, setCopiedPath] = useState(false);
   // 文件预览覆盖层(Task #15084):对话/工具卡片里的路径点击 → 弹此覆盖层。
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
   // plan 展开/折叠偏好:按 session 持久化(localStorage)(Task #21298)。
@@ -171,12 +169,48 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     setPreviewTarget({ path, line });
   }, []);
   const closeFilePreview = useCallback(() => setPreviewTarget(null), []);
-  // 头部「复制项目路径」:写 project.path 到剪贴板;无 project 时不执行(disabled 兜底)。
+  // 当前生效的工作目录:优先 session.worktreePath(独立 worktree),降级 project.path(共享目录)。
+  // 与 App.tsx 的 termCwdRef 同一套优先级(worktree 优先 → 项目目录)。
+  const activePath = props.session?.worktreePath || props.project?.path || "";
+  // 复制工作目录到剪贴板(对话区右键菜单调用);无路径时不执行(openCtxMenu 入口已兜底)。
+  // 不做 copied 反馈:右键菜单点击即关闭,反馈不可见(与 Sidebar 项目菜单一致)。
   const copyPath = useCallback(async () => {
-    const p = props.project?.path;
-    if (!p) return;
-    try { await navigator.clipboard.writeText(p); setCopiedPath(true); setTimeout(() => setCopiedPath(false), 1500); } catch { /* noop */ }
-  }, [props.project?.path]);
+    if (!activePath) return;
+    try { await navigator.clipboard.writeText(activePath); } catch { /* noop */ }
+  }, [activePath]);
+  // ─── 对话区右键菜单(复用 Sidebar ctx-menu 范式:fixed 定位 + 全局 Esc / outside-mousedown / resize 关闭 + 视口裁剪)───
+  // 仅放与工作目录相关的项(复制路径 / 在 Finder 打开),与 Sidebar 项目菜单的路径项对齐。
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement>(null);
+  const openCtxMenu = useCallback((e: React.MouseEvent) => {
+    if (!activePath) return; // 无路径则交给浏览器默认菜单
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  }, [activePath]);
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setCtxMenu(null); };
+    const close = () => setCtxMenu(null);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", close);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("resize", close);
+    };
+  }, [ctxMenu]);
+  useLayoutEffect(() => {
+    const el = ctxMenuRef.current;
+    if (!el || !ctxMenu) return;
+    const pad = 8;
+    const w = el.offsetWidth, h = el.offsetHeight;
+    let left = ctxMenu.x, top = ctxMenu.y;
+    if (left + w > window.innerWidth - pad) left = Math.max(pad, window.innerWidth - w - pad);
+    if (top + h > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - h - pad);
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }, [ctxMenu]);
   // ─── 虚拟化:状态 / 派生数据 / 助手 ───
   // 窗口 [start, end):只有这些行进入 DOM。区间变化才 setState(W 不变量)。
   const [win, setWin] = useState({ start: 0, end: 0 });
@@ -196,13 +230,15 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
 
   // rows = 把 items 折叠成渲染行(连续 tool 成组);layout = 前缀和几何(唯一坐标事实,含 headPad 与 scrollTop 同系)。
   const rows = useMemo(() => buildRows(items), [items]);
-  // 每个回合的起止时间,供 TurnDivider 显示本轮持续时间。
-  // turn start = user 消息 ts(发送时刻落库);turn end = 该回合最后一条消息的 ts
-  // —— persistTurn 在回合结束时统一写库,最后一条 createdAt ≈ 回合结束时刻(§5.3 尊重数据源)。
-  // 仅「已结束」回合算出 end:有后续 user 消息(下回合已开)必为结束;最后一回合在非 prompting
-  // (idle/error/…)时视为结束。进行中(prompting)的回合不显示时长(无结束时刻)。
-  const turnBounds = useMemo(() => {
-    const m = new Map<number, { start?: number; end?: number }>();
+  // 每个回合的持续时间,挂到该回合「最后一条 agent 回复」的 msg-meta(需求钉死 #68:
+  // duration 不许放 user 消息,只挂 agent 回复)。turn start = user 消息 ts(发送时刻落库);
+  // turn end = 该回合最后一条消息的 ts —— persistTurn 在回合结束时统一写库,最后一条
+  // createdAt ≈ 回合结束时刻(§5.3 尊重数据源)。
+  // 仅「已结束」回合算出 duration:有后续 user 消息(下回合已开)必为结束;最后一回合在非
+  // prompting(idle/error/…)时视为结束。进行中(prompting)的回合不显示时长(无结束时刻)。
+  // 返回 map:agent 消息下标 → 本回合 durationMs(仅每回合最后一条 agent 进入 map)。
+  const agentTurnDuration = useMemo(() => {
+    const m = new Map<number, number>();
     const userIdx: number[] = [];
     for (let i = 0; i < items.length; i++) if (items[i].type === "user") userIdx.push(i);
     for (let k = 0; k < userIdx.length; k++) {
@@ -211,7 +247,14 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       const isLast = k === userIdx.length - 1;
       const endIdx = isLast ? items.length - 1 : userIdx[k + 1] - 1;
       const complete = !isLast || props.status !== "prompting";
-      m.set(start, { start: startTs, end: complete ? items[endIdx]?.ts : undefined });
+      const endTs = complete ? items[endIdx]?.ts : undefined;
+      if (!(startTs && endTs && endTs > startTs)) continue;
+      // 找该回合 [start, endIdx] 内最后一条 agent 消息,把 duration 挂它(最终回复 = turn 锚点)。
+      let lastAgent = -1;
+      for (let i = endIdx; i >= start; i--) {
+        if (items[i].type === "agent") { lastAgent = i; break; }
+      }
+      if (lastAgent >= 0) m.set(lastAgent, endTs - startTs);
     }
     return m;
   }, [items, props.status]);
@@ -486,16 +529,6 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         </div>
         <div className="chat-header-actions">
           {s.key && <span className={`status-badge ${s.cls}`}>{t(s.key)}</span>}
-          <button
-            className="icon-btn small"
-            onClick={copyPath}
-            disabled={!props.project}
-            data-tooltip-id="md-tip"
-            data-tooltip-content={copiedPath ? t("chat.pathCopiedTip") : t("chat.copyPathTip")}
-            data-testid="copy-path-btn"
-          >
-            {copiedPath ? <Check size={15} /> : <Copy size={15} />}
-          </button>
           <button className="icon-btn small" onClick={props.onToggleTerminal} data-tooltip-id="md-tip" data-tooltip-content={t("chat.toggleTerminalTip")} aria-label={t("chat.toggleTerminal")}>
             <SquareTerminal size={15} />
           </button>
@@ -521,7 +554,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         </div>
       )}
 
-      <div className="chat-body" key={props.sessionId} ref={scrollRef} onScroll={onScroll} data-testid="chat-body">
+      <div className="chat-body" key={props.sessionId} ref={scrollRef} onScroll={onScroll} onContextMenu={openCtxMenu} data-testid="chat-body">
         {/* 内容层:显式高度 = 布局 total(撑开滚动条),行绝对定位(top = layout.tops,与 scrollTop 同系)。 */}
         <div className="chat-content" ref={contentRef} style={{ height: layout.total }}>
           {/* 头部区:顶部留白 + 加载更多 + 占位。实测高度 headHRef(data-iid=__head__)。 */}
@@ -547,15 +580,10 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
               // 历史 turn 的 plan(静态展示,无 spinner —— turn 已结束,plan 是定格快照)。
               content = <PlanTimeline entries={(items[row.first] as Extract<ChatItem, { type: "plan" }>).entries} prompting={false} isOpen={planOpen} onToggle={onTogglePlanOpen} />;
             } else {
-              const userItem = row.kind === "user" ? (items[row.first] as Extract<ChatItem, { type: "user" }>) : undefined;
-              const tb = userItem ? turnBounds.get(row.first) : undefined;
-              const durationMs = tb?.start && tb?.end && tb.end > tb.start ? tb.end - tb.start : undefined;
+              // duration 挂最后一条 agent 回复(非 user,需求钉死 #68):仅 agent 行查 map。
+              const durationMs = row.kind === "agent" ? agentTurnDuration.get(row.first) : undefined;
               content = (
-                <>
-                  {/* 回合分隔:每条用户消息(首条除外)前插一条带时间的分隔线,让多轮对话边界清晰。 */}
-                  {userItem && row.first > 0 && <TurnDivider ts={userItem.ts} durationMs={durationMs} />}
-                  <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} />
-                </>
+                <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} durationMs={durationMs} />
               );
             }
             return (
@@ -601,6 +629,21 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           </div>
         )}
       </div>
+      {ctxMenu && (
+        <div
+          ref={ctxMenuRef}
+          className="ctx-menu"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button className="ctx-item" onClick={() => { void copyPath(); setCtxMenu(null); }}>
+            <Copy size={13} /> {t("sidebar.copyWorkdir")}
+          </button>
+          <button className="ctx-item" onClick={() => { void ChatService.RevealPath(activePath); setCtxMenu(null); }}>
+            <FolderOpen size={13} /> {t("sidebar.revealInFinder")}
+          </button>
+        </div>
+      )}
       {props.error && <div className="error-bar">⚠ {props.error}</div>}
       {props.mergeResult && <div className={`merge-result ${props.mergeResult.startsWith("✅") ? "ok" : "fail"}`}>{props.mergeResult}</div>}
       <FilePreviewOverlay sessionId={props.sessionId} target={previewTarget} onClose={closeFilePreview} />
@@ -646,18 +689,22 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
 });
 
 
-const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview }: { item: ChatItem; sessionId: string; onOpenFilePreview: (path: string, line?: number) => void }) {
+const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview, durationMs }: { item: ChatItem; sessionId: string; onOpenFilePreview: (path: string, line?: number) => void; durationMs?: number }) {
   if (item.type === "user") {
     return (
       <div className="row row-user" data-testid="msg-user">
         <div className="bubble-user-wrap">
-          <MessageActions text={item.text} className="user-msg-actions" testId="copy-user-msg" />
           <UserBubble text={item.text} onOpenFilePreview={onOpenFilePreview} />
+          <div className="msg-meta">
+            {item.ts && <span className="msg-time">{formatTime(item.ts)}</span>}
+            {item.text && <MessageActions text={item.text} testId="copy-user-msg" />}
+          </div>
         </div>
       </div>
     );
   }
   if (item.type === "agent") {
+    const dur = formatDuration(durationMs);
     return (
       <div className="row row-agent" data-testid="msg-agent">
         <div className="avatar"><Sparkles size={15} /></div>
@@ -666,7 +713,11 @@ const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview }: { 
             <AgentMarkdown text={item.text + (item.streaming ? " ▋" : "")} onOpenFilePreview={onOpenFilePreview} streaming={item.streaming} />
           </div>
           <div className="msg-meta">
-            {item.ts && <span className="msg-time">{formatTime(item.ts)}</span>}
+            {item.ts && (
+              <span className="msg-time">
+                {formatTime(item.ts)}{dur && <span className="msg-dur"> · {dur}</span>}
+              </span>
+            )}
             {!item.streaming && item.text && <MessageActions text={item.text} />}
           </div>
         </div>
@@ -1557,22 +1608,6 @@ function extractCodeChild(children: ComponentPropsWithoutRef<"pre">["children"])
   const lang = /language-(\w[\w+-]*)/.exec(cls)?.[1] || "";
   const text = typeof props.children === "string" ? props.children : String(props.children ?? "");
   return { language: lang || "code", text: text.replace(/\n$/, "") };
-}
-
-// 回合分隔:发丝线 + 时间 + 本轮持续时间,清晰划分每一轮对话(用户消息前的锚点)。
-function TurnDivider({ ts, durationMs }: { ts?: number; durationMs?: number }) {
-  const dur = formatDuration(durationMs);
-  return (
-    <div className="turn-divider">
-      <span className="turn-divider-line" />
-      {ts && (
-        <span className="turn-divider-time">
-          {formatTime(ts)}{dur && <span className="turn-divider-dur"> · {dur}</span>}
-        </span>
-      )}
-      <span className="turn-divider-line" />
-    </div>
-  );
 }
 
 // 时长格式化:<60s → "Ns";<60m → "Mm SSs"(SS 零填充);≥60m → "Hh MMm"。不足 1s 返回空。

@@ -6,7 +6,7 @@ import type { ConfigOption, Mention, ImageAttachment, AudioAttachment, Usage } f
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
-import { Paperclip, X, Slash, Square, ArrowUp, File, ChevronDown, ChevronUp, ImageIcon, Mic, ListPlus, GitBranch } from "lucide-react";
+import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, ListPlus, GitBranch, CornerUpLeft } from "lucide-react";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -66,6 +66,19 @@ function detectMention(text: string, pos: number): { start: number; query: strin
   const wordStart = i + 1;
   if (text[wordStart] !== "@") return null;
   return { start: wordStart, query: text.slice(wordStart + 1, pos) };
+}
+
+// 把 @ token 的 query 拆成 (scope, term):最后一个 / 之前是 scope(限定搜索子树),
+// 之后是 term(模糊词)。空 term → 后端返 scope 直接子项(含目录,目录优先)。
+//   "foo"      → scope="",   term="foo"   (全项目模糊)
+//   "src/foo"  → scope="src", term="foo"  (src 子树内模糊)
+//   "src/"     → scope="src", term=""     (列 src 直接子项,drill-down 态)
+//   "src/sub/" → scope="src/sub", term="" (drill 两级)
+// 文本是唯一事实源:scope 从 @ token 推导,不另存 state(§5.3 找不变量)。
+function splitScopeTerm(q: string): { scope: string; term: string } {
+  const i = q.lastIndexOf("/");
+  if (i < 0) return { scope: "", term: q };
+  return { scope: q.slice(0, i), term: q.slice(i + 1) };
 }
 
 // 草稿文本 token 预估:无后端精确分词器,用「字符数/4」近似(GPT 系经验比值,CJK 偏高、英文偏低,
@@ -190,22 +203,23 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   };
   useEffect(() => { if (ref.current) autoGrow(ref.current); }, [value, collapsed]);
 
-  // @ 触发:据光标位置判定是否在 @ 提及中,调后端 SessionFuzzyFind 在 session 工作目录全项目
-  // 范围按 query 子串模糊匹配文件路径(跨目录,仅文件),返回最多 12 个命中。
+  // @ 触发:据光标位置判定是否在 @ 提及中,调后端 SessionFuzzyFind 在 session 工作目录
+  // 按 (scope, term) 检索:term 非空 → scope 子树内模糊匹配(文件 + 目录);term 空 →
+  // 列 scope 的直接子项(目录优先,IDE quick-open 初始态)。scope 从 @ token 推导(splitScopeTerm)。
   const mentionInfo = useMemo(() => detectMention(value, cursorRef.current), [value, cursorPos]);
+  const mentionScope = mentionInfo ? splitScopeTerm(mentionInfo.query).scope : "";
   useEffect(() => {
     if (!sessionId || slashOpen || !mentionInfo) { setMentionOpen(false); return; }
-    const q = mentionInfo.query;
-    // 空 query 无有用结果(FuzzyFind 后端对空 query 返回 nil)→ 直接关面板,不打后端 IPC。
-    if (!q.trim()) { setMentionItems([]); setMentionOpen(false); return; }
+    const { scope, term } = splitScopeTerm(mentionInfo.query);
     let cancelled = false;
     // 防抖:快打字时不每次按键都打后端 IPC,150ms 内的新 keystroke 取消上一次查询。
     const timer = setTimeout(() => {
-      ChatService.SessionFuzzyFind(sessionId, q, 12).then((nodes) => {
+      ChatService.SessionFuzzyFind(sessionId, scope, term, 12).then((nodes) => {
         if (cancelled) return;
         const list = (nodes || []).slice(0, 12);
         setMentionItems(list);
         setMentionIdx(0);
+        // 空 term 也开面板(列目录):让用户 @ 后即见根,可挑文件或往下钻。
         setMentionOpen(list.length > 0);
       }).catch(() => { if (!cancelled) setMentionOpen(false); });
     }, 150);
@@ -271,6 +285,46 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     });
   };
 
+  // 钻进一个目录候选:把 @query 替换成 @<dirpath>/(尾随 / 标记 drill 态,scope=dirpath),
+  // 不记录提及、不关面板 —— useEffect 据新 query 重算 scope 并列该目录子项,继续挑或继续钻。
+  // 文本是唯一事实源:drill 态完全由 @ token 的尾随 / 表达,刷新/恢复都能复现(§5.3)。
+  const drillMention = (node: FileNode) => {
+    const pos = cursorRef.current;
+    const m = detectMention(value, pos);
+    if (!m) return;
+    const token = "@" + node.path + "/";
+    cursorRef.current = m.start + token.length;
+    onChange(value.slice(0, m.start) + token + value.slice(pos));
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (el) { el.focus(); el.selectionStart = el.selectionEnd = cursorRef.current; }
+    });
+  };
+
+  // 返回上一级:剥掉当前 @ query 末尾一段路径(segment),回父目录的 drill 态;已在根则无操作。
+  //   "src/sub/" → "src/"   "src/" → ""   "" → 无操作
+  const goUpMention = () => {
+    const pos = cursorRef.current;
+    const m = detectMention(value, pos);
+    if (!m || !m.query.includes("/")) return;
+    const stripped = m.query.replace(/\/$/, "");
+    const i = stripped.lastIndexOf("/");
+    const parentQuery = i < 0 ? "" : stripped.slice(0, i + 1);
+    const token = "@" + parentQuery;
+    cursorRef.current = m.start + token.length;
+    onChange(value.slice(0, m.start) + token + value.slice(pos));
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (el) { el.focus(); el.selectionStart = el.selectionEnd = cursorRef.current; }
+    });
+  };
+
+  // 列表项激活(Enter/Tab/Click):目录 → 钻进;文件 → 选为提及。
+  const activateMention = (node: FileNode) => {
+    if (node.isDir) drillMention(node);
+    else pickMention(node);
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // 中文输入法(IME)composing 中:Enter 用于选词,不提交/不触发命令。
     // 三重检查:手动 ref 追踪(最可靠)+ isComposing(标准)+ keyCode 229(已废弃但兜底)。
@@ -283,12 +337,23 @@ export default function Composer({ value, onChange, disabled, prompting, configO
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickSlash(filtered[slashIdx]); return; }
       if (e.key === "Escape") { e.preventDefault(); setSlashOpen(false); return; }
     }
-    // @ 提及菜单:FuzzyFind 仅返回文件,无目录下钻语义。↑↓ 导航,Enter / Tab 选中,Esc 关闭。
+    // @ 提及菜单:目录可下钻、文件可选中。↑↓ 导航,Enter/Tab 激活(目录钻进/文件选中),
+    // Esc 关闭。Backspace 在 term 为空(光标紧跟 / )时退一级(等价点 ..)。
     if (mentionOpen) {
       if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((i) => Math.min(i + 1, mentionItems.length - 1)); return; }
-      if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => Math.max(i - 1, 0)); return; }
-      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickMention(mentionItems[mentionIdx]); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => Math.max(i - 1, -1)); return; }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        // mentionIdx=-1(焦点在 go-up 行)→ 退一级;否则激活当前项(目录钻进/文件选中)。
+        if (mentionIdx < 0) goUpMention();
+        else activateMention(mentionItems[mentionIdx]);
+        return;
+      }
       if (e.key === "Escape") { e.preventDefault(); setMentionOpen(false); return; }
+      if (e.key === "Backspace") {
+        const info = detectMention(value, cursorRef.current);
+        if (info && info.query.endsWith("/")) { e.preventDefault(); goUpMention(); return; }
+      }
     }
 
     // 上下键翻历史:仅当光标在首行(↑)/末行(↓),且无菜单时。
@@ -439,17 +504,38 @@ export default function Composer({ value, onChange, disabled, prompting, configO
       )}
       {mentionOpen && (
         <div className="slash-popover mention-popover" data-testid="mention-popover">
+          {/* 返回上一级:scope 非空(drill 态)时显示,退到父目录。data-testid 供测试点击。 */}
+          {mentionScope !== "" && (
+            <button
+              className={`slash-item mention-up ${mentionIdx < 0 ? "active" : ""}`}
+              data-testid="mention-go-up"
+              onMouseEnter={() => setMentionIdx(-1)}
+              onClick={goUpMention}
+              title={t("composer.mention.goUpTip")}
+            >
+              <CornerUpLeft size={13} />
+              <span className="slash-cmd mention-up-label">{t("composer.mention.goUp")}</span>
+            </button>
+          )}
           {mentionItems.map((n, i) => {
             // 跨目录结果可能撞名(src/foo.ts vs lib/foo.ts),显完整相对路径让用户区分:
             // 目录前缀 dim + basename 正常色(§4.4 不裸露歧义字段)。
             const dirPrefix = n.path.length > n.name.length ? n.path.slice(0, n.path.length - n.name.length) : "";
             return (
-              <button key={n.path} className={`slash-item ${i === mentionIdx ? "active" : ""}`} onMouseEnter={() => setMentionIdx(i)} onClick={() => pickMention(n)}>
-                <File size={13} />
+              <button
+                key={n.path}
+                className={`slash-item mention-item ${n.isDir ? "is-dir" : "is-file"} ${i === mentionIdx ? "active" : ""}`}
+                onMouseEnter={() => setMentionIdx(i)}
+                onClick={() => activateMention(n)}
+                title={n.isDir ? t("composer.mention.drillTip", { dir: n.path }) : "@" + n.path}
+              >
+                {n.isDir ? <Folder size={13} className="mention-ico-dir" /> : <File size={13} className="mention-ico-file" />}
                 <span className="slash-cmd mention-path">
                   {dirPrefix && <span className="mention-dir">{dirPrefix}</span>}
                   {n.name}
                 </span>
+                {/* 目录项右侧 chevron 提示「可下钻」,文件项无(选中即引用)。 */}
+                {n.isDir && <ChevronRight size={12} className="mention-drill-chev" />}
               </button>
             );
           })}
@@ -702,7 +788,10 @@ export default function Composer({ value, onChange, disabled, prompting, configO
 //  - 费用:累计 $cost(harness 自报)。
 // 配色按 usageLevel 分级(绿 → 琥珀 → 红),hover tooltip 展示 token 明细(输入/输出/缓存/思考/合计)。
 // §4.5:统一用 react-tooltip(md-tip),禁用原生 title。
-// 仅在有内容可报时渲染(全空则返回 null,不占位)。
+// 「未上报」态:harness 上报的用量全 0(used/size/cost/明细均 0)时,展示灰色「—(未上报)」,
+// 让用户看到「用量入口在,只是 harness 没报」而非入口消失。判定**只看实际数据是否全 0,
+// 不依赖 CapabilityMatrix.emitsUsage**(§5.3 尊重数据源:capability 位是能力声明,数据才是真相;
+// 声明会报但实际全 0 仍应显示未上报,反之亦然)。草稿预估是本地估算,不计入「是否上报」判定。
 function ComposerUsage({ usage, draftTokens }: {
   usage: Usage;
   draftTokens: number;
@@ -711,24 +800,27 @@ function ComposerUsage({ usage, draftTokens }: {
   const hasDraft = draftTokens > 0;
   const hasCtx = usage.used > 0 || usage.size > 0;
   const hasCost = usage.cost > 0;
-  if (!hasDraft && !hasCtx && !hasCost) return null;
+  const hasBreakdown = usage.totalTokens > 0 || usage.inputTokens > 0 || usage.outputTokens > 0
+    || usage.cachedReadTokens > 0 || usage.cachedWriteTokens > 0 || usage.thoughtTokens > 0;
+  // harness 是否上报了任何用量数据:上下文 / 费用 / token 明细 任一非 0 即「已上报」。
+  const hasUsageReported = hasCtx || hasCost || hasBreakdown;
   const pct = usage.size > 0 ? Math.min(100, Math.round((usage.used / usage.size) * 100)) : 0;
   // 分级配色:上下文越满越警示(绿 → 琥珀 → 红),让占比一眼可读。
   const level = pct >= 85 ? "crit" : pct >= 60 ? "high" : pct >= 30 ? "mid" : "low";
-  // token 明细 tooltip(§4.5 react-tooltip):仅在有明细时附加,用 \n 多行(pre-line 渲染)。
-  const hasBreakdown = usage.totalTokens > 0 || usage.inputTokens > 0 || usage.outputTokens > 0
-    || usage.cachedReadTokens > 0 || usage.cachedWriteTokens > 0 || usage.thoughtTokens > 0;
-  const usageTip = hasBreakdown
-    ? [
-        t("chat.usageTitle"),
-        `${t("chat.usageInput")}: ${fmtTokens(usage.inputTokens)}`,
-        `${t("chat.usageOutput")}: ${fmtTokens(usage.outputTokens)}`,
-        usage.cachedReadTokens > 0 ? `${t("chat.usageCachedRead")}: ${fmtTokens(usage.cachedReadTokens)}` : "",
-        usage.cachedWriteTokens > 0 ? `${t("chat.usageCachedWrite")}: ${fmtTokens(usage.cachedWriteTokens)}` : "",
-        usage.thoughtTokens > 0 ? `${t("chat.usageThought")}: ${fmtTokens(usage.thoughtTokens)}` : "",
-        `${t("chat.usageTotal")}: ${fmtTokens(usage.totalTokens)}`,
-      ].filter(Boolean).join("\n")
-    : t("chat.usageTitle");
+  // token 明细 tooltip(§4.5 react-tooltip):有明细 → 多行;已上报无明细 → 标题;未上报 → 未上报说明。
+  const usageTip = !hasUsageReported
+    ? t("chat.usageNotReportedTip")
+    : hasBreakdown
+      ? [
+          t("chat.usageTitle"),
+          `${t("chat.usageInput")}: ${fmtTokens(usage.inputTokens)}`,
+          `${t("chat.usageOutput")}: ${fmtTokens(usage.outputTokens)}`,
+          usage.cachedReadTokens > 0 ? `${t("chat.usageCachedRead")}: ${fmtTokens(usage.cachedReadTokens)}` : "",
+          usage.cachedWriteTokens > 0 ? `${t("chat.usageCachedWrite")}: ${fmtTokens(usage.cachedWriteTokens)}` : "",
+          usage.thoughtTokens > 0 ? `${t("chat.usageThought")}: ${fmtTokens(usage.thoughtTokens)}` : "",
+          `${t("chat.usageTotal")}: ${fmtTokens(usage.totalTokens)}`,
+        ].filter(Boolean).join("\n")
+      : t("chat.usageTitle");
   return (
     <span
       className={`composer-usage composer-usage-${level}`}
@@ -738,13 +830,19 @@ function ComposerUsage({ usage, draftTokens }: {
       data-tooltip-place="top"
     >
       {hasDraft && <span className="cu-draft">~{fmtTokens(draftTokens)}</span>}
-      {hasDraft && (hasCtx || hasCost) && <span className="cu-sep">·</span>}
-      {hasCtx && (
-        <span className="cu-ctx">
-          {fmtTokens(usage.used)}{usage.size > 0 ? ` / ${fmtTokens(usage.size)}` : ""}{usage.size > 0 ? ` · ${pct}%` : ""}
-        </span>
+      {hasDraft && hasUsageReported && <span className="cu-sep">·</span>}
+      {hasUsageReported ? (
+        <>
+          {hasCtx && (
+            <span className="cu-ctx">
+              {fmtTokens(usage.used)}{usage.size > 0 ? ` / ${fmtTokens(usage.size)}` : ""}{usage.size > 0 ? ` · ${pct}%` : ""}
+            </span>
+          )}
+          {hasCost && <span className="cu-cost">${usage.cost.toFixed(4)}</span>}
+        </>
+      ) : (
+        <span className="cu-none">{t("chat.usageNotReported")}</span>
       )}
-      {hasCost && <span className="cu-cost">${usage.cost.toFixed(4)}</span>}
     </span>
   );
 }

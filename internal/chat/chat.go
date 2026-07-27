@@ -917,6 +917,16 @@ func (s *ChatService) SessionReadFile(sessionID, rel string) (string, error) {
 	return fsview.ReadFile(root, rel)
 }
 
+// SessionReadImage 读取 session 工作目录下 rel 的图片,返回 dataURL(data:<mime>;base64,<b64>)
+// 与扩展名(不含点)。路径钉在 cwd(safeJoin 防 ../ 与符号链接越界);非图片 / 过大 / 越界报错。
+func (s *ChatService) SessionReadImage(sessionID, rel string) (fsview.ImageData, error) {
+	root, err := s.cwdOf(sessionID)
+	if err != nil {
+		return fsview.ImageData{}, err
+	}
+	return fsview.ReadImage(root, rel)
+}
+
 // SessionCreateFile 在 session 工作目录下新建文件(含内容)。
 func (s *ChatService) SessionCreateFile(sessionID, rel, content string) error {
 	root, err := s.cwdOf(sessionID)
@@ -954,15 +964,17 @@ func (s *ChatService) SessionRenamePath(sessionID, rel, newName string) (string,
 	return fsview.RenamePath(root, rel, newName)
 }
 
-// SessionFuzzyFind 在 session 工作目录下按 query 子串模糊匹配文件路径,返回最多 limit 个命中。
+// SessionFuzzyFind 在 session 工作目录下按 query 子串模糊匹配路径,返回最多 limit 个命中。
+// scope 限定搜索子树(相对 cwd 的路径,空表示整棵 cwd 树),透传给 fsview.FuzzyFind。
 // git 仓库复用 fsview 可见集(尊重 .gitignore),非 git 目录跳过 .git / node_modules 等大目录。
-// 路径钉在 cwd;空 query 返回 nil;limit<=0 用默认上限。
-func (s *ChatService) SessionFuzzyFind(sessionID, query string, limit int) ([]fsview.FileNode, error) {
+// 文件与目录都参与匹配;空 query 返回 scope 的直接子项(含目录);limit<=0 用默认上限。
+// 路径钉在 cwd(safeJoin 防越界)。
+func (s *ChatService) SessionFuzzyFind(sessionID, scope, query string, limit int) ([]fsview.FileNode, error) {
 	root, err := s.cwdOf(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	return fsview.FuzzyFind(root, query, limit)
+	return fsview.FuzzyFind(root, scope, query, limit)
 }
 
 // OpenSession 打开已有 session。懒 spawn(§3.x):
@@ -2115,11 +2127,10 @@ func (s *ChatService) RefreshHarnesses() ([]harness.Harness, error) {
 //     AddHarness 路径不经过它,故这里显式 go 一次(§5.4:确认 probe 触发点)。
 //
 // 返回更新后的全量 harness 列表(前端据此刷新);error 非空时列表为 nil。
-func (s *ChatService) AddHarness(id, name, command, icon string) ([]harness.Harness, error) {
+func (s *ChatService) AddHarness(id, name, command string) ([]harness.Harness, error) {
 	id = strings.TrimSpace(id)
 	name = strings.TrimSpace(name)
 	command = strings.TrimSpace(command)
-	icon = strings.TrimSpace(icon)
 
 	path := filepath.Join(s.cfg.DataDir, harness.UserHarnessesFile)
 	list, err := harness.LoadUserHarnesses(path)
@@ -2129,7 +2140,7 @@ func (s *ChatService) AddHarness(id, name, command, icon string) ([]harness.Harn
 	if err := harness.ValidateUserHarness(id, name, command, list); err != nil {
 		return nil, err
 	}
-	list = append(list, harness.UserHarness{ID: id, Name: name, Command: command, Icon: icon})
+	list = append(list, harness.UserHarness{ID: id, Name: name, Command: command})
 	if err := harness.SaveUserHarnesses(path, list); err != nil {
 		return nil, fmt.Errorf("save user harnesses: %w", err)
 	}

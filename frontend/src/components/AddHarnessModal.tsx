@@ -11,7 +11,7 @@ interface Props {
   onCancel: () => void;
 }
 
-// 添加 harness 弹窗:用户填写 ID / Name / Command(必填)+ Icon(可选,空 = 前端兜底图标)。
+// 添加 harness 弹窗:用户填写 ID / Name / Command(必填)。
 //
 // 复用现有 modal 范式(modal-overlay/modal-card/modal-input/modal-del-err,§5.3),形态参考
 // FilePanel 的「文本输入 modal」(autoFocus + Enter 提交 + Esc 关闭)。
@@ -27,7 +27,6 @@ export default function AddHarnessModal({ existing, onDone, onCancel }: Props) {
   const [id, setId] = useState("");
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
-  const [icon, setIcon] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -69,7 +68,7 @@ export default function AddHarnessModal({ existing, onDone, onCancel }: Props) {
     setErr(null);
     setSubmitting(true);
     try {
-      const list = await ChatService.AddHarness(id.trim(), name.trim(), command.trim(), icon.trim());
+      const list = await ChatService.AddHarness(id.trim(), name.trim(), command.trim());
       onDone(list ?? []);
     } catch (e) {
       // 后端兜底校验失败(如:并发加同 ID / 命令非法)——直接显示后端错误串。
@@ -138,28 +137,6 @@ export default function AddHarnessModal({ existing, onDone, onCancel }: Props) {
             placeholder={t("settings.harness.addCmdPlaceholder")}
             onKeyDown={(e) => { if (e.key === "Enter") void submit(); }}
             data-testid="ah-command"
-          />
-        </div>
-
-        <div className="ah-field">
-          <label className="ah-label" htmlFor="ah-icon">
-            {t("settings.harness.addIconLabel")}
-            <span
-              className="ah-hint"
-              data-tooltip-id="md-tip"
-              data-tooltip-content={t("settings.harness.addIconTip")}
-            >
-              {t("settings.harness.addIconHint")}
-            </span>
-          </label>
-          <input
-            id="ah-icon"
-            className="modal-input"
-            value={icon}
-            onChange={(e) => setIcon(e.target.value)}
-            placeholder={t("settings.harness.addIconPlaceholder")}
-            onKeyDown={(e) => { if (e.key === "Enter") void submit(); }}
-            data-testid="ah-icon"
           />
         </div>
 
