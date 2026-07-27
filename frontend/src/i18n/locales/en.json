@@ -320,7 +320,9 @@
     "renameTitle": "Rename",
     "newFileTitle": "New file",
     "newFolderTitle": "New folder",
-    "namePlaceholder": "Name"
+    "namePlaceholder": "Name",
+    "copyPath": "Copy path",
+    "revealInFinder": "Reveal in Finder"
   },
   "gitPanel": {
     "title": "Source Control",

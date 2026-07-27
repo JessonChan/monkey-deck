@@ -1382,6 +1382,7 @@ export default function App() {
           <SidePanel
             sessionId={selectedSessionId}
             rootName={selectedProject?.name || ""}
+            rootPath={activeSession?.worktreePath || selectedProject?.path || ""}
             isGitProject={gitByProject[selectedProject?.id ?? ""] ?? false}
             changes={sessionChanges}
             status={status}

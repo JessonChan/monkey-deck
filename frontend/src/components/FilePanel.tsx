@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
@@ -23,6 +23,7 @@ import {
 interface Props {
   sessionId: string;
   rootName: string;
+  rootPath: string;
   changes: FileChange[] | null;
   status: string;
 }
@@ -42,7 +43,7 @@ type Preview =
   | { kind: "text"; name: string; path: string; content: string }
   | { kind: "image"; name: string; path: string; url: string };
 
-export default function FilePanel({ sessionId, rootName, changes, status }: Props) {
+export default function FilePanel({ sessionId, rootName, rootPath, changes, status }: Props) {
   const { t } = useTranslation();
   const [children, setChildren] = useState<ChildrenMap>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -53,6 +54,54 @@ export default function FilePanel({ sessionId, rootName, changes, status }: Prop
   const [modal, setModal] = useState<Modal | null>(null);
   const [modalName, setModalName] = useState("");
   const [tick, setTick] = useState(0);
+  // 右键菜单(复用 Sidebar ctx-menu 范式:fixed 定位 + 全局 Esc / outside-mousedown / resize 关闭 + 视口裁剪)。
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; node: FileNode } | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement>(null);
+
+  // rel(相对路径)→ 绝对路径(钉在 rootPath;无 rootPath 时返回空,交给浏览器默认菜单)。
+  const absPath = useCallback((rel: string) => {
+    if (!rootPath) return "";
+    return rel === "" ? rootPath : rootPath.replace(/\/+$/, "") + "/" + rel;
+  }, [rootPath]);
+
+  const openCtxMenu = (e: React.MouseEvent, node: FileNode) => {
+    if (!rootPath) return; // 无根路径则交给浏览器默认菜单
+    e.preventDefault();
+    e.stopPropagation();
+    setCtxMenu({ x: e.clientX, y: e.clientY, node });
+  };
+
+  const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
+
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeCtxMenu(); };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", closeCtxMenu);
+    window.addEventListener("resize", closeCtxMenu);
+    window.addEventListener("scroll", closeCtxMenu, true);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", closeCtxMenu);
+      window.removeEventListener("resize", closeCtxMenu);
+      window.removeEventListener("scroll", closeCtxMenu, true);
+    };
+  }, [ctxMenu, closeCtxMenu]);
+
+  // 视口 clamp:渲染后量菜单尺寸,推入 [left,top] 防溢出(对齐 Sidebar)。
+  useLayoutEffect(() => {
+    const el = ctxMenuRef.current;
+    if (!el || !ctxMenu) return;
+    const pad = 8;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    let left = ctxMenu.x;
+    let top = ctxMenu.y;
+    if (left + w > window.innerWidth - pad) left = Math.max(pad, window.innerWidth - w - pad);
+    if (top + h > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - h - pad);
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }, [ctxMenu]);
 
   // path → git 状态字母(工作区优先;用于文件行徽标)。
   const statusByPath = useMemo(() => {
@@ -200,6 +249,7 @@ export default function FilePanel({ sessionId, rootName, changes, status }: Prop
             className={`tree-row ${selected === node.path ? "sel" : ""}`}
             style={{ paddingLeft: pad }}
             onClick={() => toggleDir(node)}
+            onContextMenu={(e) => openCtxMenu(e, node)}
           >
             <span className="tree-caret">
               {isLoading ? <RefreshCw size={11} className="spin" /> : isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
@@ -223,6 +273,7 @@ export default function FilePanel({ sessionId, rootName, changes, status }: Prop
         className={`tree-row ${selected === node.path ? "sel" : ""}`}
         style={{ paddingLeft: pad }}
         onClick={() => void openFile(node)}
+        onContextMenu={(e) => openCtxMenu(e, node)}
       >
         <span className="tree-caret" />
         <FileIcon size={13} className="tree-ico-file" />
@@ -287,6 +338,38 @@ export default function FilePanel({ sessionId, rootName, changes, status }: Prop
           </div>
         </div>
       )}
+
+      {ctxMenu && (() => {
+        const node = ctxMenu.node;
+        const parent = node.path.includes("/") ? node.path.substring(0, node.path.lastIndexOf("/")) : "";
+        return (
+          <div
+            ref={ctxMenuRef}
+            className="ctx-menu"
+            style={{ left: ctxMenu.x, top: ctxMenu.y }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button className="ctx-item" onClick={() => { const p = absPath(node.path); if (p) void navigator.clipboard?.writeText(p); closeCtxMenu(); }}>
+              <Copy size={13} /> {t("filePanel.copyPath")}
+            </button>
+            <button className="ctx-item" onClick={() => { const p = absPath(node.path); if (p) void ChatService.RevealPath(p); closeCtxMenu(); }}>
+              <FolderOpen size={13} /> {t("filePanel.revealInFinder")}
+            </button>
+            <div className="ctx-sep" />
+            {node.isDir && (
+              <button className="ctx-item" onClick={() => { openModal({ kind: "file", dir: node.path }); closeCtxMenu(); }}>
+                <FilePlus2 size={13} /> {t("common.newFile")}
+              </button>
+            )}
+            <button className="ctx-item" onClick={() => { openModal({ kind: "rename", dir: parent, target: node.path, initial: node.name }); closeCtxMenu(); }}>
+              <Pencil size={13} /> {t("common.rename")}
+            </button>
+            <button className="ctx-item danger" onClick={() => { openModal({ kind: "delete", dir: parent, target: node.path, isDir: node.isDir }); closeCtxMenu(); }}>
+              <Trash2 size={13} /> {t("common.delete")}
+            </button>
+          </div>
+        );
+      })()}
 
       {modal && (
         <div className="modal-overlay" onClick={() => setModal(null)}>

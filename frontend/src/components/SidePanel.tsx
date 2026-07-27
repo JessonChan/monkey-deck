@@ -8,6 +8,7 @@ import type { FileChange } from "../../bindings/github.com/jessonchan/monkey-dec
 interface Props {
   sessionId: string;
   rootName: string;
+  rootPath: string;
   changes: FileChange[] | null;
   status: string;
   // SCM(GitPanel):isGitProject=项目是否 git repo(对齐 orca / VS Code repo-kind 判定,跟 session 是否有独立 worktree 解耦);
@@ -75,7 +76,7 @@ export default function SidePanel(props: Props) {
       </div>
       <div className="side-body">
         {tab === "files" ? (
-          <FilePanel sessionId={props.sessionId} rootName={props.rootName} changes={props.changes} status={props.status} />
+          <FilePanel sessionId={props.sessionId} rootName={props.rootName} rootPath={props.rootPath} changes={props.changes} status={props.status} />
         ) : (
           <GitPanel
             embedded

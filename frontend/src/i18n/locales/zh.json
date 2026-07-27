@@ -320,7 +320,9 @@
     "renameTitle": "重命名",
     "newFileTitle": "新建文件",
     "newFolderTitle": "新建文件夹",
-    "namePlaceholder": "名称"
+    "namePlaceholder": "名称",
+    "copyPath": "复制路径",
+    "revealInFinder": "在 Finder 打开"
   },
   "gitPanel": {
     "title": "源代码管理",
