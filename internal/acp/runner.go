@@ -190,7 +190,9 @@ func (r *Runner) spawnAndInit(ctx context.Context, workDir string, handler *Hand
 	// cmd 已 Start:交给 harnessProcess 独占 Wait(单一 reap,杜绝双 Wait 竞态)。
 	proc := newHarnessProcess(cmd, strings.Join(r.HarnessCmd, " "), stderr)
 
-	conn := acp.NewClientSideConnection(handler, stdin, stdout)
+	// RESUME_PATCH(临时兜底,见 resume_patch.go):补 SDK 的 ResumeSessionRequest.McpServers
+	// omitempty bug —— 出站 session/resume 帧缺 mcpServers 时在此补回。上游修后删此包装。
+	conn := acp.NewClientSideConnection(handler, newResumePatchWriter(stdin), stdout)
 	conn.SetLogger(slog.Default())
 
 	initResp, err := conn.Initialize(ctx, acp.InitializeRequest{
