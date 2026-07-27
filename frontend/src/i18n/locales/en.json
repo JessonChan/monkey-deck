@@ -112,8 +112,6 @@
     "newSessionTitle": "New chat",
     "toggleTerminalTip": "Terminal (⌘J)",
     "toggleTerminal": "Toggle terminal",
-    "copyPathTip": "Copy project path",
-    "pathCopiedTip": "Project path copied",
     "refreshConfigFailed": "Failed to refresh model list",
     "placeholder": "Send a message to start…",
     "loadMore": "Load more",

@@ -139,8 +139,6 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   const programmaticScrollRef = useRef(false);
   // Floating scroll-to-bottom button visibility: true = show FAB (user is reading history).
   const [showScrollBtn, setShowScrollBtn] = useState(false);
-  // 头部「复制项目路径」按钮的 copied 反馈(1.5s 回落,与其它 copy 按钮一致)。
-  const [copiedPath, setCopiedPath] = useState(false);
   // 文件预览覆盖层(Task #15084):对话/工具卡片里的路径点击 → 弹此覆盖层。
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
   // plan 展开/折叠偏好:按 session 持久化(localStorage)(Task #21298)。
@@ -170,10 +168,11 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   // 当前生效的工作目录:优先 session.worktreePath(独立 worktree),降级 project.path(共享目录)。
   // 与 App.tsx 的 termCwdRef 同一套优先级(worktree 优先 → 项目目录)。
   const activePath = props.session?.worktreePath || props.project?.path || "";
-  // 头部「复制工作目录」:写 activePath 到剪贴板;无路径时不执行(disabled 兜底)。
+  // 复制工作目录到剪贴板(对话区右键菜单调用);无路径时不执行(openCtxMenu 入口已兜底)。
+  // 不做 copied 反馈:右键菜单点击即关闭,反馈不可见(与 Sidebar 项目菜单一致)。
   const copyPath = useCallback(async () => {
     if (!activePath) return;
-    try { await navigator.clipboard.writeText(activePath); setCopiedPath(true); setTimeout(() => setCopiedPath(false), 1500); } catch { /* noop */ }
+    try { await navigator.clipboard.writeText(activePath); } catch { /* noop */ }
   }, [activePath]);
   // ─── 对话区右键菜单(复用 Sidebar ctx-menu 范式:fixed 定位 + 全局 Esc / outside-mousedown / resize 关闭 + 视口裁剪)───
   // 仅放与工作目录相关的项(复制路径 / 在 Finder 打开),与 Sidebar 项目菜单的路径项对齐。
@@ -517,16 +516,6 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         </div>
         <div className="chat-header-actions">
           {s.key && <span className={`status-badge ${s.cls}`}>{t(s.key)}</span>}
-          <button
-            className="icon-btn small"
-            onClick={copyPath}
-            disabled={!activePath}
-            data-tooltip-id="md-tip"
-            data-tooltip-content={copiedPath ? t("chat.pathCopiedTip") : t("chat.copyPathTip")}
-            data-testid="copy-path-btn"
-          >
-            {copiedPath ? <Check size={15} /> : <Copy size={15} />}
-          </button>
           <button className="icon-btn small" onClick={props.onToggleTerminal} data-tooltip-id="md-tip" data-tooltip-content={t("chat.toggleTerminalTip")} aria-label={t("chat.toggleTerminal")}>
             <SquareTerminal size={15} />
           </button>
