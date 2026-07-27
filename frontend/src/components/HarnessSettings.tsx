@@ -356,28 +356,27 @@ function HarnessRow({
       </div>
       <div className="harness-row-acts">
         <CapabilityMatrixButton cap={cap} harnessId={h.id} />
-        {/* 自检(复检)按钮:所有 harness 都有 —— 不只添加时能自检,已加的也能随时重跑诊断。 */}
+        {/* 自检(复检):所有 harness 都有 —— icon-only 收紧行宽(tooltip 说明)。 */}
         <button
-          className="modal-btn ghost"
+          className="tool-btn"
           data-testid={`harness-probe-btn-${h.id}`}
           disabled={probing}
           data-tooltip-id="md-tip"
           data-tooltip-content={t("settings.harness.probeTip")}
           onClick={() => void probe()}
         >
-          {probing ? <Loader2 size={13} className="spin" /> : <ShieldCheck size={13} />}
-          {probing ? t("settings.harness.addProbing") : t("settings.harness.probeBtn")}
+          {probing ? <Loader2 size={14} className="spin" /> : <ShieldCheck size={14} />}
         </button>
-        {/* 编辑按钮:仅用户自添加 harness(内置不可改)。改 name + command(id 不变)。 */}
+        {/* 编辑:仅用户自添加 harness(内置不可改)。改 name + command(id 不变)。 */}
         {h.userDefined && (
           <button
-            className="modal-btn ghost"
+            className="tool-btn"
             data-testid={`harness-edit-${h.id}`}
             data-tooltip-id="md-tip"
             data-tooltip-content={t("settings.harness.editTip")}
             onClick={onEdit}
           >
-            <Pencil size={13} /> {t("settings.harness.editBtn")}
+            <Pencil size={14} />
           </button>
         )}
         {(h.upgradeAvailable || !h.installed) && (

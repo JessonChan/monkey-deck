@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { ConformanceReport } from "../../bindings/github.com/jessonchan/monkey-deck/internal/acp/models";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { Loader2, ShieldCheck } from "lucide-react";
+import { Loader2, ShieldCheck, X } from "lucide-react";
 import ProbeReport, { canAddFromReport } from "./ProbeReport";
 
 interface Props {
@@ -81,9 +81,18 @@ export default function AddHarnessModal({ onDone, onCancel }: Props) {
   };
 
   return (
-    <div className="modal-overlay" onClick={onCancel}>
-      <div className="modal-card add-harness-card" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-title">{t("settings.harness.addTitle")}</div>
+      <div className="modal-overlay">
+        <div className="modal-card add-harness-card">
+          <button
+            className="modal-close"
+            onClick={onCancel}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("common.close")}
+            aria-label={t("common.close")}
+          >
+            <X size={15} />
+          </button>
+          <div className="modal-title">{t("settings.harness.addTitle")}</div>
         <div className="ah-desc">{t("settings.harness.addDesc")}</div>
 
         <div className="ah-field">

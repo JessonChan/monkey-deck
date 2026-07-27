@@ -1707,9 +1707,15 @@ input, textarea { font-family: inherit; }
 .modal-card {
   width: 100%; max-width: 320px; background: var(--elev-2);
   border: 1px solid var(--sep-strong); border-radius: var(--r-md);
-  box-shadow: var(--shadow-pop); padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  box-shadow: var(--shadow-pop); padding: 16px; display: flex; flex-direction: column; gap: 12px; position: relative;
 }
 .modal-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.modal-close {
+  position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: var(--r-sm);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-3); background: transparent; border: none; cursor: pointer;
+}
+.modal-close:hover { background: var(--hover); color: var(--text); }
 .modal-input {
   width: 100%; background: var(--bg); border: 1px solid var(--sep); border-radius: 6px;
   padding: 8px 10px; color: var(--text); font-size: 13px; outline: none; user-select: text;
