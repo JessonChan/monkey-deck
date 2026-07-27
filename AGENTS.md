@@ -272,6 +272,7 @@ monkey-deck/
 4. **tool 状态必须单调推进,禁止回退**:tool 一旦到终态(`completed`/`failed`),后续 `tool_call_update` 只更新 `rawOutput` 等非状态字段,**不接受 `status` 回退到 `in_progress`/`pending`**(omp async task 的 `tool_execution_update` 会硬编码打回 in_progress)。`handleEvent`(`internal/chat`)与 `activityTracker.observe`(`internal/acp`)两处都做。
 5. **持久化按真实时序交错写库**:思考/回复/工具是交错的(thought→tool→agent→tool→agent),`persistTurn` 必须按真实发生顺序逐条写 `seq`,不能先写完所有 segment 再写所有 tool(否则重开会话历史时工具卡片全聚到 turn 末尾)。
 6. **自动重连的崩溃循环防护**:`reconnectLoop` 的「spawn 成功」判定必须有**稳定观察期**(`reconnStability`)——只判 ensureLive 返回 nil 就算成功,会导致「spawn OK 但立刻崩溃」的 harness 被判为重连成功,reconnect goroutine 退出,health watcher 又检测到死、再触发重连,形成无上限的紧密循环。稳定观察期 + 重试上限 + `reconnectGiveUp`(耗尽后停摆直到用户主动操作)三道一起才能把循环收敛到有限次。
+7. **acp-go-sdk 的 `ResumeSessionRequest.McpServers` 带 omitempty(SDK bug,有本地兜底)**:`session/resume`(恢复 session)时该字段的 `json:"mcpServers,omitempty"` 会把空切片整体丢掉(NewSession/LoadSession 同字段都没 omitempty)→ 严格 harness(如 junie)报 `-32700 mcpServers is required`。本地兜底:`internal/acp/resume_patch.go` 在出站管道(harness stdin)上包一层中间件,补回缺失的 `"mcpServers": []`(`runner.go` 搜 `RESUME_PATCH`)。**上游 coder/acp-go-sdk 去掉该 omitempty 并发版后,按 resume_patch.go 顶部删除步骤撤掉兜底。** 详见 `docs/worklog/2026-07-28-acp-resume-mcpservers-omitempty-workaround.md`。
 
 > 具体项目踩坑与修复记录(根因/修法/验证)统一落在 `docs/worklog/YYYY-MM-DD-<slug>.md`,本文只保留原则性规则。流式合并按主键归并的原则见 §5.3。
 
