@@ -1,4 +1,4 @@
-> 最后维护：2026-06-30（新增 Windows/Linux 生成流程 + 源文件管理）
+> 最后维护：2026-07-28（应用图标换 v3 满版无水印稿；设计源处理链改用 ImageMagick 满版 + 去水印）
 # 应用图标维护说明
 
 > 解决「打包后 app 图标仍是 Wails 默认 W」的问题，并记录以后换图标的正确流程。
@@ -99,31 +99,34 @@ Wails3 脚手架默认的 `generate:icons` 带这两个参数：
 
 ## 图标设计源文件（真相之上）
 
-`build/appicon.png` 自动生成自以下设计源文件之一：
+`build/appicon.png` 由当前设计源 `assets/monkey-deck-icon-v3.png`（2048×2048，满版方形）派生。
 
-```
-assets/monkey-deck-icon-v2.png          ← 设计师交付的 2048×2048 主图（完整含透明 padding）
-assets/monkey-deck-icon-v2-cropped.png  ← 最终扣好的 1062×1062 1:1 内容（去掉羽化白边）
-```
+设计源文件放在 `assets/`（git 跟踪，入库）。历史迭代 `monkey-deck-icon-v2*.png` 保留备查，已不再是源。
 
-设计源文件放在 `assets/`（git 跟踪，入库）。
+**为什么 v3 是「满版方形」（full-bleed：无圆角 / 无透明边 / 无自带阴影）**：macOS Big Sur+ 对所有 app icon 强制套超椭圆（squircle）蒙版 + 运行时投影，源图必须满版方形——圆角与投影交给系统。若源图自带圆角或透明 padding，系统蒙版裁切会露底 / 裁到透明边 / 与系统圆角曲率打架。故 v3 把不透明主体裁满整个画布，透明角填成同色深色板（`#182636`，落在系统蒙版之外，不显示）。
 
-**从设计稿到 `build/appicon.png` 的处理链**：
+**附带去除 AI 生成水印**：原稿右下角「豆包AI生成」水印落在透明边距里（alpha≈0）。裁满版 + alpha 硬化（阈值 90%：主体 alpha≈0.996 保留，水印字与圆角抗锯齿 alpha 极低被剔除）后，水印随透明区一起消失，无需 inpaint 猜色。
+
+**从原稿到 `build/appicon.png` 的处理链**（ImageMagick；本机无 PIL/numpy，故弃用旧 PIL 脚本）：
 
 ```bash
-# 1. 拿到设计稿（2048×2048，alpha>0 含羽化边距）
-# 2. 扣掉羽化白边，保留 1:1 核心主体
-python3 -c "
-from PIL import Image; import numpy as np
-img = Image.open('assets/monkey-deck-icon-v2.png').convert('RGBA')
-a = np.array(img)[:,:,3]
-ys, xs = np.where(a >= 180)  # 实色核心，避开低 alpha 羽化
-img.crop((xs.min(), ys.min(), xs.max()+1, ys.max()+1)) \
-   .save('assets/monkey-deck-icon-v2-cropped.png', 'PNG')
-"
-# 3. 等比缩放到 1024×1024
-sips -Z 1024 assets/monkey-deck-icon-v2-cropped.png --out build/appicon.png
+SRC=<带透明边/水印的原稿.png>
+DARK="#182636"
+# 1. 取不透明主体 bbox（裁掉透明 padding 与边距里的水印）
+sz=$(magick $SRC -alpha extract -threshold 50% -trim -format '%@' info:)   # WxH+0+0
+pg=$(magick $SRC -alpha extract -threshold 50% -trim -format '%g' info:)   # PAGEw x PAGEh +X +Y
+trim=${sz%%+*}; W=${trim%x*}; H=${trim#*x}
+off=${pg#*+}; X=${off%+*}; Y=${off#*+}
+# 2. 裁满主体 → alpha 硬化(90%)去水印/抗锯齿 → 填深色去圆角缺口 → 拉满 2048
+magick $SRC -crop ${W}x${H}+${X}+${Y} +repage \
+  \( +clone -alpha extract -threshold 90% \) -compose CopyOpacity -composite \
+  -background $DARK -alpha remove -alpha off -resize 2048x2048! \
+  assets/monkey-deck-icon-v3.png
+# 3. 派生 1024 通用源
+sips -Z 1024 assets/monkey-deck-icon-v3.png --out build/appicon.png
 ```
+
+> `assets/monkey-deck-icon-v3.png` 已是处理好的满版结果，日常换图标直接覆盖 `build/appicon.png` 或重跑第 3 步即可；上面 1–2 步仅在拿到「带透明边 / 水印」的新原稿时才需要。
 
 ## Windows / Linux 图标生成
 
