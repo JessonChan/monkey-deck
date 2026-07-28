@@ -534,6 +534,60 @@ func mergeInDir(dir, branch, message string) (string, error) {
 	return out, nil
 }
 
+// PreflightMerge 用 git merge-tree --write-tree 预演「branch 合并进 base」,不碰工作区/index。
+// git ≥ 2.38 支持。返回:
+//   - conflicts 非空 + ok=true:有冲突(已去重),调用方应直接报错不发起合并。
+//   - nil + ok=true:无冲突,可安全合并。
+//   - ok=false:git 不支持 --write-tree(<2.38),调用方走原「合并+abort」兜底路径。
+//   - err!=nil:预演本身失败(非冲突),透传。
+func PreflightMerge(repoPath, base, branch string) (conflicts []string, ok bool, err error) {
+	// 直接 exec:需区分 exit 1(冲突,正常结果)与其它(不支持/真错误)。
+	cmd := exec.Command("git", "-C", repoPath, "merge-tree", "--write-tree", base, branch)
+	stdout, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			stderr := string(ee.Stderr)
+			// exit 1 = 有冲突:stdout 含 stage 行,解析冲突文件。
+			if ee.ExitCode() == 1 {
+				return parseMergeTreeConflicts(string(stdout)), true, nil
+			}
+			// 旧版 git 不认 --write-tree:usage 错误(exit 129)或 stderr 含 unknown option。
+			if ee.ExitCode() == 129 || strings.Contains(stderr, "unknown option") {
+				return nil, false, nil
+			}
+			return nil, false, fmt.Errorf("git merge-tree: %s", strings.TrimSpace(stderr))
+		}
+		return nil, false, err
+	}
+	// exit 0 = 无冲突(stdout 第一行是合并后的 tree OID)。
+	return nil, true, nil
+}
+
+// parseMergeTreeConflicts 从 merge-tree --write-tree 输出解析冲突文件路径。
+// 冲突时输出行:<mode> <oid> <stage>\t<path>(stage 1/2/3 = base/ours/theirs,同一文件三行)。
+// 按 tab 分割取 path(含空格路径不被拆),去重(stage 三行)。
+func parseMergeTreeConflicts(out string) []string {
+	seen := map[string]bool{}
+	var files []string
+	for _, line := range strings.Split(out, "\n") {
+		tabIdx := strings.IndexByte(line, '\t')
+		if tabIdx < 0 {
+			continue
+		}
+		meta := strings.Fields(line[:tabIdx])
+		path := line[tabIdx+1:]
+		// meta 末段是 stage(1/2/3);前面是 mode + oid。只收冲突 stage。
+		if len(meta) >= 3 && (meta[len(meta)-1] == "1" || meta[len(meta)-1] == "2" || meta[len(meta)-1] == "3") {
+			if !seen[path] {
+				seen[path] = true
+				files = append(files, path)
+			}
+		}
+	}
+	return files
+}
+
 // MergeBranchInto 把 branch 合并进本地分支 target(用 message 作 merge commit 信息)。
 // target = 该 session 的基线分支(从哪 checkout 就合回哪,对称)。
 // 先用 worktree list --porcelain 定位 target 当前 checkout 在哪:
@@ -544,6 +598,11 @@ func mergeInDir(dir, branch, message string) (string, error) {
 //
 // 临时 worktree 路径必 defer 删除(无论成功/冲突/失败),保证不留垃圾(todo §6.2)。
 func MergeBranchInto(repoPath, branch, target, message string) (string, error) {
+	// 0. 预检:git merge-tree 预演「branch→target」,有冲突直接返回,不发起合并(工作区零触碰)。
+	//    git ≥ 2.38 支持;不支持则 ok=false 跳过,走下面实际 merge + 冲突 abort 兜底。
+	if conflicts, ok, perr := PreflightMerge(repoPath, target, branch); perr == nil && ok && len(conflicts) > 0 {
+		return "", &MergeConflictError{Files: conflicts}
+	}
 	// 1. 定位 target 在哪被 checkout(git worktree list --porcelain)。
 	listOut, err := gitRaw(repoPath, "worktree", "list", "--porcelain")
 	if err != nil {
