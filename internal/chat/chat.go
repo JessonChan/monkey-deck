@@ -61,6 +61,10 @@ const (
 	ErrCodeHarnessEmptyTurn = "harness_empty_turn"
 	// ErrCodeHarnessReconnectFailed:断连后自动重连耗尽重试上限仍失败,需用户手动(发消息)触发再次尝试。
 	ErrCodeHarnessReconnectFailed = "harness_reconnect_failed"
+	// ErrCodeAgentTurnIncomplete:Prompt 成功返回、timeline 也非空,但 stopReason 不是 end_turn
+	// (cancelled/refusal/max_tokens/max_turn_requests)——agent 自己没正常跑完这轮(常见:所选模型
+	// 临时不可用、被拒绝、触上限)。harness 仍活、连接是好的,只推提示、不重连;用户可重试。
+	ErrCodeAgentTurnIncomplete = "agent_turn_incomplete"
 )
 
 // 会话状态(会随 SessionEvent/StatusPayload 推前端)。
@@ -1745,6 +1749,14 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 	}
 	// 取 harness 生成的权威标题覆盖兜底标题(§5.4 #14)。
 	s.syncSessionTitle(ls, sessionID)
+	// agent 非 end_turn 结束(cancelled/refusal/max_tokens/max_turn_requests):harness 仍活、
+	// 连接是好的,这轮只是没正常完成。不 teardown(用户可重试),但要给用户可见提示 ——
+	// 否则 timeline 非空会静默当成功(§5.4:非 end_turn 不当成功)。用户主动 Stop 走 err 路径,
+	// 不会到此;此处 stopReason 非 end_turn 必是 agent 自身发起的异常结束。
+	if stopReason != acp.StopReasonEndTurn {
+		s.emitError(sessionID, ErrCodeAgentTurnIncomplete)
+		return
+	}
 	s.emitStatus(sessionID, "idle", "stopReason="+string(stopReason))
 }
 

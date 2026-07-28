@@ -31,6 +31,9 @@ const maxListPages = 100
 // (§2.1:internal/acp 是 ACP 唯一封装层,业务包不直接 import SDK)。
 type StopReason = acp.StopReason
 
+// StopReasonEndTurn 透传 SDK 常量:agent 自然完成一轮(internal/chat 据此判定 turn 是否正常结束)。
+const StopReasonEndTurn = acp.StopReasonEndTurn
+
 // Attachment 是随 prompt 发给 agent 的引用(@提及 / 回形针文件 / 内联图片 / 音频 / 内联资源)。
 //
 // Kind 决定发出的 ContentBlock 类型(baseline 之外的能力需 agent 声明对应 prompt 能力,§3.5):
