@@ -1400,6 +1400,7 @@ export default function App() {
             changes={sessionChanges}
             status={status}
             branch={branchBySession[selectedSessionId] || activeSession.branch || ""}
+            baseRef={activeSession.baseRef || ""}
             mergeResult={mergeResult}
             onMerge={mergeSession}
             onStage={stageFiles}
