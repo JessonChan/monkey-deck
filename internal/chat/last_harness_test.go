@@ -37,7 +37,7 @@ func TestCreateSessionPersistsLastHarness(t *testing.T) {
 	}
 
 	// 选 opencode → 记下 opencode。
-	if _, err := svc.CreateSession(proj.ID, "t", "opencode", false); err != nil {
+	if _, err := svc.CreateSession(proj.ID, "t", "opencode", false, ""); err != nil {
 		t.Fatalf("CreateSession opencode: %v", err)
 	}
 	if got := svc.GetLastHarness(); got != "opencode" {
@@ -45,7 +45,7 @@ func TestCreateSessionPersistsLastHarness(t *testing.T) {
 	}
 
 	// 空 id → Normalize 回退 omp → 记下 omp。
-	if _, err := svc.CreateSession(proj.ID, "t", "", false); err != nil {
+	if _, err := svc.CreateSession(proj.ID, "t", "", false, ""); err != nil {
 		t.Fatalf("CreateSession empty: %v", err)
 	}
 	if got := svc.GetLastHarness(); got != "omp" {
@@ -53,7 +53,7 @@ func TestCreateSessionPersistsLastHarness(t *testing.T) {
 	}
 
 	// 未知 id → Normalize 回退 omp。
-	if _, err := svc.CreateSession(proj.ID, "t", "nope", false); err != nil {
+	if _, err := svc.CreateSession(proj.ID, "t", "nope", false, ""); err != nil {
 		t.Fatalf("CreateSession unknown: %v", err)
 	}
 	if got := svc.GetLastHarness(); got != "omp" {
