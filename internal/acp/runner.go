@@ -460,10 +460,60 @@ func (cs *ChatSession) RefreshConfig(ctx context.Context) ([]ConfigOption, error
 	// 清理 probe 创建的 session:harness 可能持久化 session 记录,CloseSession 收尾。
 	// 失败不致命(harness 可能已随 kill 退出),忽略错误。
 	_, _ = conn.CloseSession(ctx, acp.CloseSessionRequest{SessionId: sess.SessionId})
-	cs.ConfigOptions = sess.ConfigOptions
+	// RefreshConfig 只刷新【可选列表】(同步外部新加的 provider/model),不应动当前选择:
+	// probe 是全新 session,CurrentValue 是 harness 默认值;整列覆盖会把用户刚切的模型盖回默认
+	// (打开下拉触发 probe → 几秒后模型回退)。合并:保留活 session 的 CurrentValue(仅当仍在新列表里)。
+	cs.ConfigOptions = mergeConfigCurrentValues(cs.ConfigOptions, sess.ConfigOptions)
 	cs.PromptCapabilities = initResp.AgentCapabilities.PromptCapabilities
 	slog.Info("refreshed config options", "sessionId", cs.SessionID, "cwd", cs.WorkDir, "options", len(cs.ConfigOptions))
 	return FlattenConfigOptions(cs.ConfigOptions), nil
+}
+
+// mergeConfigCurrentValues 把 old(活 session)各 Select 选项的 CurrentValue 还原进 fresh(probe 刷新
+// 的可选列表),仅当该值仍在 fresh 的可选项里(避免还原已下架的模型)。fresh 保留 probe 的最新可选列表,
+// 只把当前选择从 old 搬回来。Boolean(unstable)不处理 —— 模型/模式/思考档都是 Select。
+func mergeConfigCurrentValues(old, fresh []acp.SessionConfigOption) []acp.SessionConfigOption {
+	prev := map[acp.SessionConfigId]acp.SessionConfigValueId{}
+	for _, o := range old {
+		if o.Select != nil {
+			prev[o.Select.Id] = o.Select.CurrentValue
+		}
+	}
+	for i := range fresh {
+		sel := fresh[i].Select
+		if sel == nil {
+			continue
+		}
+		live, ok := prev[sel.Id]
+		if !ok || live == "" {
+			continue
+		}
+		if selectOptionAvailable(sel.Options, live) {
+			fresh[i].Select.CurrentValue = live
+		}
+	}
+	return fresh
+}
+
+// selectOptionAvailable 判断 value 是否在 SessionConfigSelectOptions(Ungrouped + Grouped 都查)里。
+func selectOptionAvailable(opts acp.SessionConfigSelectOptions, value acp.SessionConfigValueId) bool {
+	if opts.Ungrouped != nil {
+		for _, e := range *opts.Ungrouped {
+			if e.Value == value {
+				return true
+			}
+		}
+	}
+	if opts.Grouped != nil {
+		for _, g := range *opts.Grouped {
+			for _, e := range g.Options {
+				if e.Value == value {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // SetConfigOption 切换某个 config option(model/mode/effort),热切、同 session 即时生效。
