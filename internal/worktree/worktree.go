@@ -7,8 +7,10 @@ package worktree
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -91,8 +93,9 @@ func HeadShort(repoPath string) (string, error) {
 
 // Create 在 repoPath 的 baseRef 基础上,新建分支 branch 并检出工作树到 targetPath。
 // baseRef 为空则用 HEAD。targetPath 不能已存在。
+// --no-track:避免新建分支自动配置 upstream 跟踪,首次 push 前 git status 误报 "behind by N"(§1.4)。
 func Create(repoPath, branch, targetPath, baseRef string) error {
-	args := []string{"worktree", "add", "-b", branch, targetPath}
+	args := []string{"worktree", "add", "--no-track", "-b", branch, targetPath}
 	if baseRef != "" {
 		args = append(args, baseRef)
 	} else {
@@ -159,15 +162,20 @@ func conflictedFiles(repoPath string) ([]string, error) {
 	return strings.Split(out, "\n"), nil
 }
 
-// DiffStat 返回 branch 相对 repoPath 当前 HEAD 的变更摘要(git diff --stat)。
+// DiffStat 返回 branch 相对 base 的变更摘要(git diff --stat)。
+// base 为空则用主仓库 HEAD(旧行为:主仓库在基线分支时碰巧等价)。
+// 有显式基线的 session 应传 se.BaseRef,避免主仓库 HEAD 飘走后增量算错(todo §13 review 补漏)。
 // 格式如 "3 files changed, 15 insertions(+), 5 deletions(-)"。无变更返回空串。
-func DiffStat(repoPath, branch string) (string, error) {
-	// 先找 merge-base(分支与当前 HEAD 的共同祖先),只看 branch 的增量
-	base, err := git(repoPath, "merge-base", "HEAD", branch)
+func DiffStat(repoPath, branch, base string) (string, error) {
+	baseRef := base
+	if baseRef == "" {
+		baseRef = "HEAD"
+	}
+	mb, err := git(repoPath, "merge-base", baseRef, branch)
 	if err != nil {
 		return "", err
 	}
-	out, err := git(repoPath, "diff", "--stat", base, branch)
+	out, err := git(repoPath, "diff", "--stat", mb, branch)
 	if err != nil {
 		return "", err
 	}
@@ -175,12 +183,17 @@ func DiffStat(repoPath, branch string) (string, error) {
 }
 
 // BranchLog 返回 branch 相对 base 的 commit 列表(一行一条),供"这个分支干了什么"展示。
-func BranchLog(repoPath, branch string) (string, error) {
-	base, err := git(repoPath, "merge-base", "HEAD", branch)
+// base 为空则用主仓库 HEAD(旧行为)。有显式基线的 session 应传 se.BaseRef。
+func BranchLog(repoPath, branch, base string) (string, error) {
+	baseRef := base
+	if baseRef == "" {
+		baseRef = "HEAD"
+	}
+	mb, err := git(repoPath, "merge-base", baseRef, branch)
 	if err != nil {
 		return "", err
 	}
-	out, err := git(repoPath, "log", "--oneline", base+".."+branch)
+	out, err := git(repoPath, "log", "--oneline", mb+".."+branch)
 	if err != nil {
 		return "", err
 	}
@@ -352,4 +365,270 @@ func FileDiff(worktreePath, path string, staged bool) (string, error) {
 func BranchExists(repoPath, branch string) bool {
 	_, err := git(repoPath, "rev-parse", "--verify", "refs/heads/"+branch)
 	return err == nil
+}
+
+// ErrNoBaseRef 探测不到默认基线分支(无 main/master 且无 origin/HEAD)。
+// Route A strict:不回退 HEAD,由调用方强制用户显式选(todo/worktree-base-ref-selection.md §2)。
+var ErrNoBaseRef = errors.New("no default base ref found")
+
+
+// DefaultBaseRef 默认基线探测结果(BaseRef=短名,Ok=是否探测到)。供前端预选 + 星标。
+type DefaultBaseRef struct {
+	BaseRef string `json:"baseRef"`
+	Ok      bool   `json:"ok"`
+}
+
+// revVerify 报告 ref 是否解析到一个 commit。用于探测分支是否存在。
+func revVerify(repoPath, ref string) bool {
+	_, err := git(repoPath, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	return err == nil
+}
+
+// RefExists 报告 ref 是否解析到一个 commit,尝试常见命名空间(heads/remotes/原样)。
+// 接受短名(main)、远程跟踪名(origin/main)或完整 ref(refs/heads/main)。
+// 供「记住上次选择」验证分支仍存在(分支可能被删后 setting 残留)。
+func RefExists(repoPath, ref string) bool {
+	if ref == "" {
+		return false
+	}
+	cands := []string{ref}
+	if !strings.HasPrefix(ref, "refs/") {
+		cands = append(cands, "refs/heads/"+ref, "refs/remotes/"+ref)
+	}
+	for _, c := range cands {
+		if revVerify(repoPath, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolveDefaultBaseRef 探测仓库的默认基线分支(返回本地分支短名,如 main)。
+// 顺序(todo §3,本地优先):
+//  1. git symbolic-ref refs/remotes/origin/HEAD → 得默认名(如 main)→ 本地 refs/heads/<name> 存在 → 返回。
+//  2. 本地优先 probe list:refs/heads/main → master → refs/remotes/origin/main → origin/master,第一个存在的返回短名。
+//  3. 全空 → ErrNoBaseRef(不回退 HEAD)。
+//
+// v1 写死 origin(绝大多数项目;fork/多 remote 让用户手选,文档标注限制)。
+func ResolveDefaultBaseRef(repoPath string) (string, error) {
+	// 1. origin/HEAD symbolic-ref(静默:不存在会非零,忽略错误)。
+	if out, _ := git(repoPath, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"); out != "" {
+		// out 形如 refs/remotes/origin/main,取最后一段作短名。
+		name := out
+		if i := strings.LastIndex(out, "/"); i >= 0 {
+			name = out[i+1:]
+		}
+		if name != "" && revVerify(repoPath, "refs/heads/"+name) {
+			return name, nil
+		}
+	}
+	// 2. 本地优先 probe list。
+	type probe struct{ full, short string }
+	probes := []probe{
+		{"refs/heads/main", "main"},
+		{"refs/heads/master", "master"},
+		{"refs/remotes/origin/main", "main"},
+		{"refs/remotes/origin/master", "master"},
+	}
+	for _, p := range probes {
+		if revVerify(repoPath, p.full) {
+			return p.short, nil
+		}
+	}
+	return "", ErrNoBaseRef
+}
+
+// ResolveAddBaseRef 把用户选的 baseRef 消歧成 git 能安全传给 worktree add 的 ref,
+// 避免短名(如 main)被 git 解析成同名 tag。
+//   - 以 refs/ 开头 → 原样用(已是完整 ref)。
+//   - 含 / (如 origin/main)→ 先试 refs/remotes/<base>,再 refs/heads/<base>。
+//   - 纯名(如 main / develop)→ 只试 refs/heads/<base>。
+//
+// 都不命中 → 回退原串(让 git 自己报错,透传 git 的诊断信息)。
+func ResolveAddBaseRef(repoPath, baseRef string) string {
+	if baseRef == "" {
+		return ""
+	}
+	if strings.HasPrefix(baseRef, "refs/") {
+		return baseRef
+	}
+	var cands []string
+	if strings.Contains(baseRef, "/") {
+		cands = []string{"refs/remotes/" + baseRef, "refs/heads/" + baseRef}
+	} else {
+		cands = []string{"refs/heads/" + baseRef}
+	}
+	for _, c := range cands {
+		if revVerify(repoPath, c) {
+			return c
+		}
+	}
+	return baseRef
+}
+
+// BranchInfo 一条分支的信息(供选择器列表)。
+type BranchInfo struct {
+	Name string `json:"name"` // 短名(如 main / origin/main)
+	Kind string `json:"kind"` // "local" | "remote"
+	Date int64  `json:"date"` // committerdate unix 秒(供排序 + 前端按当前时区格式化:同年省年、带时分秒)
+}
+
+// ListBranches 列出仓库的本地 + 远程跟踪分支,排除 */HEAD 伪 ref,
+// 按 committerdate 倒序封顶 200 条(供选择器一次性拉取 + 前端过滤,KISS)。
+func ListBranches(repoPath string) ([]BranchInfo, error) {
+	// --sort=-committerdate:最近优先。--count=200 封顶。
+	// %(committerdate:unix):unix 秒,前端按本地时区 + 同年省年格式化(git 的 :short 只到日、无时分秒且不支持条件格式)。
+	out, err := git(repoPath, "for-each-ref",
+		"--sort=-committerdate",
+		"--count=200",
+		"--format=%(refname:short)%09%(committerdate:unix)%09%(refname)",
+		"refs/heads/", "refs/remotes/",
+	)
+	if err != nil {
+		return nil, err
+	}
+	var res []BranchInfo
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		short, dateStr := parts[0], parts[1]
+		full := short
+		if len(parts) == 3 {
+			full = parts[2]
+		}
+		// 排除 */HEAD 伪 ref(origin/HEAD 等)。
+		if strings.HasSuffix(full, "/HEAD") {
+			continue
+		}
+		kind := "local"
+		if strings.HasPrefix(full, "refs/remotes/") {
+			kind = "remote"
+		}
+		var ts int64
+		if n, err := strconv.ParseInt(dateStr, 10, 64); err == nil {
+			ts = n
+		}
+		res = append(res, BranchInfo{Name: short, Kind: kind, Date: ts})
+	}
+	return res, nil
+}
+
+// mergeInDir 在 dir 所在的工作树里把 branch 合并进当前(已 checkout 在 target 的)HEAD,
+// 返回合并输出或 *MergeConflictError(自动 merge --abort 回滚该工作树)。
+// 与 MergeBranch 同语义,只是针对任意工作树目录而非固定主仓库。
+func mergeInDir(dir, branch, message string) (string, error) {
+	out, err := git(dir, "merge", "--no-ff", "-m", message, branch)
+	if err != nil {
+		conflicted, _ := conflictedFiles(dir)
+		_, _ = git(dir, "merge", "--abort") // 无 merge 进行中时是空操作
+		if len(conflicted) > 0 {
+			return "", &MergeConflictError{Files: conflicted}
+		}
+		return "", err
+	}
+	return out, nil
+}
+
+// MergeBranchInto 把 branch 合并进本地分支 target(用 message 作 merge commit 信息)。
+// target = 该 session 的基线分支(从哪 checkout 就合回哪,对称)。
+// 先用 worktree list --porcelain 定位 target 当前 checkout 在哪:
+//   - 主仓库(repoPath)在 target 且干净 → 直接在主仓库 merge(现有语义)。
+//   - 主仓库在 target 但脏 → 报错(脏工作区 merge 必爆)。
+//   - target 空闲(主仓库在别的分支,且 target 未在别处被检出)→ 建 target 的临时 worktree,在其中 merge 后删除;主仓库不动。
+//   - target 在主仓库之外被检出 → 报错。
+//
+// 临时 worktree 路径必 defer 删除(无论成功/冲突/失败),保证不留垃圾(todo §6.2)。
+func MergeBranchInto(repoPath, branch, target, message string) (string, error) {
+	// 1. 定位 target 在哪被 checkout(git worktree list --porcelain)。
+	listOut, err := gitRaw(repoPath, "worktree", "list", "--porcelain")
+	if err != nil {
+		return "", err
+	}
+	type wt struct{ path, head string }
+	var worktrees []wt
+	var cur wt
+	for _, line := range strings.Split(listOut, "\n") {
+		if line == "" {
+			if cur.path != "" {
+				worktrees = append(worktrees, cur)
+			}
+			cur = wt{}
+			continue
+		}
+		if strings.HasPrefix(line, "worktree ") {
+			cur.path = strings.TrimPrefix(line, "worktree ")
+		} else if strings.HasPrefix(line, "branch ") {
+			cur.head = strings.TrimPrefix(line, "branch ")
+		} else if strings.HasPrefix(line, "HEAD ") {
+			// detached:记录 ref;非 detached 由 branch 行覆盖。这里取 short 形式比较。
+			cur.head = strings.TrimPrefix(line, "HEAD ")
+		}
+	}
+	if cur.path != "" {
+		worktrees = append(worktrees, cur)
+	}
+	targetShort := target
+	if i := strings.LastIndex(target, "/"); i >= 0 {
+		targetShort = target[i+1:]
+	}
+	// 主仓库 = list 第一项(repoPath 自身)。比较 head 是否 == target(分支名或 short)。
+	var mainDir string
+	mainOnTarget := false
+	if len(worktrees) > 0 {
+		mainDir = worktrees[0].path
+		mainOnTarget = worktrees[0].head == target || worktrees[0].head == "refs/heads/"+target ||
+			worktrees[0].head == targetShort
+	}
+	// target 是否被其它 worktree 检出(主仓库之外)。
+	occupiedBy := ""
+	for _, w := range worktrees {
+		if w.path == mainDir {
+			continue
+		}
+		if w.head == target || w.head == "refs/heads/"+target || w.head == targetShort {
+			occupiedBy = w.path
+			break
+		}
+	}
+
+	// 2a. 主仓库在 target → 直接 merge(检查干净)。
+	if mainOnTarget {
+		if HasChanges(mainDir) {
+			return "", fmt.Errorf("主仓库工作区不干净(当前在 %s),先提交或丢弃改动后再合并", target)
+		}
+		return mergeInDir(mainDir, branch, message)
+	}
+	// 2b. target 在主仓库之外被检出 → 报错。
+	if occupiedBy != "" {
+		return "", fmt.Errorf("基线分支 %s 正被另一个工作树检出(%s),无法合并", target, occupiedBy)
+	}
+	// 2c. target 空闲 → 建 target 的临时 worktree,merge 后删除。
+	tmpWt, err := os.MkdirTemp("", "md-merge-*")
+	if err != nil {
+		return "", err
+	}
+	// 提前删空目录,git worktree add 要求目标不存在。
+	_ = os.Remove(tmpWt)
+	// 检出 target 分支(非 detach):merge 在该工作树内会移动 target 分支指针。
+	// 不能用 --detach:detached HEAD 下 merge 只移 HEAD 不移分支 ref,target 分支不会更新。
+	// 前面的占用检查已保证 target 未在别处被检出,此处 worktree add 能成功。
+	if _, err := git(repoPath, "worktree", "add", tmpWt, target); err != nil {
+		return "", fmt.Errorf("建临时 worktree: %w", err)
+	}
+	defer func() {
+		_ = gitQuiet(repoPath, "worktree", "remove", "--force", tmpWt)
+	}()
+	return mergeInDir(tmpWt, branch, message)
+}
+
+// gitQuiet 跑 git 命令,静默失败(返回 error 但不含 stderr 包装,用于临时操作)。
+func gitQuiet(repoPath string, args ...string) error {
+	full := append([]string{"-C", repoPath}, args...)
+	_, err := exec.Command("git", full...).Output()
+	return err
 }
