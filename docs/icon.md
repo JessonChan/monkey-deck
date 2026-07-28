@@ -25,15 +25,30 @@ build/appicon.png  ──wails3 generate icons + build/darwin/generate-icons.sh�
 ## 如何换图标
 
 1. 用新图标覆盖 `build/appicon.png`（PNG，建议 ≥1024×1024，正方形）。
-2. 重新打包：`wails3 task package`
+2. 重新打包：`wails3 task darwin:package`（= build + create:app:bundle，后者把 `build/darwin/icons.icns` cp 进 `.app`）。
+   > ⚠️ `wails3 build` / `wails3 task darwin:build` **只编译裸二进制**，不碰 `.app` bundle。必须跑 `package` 才会更新 bundle 里的 icns。
 3. 清 macOS 图标缓存（**必做，见下**）。
-4. `open bin/monkey-deck.app` 验证。
+4. `open "bin/Monkey Deck.app"` 验证。
+
+> ⚠️ **bundle 名陷阱**：`.app` 目录名 = `config.yml` 的 `productName`（当前 = `Monkey Deck`），所以正确路径是 `bin/Monkey Deck.app`（注意空格）。`bin/monkey-deck.app` 是历史残留的 **decoy**——构建系统不再更新它，打开它永远看到旧图标。同理 `bin/monkey-deck.dev.app` 也是 decoy；dev 模式的 bundle 叫 `bin/Monkey Deck.dev.app`。
 
 ## ⚠️ macOS 图标缓存（换图标后必清）
 
-bundle id (`com.jessonchan.monkeydeck`) 不变时，LaunchServices / iconservices 会**沿用旧图标缓存**——资源换了但 Dock / Launchpad 仍显示旧图。非特权手段（`lsregister`、`killall Dock`）清不掉系统级缓存。
+bundle id (`com.jessonchan.monkeydeck`) 不变时，LaunchServices / iconservices 会**沿用旧图标缓存**——资源换了但 Dock / Launchpad 仍显示旧图。
 
-每次换图标后跑：
+**非 sudo 手段**（通常够用）：
+
+```bash
+rm -rf ~/Library/Caches/com.apple.iconservices.store
+# 强制 LaunchServices 重新索引
+for d in bin/*.app; do
+  touch "$d"
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$d"
+done
+killall Dock Finder
+```
+
+**sudo 手段**（非 sudo 无效时）：
 
 ```bash
 sudo rm -rf /Library/Caches/com.apple.iconservices.store ~/Library/Caches/com.apple.iconservices.store
