@@ -145,6 +145,8 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   // 文件预览覆盖层(Task #15084):对话/工具卡片里的路径点击 → 弹此覆盖层。
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
+  // error-bar 复制反馈(点复制后短暂显示「已复制」)。
+  const [errorCopied, setErrorCopied] = useState(false);
   // plan 展开/折叠偏好:按 session 持久化(localStorage)(Task #21298)。
   // 同一 session 内所有 plan(当前 turn 实时 + 历史 turn 静态)共用一个偏好,用户折叠/展开
   // 一次后整 session 遵循,重开会话也能恢复。默认展开(不再按条数折叠)。
@@ -644,8 +646,32 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           </button>
         </div>
       )}
-      {props.error && <div className="error-bar">⚠ {props.error}</div>}
-      {props.mergeResult && <div className={`merge-result ${props.mergeResult.startsWith("✅") ? "ok" : "fail"}`}>{props.mergeResult}</div>}
+      {props.error && (
+        <div className="error-bar">
+          <span className="error-bar-msg">⚠ {props.error}</span>
+          <button
+            className="error-bar-copy"
+            data-tooltip-id="md-tip"
+            data-tooltip-content={errorCopied ? t("common.copied") : t("common.copy")}
+            onClick={() => { try { navigator.clipboard?.writeText(props.error || ""); setErrorCopied(true); setTimeout(() => setErrorCopied(false), 1200); } catch { /* noop */ } }}
+          >
+            {errorCopied ? <Check size={12} /> : <Copy size={12} />}
+          </button>
+        </div>
+      )}
+      {props.mergeResult && (
+        <div className={`merge-result ${props.mergeResult.startsWith("✅") ? "ok" : "fail"}`}>
+          <span className="merge-result-msg">{props.mergeResult}</span>
+          {props.mergeResult.startsWith("❌") && (
+            <button
+              className="error-bar-copy"
+              onClick={() => { try { navigator.clipboard?.writeText(props.mergeResult || ""); setErrorCopied(true); setTimeout(() => setErrorCopied(false), 1200); } catch { /* noop */ } }}
+            >
+              {errorCopied ? <Check size={12} /> : <Copy size={12} />}
+            </button>
+          )}
+        </div>
+      )}
       <FilePreviewOverlay sessionId={props.sessionId} target={previewTarget} onClose={closeFilePreview} />
       <footer className="chat-footer">
         <QueuePanel

@@ -22,6 +22,7 @@ import type { FileChange, BranchInfo } from "../bindings/github.com/jessonchan/m
 import { applyEventToItems as applyEventToItemsPure } from "./lib/streamMerge";
 import { shouldDropOnSwitch } from "./lib/sessionDrop";
 import { isNotifySoundEnabled, playNotifySound } from "./lib/notifySound";
+import { extractErrMsg } from "./lib/errorMsg";
 import { isMemorySaverEnabled } from "./lib/memorySaver";
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
@@ -326,7 +327,7 @@ export default function App() {
     try {
       await ChatService.SendMessage(sid, next.text, buildAttachments(next.mentions, next.images, next.audios));
     } catch (e) {
-      if (isViewing) setError(String(e));
+      if (isViewing) setError(extractErrMsg(e));
       setStatusBySession((prev) => ({ ...prev, [sid]: "idle" }));
     } finally {
       drainingBySessionRef.current.delete(sid);
@@ -705,7 +706,7 @@ export default function App() {
       }
       setNewSession({ projectId: pid, isGit, lastHarness, defaultBaseRef, branches });
     } catch (e) {
-      setError(String(e));
+      setError(extractErrMsg(e));
     }
   }, [selectedProjectId]);
 
@@ -725,7 +726,7 @@ export default function App() {
         await openSession(se.id);
       }
     } catch (e) {
-      setError(String(e));
+      setError(extractErrMsg(e));
     }
   }, [newSession, selectedProjectId, refreshSessions, openSession, selectProject]);
 
@@ -762,7 +763,7 @@ export default function App() {
       try {
         await ChatService.SendMessage(selectedSessionId, text, buildAttachments(mentions, imgs, aus));
       } catch (e) {
-        setError(String(e));
+        setError(extractErrMsg(e));
         setStatusBySession((prev) => ({ ...prev, [selectedSessionId]: "idle" }));
       }
     },
@@ -784,7 +785,7 @@ export default function App() {
     try {
       await ChatService.ContinueSession(sid);
     } catch (e) {
-      setError(String(e));
+      setError(extractErrMsg(e));
     }
   }, []);
 
@@ -804,7 +805,7 @@ export default function App() {
     try {
       await ChatService.InterruptAndSend(sid, item.text, buildAttachments(item.mentions, item.images, item.audios));
     } catch (e) {
-      setError(String(e));
+      setError(extractErrMsg(e));
     }
   }, []);
 
@@ -934,7 +935,7 @@ export default function App() {
       setTermTabsBySession((prev) => ({ ...prev, [sid]: [...(prev[sid] ?? []), { id, sessionId: sid, title, status: "running" }] }));
       setActiveTermBySession((prev) => ({ ...prev, [sid]: id }));
       setTermOpenBySession((prev) => ({ ...prev, [sid]: true }));
-    } catch (e) { setError(String(e)); }
+    } catch (e) { setError(extractErrMsg(e)); }
   }, []);
 
   // toggle:打开时若该 session 还没终端,自动建一个;已开 → 关。开关状态 per-session。
@@ -1029,7 +1030,7 @@ export default function App() {
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
     try { await ChatService.SetSessionConfigOption(sid, configId, value); }
-    catch (e) { setError(String(e)); }
+    catch (e) { setError(extractErrMsg(e)); }
   }, []);
 
   // 打开 model 下拉时防抖重拉 configOptions(同步外部配置改动:用户在 harness 配置里新增的 provider/model)。
@@ -1043,7 +1044,7 @@ export default function App() {
       if (!sid) return;
       if (statusRef.current === "readonly" || statusRef.current === "empty") return;
       ChatService.RefreshSessionConfig(sid).catch((e) => {
-        setError(`${t("chat.refreshConfigFailed")}: ${String(e)}`);
+        setError(`${t("chat.refreshConfigFailed")}: ${extractErrMsg(e)}`);
       });
     }, 400);
   }, [t]);
@@ -1064,7 +1065,7 @@ export default function App() {
       try { setSessionDiff(await ChatService.SessionDiff(sid) || ""); } catch {}
       try { const m = await ChatService.SessionMergeable(sid); setMergeableBySession((prev) => ({ ...prev, [sid]: m })); } catch {}
     } catch (e) {
-      const msg = t("app.mergeFailed", { error: String(e) });
+      const msg = t("app.mergeFailed", { error: extractErrMsg(e) });
       setError(msg);
       setMergeResults((prev) => ({ ...prev, [selectedSessionId]: msg }));
       const sid = selectedSessionId;
@@ -1076,26 +1077,26 @@ export default function App() {
   const stageFiles = useCallback(async (paths: string[]) => {
     if (!selectedSessionId) return;
     try { await ChatService.SessionStage(selectedSessionId, paths); setError(null); }
-    catch (e) { setError(String(e)); }
+    catch (e) { setError(extractErrMsg(e)); }
     finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
   }, [selectedSessionId]);
   const unstageFiles = useCallback(async (paths: string[]) => {
     if (!selectedSessionId) return;
     try { await ChatService.SessionUnstage(selectedSessionId, paths); setError(null); }
-    catch (e) { setError(String(e)); }
+    catch (e) { setError(extractErrMsg(e)); }
     finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
   }, [selectedSessionId]);
   const discardFiles = useCallback(async (paths: string[]) => {
     if (!selectedSessionId) return;
     try { await ChatService.SessionDiscard(selectedSessionId, paths); setError(null); }
-    catch (e) { setError(String(e)); }
+    catch (e) { setError(extractErrMsg(e)); }
     finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
   }, [selectedSessionId]);
   // 提交:失败时 rethrow,让 GitPanel 保留提交信息 + 显示内联错误。
   const commitSession = useCallback(async (message: string) => {
     if (!selectedSessionId) throw new Error(t("app.noActiveSession"));
     try { await ChatService.SessionCommit(selectedSessionId, message); setError(null); }
-    catch (e) { setError(String(e)); throw e; }
+    catch (e) { setError(extractErrMsg(e)); throw e; }
     finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); const m = await ChatService.SessionMergeable(selectedSessionId); setMergeableBySession((p) => ({ ...p, [selectedSessionId]: m })); } catch {} }
   }, [selectedSessionId]);
   // AI 提交:让当前 session 的 agent 自动提交。触发一轮 turn;turn 结束(idle)时
@@ -1103,7 +1104,7 @@ export default function App() {
   const aiCommit = useCallback(async () => {
     if (!selectedSessionId) throw new Error(t("app.noActiveSession"));
     try { await ChatService.SessionAICommit(selectedSessionId); setError(null); }
-    catch (e) { setError(String(e)); throw e; }
+    catch (e) { setError(extractErrMsg(e)); throw e; }
   }, [selectedSessionId]);
 
   // 点击文件查看改动(staged 区分暂存/工作区上下文)。读操作,turn 进行中也允许。
@@ -1119,7 +1120,7 @@ export default function App() {
       await ChatService.AddProject("", path, "");
       await refreshProjects();
     } catch (e) {
-      setError(String(e));
+      setError(extractErrMsg(e));
     }
   }, [refreshProjects]);
 
