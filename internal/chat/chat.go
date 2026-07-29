@@ -667,19 +667,31 @@ func (s *ChatService) MergeSession(sessionID string) (string, error) {
 	if strings.TrimSpace(aheadLog) == "" {
 		return "✅ 无新变更:该分支没有领先基线的新提交(可能已合并过),跳过合并。", nil
 	}
-	// 合回基线分支:有显式 BaseRef(新 session)用 MergeBranchInto(target=BaseRef);
-	// baseRef 空(旧 session / 迁移前)沿用旧行为——合到主仓库当前 HEAD。
+	// Merge back to the base branch. With an explicit BaseRef (newer sessions) use
+	// MergeBranchInto(target=BaseRef); empty BaseRef (legacy/pre-migration) keeps the
+	// old behavior — merge into the main repo's current HEAD.
+	// targetDesc: human description of the merge target, so the conflict message can
+	// spell out "branch X → Y" instead of a vague "main repo unchanged".
 	var mergeOut string
+	var targetDesc string
 	if se.BaseRef != "" {
+		targetDesc = se.BaseRef
 		mergeOut, err = worktree.MergeBranchInto(proj.Path, se.Branch, se.BaseRef, mergeCommitMessage(se.Branch, se.Title))
 	} else {
+		// No explicit base: target is the main repo HEAD; resolve its short name
+		// for the description, fall back to "主仓库 HEAD" when unavailable.
+		if hb, herr := worktree.HeadShort(proj.Path); herr == nil && hb != "" && hb != "HEAD" {
+			targetDesc = hb
+		} else {
+			targetDesc = "主仓库 HEAD"
+		}
 		mergeOut, err = worktree.MergeBranch(proj.Path, se.Branch, mergeCommitMessage(se.Branch, se.Title))
 	}
 	if err != nil {
 		var conflictErr *worktree.MergeConflictError
 		if errors.As(err, &conflictErr) {
-			return "", fmt.Errorf("合并因 %d 个文件冲突已取消(主仓库未改动)。请在源代码管理面板协调这些文件后重试:\n  %s",
-				len(conflictErr.Files), strings.Join(conflictErr.Files, "\n  "))
+			return "", fmt.Errorf("合并已取消:把 %s 分支合并到 %s 时遇到 %d 个文件冲突(目标分支未改动)。请在源代码管理面板协调这些文件后重试:\n  %s",
+				se.Branch, targetDesc, len(conflictErr.Files), strings.Join(conflictErr.Files, "\n  "))
 		}
 		return "", err
 	}
