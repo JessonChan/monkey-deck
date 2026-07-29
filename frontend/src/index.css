@@ -918,13 +918,13 @@ input, textarea { font-family: inherit; }
 .merge-result-msg { flex: 1; min-width: 0; }
 .merge-result.ok { background: rgba(48, 209, 88, 0.12); color: var(--green); border: 1px solid rgba(48, 209, 88, 0.25); }
 .merge-result.fail { background: rgba(255, 69, 58, 0.12); color: var(--red); border: 1px solid rgba(255, 69, 58, 0.25); }
-/* error-bar / merge-result 的复制按钮:不抢焦点,点完即反馈 */
-.error-bar-copy {
+/* CopyIconButton: global copy icon for error-bar / merge-result etc. — no focus steal, instant feedback */
+.copy-icon-btn {
   flex-shrink: 0; background: transparent; border: none; cursor: pointer;
   color: inherit; opacity: 0.6; padding: 2px; border-radius: 4px; display: inline-flex;
   transition: opacity 0.1s, background 0.1s;
 }
-.error-bar-copy:hover { opacity: 1; background: rgba(127,127,127,0.15); }
+.copy-icon-btn:hover { opacity: 1; background: rgba(127,127,127,0.15); }
 @keyframes slideDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 
 .chat-footer { border-top: 1px solid var(--sep); padding: 9px 0 13px; background: var(--bg); }
