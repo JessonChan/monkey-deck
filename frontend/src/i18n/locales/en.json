@@ -362,7 +362,9 @@
     "mergeBtn": "Merge into main repo",
     "mergeIntoBase": "Merge into {{branch}}",
     "mergeTipBase": "Merge this session's branch back into {{branch}} (its base). Only committed changes are merged; uncommitted changes stay in the worktree.",
-    "mergeTipLegacy": "Merge this session's branch into the main repo's current HEAD (legacy session without explicit base)."
+    "mergeTipLegacy": "Merge this session's branch into the main repo's current HEAD (legacy session without explicit base).",
+    "mergeNothing": "Nothing to merge",
+    "mergeNothingTip": "No commits ahead of the base branch. Commit your changes first, or this session is already merged."
   },
   "sidePanel": {
     "files": "Files",

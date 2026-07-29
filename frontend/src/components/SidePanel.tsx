@@ -17,6 +17,7 @@ interface Props {
   branch: string;
   baseRef: string;  // 透传给 GitPanel:合并目标(空=旧 session 合到主仓库 HEAD)
   mergeResult: string | null;
+  mergeable: boolean;  // branch 有无领先基线的已提交 commit(无则 disable 合并按钮)
   onMerge: () => void;
   onStage: (paths: string[]) => Promise<void>;
   onUnstage: (paths: string[]) => Promise<void>;
@@ -85,6 +86,7 @@ export default function SidePanel(props: Props) {
             baseRef={props.baseRef}
             changes={props.changes}
             mergeResult={props.mergeResult}
+            mergeable={props.mergeable}
             onMerge={props.onMerge}
             onStage={props.onStage}
             onUnstage={props.onUnstage}
