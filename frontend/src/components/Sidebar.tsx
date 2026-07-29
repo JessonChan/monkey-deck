@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Pencil, Search, X, Pin, PinOff, PanelLeftClose, Settings, SquareTerminal } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Search, X, Pin, PinOff, PanelLeftClose, Settings, SquareTerminal, ExternalLink } from "lucide-react";
 import {
   DndContext,
   PointerSensor,
@@ -43,6 +43,12 @@ interface Props {
   onOpenSettings: () => void;
   // 有 harness 新版时,齿轮入口亮红点(§设置入口/harness 菜单红点)。
   harnessUpdateAvailable?: boolean;
+  // 已弹出到独立窗口的 session 集合:这些 session 行显示「独立窗口」角标,
+  // 点击改为 focus popout 窗口(而非就地选中);右键菜单「移回主窗口」可关闭 popout。
+  poppedSessionIds?: Set<string>;
+  onPopoutSession?: (sessionId: string) => void;   // 弹出到独立窗口(主窗口打包快照 + 调 OpenSessionWindow)
+  onFocusPopout?: (sessionId: string) => void;     // 聚焦已弹出的窗口
+  onClosePopout?: (sessionId: string) => void;     // 关闭 popout(移回主窗口)
 }
 
 // 可拖拽项目行(0007):折叠态整行可拖,展开态 disabled(不可主动拖,但仍可被其他项挤动)。
@@ -351,10 +357,18 @@ export default function Sidebar(props: Props) {
                       >
                         <button
                           className="session-item-main"
-                          onClick={() => props.onSelectSession(s.id, p.id)}
+                          onClick={() => {
+                            if (props.poppedSessionIds?.has(s.id) && props.onFocusPopout) props.onFocusPopout(s.id);
+                            else props.onSelectSession(s.id, p.id);
+                          }}
                         >
                           <span className={`session-dot ${cls}`} data-tooltip-id="md-tip" data-tooltip-content={dotTip} />
                           <span className="session-label">{s.title || t("sidebar.sessionDraftFallback")}</span>
+                          {props.poppedSessionIds?.has(s.id) && (
+                            <span className="session-popout-mark" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.popoutTip")} data-testid={`popout-${s.id}`}>
+                              <ExternalLink size={11} />
+                            </span>
+                          )}
                           <HarnessIcon harnessId={s.harness} size={12} className="session-harness-icon" tooltip={t("sidebar.harnessTip", { name: harnessNameById(s.harness) })} />
                           {s.pinned && (
                             <span className="session-pin" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.pinnedTip")} data-testid={`pin-${s.id}`}>
@@ -375,9 +389,7 @@ export default function Sidebar(props: Props) {
                           ) : (() => {
                             const dh = props.draftBySession?.[s.id];
                             return dh && dh.trim() ? (
-                              <span className="draft-indicator" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.draftTip", { text: dh.slice(0, 40) + (dh.length > 40 ? "…" : "") })} data-testid={`draft-${s.id}`}>
-                                <Pencil size={6} />
-                              </span>
+                              <span className="session-draft" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.draftTip")}>{t("sidebar.draft")}</span>
                             ) : <span className="session-time" data-tooltip-id="md-tip" data-tooltip-content={formatDateTime(s.updatedAt)}>{timeAgo(s.updatedAt)}</span>;
                           })()}
                         </button>
@@ -429,6 +441,16 @@ export default function Sidebar(props: Props) {
           >
             <Folder size={13} /> {t("sidebar.activateSession")}
           </button>
+          {props.poppedSessionIds?.has(ctx.session.id) ? (
+            <button className="ctx-item" onClick={() => { props.onClosePopout?.(ctx.session.id); closeCtx(); }}>
+              <ExternalLink size={13} /> {t("sidebar.moveBackToMainWindow")}
+            </button>
+          ) : (
+            <button className="ctx-item" onClick={() => { props.onPopoutSession?.(ctx.session.id); closeCtx(); }}>
+              <ExternalLink size={13} /> {t("sidebar.moveToNewWindow")}
+            </button>
+          )}
+          <div className="ctx-sep" />
           <button className="ctx-item" onClick={() => { void props.onTogglePin(ctx.session.id, !ctx.session.pinned); closeCtx(); }}>
             {ctx.session.pinned ? <><PinOff size={13} /> {t("sidebar.unpin")}</> : <><Pin size={13} /> {t("sidebar.pin")}</>}
           </button>
