@@ -18,7 +18,7 @@ import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/inte
 import { Group, Panel, Separator, useDefaultLayout, usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
 import { Tooltip } from "react-tooltip";
 import { PanelLeftOpen, PanelRightOpen } from "lucide-react";
-import type { FileChange } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
+import type { FileChange, BranchInfo } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import { applyEventToItems as applyEventToItemsPure } from "./lib/streamMerge";
 import { shouldDropOnSwitch } from "./lib/sessionDrop";
 import { isNotifySoundEnabled, playNotifySound } from "./lib/notifySound";
@@ -90,7 +90,7 @@ export default function App() {
     () => harnesses.some((h) => h.upgradeAvailable),
     [harnesses],
   );
-  const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean; lastHarness: string } | null>(null);  // 新建对话弹窗
+  const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean; lastHarness: string; defaultBaseRef: string; branches: BranchInfo[] } | null>(null);  // 新建对话弹窗
   const [settingsOpen, setSettingsOpen] = useState(false); // 统一设置中心面板(收敛语言/提示音/权限/harness)
   // 集成终端(per-session,与 agent ACP 通道完全分离;§1.1 agent 永远走 ACP)。
   // 终端面板开关也 per-session:session A 开着,切到 B 时 B 按自己的状态显示(各自独立)。
@@ -680,24 +680,37 @@ export default function App() {
     const pid = projectId ?? selectedProjectId;
     if (!pid) return;
     try {
+      // 预取:isGit(决定 worktree 选项是否显示)+ lastHarness(预选 harness)
+      // + 默认基线 + 分支列表(仅 git 项目需要,worktree=true 时的基线选择器用)。
       const [isGit, lastHarness] = await Promise.all([
         ChatService.IsGitProject(pid),
         ChatService.GetLastHarness(),
       ]);
-      setNewSession({ projectId: pid, isGit, lastHarness });
+      let defaultBaseRef = "";
+      let branches: BranchInfo[] = [];
+      if (isGit) {
+        // 探测失败不算错误:defaultBaseRef 留空,modal 走「必选」态(Route A strict)。
+        const [def, list] = await Promise.all([
+          ChatService.ResolveBaseRefDefault(pid).catch(() => ({ baseRef: "", ok: false })),
+          ChatService.SearchBaseRefs(pid).catch(() => []),
+        ]);
+        defaultBaseRef = def?.ok ? def.baseRef : "";
+        branches = list || [];
+      }
+      setNewSession({ projectId: pid, isGit, lastHarness, defaultBaseRef, branches });
     } catch (e) {
       setError(String(e));
     }
   }, [selectedProjectId]);
 
   // 用户在弹窗确认后真正创建 session。
-  const confirmNewSession = useCallback(async (harness: string, useWorktree: boolean) => {
+  const confirmNewSession = useCallback(async (harness: string, useWorktree: boolean, baseRef: string) => {
     const pid = newSession?.projectId;
     if (!pid) return;
     setNewSession(null);
     try {
       if (pid !== selectedProjectId) await selectProject(pid);
-      const se = await ChatService.CreateSession(pid, "", harness, useWorktree);
+      const se = await ChatService.CreateSession(pid, "", harness, useWorktree, baseRef);
       if (se) {
         setItemsBySession((prev) => ({ ...prev, [se.id]: [] }));
         setStatusBySession((prev) => ({ ...prev, [se.id]: "empty" }));
@@ -1029,7 +1042,7 @@ export default function App() {
     }, 400);
   }, [t]);
 
-  const [mergeResult, setMergeResult] = useState<string | null>(null);
+  const [mergeResults, setMergeResults] = useState<Record<string, string>>({});  // per-session 合并结果(切 session 不会串窗口)
   const [sessionDiff, setSessionDiff] = useState<string | null>(null);
   const [sessionChanges, setSessionChanges] = useState<FileChange[] | null>(null);
   const mergeSession = useCallback(async () => {
@@ -1037,15 +1050,17 @@ export default function App() {
     try {
       const result = await ChatService.MergeSession(selectedSessionId);
       setError(null);
-      setMergeResult(result || t("app.mergeDone"));
-      setTimeout(() => setMergeResult(null), 6000);
+      setMergeResults((prev) => ({ ...prev, [selectedSessionId]: result || t("app.mergeDone") }));
+      const sid = selectedSessionId;
+      setTimeout(() => setMergeResults((prev) => { const n = { ...prev }; delete n[sid]; return n; }), 6000);
       // 合并后刷新 diff(变为"无变更")
-      try { setSessionDiff(await ChatService.SessionDiff(selectedSessionId) || ""); } catch {}
+      try { setSessionDiff(await ChatService.SessionDiff(sid) || ""); } catch {}
     } catch (e) {
       const msg = t("app.mergeFailed", { error: String(e) });
       setError(msg);
-      setMergeResult(msg);
-      setTimeout(() => setMergeResult(null), 8000);
+      setMergeResults((prev) => ({ ...prev, [selectedSessionId]: msg }));
+      const sid = selectedSessionId;
+      setTimeout(() => setMergeResults((prev) => { const n = { ...prev }; delete n[sid]; return n; }), 8000);
     }
   }, [selectedSessionId]);
 
@@ -1309,9 +1324,8 @@ export default function App() {
               onAction={handleComposerAction}
               onRespondPermission={respondPermission}
               onToggleTerminal={toggleTerminalPanel}
-              onRefreshConfig={refreshConfig}
+              mergeResult={mergeResults[selectedSessionId] || null}
               onMerge={mergeSession}
-              mergeResult={mergeResult}
               sessionDiff={sessionDiff}
               queue={queue}
               onInterruptQueue={interruptQueue}
@@ -1337,6 +1351,7 @@ export default function App() {
               configOptions={configOptions}
               livePlan={livePlan}
               onSetConfig={setSessionConfig}
+              onRefreshConfig={refreshConfig}
               hasMore={hasMore}
               loadingMore={loadingMore}
               onLoadMore={() => selectedSessionId && loadMoreMessages(selectedSessionId)}
@@ -1386,8 +1401,9 @@ export default function App() {
             isGitProject={gitByProject[selectedProject?.id ?? ""] ?? false}
             changes={sessionChanges}
             status={status}
+            mergeResult={mergeResults[selectedSessionId] || null}
             branch={branchBySession[selectedSessionId] || activeSession.branch || ""}
-            mergeResult={mergeResult}
+            baseRef={activeSession.baseRef || ""}
             onMerge={mergeSession}
             onStage={stageFiles}
             onUnstage={unstageFiles}
@@ -1436,6 +1452,8 @@ export default function App() {
         harnesses={harnesses}
         isGit={newSession.isGit}
         lastHarness={newSession.lastHarness}
+        defaultBaseRef={newSession.defaultBaseRef}
+        branches={newSession.branches}
         onConfirm={confirmNewSession}
         onCancel={() => setNewSession(null)}
       />

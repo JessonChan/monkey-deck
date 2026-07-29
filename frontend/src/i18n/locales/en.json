@@ -79,7 +79,19 @@
     "shareTitle": "Use project directory",
     "shareDesc": "Sessions share one directory; edits are visible to each other. Good for continuing on the same context.",
     "worktreeTitle": "New isolated branch (worktree)",
-    "worktreeDesc": "Create a dedicated git worktree and branch for this session; sessions don't interfere, can be merged back.",
+    "worktreeDesc": "Create a dedicated git worktree and branch for this session; sessions don't interfere, and changes can be merged back into the base branch.",
+    "baseRef": "Base branch",
+    "baseRefTip": "The new branch grows from this base, and merges back into it (checkout-from = merge-back-to).",
+    "baseRefPlaceholder": "Select a base branch…",
+    "baseRefSearch": "Search branches…",
+    "baseRefEmpty": "No matching branches",
+    "baseRefFilterAll": "All",
+    "baseRefFilterLocal": "Local",
+    "baseRefFilterRemote": "Remote",
+    "baseRefLocal": "local",
+    "baseRefRemote": "remote",
+    "baseRefNote": "New branch md/<id> will be based on {{branch}}; merge goes back to {{branch}}.",
+    "baseRefUnselected": "(unselected)",
     "createBtn": "Create"
   },
   "capability": {
@@ -227,7 +239,8 @@
     "historyHintTip": "Use arrow keys to browse past messages of this session; edit or press Enter to resend",
     "historyBadge": "History {{idx}}/{{total}}",
     "historyBadgeTip": "↑ older · ↓ newer · past latest restores draft",
-    "branchTip": "Current git branch of this chat's working directory",
+    "branchTip": "Current git branch · click to copy name",
+    "branchCopied": "Branch name copied",
     "lineCharCount": "{{lines}} lines · {{chars}} chars",
     "linesFolded": "{{count}} lines folded",
     "longLineTruncated": "{{count}} chars · long line truncated",
@@ -346,7 +359,10 @@
     "noDiff": "No changes",
     "diffFailed": "Load failed: {{error}}",
     "noChanges": "None",
-    "mergeBtn": "Merge into main repo"
+    "mergeBtn": "Merge into main repo",
+    "mergeIntoBase": "Merge into {{branch}}",
+    "mergeTipBase": "Merge this session's branch back into {{branch}} (its base). Only committed changes are merged; uncommitted changes stay in the worktree.",
+    "mergeTipLegacy": "Merge this session's branch into the main repo's current HEAD (legacy session without explicit base)."
   },
   "sidePanel": {
     "files": "Files",

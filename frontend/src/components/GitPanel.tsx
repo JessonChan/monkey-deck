@@ -17,6 +17,7 @@ import { countDiffLines, diffLineCls } from "../lib/diff";
 
 interface Props {
   branch: string;
+  baseRef: string;  // worktree 基线分支(合并目标);空=旧 session → 合到主仓库 HEAD
   changes: FileChange[] | null;
   mergeResult: string | null;
   onMerge: () => void;
@@ -44,9 +45,9 @@ const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
   R: { label: "R", cls: "st-renamed" },
 };
 
-// 源代码管理面板,参考 VS Code SCM:提交信息框 + 提交按钮 + 暂存/工作区两组 + 逐文件操作 + 点击查看 diff。
 export default function GitPanel({
   branch,
+  baseRef,
   changes,
   mergeResult,
   onMerge,
@@ -293,8 +294,15 @@ export default function GitPanel({
         )}
       </Group>
 
-      <button className="merge-btn-full" onClick={onMerge} disabled={busy} data-testid="merge-btn">
-        {t("gitPanel.mergeBtn")}
+      <button
+        className="merge-btn-full"
+        onClick={onMerge}
+        disabled={busy}
+        data-testid="merge-btn"
+        data-tooltip-id="md-tip"
+        data-tooltip-content={baseRef ? t("gitPanel.mergeTipBase", { branch: baseRef }) : t("gitPanel.mergeTipLegacy")}
+      >
+        {baseRef ? t("gitPanel.mergeIntoBase", { branch: baseRef }) : t("gitPanel.mergeBtn")}
       </button>
 
       {mergeResult && (

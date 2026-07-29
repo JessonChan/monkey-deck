@@ -54,6 +54,9 @@ type Session struct {
 	// session 的 git worktree(并行隔离用,§1.4)。空 = 非 git 项目或未建,直接用项目目录。
 	WorktreePath string `json:"worktreePath"`
 	Branch       string `json:"branch"`
+	// BaseRef 基线分支(新建 worktree 时的起点 + 合并时的终点),空=非 worktree 或旧 session。
+	// 显式基线,绝不裸用 HEAD(§1.4 todo/worktree-base-ref-selection.md)。
+	BaseRef      string `json:"baseRef"`
 	// token 用量(最后一次 SessionUsageUpdate 的快照,使重开会话能恢复占比,§1.6)。
 	UsedTokens int64   `json:"usedTokens"`
 	SizeTokens int64   `json:"sizeTokens"`

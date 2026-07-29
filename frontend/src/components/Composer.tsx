@@ -6,7 +6,7 @@ import type { ConfigOption, Mention, ImageAttachment, AudioAttachment, Usage } f
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
-import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, ListPlus, GitBranch, CornerUpLeft } from "lucide-react";
+import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, ListPlus, GitBranch, Check, CornerUpLeft } from "lucide-react";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -128,6 +128,11 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   // IME 合成追踪:compositionStart/End 手动记录,配合 isComposing + keyCode===229 三重保险,
   // 彻底防中文输入法选词确认的 Enter 被误判为发送(部分 macOS IME 下 isComposing 不可靠)。
   const composingRef = useRef(false);
+  // 分支 chip 点击复制分支名(与项目内 copy 范式一致:1200ms copied 反馈)。
+  const [branchCopied, setBranchCopied] = useState(false);
+  const copyBranch = async () => {
+    try { await navigator.clipboard.writeText(branch); setBranchCopied(true); setTimeout(() => setBranchCopied(false), 1200); } catch { /* noop */ }
+  };
 
   // --- 长文本折叠(展示态)---
   // isLong:超过行/字符阈值即为长文本;collapsed:是否折叠成紧凑预览块。
@@ -731,19 +736,21 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                 </button>
               )
             )}
-            {/* 当前分支:与右上用量/历史并列的只读指示。空(非 git / 未取到)不渲染。
+            {/* 当前分支:与右上用量/历史并列的指示,点击复制分支名。空(非 git / 未取到)不渲染。
                 §4.5 用 react-tooltip(md-tip),禁原生 title;§4.4 不裸露字段名。 */}
             {branch && (
-              <span
-                className="compose-branch"
+              <button
+                type="button"
+                className={`compose-branch${branchCopied ? " copied" : ""}`}
                 data-testid="composer-branch"
+                onClick={copyBranch}
                 data-tooltip-id="md-tip"
-                data-tooltip-content={t("composer.branchTip")}
+                data-tooltip-content={branchCopied ? t("composer.branchCopied") : t("composer.branchTip")}
                 data-tooltip-place="top"
               >
-                <GitBranch size={11} />
+                {branchCopied ? <Check size={11} /> : <GitBranch size={11} />}
                 <span className="compose-branch-name">{branch}</span>
-              </span>
+              </button>
             )}
           </div>
           <div className="compose-right">

@@ -1,7 +1,7 @@
 # TODO:worktree 基线分支选择(显式基线,不回退 HEAD)
 
-> 状态:**设计已完成,待开工**。本文是设计契约(AGENTS.md §6.1 文档先于代码)。
-> 创建:2026-07-26。开工前先把 §9 的待定项拍板。
+> 状态:**开工中(2026-07-28)**。本文是设计契约(AGENTS.md §6.1 文档先于代码)。
+> 创建:2026-07-26;review 修正 + 开工:2026-07-28。§12 待定项已拍板(见各条)。
 
 ---
 
@@ -96,10 +96,10 @@ target = 本地分支(从 `BaseRef` 推导;若 `BaseRef` 是远程跟踪 ref →
 | 主仓库(proj.Path)在 target 且工作区干净 | 直接在主仓库 `merge --no-ff -m msg branch`(现有语义) |
 | 主仓库在 target 但脏 | 报错"主仓库工作区不干净,先提交/丢弃" |
 | 主仓库在别的分支(target 空闲) | 建 target 的**临时 worktree**,在其中 merge 后删除;主仓库不动 |
-| target 被另一个 session 的 worktree 占用 | 报错"基线分支正被会话 <Y> 占用" |
+| target 在主仓库之外被 checkout | 报错"基线分支正被检出" |
 
-- 冲突:保留现有 `merge --abort` + `conflictedFiles` → `MergeConflictError`(worktree.go:140-144),主仓库/临时 worktree 始终干净。
-- 保留 `--no-ff -m`(session 标题作 merge commit 信息,见 chat.go:651 `mergeCommitMessage`)。
+- 临时 worktree 路径**必须 `defer` 删除**(无论成功/冲突/失败),单测覆盖「merge 冲突时临时 worktree 被清理」。
+- 保留 `--no-ff -m`(session 标题作 merge commit 信息,见 chat.go:669 `mergeCommitMessage`)。
 - `MergeSession`(chat.go:602)改调 `MergeBranchInto(proj.Path, se.Branch, se.BaseRef, msg)`。
 
 ---
@@ -109,7 +109,7 @@ target = 本地分支(从 `BaseRef` 推导;若 `BaseRef` 是远程跟踪 ref →
 | 改动 | 位置 |
 |---|---|
 | `Session.BaseRef string`(基线分支,空=非 worktree 或旧 session) | `internal/store/store.go:47` Session 结构 |
-| `base_ref TEXT NOT NULL DEFAULT ''` | 新 `migrations/0009_session_base_ref.sql` |
+| `base_ref TEXT NOT NULL DEFAULT ''` | 新 `migrations/0013_session_base_ref.sql` |
 | `sessionColumns` / `scanSession` 加 base_ref;新增 `SetSessionBaseRef` | `internal/store/sessions.go` |
 
 - **旧 session**(baseRef 空):migration backfill 空;merge 时 baseRef 空 → 沿用旧行为(合到主仓库 HEAD)+ 一次性迁移提示;新 session 才受控。
@@ -236,23 +236,30 @@ sequenceDiagram
 
 ---
 
-## 12. 待定(开工前拍板)
+## 12. 待定(已拍板 2026-07-28)
 
-1. **`--no-ff` merge commit 保留?**(推荐:是——session 边界 + AI 标题有价值;代价:非 FF 必须有 worktree 承载 merge)
-2. **"target 被其他 session 的 worktree 占用" → 拒绝?**(推荐:是,明确提示是哪个会话)
-3. **主仓库脏且在 target → 拒绝?**(推荐:是)
-4. **项目级 base pin**(`proj.WorktreeBaseRef`):每次预选探测默认 vs 记住"此项目总从 develop 建"。(推荐:先只做"每次预选默认",pin 留作 phase 2)
+1. **`--no-ff` merge commit 保留?** → **是**。session 边界 + AI 标题有价值,且是现状,改动成本为零。
+2. **"target 被其他 session 的 worktree 占用" → 拒绝?** → **v1 不做专门检测**(砍掉)。app 只会创建 `md/<id>` 分支的 worktree,基线分支(main/develop)永远不会被 session worktree 占用;为不可能场景写跨 session 遍历检测违反 KISS。降级为:`worktree list --porcelain` 发现 target 在主仓库之外被 checkout 才报错(§6.2)。
+3. **主仓库脏且在 target → 拒绝?** → **是**。脏工作区 merge 必爆,必须拒绝。
+4. **项目级 base pin**(`proj.WorktreeBaseRef`)→ **phase 2**。v1 只做"每次预选默认",pin 留作后续。
 
 ---
 
 ## 13. 改动面(落地时)
 
-- `internal/worktree/worktree.go`:+`ResolveDefaultBaseRef` / `ResolveAddBaseRef` / `ListBranches` / `MergeBranchInto`;`Create` 加 `--no-track`。
-- `internal/chat/chat.go`:`CreateSession` 签名 + 逻辑;+`ResolveBaseRefDefault` / `SearchBaseRefs` binding;`MergeSession` 改 target。
-- `internal/store/{store,sessions}.go`:+`BaseRef` 字段 / 列 / 方法。
-- `migrations/0009_session_base_ref.sql`。
-- `frontend/src/components/NewSessionModal.tsx` + `App.tsx`。
-- `wails3 gen bindings`(§0.5)。
-- i18n zh/en。
-- 测试:`worktree_test`(探测/消歧/list/merge-into)、`chat` CreateSession/MergeSession、`NewSessionModal` mount。
-- `docs/worklog/` 新条目(§0.3)。
+- `internal/worktree/worktree.go`:
+  - +`ResolveDefaultBaseRef` / `ResolveAddBaseRef` / `ListBranches` / `MergeBranchInto`
+  - `Create` 加 `--no-track`
+  - **`DiffStat` / `BranchLog` 增加可选 base 参数**(review 补漏:现状 base 是主仓库 HEAD,显式基线后主仓库 HEAD 会飘,须改用 `BaseRef...branch` 语义)
+- `internal/chat/chat.go`:
+  - `CreateSession`(chat.go:544)签名加 `baseRef` + 逻辑
+  - `MergeSession`(chat.go:620)改调 `MergeBranchInto(target=se.BaseRef)`;baseRef 空(旧 session)沿用旧行为
+  - `SessionDiff`/`SessionChanges`(chat.go:735-736)对有 BaseRef 的 session 传 `se.BaseRef`
+  - +`ResolveBaseRefDefault` / `SearchBaseRefs` binding
+- `internal/store/{store,sessions}.go`:+`BaseRef` 字段 / 列 / `SetSessionBaseRef` 方法;`sessionColumns`/`scanSession`/insert 加 base_ref
+- `migrations/0013_session_base_ref.sql`
+- `frontend/src/components/NewSessionModal.tsx` + `App.tsx`
+- `wails3 gen bindings`(§0.5)
+- i18n zh/en
+- 测试:`worktree_test`(探测/消歧/list/merge-into/临时 worktree 清理)、`chat` CreateSession/MergeSession、`NewSessionModal` mount
+- `docs/worklog/` 新条目(§0.3)

@@ -1125,16 +1125,19 @@ input, textarea { font-family: inherit; }
 }
 @keyframes compose-history-badge-in { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
 
-/* ─── Composer 当前分支指示(只读 chip)─── */
-/* compose-tools 里的只读分支指示;空(非 git / 未取到)不渲染,故不占位。
-   视觉与 history-chip 同族(mono + elev-2 底 + sep 边),但不可点 → 默认色、默认光标。 */
+/* ─── Composer 当前分支指示(点击复制 chip)─── */
+/* compose-tools 里的分支指示;空(非 git / 未取到)不渲染,故不占位。
+   视觉与 history-chip 同族(mono + elev-2 底 + sep 边),可点击复制分支名 → pointer + hover + copied 反馈。 */
 .compose-branch {
   display: inline-flex; align-items: center; gap: 4px;
   font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
   background: var(--elev-2); border: 1px solid var(--sep);
   padding: 2px 7px; border-radius: 5px; height: 20px; margin-left: 4px;
-  max-width: 180px;
+  max-width: 180px; cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
+.compose-branch:hover { color: var(--text-2); border-color: var(--text-4); background: var(--hover); }
+.compose-branch.copied { color: var(--green); border-color: var(--green); }
 .compose-branch-name {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
@@ -2016,6 +2019,72 @@ input, textarea { font-family: inherit; }
 .ns-worktree-text { display: flex; flex-direction: column; gap: 3px; }
 .ns-worktree-title { font-size: 13px; font-weight: 600; color: var(--text); }
 .ns-worktree-desc { font-size: 11.5px; color: var(--text-2); line-height: 1.4; }
+
+/* ─── NewSessionModal 基线分支选择器(轻量 CSS/DOM 自研 combobox,§4.6) ─── */
+.ns-label-hint {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; margin-left: 4px; border-radius: 50%;
+  font-size: 10px; color: var(--text-3); background: var(--elev-2); border: 1px solid var(--sep);
+  cursor: help;
+}
+.ns-baseref { position: relative; }
+.ns-baseref-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; padding: 8px 11px; border-radius: 8px; cursor: pointer; text-align: left;
+  background: var(--bg); border: 1px solid var(--sep); transition: border-color 0.12s;
+  font-family: var(--mono); font-size: 12.5px;
+}
+.ns-baseref-trigger:hover { border-color: var(--text-4); }
+.ns-baseref-value { color: var(--text); display: inline-flex; align-items: center; gap: 5px; }
+.ns-baseref-placeholder { color: var(--text-3); }
+.ns-baseref-default { color: var(--amber); }
+.ns-baseref-caret { color: var(--text-3); font-size: 10px; }
+.ns-baseref-dropdown {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 10;
+  background: var(--elev); border: 1px solid var(--sep); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25); overflow: hidden;
+  display: flex; flex-direction: column; max-height: 240px;
+}
+.ns-baseref-list { overflow-y: auto; }
+.ns-baseref-empty { padding: 10px; font-size: 11.5px; color: var(--text-3); text-align: center; }
+.ns-baseref-option {
+  display: flex; flex-direction: column; gap: 2px;
+  width: 100%; padding: 7px 11px; cursor: pointer; text-align: left;
+  background: transparent; border: none; transition: background 0.1s;
+}
+.ns-baseref-option:hover { background: var(--hover); }
+.ns-baseref-option.active { background: rgba(10, 132, 255, 0.1); }
+.ns-baseref-row1 { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.ns-baseref-row2 { display: flex; align-items: center; gap: 6px; padding-left: 17px; }
+.ns-baseref-name {
+  font-family: var(--mono); font-size: 12px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ns-baseref-date { font-family: var(--mono); font-size: 10px; color: var(--text-3); }
+.ns-baseref-kind {
+  font-size: 9px; padding: 1px 5px; border-radius: 3px; flex-shrink: 0;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.ns-baseref-kind.kind-local { color: var(--accent-2); background: rgba(10,132,255,0.1); }
+.ns-baseref-kind.kind-remote { color: var(--text-3); background: var(--elev-2); }
+/* toolbar:搜索框 + filter chip 组同一行(空间小,复用行高) */
+.ns-baseref-toolbar {
+  display: flex; align-items: center; gap: 6px; padding: 7px 9px;
+  border-bottom: 1px solid var(--sep); background: var(--bg);
+}
+.ns-baseref-toolbar .ns-baseref-search {
+  flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--sep); border-radius: 5px;
+  background: var(--bg); color: var(--text); font-size: 12px; outline: none;
+}
+.ns-baseref-toolbar .ns-baseref-search:focus { border-color: var(--accent); }
+.ns-baseref-filters { display: inline-flex; gap: 2px; flex-shrink: 0; background: var(--elev-2); border-radius: 5px; padding: 1px; }
+.ns-baseref-filter {
+  padding: 3px 8px; font-size: 10.5px; border: none; border-radius: 4px;
+  background: transparent; color: var(--text-3); cursor: pointer; transition: all 0.1s;
+}
+.ns-baseref-filter:hover { color: var(--text-2); }
+.ns-baseref-filter.active { background: var(--elev); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+.ns-baseref-note { font-size: 11px; color: var(--text-3); margin-top: 2px; line-height: 1.4; }
 
 /* ═══ 集成终端面板 ═══ */
 .main-vertical { width: 100%; height: 100%; flex: 1; min-height: 0; }

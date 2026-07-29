@@ -44,7 +44,7 @@ func TestCreateSessionWorktreeUnderCachesDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	se, err := svc.CreateSession(proj.ID, "test", "", true)
+	se, err := svc.CreateSession(proj.ID, "test", "", true, "")
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}

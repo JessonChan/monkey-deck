@@ -15,6 +15,7 @@ interface Props {
   // branch=当前分支名(供 GitPanel 展示用, GitPanel 不用于判定 SCM 可见性)。
   isGitProject: boolean;
   branch: string;
+  baseRef: string;  // 透传给 GitPanel:合并目标(空=旧 session 合到主仓库 HEAD)
   mergeResult: string | null;
   onMerge: () => void;
   onStage: (paths: string[]) => Promise<void>;
@@ -81,6 +82,7 @@ export default function SidePanel(props: Props) {
           <GitPanel
             embedded
             branch={props.branch}
+            baseRef={props.baseRef}
             changes={props.changes}
             mergeResult={props.mergeResult}
             onMerge={props.onMerge}

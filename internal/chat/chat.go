@@ -541,7 +541,10 @@ func (s *ChatService) SetSessionPinned(sessionID string, pinned bool) error {
 
 // CreateSession 新建 session。harness 指定使用的 agent(omp/opencode,空=omp 默认);
 // useWorktree=true 时为 git 项目建独立 worktree+分支(并行隔离),否则直接用项目目录(§1.4)。
-func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorktree bool) (*store.Session, error) {
+// baseRef:worktree 的基线分支(本地分支名,如 main/develop);useWorktree=true 时必填——
+// 空则后端探测默认(探测不到返回 errBaseRefRequired,Route A strict 不回退 HEAD);
+// useWorktree=false 时忽略。
+func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorktree bool, baseRef string) (*store.Session, error) {
 	proj, err := s.st.GetProject(s.ctx, projectID)
 	if err != nil {
 		return nil, err
@@ -564,18 +567,37 @@ func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorkt
 	}
 	// git 项目 + 用户选择建 worktree:为该 session 建独立 worktree+分支(并行隔离;失败降级用项目目录)。
 	if useWorktree && worktree.IsRepo(proj.Path) {
+		// 基线解析(Route A strict):baseRef 空 → 探测默认;探测不到 → 报错,绝不回退 HEAD。
+		resolvedBase := baseRef
+		if resolvedBase == "" {
+			resolvedBase, err = worktree.ResolveDefaultBaseRef(proj.Path)
+			if err != nil {
+				return nil, errBaseRefRequired
+			}
+		}
+		effective := worktree.ResolveAddBaseRef(proj.Path, resolvedBase)
 		short := se.ID
 		if len(short) > 8 {
 			short = short[:8]
 		}
 		branch := "md/" + short
 		wtPath := filepath.Join(s.cfg.CachesDir, "worktrees", proj.ID, se.ID)
-		if err := worktree.Create(proj.Path, branch, wtPath, ""); err != nil {
+		if err := worktree.Create(proj.Path, branch, wtPath, effective); err != nil {
 			slog.Warn("create session worktree failed, fallback to project dir", "err", err)
 		} else if err := s.st.SetSessionWorktree(s.ctx, se.ID, wtPath, branch); err != nil {
 			slog.Warn("persist session worktree failed", "err", err)
 		} else {
 			se.WorktreePath, se.Branch = wtPath, branch
+			// 落基线分支(存用户选的短名,而非消歧后的完整 ref;展示用短名更友好)。
+			if err := s.st.SetSessionBaseRef(s.ctx, se.ID, resolvedBase); err != nil {
+				slog.Warn("persist session base ref failed", "err", err)
+			} else {
+				se.BaseRef = resolvedBase
+				// 记住本次选择(per-project),下次新建该项目的对话默认选它(§5.3 本地是真相来源)。
+				if err := s.st.SetSetting(s.ctx, "baseRef:"+projectID, resolvedBase); err != nil {
+					slog.Warn("persist last baseRef", "err", err)
+				}
+			}
 		}
 	}
 	// B 方案:不在创建时 spawn。用户切到该 session 时 App.tsx 的 openSession 回调调
@@ -635,7 +657,24 @@ func (s *ChatService) MergeSession(sessionID string) (string, error) {
 	if proj == nil {
 		return "", fmt.Errorf("project not found")
 	}
-	mergeOut, err := worktree.MergeBranch(proj.Path, se.Branch, mergeCommitMessage(se.Branch, se.Title))
+	// 合并前检测:branch 是否有领先基线的 commit。无则跳过 merge(不造空 merge commit)。
+	// 用 BranchLog(base=BaseRef 或主仓库 HEAD):空 = branch 无领先 = 无可合并内容。
+	var logBase string
+	if se.BaseRef != "" {
+		logBase = se.BaseRef
+	}
+	aheadLog, _ := worktree.BranchLog(proj.Path, se.Branch, logBase)
+	if strings.TrimSpace(aheadLog) == "" {
+		return "✅ 无新变更:该分支没有领先基线的新提交(可能已合并过),跳过合并。", nil
+	}
+	// 合回基线分支:有显式 BaseRef(新 session)用 MergeBranchInto(target=BaseRef);
+	// baseRef 空(旧 session / 迁移前)沿用旧行为——合到主仓库当前 HEAD。
+	var mergeOut string
+	if se.BaseRef != "" {
+		mergeOut, err = worktree.MergeBranchInto(proj.Path, se.Branch, se.BaseRef, mergeCommitMessage(se.Branch, se.Title))
+	} else {
+		mergeOut, err = worktree.MergeBranch(proj.Path, se.Branch, mergeCommitMessage(se.Branch, se.Title))
+	}
 	if err != nil {
 		var conflictErr *worktree.MergeConflictError
 		if errors.As(err, &conflictErr) {
@@ -732,8 +771,8 @@ func (s *ChatService) SessionDiff(sessionID string) (string, error) {
 		return sb.String(), nil
 	}
 	// 有 worktree:展示分支相对主仓库的变更摘要
-	stat, _ := worktree.DiffStat(proj.Path, se.Branch)
-	log, _ := worktree.BranchLog(proj.Path, se.Branch)
+	stat, _ := worktree.DiffStat(proj.Path, se.Branch, se.BaseRef)
+	log, _ := worktree.BranchLog(proj.Path, se.Branch, se.BaseRef)
 	uncommitted, _ := worktree.UncommittedStat(se.WorktreePath)
 	var sb strings.Builder
 	if log != "" {
@@ -2103,6 +2142,9 @@ func (s *ChatService) isBusy(sessionID string) bool {
 
 // errSCMBusy turn 进行中操作源代码管理时返回。
 var errSCMBusy = errors.New("对话进行中,请等回合结束再操作源代码管理")
+// errBaseRefRequired useWorktree=true 但探测不到默认基线分支(Route A strict:不回退 HEAD)。
+// 前端 NewSessionModal 预选失败时本已拦住;这是后端兜底,防止前端透传空 baseRef 绕过校验。
+var errBaseRefRequired = errors.New("未选择基线分支,且仓库未探测到默认分支(main/master),请手动选择")
 
 // --- 配置查询(前端设置页用)---
 
@@ -2645,6 +2687,46 @@ func (s *ChatService) IsGitProject(projectID string) (bool, error) {
 		return false, fmt.Errorf("project not found: %s", projectID)
 	}
 	return worktree.IsRepo(proj.Path), nil
+}
+
+// ResolveBaseRefDefault 返回 NewSessionModal 的默认基线分支(预选 + 星标 + 置顶)。
+// 优先级:① 记住的上次选择(per-project setting `baseRef:<id>`),验证分支仍存在 → 用它;
+// ② 探测仓库默认(origin/HEAD → main/master probe);③ 都没有 → Ok=false(必选,Route A strict)。
+// 「记住上次选择」让重复新建零摩擦;per-project 是因为不同项目基线不同(A=main,B=develop)。
+func (s *ChatService) ResolveBaseRefDefault(projectID string) (worktree.DefaultBaseRef, error) {
+	proj, err := s.st.GetProject(s.ctx, projectID)
+	if err != nil {
+		return worktree.DefaultBaseRef{}, err
+	}
+	if proj == nil {
+		return worktree.DefaultBaseRef{}, fmt.Errorf("project not found: %s", projectID)
+	}
+	// ① 上次选择:仍存在就用它(用户最近一次的意图最可信)。
+	if last, _ := s.st.GetSetting(s.ctx, "baseRef:"+projectID); last != "" {
+		if worktree.RefExists(proj.Path, last) {
+			return worktree.DefaultBaseRef{BaseRef: last, Ok: true}, nil
+		}
+	}
+	// ② 探测默认。
+	name, err := worktree.ResolveDefaultBaseRef(proj.Path)
+	if err != nil {
+		// 探测不到不算错误:返回 Ok=false 让前端走「必选」态。
+		return worktree.DefaultBaseRef{BaseRef: "", Ok: false}, nil
+	}
+	return worktree.DefaultBaseRef{BaseRef: name, Ok: true}, nil
+}
+
+// SearchBaseRefs 返回项目的本地+远程跟踪分支列表(供 NewSessionModal 基线选择器一次性拉取 + 前端过滤)。
+// 排除 */HEAD 伪 ref,按 committerdate 倒序,封顶 200 条。todo §4.3。
+func (s *ChatService) SearchBaseRefs(projectID string) ([]worktree.BranchInfo, error) {
+	proj, err := s.st.GetProject(s.ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if proj == nil {
+		return nil, fmt.Errorf("project not found: %s", projectID)
+	}
+	return worktree.ListBranches(proj.Path)
 }
 
 // GetLastHarness 返回上次新建对话选择的 harness(下次新建对话默认选中)。无则空串,前端自行回退首个。

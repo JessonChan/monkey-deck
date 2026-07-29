@@ -301,3 +301,381 @@ func TestStatusRenameSpacesAndDiff(t *testing.T) {
 		t.Fatalf("FileDiff staged wrong:\n%s", d3)
 	}
 }
+
+// initRepoWithBranch 初始化临时仓库,在指定分支名上做首次提交,返回仓库根路径。
+func initRepoWithBranch(t *testing.T, branch string) string {
+	t.Helper()
+	root := t.TempDir()
+	// -b 指定初始分支名(新版 git 支持;旧版回退 init + checkout)。
+	if err := runGit(root, "init", "-q", "-b", branch, root); err != nil {
+		must(t, runGit(root, "init", "-q", root))
+		must(t, runGit(root, "checkout", "-q", "-b", branch))
+	}
+	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("a"), 0o644))
+	must(t, runGit(root, "add", "."))
+	must(t, runGit(root, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init"))
+	return root
+}
+
+// headBranch 返回仓库当前 HEAD 分支短名(detached 返回空)。
+func headBranch(t *testing.T, root string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	must(t, err)
+	return strings.TrimSpace(string(out))
+}
+
+// TestResolveDefaultBaseRef 探测默认基线分支:main / master 都能命中,无 main/master 的空仓库报 ErrNoBaseRef。
+func TestResolveDefaultBaseRef(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	for _, name := range []string{"main", "master"} {
+		t.Run(name, func(t *testing.T) {
+			root := initRepoWithBranch(t, name)
+			got, err := ResolveDefaultBaseRef(root)
+			if err != nil {
+				t.Fatalf("ResolveDefaultBaseRef: %v", err)
+			}
+			if got != name {
+				t.Fatalf("got %q, want %q", got, name)
+			}
+		})
+	}
+	// 空仓库(无 main/master,只有 develop)→ ErrNoBaseRef(Route A strict 不回退 HEAD)。
+	t.Run("no_main_master", func(t *testing.T) {
+		root := initRepoWithBranch(t, "develop")
+		_, err := ResolveDefaultBaseRef(root)
+		if !errors.Is(err, ErrNoBaseRef) {
+			t.Fatalf("got err=%v, want ErrNoBaseRef", err)
+		}
+	})
+}
+
+// TestResolveAddBaseRef 消歧:纯名→refs/heads;含/→先 refs/remotes 再 refs/heads;refs/ 前缀原样;不存在回退原串。
+func TestResolveAddBaseRef(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := initRepoWithBranch(t, "main")
+	// 建一个本地分支 develop。
+	must(t, runGit(root, "branch", "develop"))
+
+	// 纯名 main → refs/heads/main(存在)
+	if got := ResolveAddBaseRef(root, "main"); got != "refs/heads/main" {
+		t.Fatalf("pure name: got %q", got)
+	}
+	// 不存在的纯名 → 回退原串
+	if got := ResolveAddBaseRef(root, "nope"); got != "nope" {
+		t.Fatalf("missing name: got %q", got)
+	}
+	// refs/ 前缀 → 原样
+	if got := ResolveAddBaseRef(root, "refs/heads/main"); got != "refs/heads/main" {
+		t.Fatalf("refs prefix: got %q", got)
+	}
+	// 含 / 的远程跟踪形式(本地无 origin/main)→ 回退到 refs/heads(origin/main 不存在,refs/heads/origin/main 也不存在)
+	// 这里主要验证不 panic 且有合理返回。
+	_ = ResolveAddBaseRef(root, "origin/main")
+}
+
+// TestListBranches 列出本地+远程分支,排除 */HEAD。
+func TestListBranches(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := initRepoWithBranch(t, "main")
+	must(t, runGit(root, "branch", "develop"))
+	must(t, runGit(root, "branch", "feature/x"))
+
+	got, err := ListBranches(root)
+	must(t, err)
+	names := map[string]bool{}
+	for _, b := range got {
+		if strings.HasSuffix(b.Name, "/HEAD") {
+			t.Fatalf("HEAD pseudo-ref not excluded: %+v", b)
+		}
+		names[b.Name] = true
+	}
+	for _, want := range []string{"main", "develop", "feature/x"} {
+		if !names[want] {
+			t.Fatalf("branch %q not listed: %+v", want, got)
+		}
+	}
+}
+
+// TestMergeBranchInto_MainOnTarget 主仓库就在 target 分支且干净 → 直接 merge。
+func TestMergeBranchInto_MainOnTarget(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := initRepoWithBranch(t, "main")
+	target := headBranch(t, root) // = main
+
+	// 建 worktree 分支并提交改动
+	wt := filepath.Join(t.TempDir(), "wt")
+	branch := "md/sess1"
+	must(t, Create(root, branch, wt, "main"))
+	must(t, os.WriteFile(filepath.Join(wt, "a.txt"), []byte("changed"), 0o644))
+	must(t, runGit(wt, "add", "."))
+	must(t, runGit(wt, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "change"))
+
+	// 主仓库当前在 main 且干净 → merge 直接进主仓库
+	out, err := MergeBranchInto(root, branch, target, "merge test")
+	must(t, err)
+	if !strings.Contains(out, "changed") && out != "" {
+		// merge 输出可能含文件名统计;只要没报错且 a.txt 更新即成功
+	}
+	b, _ := os.ReadFile(filepath.Join(root, "a.txt"))
+	if string(b) != "changed" {
+		t.Fatalf("merge into main(target) did not apply: %q", b)
+	}
+}
+
+// TestMergeBranchInto_TempWorktree 主仓库在别的分支(target 空闲)→ 建临时 worktree merge,主仓库不动。
+// 这是 review 点名的最复杂路径:验证合并生效 + 临时 worktree 被清理。
+func TestMergeBranchInto_TempWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := initRepoWithBranch(t, "main")
+	target := "main"
+
+	// 建 worktree 分支并提交改动
+	wt := filepath.Join(t.TempDir(), "wt")
+	branch := "md/sess2"
+	must(t, Create(root, branch, wt, target))
+	must(t, os.WriteFile(filepath.Join(wt, "a.txt"), []byte("changed-in-temp"), 0o644))
+	must(t, runGit(wt, "add", "."))
+	must(t, runGit(wt, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "change"))
+
+	// 主仓库切到别的分支(target=main 空闲)
+	must(t, runGit(root, "checkout", "-q", "-b", "other-work"))
+
+	// 合并:target=main 空闲 → 走临时 worktree 路径
+	_, err := MergeBranchInto(root, branch, target, "merge via temp worktree")
+	must(t, err)
+
+	// main 分支应已包含改动。checkout main 验证。
+	must(t, runGit(root, "checkout", "-q", "main"))
+	b, _ := os.ReadFile(filepath.Join(root, "a.txt"))
+	if string(b) != "changed-in-temp" {
+		t.Fatalf("temp-worktree merge did not apply to main: %q", b)
+	}
+
+	// 临时 worktree 必被清理(review 重点):worktree list 不应残留 md-merge-* 临时项。
+	listOut, err := exec.Command("git", "-C", root, "worktree", "list", "--porcelain").Output()
+	must(t, err)
+	if strings.Contains(string(listOut), "md-merge-") {
+		t.Fatalf("temp worktree not cleaned up:\n%s", listOut)
+	}
+}
+
+// TestMergeBranchInto_ConflictCleansTempWorktree review 重点:merge 冲突时临时 worktree 也必须被清理。
+func TestMergeBranchInto_ConflictCleansTempWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := initRepoWithBranch(t, "main")
+	target := "main"
+	// 先建 session worktree,基于【原始 main = "a"】(此时 main 还没前进)。
+	// 两边都从 "a" 岔出改同一文件 → 才会真冲突。
+	wt := filepath.Join(t.TempDir(), "wt")
+	branch := "md/sess3"
+	must(t, Create(root, branch, wt, target))
+	must(t, os.WriteFile(filepath.Join(wt, "a.txt"), []byte("sess-version"), 0o644))
+	must(t, runGit(wt, "add", "."))
+	must(t, runGit(wt, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "sess change"))
+
+	// 再让 main 前进:在主仓库 checkout main,改同一文件为不同内容 → 两边发散。
+	must(t, runGit(root, "checkout", "-q", "main"))
+	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("main-version"), 0o644))
+	must(t, runGit(root, "add", "."))
+	must(t, runGit(root, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "main change"))
+	// 切到别的分支使 main 空闲 → MergeBranchInto 走临时 worktree 路径。
+	must(t, runGit(root, "checkout", "-q", "-b", "other"))
+
+
+	_, err := MergeBranchInto(root, branch, target, "conflict merge")
+	if err == nil {
+		t.Fatal("expected conflict error, got nil")
+	}
+	// 应是 MergeConflictError
+	var ce *MergeConflictError
+	if !errors.As(err, &ce) {
+		t.Fatalf("expected MergeConflictError, got %T: %v", err, err)
+	}
+	if len(ce.Files) == 0 {
+		t.Fatal("conflict error has no files")
+	}
+
+	// review 核心:即使冲突,临时 worktree 也必须被清理
+	listOut, err := exec.Command("git", "-C", root, "worktree", "list", "--porcelain").Output()
+	must(t, err)
+	if strings.Contains(string(listOut), "md-merge-") {
+		t.Fatalf("temp worktree leaked after conflict:\n%s", listOut)
+	}
+}
+
+// TestPreflightMerge_NoConflict 无冲突:ok=true, conflicts=nil。
+func TestPreflightMerge_NoConflict(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := initRepoWithBranch(t, "main")
+	// session 分支加个新文件(不与 main 冲突)
+	wt := filepath.Join(t.TempDir(), "wt")
+	must(t, Create(root, "md/pf1", wt, "main"))
+	must(t, os.WriteFile(filepath.Join(wt, "new.txt"), []byte("x"), 0o644))
+	must(t, runGit(wt, "add", "."))
+	must(t, runGit(wt, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "add"))
+
+	conflicts, ok, err := PreflightMerge(root, "main", "md/pf1")
+	must(t, err)
+	if !ok {
+		t.Skip("git < 2.38, --write-tree not supported")
+	}
+	if len(conflicts) != 0 {
+		t.Fatalf("expected no conflicts, got %v", conflicts)
+	}
+}
+
+// TestPreflightMerge_HasConflict 有冲突:ok=true, conflicts 含冲突文件(去重)。
+func TestPreflightMerge_HasConflict(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := initRepoWithBranch(t, "main")
+	// session 分支基于 main 改 a.txt
+	wt := filepath.Join(t.TempDir(), "wt")
+	must(t, Create(root, "md/pf2", wt, "main"))
+	must(t, os.WriteFile(filepath.Join(wt, "a.txt"), []byte("sess-version"), 0o644))
+	must(t, runGit(wt, "add", "."))
+	must(t, runGit(wt, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "sess"))
+	// main 前进:改同一文件不同内容 → 冲突
+	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("main-version"), 0o644))
+	must(t, runGit(root, "add", "."))
+	must(t, runGit(root, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "main"))
+
+	conflicts, ok, err := PreflightMerge(root, "main", "md/pf2")
+	must(t, err)
+	if !ok {
+		t.Skip("git < 2.38, --write-tree not supported")
+	}
+	if len(conflicts) == 0 {
+		t.Fatal("expected conflicts, got none")
+	}
+	found := false
+	for _, f := range conflicts {
+		if f == "a.txt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a.txt not in conflicts: %v", conflicts)
+	}
+	// 去重验证:一个文件冲突,conflicts 不应重复 a.txt
+	count := 0
+	for _, f := range conflicts {
+		if f == "a.txt" {
+			count++
+		}
+	}
+	if count > 1 {
+		t.Fatalf("a.txt duplicated in conflicts: %v", conflicts)
+	}
+}
+
+// TestPreflightMerge_IntegrationWithMergeBranchInto 预检挡住冲突:MergeBranchInto 有冲突时
+// 不发起合并(返回 MergeConflictError),临时 worktree 不被创建。
+func TestPreflightMerge_IntegrationWithMergeBranchInto(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := initRepoWithBranch(t, "main")
+	target := "main"
+	// 主仓库切走使 main 空闲(走临时 worktree 路径,验证预检挡在它之前)
+	must(t, runGit(root, "checkout", "-q", "-b", "other"))
+	// session 分支改 a.txt
+	wt := filepath.Join(t.TempDir(), "wt")
+	branch := "md/pf3"
+	must(t, Create(root, branch, wt, target))
+	must(t, os.WriteFile(filepath.Join(wt, "a.txt"), []byte("sess"), 0o644))
+	must(t, runGit(wt, "add", "."))
+	must(t, runGit(wt, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "sess"))
+	// main 前进改同文件 → 冲突(checkout main 改完切回 other)
+	must(t, runGit(root, "checkout", "-q", "main"))
+	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("main"), 0o644))
+	must(t, runGit(root, "add", "."))
+	must(t, runGit(root, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "main"))
+	must(t, runGit(root, "checkout", "-q", "other"))
+
+	_, err := MergeBranchInto(root, branch, target, "should not merge")
+	if err == nil {
+		t.Fatal("expected conflict error, got nil")
+	}
+	var ce *MergeConflictError
+	if !errors.As(err, &ce) {
+		t.Fatalf("expected MergeConflictError, got %T: %v", err, err)
+	}
+	// 预检挡住:不应创建临时 worktree(md-merge-*)。
+	listOut, _ := exec.Command("git", "-C", root, "worktree", "list", "--porcelain").Output()
+	if strings.Contains(string(listOut), "md-merge-") {
+		t.Fatalf("preflight should prevent temp worktree creation:\n%s", listOut)
+	}
+}
+
+// TestMergeBranchInto_TargetOccupiedByWorktree 基线分支被另一个 worktree 检出时,
+// 直接在该 worktree 里 merge(不再报错挡住)。场景:session B 基线 = session A 的 md/ 分支。
+func TestMergeBranchInto_TargetOccupiedByWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := initRepoWithBranch(t, "main")
+	// session A:建在 main 上,分支 md/aaa(worktree 占用 md/aaa)
+	wtA := filepath.Join(t.TempDir(), "wtA")
+	must(t, Create(root, "md/aaa", wtA, "main"))
+	// 在 md/aaa 上提交改动(成为后续 session B 的基线内容)
+	must(t, os.WriteFile(filepath.Join(wtA, "shared.txt"), []byte("from-aaa"), 0o644))
+	must(t, runGit(wtA, "add", "."))
+	must(t, runGit(wtA, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "aaa work"))
+	// session B:基线 = md/aaa(用户在新建对话的基线选择器里选了 md/aaa)。
+	// worktree B 检出 md/bbb,基于 md/aaa 建。
+	wtB := filepath.Join(t.TempDir(), "wtB")
+	must(t, Create(root, "md/bbb", wtB, "md/aaa"))
+	must(t, os.WriteFile(filepath.Join(wtB, "shared.txt"), []byte("from-aaa"), 0o644)) // 不冲突:同内容
+	must(t, os.WriteFile(filepath.Join(wtB, "b-only.txt"), []byte("b"), 0o644))
+	must(t, runGit(wtB, "add", "."))
+	must(t, runGit(wtB, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "bbb work"))
+
+	// 把 md/bbb 合进 md/aaa:md/aaa 正被 wtA 检出。
+	// 旧逻辑:报错挡住。新逻辑:wtA 已 checkout md/aaa 且干净 → 直接在 wtA 里 merge。
+	out, err := MergeBranchInto(root, "md/bbb", "md/aaa", "merge bbb into aaa")
+	must(t, err)
+	_ = out // merge 输出(含统计),非空即可
+	// md/aaa(wtA)应已包含 md/bbb 的改动:b-only.txt 出现在 wtA。
+	if _, err := os.Stat(filepath.Join(wtA, "b-only.txt")); err != nil {
+		t.Fatalf("merge into occupied worktree did not apply: b-only.txt missing in wtA: %v", err)
+	}
+}
+
+// TestMergeBranchInto_TargetOccupiedDirty 报错路径:基线 worktree 脏 → 必须拒绝。
+func TestMergeBranchInto_TargetOccupiedDirty(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := initRepoWithBranch(t, "main")
+	wtA := filepath.Join(t.TempDir(), "wtA")
+	must(t, Create(root, "md/aaa", wtA, "main"))
+	// wtA 工作区脏(未提交改动)
+	must(t, os.WriteFile(filepath.Join(wtA, "dirty.txt"), []byte("dirty"), 0o644))
+	wtB := filepath.Join(t.TempDir(), "wtB")
+	must(t, Create(root, "md/bbb", wtB, "md/aaa"))
+
+	_, err := MergeBranchInto(root, "md/bbb", "md/aaa", "should fail")
+	if err == nil {
+		t.Fatal("expected error on dirty occupied target, got nil")
+	}
+	if !strings.Contains(err.Error(), "不干净") {
+		t.Fatalf("expected dirty error, got: %v", err)
+	}
+}

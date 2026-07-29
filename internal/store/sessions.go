@@ -9,13 +9,13 @@ import (
 )
 
 // sessionColumns / scanSession:统一 session 的列与扫描,避免多处 SELECT/Scan 漂移(§1.5)。
-const sessionColumns = `id,project_id,acp_session_id,title,model,harness,worktree_path,branch,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,config_options_cache`
+const sessionColumns = `id,project_id,acp_session_id,title,model,harness,worktree_path,branch,base_ref,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,config_options_cache`
 
 func scanSession(r interface{
 	Scan(dest ...any) error
 }, se *Session) error {
 	return r.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model, &se.Harness,
-		&se.WorktreePath, &se.Branch,
+		&se.WorktreePath, &se.Branch, &se.BaseRef,
 		&se.UsedTokens, &se.SizeTokens, &se.Cost,
 		&se.CachedReadTokens, &se.CachedWriteTokens, &se.InputTokens, &se.OutputTokens, &se.ThoughtTokens, &se.TotalTokens,
 		&se.CreatedAt, &se.UpdatedAt, &se.PromptedAt, &se.Pinned, &se.ConfigOptionsCache)
@@ -163,5 +163,13 @@ func (s *Store) SetSessionWorktree(ctx context.Context, id, worktreePath, branch
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE sessions SET worktree_path=?, branch=?, updated_at=? WHERE id=?`,
 		worktreePath, branch, now(), id)
+	return err
+}
+
+// SetSessionBaseRef 记录 session 的基线分支(worktree 基线解析后调)。
+func (s *Store) SetSessionBaseRef(ctx context.Context, id, baseRef string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET base_ref=?, updated_at=? WHERE id=?`,
+		baseRef, now(), id)
 	return err
 }
