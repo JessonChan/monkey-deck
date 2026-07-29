@@ -208,6 +208,12 @@ monkey-deck/
 - 给 agent 传 model 必须是 **`provider/model` 格式**（如 `volcengine-agent-plan/glm-5.1`），**裸名（如 `glm-5.1`）会被解析失败 → fallback 到占位无效 model → agent 创建 session 后 0 产出 → 静默 idle**。
 - harness 在 session 创建时钉死 model,修改 model 后可能需新建 session 才能生效。
 
+### 3.6 代码注释默认使用英文(硬约束)
+- **新增注释一律用英文**:Go / TS / TSX / SQL 等源码文件里新写的注释(`//`、`/* */`、`--` 等)默认用英文,不再写中文注释。
+- **旧中文注释触及即转英文**:修改到带中文注释的代码时,顺带把本次改动涉及的注释改为英文;**不要求一次性全仓翻译**,但「碰到就要顺手转」。不主动去改与本次改动无关的文件。
+- **适用范围仅限源码注释**:**文档文件**(AGENTS.md、`docs/worklog/*`、README、THIRD_PARTY_LICENSES 等)**仍用中文**——这些是给人读的项目文档,不在本约束内。commit message 规范见 §6.2,不在此约束。
+- **理由**:代码标识符、API、依赖库文档都是英文,注释用英文与之一致,利于检索、跨语言协作与 AI 工具处理,避免中英混排的认知切换成本。
+
 ---
 
 ## 4. 前端与 UI 纪律
@@ -349,6 +355,7 @@ WAILS_SERVER_PORT=9246 ./bin/monkey-deck-server      # 或 wails3 task run:serve
 - [ ] 开工前读过 `docs/worklog/` 最近几条?(§0.3)
 - [ ] 收工前已在 `docs/worklog/` 新增工作日志?(§0.3)
 - [ ] 原子提交、commit message 清楚、没夹带无关改动、没提交构建产物?(§6.2)
+- [ ] 新增代码注释用英文;本次改动触及的旧中文注释已转英文?(§3.6)
 - [ ] 没碰外部参考库(`/tmp/monkey-deck-reference`,见 §0.2)下任何文件?
 - [ ] 借用参考库下任何项目的代码已按其原始协议署名(版权声明 + 许可文本 + THIRD_PARTY_LICENSES 登记;openwork 避开 `ee/`)?(§0.4)
 - [ ] ACP 单测用 mock,没启真 harness?(§5.1)
