@@ -623,3 +623,59 @@ func TestPreflightMerge_IntegrationWithMergeBranchInto(t *testing.T) {
 		t.Fatalf("preflight should prevent temp worktree creation:\n%s", listOut)
 	}
 }
+
+// TestMergeBranchInto_TargetOccupiedByWorktree 基线分支被另一个 worktree 检出时,
+// 直接在该 worktree 里 merge(不再报错挡住)。场景:session B 基线 = session A 的 md/ 分支。
+func TestMergeBranchInto_TargetOccupiedByWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := initRepoWithBranch(t, "main")
+	// session A:建在 main 上,分支 md/aaa(worktree 占用 md/aaa)
+	wtA := filepath.Join(t.TempDir(), "wtA")
+	must(t, Create(root, "md/aaa", wtA, "main"))
+	// 在 md/aaa 上提交改动(成为后续 session B 的基线内容)
+	must(t, os.WriteFile(filepath.Join(wtA, "shared.txt"), []byte("from-aaa"), 0o644))
+	must(t, runGit(wtA, "add", "."))
+	must(t, runGit(wtA, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "aaa work"))
+	// session B:基线 = md/aaa(用户在新建对话的基线选择器里选了 md/aaa)。
+	// worktree B 检出 md/bbb,基于 md/aaa 建。
+	wtB := filepath.Join(t.TempDir(), "wtB")
+	must(t, Create(root, "md/bbb", wtB, "md/aaa"))
+	must(t, os.WriteFile(filepath.Join(wtB, "shared.txt"), []byte("from-aaa"), 0o644)) // 不冲突:同内容
+	must(t, os.WriteFile(filepath.Join(wtB, "b-only.txt"), []byte("b"), 0o644))
+	must(t, runGit(wtB, "add", "."))
+	must(t, runGit(wtB, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "bbb work"))
+
+	// 把 md/bbb 合进 md/aaa:md/aaa 正被 wtA 检出。
+	// 旧逻辑:报错挡住。新逻辑:wtA 已 checkout md/aaa 且干净 → 直接在 wtA 里 merge。
+	out, err := MergeBranchInto(root, "md/bbb", "md/aaa", "merge bbb into aaa")
+	must(t, err)
+	_ = out // merge 输出(含统计),非空即可
+	// md/aaa(wtA)应已包含 md/bbb 的改动:b-only.txt 出现在 wtA。
+	if _, err := os.Stat(filepath.Join(wtA, "b-only.txt")); err != nil {
+		t.Fatalf("merge into occupied worktree did not apply: b-only.txt missing in wtA: %v", err)
+	}
+}
+
+// TestMergeBranchInto_TargetOccupiedDirty 报错路径:基线 worktree 脏 → 必须拒绝。
+func TestMergeBranchInto_TargetOccupiedDirty(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := initRepoWithBranch(t, "main")
+	wtA := filepath.Join(t.TempDir(), "wtA")
+	must(t, Create(root, "md/aaa", wtA, "main"))
+	// wtA 工作区脏(未提交改动)
+	must(t, os.WriteFile(filepath.Join(wtA, "dirty.txt"), []byte("dirty"), 0o644))
+	wtB := filepath.Join(t.TempDir(), "wtB")
+	must(t, Create(root, "md/bbb", wtB, "md/aaa"))
+
+	_, err := MergeBranchInto(root, "md/bbb", "md/aaa", "should fail")
+	if err == nil {
+		t.Fatal("expected error on dirty occupied target, got nil")
+	}
+	if !strings.Contains(err.Error(), "不干净") {
+		t.Fatalf("expected dirty error, got: %v", err)
+	}
+}

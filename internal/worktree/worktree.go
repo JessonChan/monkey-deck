@@ -662,11 +662,17 @@ func MergeBranchInto(repoPath, branch, target, message string) (string, error) {
 		}
 		return mergeInDir(mainDir, branch, message)
 	}
-	// 2b. target 在主仓库之外被检出 → 报错。
+	// 2b. target 被另一个 worktree 检出(如 session A 的基线是 session B 的 md/ 分支,
+	// 而 session B 的 worktree 正 checkout 在该分支上)。该 worktree 本身就是合并目标所在,
+	// 直接在它里面 merge(它已 checkout 在 target 上),无需建临时 worktree——只要它工作区干净。
+	// 失败/冲突由 mergeInDir 的 abort 兜底,该 worktree 始终干净。
 	if occupiedBy != "" {
-		return "", fmt.Errorf("基线分支 %s 正被另一个工作树检出(%s),无法合并", target, occupiedBy)
+		if HasChanges(occupiedBy) {
+			return "", fmt.Errorf("基线分支 %s 的工作树不干净(%s),先提交或丢弃改动后再合并", target, occupiedBy)
+		}
+		return mergeInDir(occupiedBy, branch, message)
 	}
-	// 2c. target 空闲 → 建 target 的临时 worktree,merge 后删除。
+	// 2c. target 空闲(主仓库在别的分支)→ 建 target 的临时 worktree,merge 后删除。
 	tmpWt, err := os.MkdirTemp("", "md-merge-*")
 	if err != nil {
 		return "", err
