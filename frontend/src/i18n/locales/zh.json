@@ -364,7 +364,7 @@
     "mergeTipBase": "把本会话分支合回 {{branch}}（它的基线）。仅已提交的改动会被合并，未提交的改动留在 worktree。",
     "mergeTipLegacy": "把本会话分支合并进主仓库当前 HEAD（旧会话，无显式基线）。",
     "mergeNothing": "无需合并",
-    "mergeNothingTip": "该分支没有领先基线的新提交。请先在源代码管理面板提交改动，或此会话可能已合并过。",
+    "mergeNothingTip": "该分支没有领先基线的新提交。请先在源代码管理面板提交改动，或此会话可能已合并过。"
   },
   "sidePanel": {
     "files": "文件",
