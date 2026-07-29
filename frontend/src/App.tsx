@@ -469,7 +469,7 @@ export default function App() {
         // 未读:回合结束但用户没在看的 session → 标记未读(供侧栏尾部小圆点提示)。
         if (s.sessionId !== selectedSessionIdRef.current) setUnreadBySession((p) => ({ ...p, [s.sessionId]: true }));
         const sid = selectedSessionIdRef.current;
-        if (sid) { ChatService.SessionDiff(sid).then(d => setSessionDiff(d || "")).catch(() => {}); ChatService.SessionChanges(sid).then(setSessionChanges).catch(() => {}); }
+        if (sid) { ChatService.SessionDiff(sid).then(d => setSessionDiff(d || "")).catch(() => {}); ChatService.SessionChanges(sid).then(setSessionChanges).catch(() => {}); ChatService.SessionMergeable(sid).then(m => setMergeableBySession((p) => ({ ...p, [sid]: m }))).catch(() => {}); }
       }
       // auto-continue:turn 结束(idle/error)→ 续发该 session 队列下一条(不限选中态,§1.6)。
       // 由 status 事件按 sessionId 直接触发(尊重数据源:status 事件是「哪个 session 该续发」的权威
@@ -649,6 +649,12 @@ export default function App() {
         const br = await ChatService.SessionCurrentBranch(sessionId);
         setBranchBySession((prev) => ({ ...prev, [sessionId]: br || "" }));
       } catch { /* 非 git 项目:保持空 */ }
+      // 合并预检:branch 有无领先基线的已提交 commit → 决定合并按钮 enable/disable。
+      // 打开/切到 session 时查一次;turn 结束后由事件刷新点(见 onStatusChanged)重查。
+      try {
+        const mergeable = await ChatService.SessionMergeable(sessionId);
+        setMergeableBySession((prev) => ({ ...prev, [sessionId]: mergeable }));
+      } catch { /* 非 git session:保持 false */ }
     },
     [messagesToItems, selectedProjectId, sessionsByProject]
   );
@@ -1045,6 +1051,7 @@ export default function App() {
   const [mergeResults, setMergeResults] = useState<Record<string, string>>({});  // per-session 合并结果(切 session 不会串窗口)
   const [sessionDiff, setSessionDiff] = useState<string | null>(null);
   const [sessionChanges, setSessionChanges] = useState<FileChange[] | null>(null);
+  const [mergeableBySession, setMergeableBySession] = useState<Record<string, boolean>>({});  // per-session:branch 有无领先基线的已提交 commit(决定合并按钮 enable/disable)
   const mergeSession = useCallback(async () => {
     if (!selectedSessionId) return;
     try {
@@ -1053,8 +1060,9 @@ export default function App() {
       setMergeResults((prev) => ({ ...prev, [selectedSessionId]: result || t("app.mergeDone") }));
       const sid = selectedSessionId;
       setTimeout(() => setMergeResults((prev) => { const n = { ...prev }; delete n[sid]; return n; }), 6000);
-      // 合并后刷新 diff(变为"无变更")
+      // 合并后刷新 diff(变为"无变更")+ mergeable(变 false)
       try { setSessionDiff(await ChatService.SessionDiff(sid) || ""); } catch {}
+      try { const m = await ChatService.SessionMergeable(sid); setMergeableBySession((prev) => ({ ...prev, [sid]: m })); } catch {}
     } catch (e) {
       const msg = t("app.mergeFailed", { error: String(e) });
       setError(msg);
@@ -1088,7 +1096,7 @@ export default function App() {
     if (!selectedSessionId) throw new Error(t("app.noActiveSession"));
     try { await ChatService.SessionCommit(selectedSessionId, message); setError(null); }
     catch (e) { setError(String(e)); throw e; }
-    finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
+    finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); const m = await ChatService.SessionMergeable(selectedSessionId); setMergeableBySession((p) => ({ ...p, [selectedSessionId]: m })); } catch {} }
   }, [selectedSessionId]);
   // AI 提交:让当前 session 的 agent 自动提交。触发一轮 turn;turn 结束(idle)时
   // 已有 effect 自动刷新 sessionChanges,故无需手动 finally 刷新。
@@ -1405,6 +1413,7 @@ export default function App() {
             branch={branchBySession[selectedSessionId] || activeSession.branch || ""}
             baseRef={activeSession.baseRef || ""}
             onMerge={mergeSession}
+            mergeable={mergeableBySession[selectedSessionId] ?? false}
             onStage={stageFiles}
             onUnstage={unstageFiles}
             onDiscard={discardFiles}

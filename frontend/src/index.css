@@ -1343,6 +1343,9 @@ input, textarea { font-family: inherit; }
   padding: 8px 12px; border-radius: 8px; border: none; transition: filter 0.12s;
 }
 .merge-btn-full:hover { filter: brightness(1.1); }
+/* 无可合并内容:disable 态用中性灰底而非半透明蓝,语义=「不用操作」而非「操作不可用」 */
+.merge-btn-full.disabled-hint { background: var(--elev-2); color: var(--text-3); }
+.merge-btn-full.disabled-hint:hover { filter: none; }
 .git-merge-result {
   font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
   padding: 8px 10px; border-radius: 6px; border: 1px solid var(--sep);

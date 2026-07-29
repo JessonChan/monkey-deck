@@ -2729,6 +2729,33 @@ func (s *ChatService) SearchBaseRefs(projectID string) ([]worktree.BranchInfo, e
 	return worktree.ListBranches(proj.Path)
 }
 
+// SessionMergeable 报告该 session 是否有可合并内容(branch 有领先基线的已提交 commit)。
+// 供前端在打开源代码管理面板时预检:无则 disable 合并按钮 + 提示「无需要合并的变更」。
+// 只看已提交差异(merge 只合并 commit);未提交改动不在此判定(由 SCM 面板的 stage/commit 流程处理)。
+// 非 worktree session(无基线/无分支)返回 false。
+func (s *ChatService) SessionMergeable(sessionID string) (bool, error) {
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	if se == nil || se.Branch == "" {
+		return false, nil
+	}
+	proj, err := s.st.GetProject(s.ctx, se.ProjectID)
+	if err != nil {
+		return false, err
+	}
+	if proj == nil {
+		return false, nil
+	}
+	// branch 有领先 base 的 commit → 可合并。base 空(旧 session)用主仓库 HEAD 兜底。
+	log, err := worktree.BranchLog(proj.Path, se.Branch, se.BaseRef)
+	if err != nil {
+		return false, nil // 探测失败按不可合并(安全侧,不鼓励点合并)
+	}
+	return strings.TrimSpace(log) != "", nil
+}
+
 // GetLastHarness 返回上次新建对话选择的 harness(下次新建对话默认选中)。无则空串,前端自行回退首个。
 func (s *ChatService) GetLastHarness() string {
 	v, _ := s.st.GetSetting(s.ctx, "lastHarness")
