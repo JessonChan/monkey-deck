@@ -1042,7 +1042,7 @@ export default function App() {
     }, 400);
   }, [t]);
 
-  const [mergeResult, setMergeResult] = useState<string | null>(null);
+  const [mergeResults, setMergeResults] = useState<Record<string, string>>({});  // per-session 合并结果(切 session 不会串窗口)
   const [sessionDiff, setSessionDiff] = useState<string | null>(null);
   const [sessionChanges, setSessionChanges] = useState<FileChange[] | null>(null);
   const mergeSession = useCallback(async () => {
@@ -1050,15 +1050,17 @@ export default function App() {
     try {
       const result = await ChatService.MergeSession(selectedSessionId);
       setError(null);
-      setMergeResult(result || t("app.mergeDone"));
-      setTimeout(() => setMergeResult(null), 6000);
+      setMergeResults((prev) => ({ ...prev, [selectedSessionId]: result || t("app.mergeDone") }));
+      const sid = selectedSessionId;
+      setTimeout(() => setMergeResults((prev) => { const n = { ...prev }; delete n[sid]; return n; }), 6000);
       // 合并后刷新 diff(变为"无变更")
-      try { setSessionDiff(await ChatService.SessionDiff(selectedSessionId) || ""); } catch {}
+      try { setSessionDiff(await ChatService.SessionDiff(sid) || ""); } catch {}
     } catch (e) {
       const msg = t("app.mergeFailed", { error: String(e) });
       setError(msg);
-      setMergeResult(msg);
-      setTimeout(() => setMergeResult(null), 8000);
+      setMergeResults((prev) => ({ ...prev, [selectedSessionId]: msg }));
+      const sid = selectedSessionId;
+      setTimeout(() => setMergeResults((prev) => { const n = { ...prev }; delete n[sid]; return n; }), 8000);
     }
   }, [selectedSessionId]);
 
@@ -1322,9 +1324,8 @@ export default function App() {
               onAction={handleComposerAction}
               onRespondPermission={respondPermission}
               onToggleTerminal={toggleTerminalPanel}
-              onRefreshConfig={refreshConfig}
+              mergeResult={mergeResults[selectedSessionId] || null}
               onMerge={mergeSession}
-              mergeResult={mergeResult}
               sessionDiff={sessionDiff}
               queue={queue}
               onInterruptQueue={interruptQueue}
@@ -1350,6 +1351,7 @@ export default function App() {
               configOptions={configOptions}
               livePlan={livePlan}
               onSetConfig={setSessionConfig}
+              onRefreshConfig={refreshConfig}
               hasMore={hasMore}
               loadingMore={loadingMore}
               onLoadMore={() => selectedSessionId && loadMoreMessages(selectedSessionId)}
@@ -1399,9 +1401,9 @@ export default function App() {
             isGitProject={gitByProject[selectedProject?.id ?? ""] ?? false}
             changes={sessionChanges}
             status={status}
+            mergeResult={mergeResults[selectedSessionId] || null}
             branch={branchBySession[selectedSessionId] || activeSession.branch || ""}
             baseRef={activeSession.baseRef || ""}
-            mergeResult={mergeResult}
             onMerge={mergeSession}
             onStage={stageFiles}
             onUnstage={unstageFiles}

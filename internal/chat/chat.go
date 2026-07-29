@@ -657,6 +657,16 @@ func (s *ChatService) MergeSession(sessionID string) (string, error) {
 	if proj == nil {
 		return "", fmt.Errorf("project not found")
 	}
+	// 合并前检测:branch 是否有领先基线的 commit。无则跳过 merge(不造空 merge commit)。
+	// 用 BranchLog(base=BaseRef 或主仓库 HEAD):空 = branch 无领先 = 无可合并内容。
+	var logBase string
+	if se.BaseRef != "" {
+		logBase = se.BaseRef
+	}
+	aheadLog, _ := worktree.BranchLog(proj.Path, se.Branch, logBase)
+	if strings.TrimSpace(aheadLog) == "" {
+		return "✅ 无新变更:该分支没有领先基线的新提交(可能已合并过),跳过合并。", nil
+	}
 	// 合回基线分支:有显式 BaseRef(新 session)用 MergeBranchInto(target=BaseRef);
 	// baseRef 空(旧 session / 迁移前)沿用旧行为——合到主仓库当前 HEAD。
 	var mergeOut string
