@@ -55,6 +55,12 @@ export function acquireTerminal(id: string, onExit?: () => void): TermEntry {
   host.style.width = "100%";
   host.style.height = "100%";
   term.open(host);
+  // ring buffer replay:从后端拉该 PTY 的历史 scrollback,灌入 xterm。
+  // popout / 重新打开终端时,这会让历史内容还原(含 ANSI 颜色)。全新 PTY 返回空,无副作用。
+  // 异步:不阻塞 xterm 创建,历史数据到达后 write 即可(xterm 按写入顺序渲染)。
+  TerminalService.GetTerminalScrollback(id).then((b64) => {
+    if (b64) term.write(decodeBase64(b64));
+  }).catch(() => {});
   const entry: TermEntry = { term, fit, host, attachedTo: null, dead: false };
 
   // 输入 → 后端。

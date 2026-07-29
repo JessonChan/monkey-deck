@@ -250,6 +250,10 @@ input, textarea { font-family: inherit; }
 /* 已开终端标记:终端面板对该 session 打开时显示(与置顶标记同格,弱色常驻,与瞬态活动状态正交)。 */
 .session-terminal-mark { flex-shrink: 0; display: inline-flex; color: var(--accent-2); }
 .session-terminal-mark svg { color: var(--accent-2); }
+/* 已弹出到独立窗口标记:session-item 标题旁弱色常驻图标(与终端标记同格)。
+   点击该 session 行 → focus popout 窗口(非就地选中)。 */
+.session-popout-mark { flex-shrink: 0; display: inline-flex; color: var(--accent-2); }
+.session-popout-mark svg { color: var(--accent-2); }
 /* session 时间:无状态图标(spinner/unread/perm/草稿)时显示在标题尾部(流内,非浮层)。
    尾部永远只有一个元素 → 标题截断点一致,无露出问题。低对比小字 = 次要信息。 */
 .session-time {
@@ -1489,9 +1493,30 @@ input, textarea { font-family: inherit; }
 .panel-rail.right { right: 0; top: 0; border-left: 1px solid var(--sep); }
 .panel-rail:hover { background: var(--hover); color: var(--text); }
 .panel-rail svg { pointer-events: none; }
+/* popout 窗口置顶 toggle:浮在右上角顶部(避开红绿灯,贴近右侧边缘)。 */
+.on-top-toggle {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 100;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.on-top-toggle:hover { background: var(--hover); color: var(--text); }
+.on-top-toggle.active { color: var(--accent); }
+.on-top-toggle.active svg { fill: var(--accent); }
 
 /* 侧栏收起后,红绿灯浮在 chat-header 左上;给标题留出避让空间。 */
 .app[data-sidebar-collapsed="true"] .chat-header { padding-left: 84px; }
+/* popout 独立窗口:无 sidebar,红绿灯浮在 chat-header 左上;留略小避让空间。 */
+.app[data-sidebar-collapsed="popout"] .chat-header { padding-left: 78px; }
 
 /* git-panel 内嵌时去掉顶部留白(tab 已占位) */
 .git-panel.embedded, .side-body .git-panel { padding-top: 12px; }

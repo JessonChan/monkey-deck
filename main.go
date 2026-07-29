@@ -55,7 +55,10 @@ func main() {
 			Handler: application.AssetFileServerFS(assets),
 		},
 		Mac: application.MacOptions{
-			ApplicationShouldTerminateAfterLastWindowClosed: true,
+			// popout 独立窗口:关主窗口但 popout 还开着时,app 不应退出。
+			// 改为 false 后,所有窗口关闭 app 仍驻留,由 ApplicationShouldHandleReopen
+			// (desktop.go)在用户点 dock 图标时重建主窗口。Cmd+Q 仍正常终止。
+			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
 	})
 

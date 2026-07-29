@@ -1,6 +1,6 @@
 //go:build !server
 
-// desktop.go:桌面 GUI 装配(应用更新 + 菜单 + 主窗口 + 窗口状态记忆)。
+// desktop.go:桌面 GUI 装配(应用更新 + 菜单 + 主窗口 + 窗口状态记忆 + popout 重建)。
 // 仅 desktop 构建(不带 -tags server)编译;server 模式见 server.go 的 no-op 版本。
 // 拆分目的:让 main.go 在 -tags server 下也能编译,启用 Wails3 server 模式做无 GUI
 // 浏览器驱动集成测试(AGENTS.md §5.5)。GUI 专属符号(application.DefaultApplicationMenu /
@@ -20,6 +20,10 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
+
+// mainWindowName 主窗口的固定名(用作 WindowManager 查找 key,与 popout-<sid> 区分)。
+// reopen 重建时按此名判断主窗口是否仍存在。
+const mainWindowName = "main"
 
 // runDesktop 装配桌面专属能力:应用自更新、应用菜单、主窗口及其状态记忆。
 // 仅 desktop 构建生效;server 模式(-tags server)走 server.go 的 no-op。
@@ -57,6 +61,25 @@ func runDesktop(app *application.App, cfg *config.Config) {
 	}
 	app.Menu.SetApplicationMenu(menu)
 
+	// 首次创建主窗口。
+	createMainWindow(app, cfg)
+
+	// popout 支持:关掉主窗口但 popout 仍开着时,app 不退出(main.go 已把
+	// ApplicationShouldTerminateAfterLastWindowClosed 设为 false)。用户点 dock 图标
+	// (applicationShouldHandleReopen)时,若主窗口已被关闭(从 WindowManager 移除),
+	// 重建主窗口。Wails3 内置的 reopen 只 Show 现有窗口(见 events_common_darwin.go),
+	// 不重建已销毁的窗口,故此处自建 handler 补足。
+	app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(event *application.ApplicationEvent) {
+		if _, ok := app.Window.GetByName(mainWindowName); ok {
+			return // 主窗口还在(可能只是隐藏),交给内置 handler 去 Show 即可。
+		}
+		createMainWindow(app, cfg)
+	})
+}
+
+// createMainWindow 创建(或重建)主窗口,含窗口状态记忆的加载与防抖落盘。
+// 首次启动 + reopen 重建共用此函数,故所有窗口状态记忆逻辑都在这里绑定。
+func createMainWindow(app *application.App, cfg *config.Config) {
 	// 窗口状态记忆:记住上次的尺寸/位置/是否最大化(ui_state.json,AGENTS.md §0.5)。
 	statePath := filepath.Join(cfg.StateDir, "ui_state.json")
 	saved, err := ui.LoadWindow(statePath)
@@ -68,6 +91,7 @@ func runDesktop(app *application.App, cfg *config.Config) {
 		width, height = saved.Width, saved.Height
 	}
 	opts := application.WebviewWindowOptions{
+		Name:   mainWindowName,
 		Title:  config.AppName,
 		Width:  width,
 		Height: height,

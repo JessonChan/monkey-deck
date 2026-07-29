@@ -60,8 +60,9 @@ type termSession struct {
 	sessionID string
 	ptmx      *os.File // PTY master(creack/pty 返回 *os.File)
 	cmd       *exec.Cmd
-	mu        sync.Mutex // 保护 exited 与 ptmx 的并发访问
+	mu        sync.Mutex // 保护 exited / ptmx / sb 的并发访问
 	exited    bool       // 进程已退出/已被 kill;置位后 Write/Resize 静默忽略
+	sb        *scrollback // PTY 输出的环形留存(ring buffer);replay 用,见 scrollback.go
 }
 
 // TerminalService 是前端与终端的桥梁(Wails3 service)。
@@ -109,7 +110,7 @@ func (s *TerminalService) Start(sessionID, cwd string, cols, rows uint16) (strin
 	}
 
 	id := uuid.NewString()
-	ts := &termSession{id: id, sessionID: sessionID, ptmx: ptmx, cmd: cmd}
+	ts := &termSession{id: id, sessionID: sessionID, ptmx: ptmx, cmd: cmd, sb: newScrollback(defaultScrollbackBytes)}
 	s.mu.Lock()
 	s.sessions[id] = ts
 	s.mu.Unlock()
@@ -197,12 +198,35 @@ func (s *TerminalService) ListTerminalsBySession() map[string]bool {
 	return out
 }
 
+// GetTerminalScrollback 返回某终端的 scrollback 历史(base64)。
+// 供独立窗口 / 重新打开终端时还原历史:前端新建 xterm 后调此拿回后端留存,
+// term.write 解码后的字节,即可还原完整 scrollback(含 ANSI 颜色),再继续订阅实时 data 事件。
+// 这让终端历史有了「后端单一真相」(见 scrollback.go 顶部说明),弹出 / 回切 / 重开走同一路径。
+// 终端不存在或无历史时返回空串。
+func (s *TerminalService) GetTerminalScrollback(id string) (string, error) {
+	ts := s.get(id)
+	if ts == nil {
+		return "", nil
+	}
+	ts.mu.Lock()
+	snap := ts.sb.snapshot()
+	ts.mu.Unlock()
+	if len(snap) == 0 {
+		return "", nil
+	}
+	return base64.StdEncoding.EncodeToString(snap), nil
+}
+
 // readLoop 持续读 PTY 输出并推前端;读结束(EOF/出错)即收口:wait 进程、推 exit、清理。
 func (s *TerminalService) readLoop(ts *termSession) {
 	buf := make([]byte, 8192)
 	for {
 		n, err := ts.ptmx.Read(buf)
 		if n > 0 {
+			// 同时留存进 ring buffer:replay 时还原完整 scrollback(见 scrollback.go)。
+			ts.mu.Lock()
+			ts.sb.write(buf[:n])
+			ts.mu.Unlock()
 			s.emit(EventData, DataPayload{
 				ID: ts.id, SessionID: ts.sessionID,
 				Data: base64.StdEncoding.EncodeToString(buf[:n]),

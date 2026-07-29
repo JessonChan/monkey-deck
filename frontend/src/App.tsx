@@ -17,7 +17,7 @@ import SettingsPanel from "./components/SettingsPanel";
 import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import { Group, Panel, Separator, useDefaultLayout, usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
 import { Tooltip } from "react-tooltip";
-import { PanelLeftOpen, PanelRightOpen } from "lucide-react";
+import { PanelLeftOpen, PanelRightOpen, Pin } from "lucide-react";
 import type { FileChange, BranchInfo } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import { applyEventToItems as applyEventToItemsPure } from "./lib/streamMerge";
 import { shouldDropOnSwitch } from "./lib/sessionDrop";
@@ -25,6 +25,15 @@ import { isNotifySoundEnabled, playNotifySound } from "./lib/notifySound";
 import { extractErrMsg } from "./lib/errorMsg";
 import { isMemorySaverEnabled } from "./lib/memorySaver";
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+
+// parsePopoutHash 从 URL hash 读取 popout session ID(/#popout=<sid>)。
+// 主窗口加载时 hash 为空(返回 null);popout 窗口由后端 OpenSessionWindow 创建时带上
+// /#popout=<sid>,fragment 不发后端、前端 location.hash 读取后进入 popout 模式。
+function parsePopoutHash(): string | null {
+  const h = window.location.hash;
+  const m = h.match(/[#&]popout=([^&]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
 
 // 按 session 隔离的状态:切走再切回时,进行中的流式输出 / 用量 / 状态 / 权限都保留在各自缓存里,
 // 不会因「切走→事件被丢弃→切回只剩 DB 已落库内容」而丢失正在输出的内容。
@@ -59,6 +68,18 @@ export default function App() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [sessionsByProject, setSessionsByProject] = useState<Record<string, Session[]>>({});
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  // popout 模式:本窗口是某 session 的独立窗口(由后端 OpenSessionWindow 创建,URL 带 #popout=<sid>)。
+  // popout 模式下隐藏 Sidebar、启动时直接 openSession 目标 session、不处理 poppedSessionIds 过滤
+  // (它是主窗口专属:主窗口对已 popout 的 session 视而不见,避免权限/状态/声音双弹)。
+  const [popoutMode] = useState<string | null>(() => parsePopoutHash());
+  const isPopout = !!popoutMode;
+  // popout 窗口「始终置顶」状态(仅 popout 模式用;主窗口不需要)。
+  const [onTop, setOnTop] = useState(false);
+  // 主窗口模式:已弹出到独立窗口的 session 集合。全局事件处理器(status/permission/sound)
+  // 对该集合内的 session 跳过 —— 一道过滤同时消灭「权限双弹、提示音双响、状态双反应」(§5.3 不变量)。
+  const [poppedSessionIds, setPoppedSessionIds] = useState<Set<string>>(new Set());
+  const poppedSessionIdsRef = useRef<Set<string>>(new Set());
+  poppedSessionIdsRef.current = poppedSessionIds;
 
   const [itemsBySession, setItemsBySession] = useState<Record<string, ChatItem[]>>({});
   const [hasMoreBySession, setHasMoreBySession] = useState<Record<string, boolean>>({});
@@ -380,7 +401,10 @@ export default function App() {
     });
     const offPerm = Events.On("chat:permission", (e: { data: PermissionPrompt }) => {
       // 权限请求也按 session 缓存;切走再切回仍在。
-      if (e.data) setPermissionBySession((prev) => ({ ...prev, [e.data.sessionId]: e.data }));
+      // 已弹出到独立窗口的 session:主窗口不弹权限(由 popout 窗口处理),避免双弹(§5.3 不变量)。
+      if (e.data && !poppedSessionIdsRef.current.has(e.data.sessionId)) {
+        setPermissionBySession((prev) => ({ ...prev, [e.data.sessionId]: e.data }));
+      }
     });
     const offStatus = Events.On("chat:status", (e: { data: StatusPayload }) => {
       const s = e.data;
@@ -412,8 +436,9 @@ export default function App() {
         }
       }
       // 错误提示只对当前查看的 session 弹(切走时不在意别的 session 的错误条)。
+      // 已弹出到独立窗口的 session:主窗口不弹错误(由 popout 窗口处理),避免双弹。
       // 有 code 时按 code 经 i18n 翻译(harness 断连等稳定文案);否则用 detail;最后兜底。
-      if (s.status === "error" && s.sessionId === selectedSessionIdRef.current) {
+      if (s.status === "error" && s.sessionId === selectedSessionIdRef.current && !poppedSessionIdsRef.current.has(s.sessionId)) {
         setError(s.code ? t(`chat.error.${s.code}`) : (s.detail || t("app.errorFallback")));
       }
       // 回合结束:清掉该 session 最后 agent/thought 的 streaming 标志(去光标 + 显复制按钮);
@@ -464,7 +489,8 @@ export default function App() {
       if (s.status === "idle") {
         // 对话结束提示音:仅在 agent 自然回合结束(detail 以 stopReason= 开头,§5.3 尊重数据源
         // —— 区分「回复完成」与「用户取消 cancelled / 兜底空 detail」)且开关开启时播放。
-        if (s.detail && s.detail.startsWith("stopReason=") && isNotifySoundEnabled()) {
+        // 已弹出到独立窗口的 session:主窗口不发声(由 popout 窗口发声),避免叠音。
+        if (s.detail && s.detail.startsWith("stopReason=") && isNotifySoundEnabled() && !poppedSessionIdsRef.current.has(s.sessionId)) {
           playNotifySound();
         }
         // 未读:回合结束但用户没在看的 session → 标记未读(供侧栏尾部小圆点提示)。
@@ -500,6 +526,72 @@ export default function App() {
       offHarnesses();
     };
   }, [refreshProjects, applyEvent, refreshSessions, drainSession]);
+
+  // popout 启动标记:目标 session 在本 popout 窗口 open 成功后置 true(快照 effect 据此触发)。
+  // 用 state 而非 ref:快照还原 effect 依赖它——openSession 异步完成后 state 变化触发 effect 重跑。
+  const [popoutOpened, setPopoutOpened] = useState(false);
+  // popout 快照还原:popout 窗口 boot 时从后端取主窗口打包的 React state 快照,
+  // 作为初始 state(items/queue/draft/livePlan/permission)。取后即删(一次性)。
+  // 仅在 popout 模式且目标 session 已 open 后执行一次。
+  const snapshotAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!popoutMode || !popoutOpened || snapshotAppliedRef.current) return;
+    snapshotAppliedRef.current = true;
+    ChatService.GetSessionSnapshot(popoutMode).then((json) => {
+      if (!json) return;
+      try {
+        const snap = JSON.parse(json);
+        // items:若有进行中的流式 turn,直接灌入(覆盖 SQLite 加载的已落库部分)。
+        if (Array.isArray(snap.items) && snap.items.length > 0) {
+          setItemsBySession((prev) => ({ ...prev, [popoutMode]: snap.items }));
+        }
+        if (Array.isArray(snap.queue)) setQueueBySession((prev) => ({ ...prev, [popoutMode]: snap.queue }));
+        if (typeof snap.draft === "string") setDraftBySession((prev) => ({ ...prev, [popoutMode]: snap.draft }));
+        if (snap.livePlan) setLivePlanBySession((prev) => ({ ...prev, [popoutMode]: snap.livePlan }));
+        if (snap.permission) setPermissionBySession((prev) => ({ ...prev, [popoutMode]: snap.permission }));
+        // 终端:恢复面板开关 + tab 列表 + active tab。tab.id 指向后端同一 PTY;
+        // termRegistry 会为每个 id 新建 xterm(独立 JS 上下文),订阅同一 terminal:data。
+        // scrollback 历史:TerminalView mount → useTerminal → acquireTerminal 时由 ring buffer replay
+        // (在 acquireTerminal 里调 GetTerminalScrollback 灌入历史)。
+        if (snap.termOpen) {
+          setTermOpenBySession((prev) => ({ ...prev, [popoutMode]: true }));
+          if (Array.isArray(snap.termTabs)) setTermTabsBySession((prev) => ({ ...prev, [popoutMode]: snap.termTabs }));
+          if (snap.activeTerm) setActiveTermBySession((prev) => ({ ...prev, [popoutMode]: snap.activeTerm }));
+        }
+      } catch { /* 快照格式异常:静默回退 SQLite */ }
+    }).catch(() => {});
+  }, [popoutMode, popoutOpened]);
+
+  // 主窗口:订阅 popout 状态变更,维护 poppedSessionIds 集合。
+  // popout 窗口不订阅(isPopout 时跳过)——它不需要过滤(它就是那个唯一在看的窗口)。
+  useEffect(() => {
+    if (isPopout) return;
+    const offPopout = Events.On("chat:popout-changed", (e: { data: { sessionId: string; popped: boolean } }) => {
+      const { sessionId, popped } = e.data;
+      setPoppedSessionIds((prev) => {
+        const next = new Set(prev);
+        if (popped) next.add(sessionId); else next.delete(sessionId);
+        return next;
+      });
+    });
+    return () => { offPopout(); };
+  }, [isPopout]);
+
+  // 主窗口 boot 对账:覆盖「主窗口重启但 popout 窗口仍开着」的场景。
+  // sessionsByProject 就绪后,对每个 session 查后端是否已 popout,同步进 poppedSessionIds。
+  // 仅执行一次(hasReconciled 守卫),后续由 popout-changed 事件实时维护。
+  const popoutReconciledRef = useRef(false);
+  useEffect(() => {
+    if (isPopout || popoutReconciledRef.current) return;
+    const allSids = Object.values(sessionsByProject).flat().map((s) => s.id);
+    if (allSids.length === 0) return;
+    popoutReconciledRef.current = true;
+    void Promise.all(allSids.map((sid) => ChatService.IsSessionWindowPopped(sid).then((p) => [sid, p] as const)))
+      .then((res) => {
+        const popped = res.filter(([, p]) => p).map(([sid]) => sid);
+        if (popped.length > 0) setPoppedSessionIds(new Set(popped));
+      }).catch(() => {});
+  }, [isPopout, sessionsByProject]);
 
   // 多项目同时展开:项目列表就绪后,把每个项目的 sessions 都加载进 map(本地 SQLite,快)。
   useEffect(() => {
@@ -660,7 +752,17 @@ export default function App() {
     [messagesToItems, selectedProjectId, sessionsByProject]
   );
 
-  // 加载更早的历史(分页翻页):取游标 seq 之前的 PAGE_SIZE 条,prepend 到现有 items 前面。
+  // popout 模式启动:本窗口是某 session 的独立窗口,直接打开目标 session。
+  // projectId 从后端 GetSessionProjectID 拿(不依赖 sessionsByProject 的加载时序——
+  // 后者可能因分页/项目数多而延迟,导致 popout 拿不到 projectId → SidePanel 空 + sendMessage 异常)。
+  useEffect(() => {
+    if (!popoutMode || popoutOpened) return;
+    void (async () => {
+      let pid: string | undefined;
+      try { pid = await ChatService.GetSessionProjectID(popoutMode); } catch { /* session 不存在 */ }
+      if (pid) { void openSession(popoutMode, pid); setPopoutOpened(true); }
+    })();
+  }, [popoutMode, openSession, popoutOpened]);
   const loadMoreMessages = useCallback(async (sessionId: string) => {
     if (loadingMoreBySession[sessionId] || !hasMoreBySession[sessionId]) return;
     setLoadingMoreBySession((prev) => ({ ...prev, [sessionId]: true }));
@@ -1201,6 +1303,47 @@ export default function App() {
     [selectedSessionId]
   );
 
+  // popout:把某 session 弹到独立窗口(主窗口打包当前 React state 快照 → 后端中转 → 新窗口还原)。
+  const popoutSession = useCallback(async (sessionId: string) => {
+    // 打包当前内存 state(进行中的流式 turn / 队列 / 草稿 / 实时 plan / 待决权限),供 popout 还原。
+    // 已落库的对话历史由 popout 自己从 SQLite LoadMessages 拉,不打包(太大)。
+    const snapshot = JSON.stringify({
+      items: itemsBySession[sessionId] ?? [],
+      queue: queueBySession[sessionId] ?? [],
+      draft: draftBySession[sessionId] ?? "",
+      livePlan: livePlanBySession[sessionId] ?? null,
+      permission: permissionBySession[sessionId] ?? null,
+      // 终端:面板开关 + tab 列表 + active tab。tab.id 对应后端同一 PTY —— popout 新建 xterm
+      // 后订阅同一 id 的 terminal:data,并调 GetTerminalScrollback replay 历史(ring buffer)。
+      termOpen: termOpenBySession[sessionId] ?? false,
+      termTabs: termTabsBySession[sessionId] ?? [],
+      activeTerm: activeTermBySession[sessionId] ?? null,
+    });
+    await ChatService.SaveSessionSnapshot(sessionId, snapshot);
+    await ChatService.OpenSessionWindow(sessionId);
+    // 乐观更新:立即标记为 popped,让主窗口对该 session 视而不见(不等 popout-changed 事件往返)。
+    setPoppedSessionIds((prev) => { const n = new Set(prev); n.add(sessionId); return n; });
+  }, [itemsBySession, queueBySession, draftBySession, livePlanBySession, permissionBySession, termOpenBySession, termTabsBySession, activeTermBySession]);
+  // 临时调试:暴露 popoutSession 到 window,供 server 模式浏览器测试调用。
+  useEffect(() => { (window as unknown as Record<string, unknown>).__popoutSession = popoutSession; }, [popoutSession]);
+
+  // 聚焦已弹出的 popout 窗口(不新开)。
+  const focusPopout = useCallback((sessionId: string) => {
+    void ChatService.FocusSessionWindow(sessionId);
+  }, []);
+
+  // 关闭 popout 窗口,移回主窗口(触发 WindowWillClose → 后端推 popout-changed false → 主窗口恢复渲染)。
+  const closePopout = useCallback((sessionId: string) => {
+    void ChatService.CloseSessionWindow(sessionId);
+  }, []);
+
+  // popout 窗口置顶 toggle:切换「始终置顶」状态,后端调 SetAlwaysOnTop。
+  const toggleOnTop = useCallback(() => {
+    if (!popoutMode) return;
+    const next = !onTop;
+    setOnTop(next);
+    void ChatService.SetSessionWindowOnTop(popoutMode, next);
+  }, [popoutMode, onTop]);
   // 切换置顶(0008):后端落库后前端乐观本地重排。不复用 refreshSessions —— 那会全量替换、
   // turn 进行中时洗掉前端直播标题(见 2026-07-01-sidebar-session-search.md 的坑);本地重排规避它、即时生效。
   // 重排复刻 DB 排序:pinned DESC → promptedAt DESC → updatedAt DESC,稳定排序保证同级不乱跳。
@@ -1252,15 +1395,34 @@ export default function App() {
   const sidebarPanelRef = usePanelRef();
   const sidePanelRef = usePanelRef();
   const [leftCollapsed, setLeftCollapsed] = useState(false);
-  const [rightCollapsed, setRightCollapsed] = useState(false);
+  // popout 窗口:右侧面板默认收起(给对话区最大显示面积);主窗口默认展开。
+  const [rightCollapsed, setRightCollapsed] = useState(isPopout);
   const syncCollapsed = (ref: RefObject<PanelImperativeHandle | null>, set: (v: boolean) => void) => {
     const c = ref.current?.isCollapsed();
     if (c != null) set(c);
   };
   const collapseSidebar = () => sidebarPanelRef.current?.collapse();
   const expandSidebar = () => sidebarPanelRef.current?.expand();
-  const collapseSide = () => sidePanelRef.current?.collapse();
-  const expandSide = () => sidePanelRef.current?.expand();
+  const collapseSide = () => { sidePanelRef.current?.collapse(); if (isPopout && popoutMode) void ChatService.ShrinkSessionWindow(popoutMode); };
+  const expandSide = () => { sidePanelRef.current?.expand(); if (isPopout && popoutMode) void ChatService.ExpandSessionWindow(popoutMode); };
+
+  // 窗口窄时自动折叠右侧面板:聊天区需要足够宽度(对话流可读),窗口 < 750px 时
+ // 右侧 SidePanel 自动收起,给聊天区让空间。用户仍可手动展开(rail 按钮),
+ // 但展开后聊天区有 minSize 保障不会被挤没。popout 窗口默认比主窗口小,尤其需要。
+ const NARROW_THRESHOLD = 750;
+ useEffect(() => {
+   const onResize = () => {
+     const w = window.innerWidth;
+     if (w < NARROW_THRESHOLD) {
+       sidePanelRef.current?.collapse();
+     }
+   };
+   window.addEventListener("resize", onResize);
+   // popout 模式:首次挂载直接收起右侧面板(给对话区最大面积)。
+   if (isPopout) sidePanelRef.current?.collapse();
+   else onResize(); // 主窗口:首次挂载检查窄屏
+   return () => window.removeEventListener("resize", onResize);
+ }, [isPopout]);
 
 
 
@@ -1272,15 +1434,15 @@ export default function App() {
       id="monkey-deck-layout"
       defaultLayout={defaultLayout}
       onLayoutChanged={onLayoutChanged}
-      data-sidebar-collapsed={leftCollapsed ? "true" : "false"}
+      data-sidebar-collapsed={isPopout ? "popout" : (leftCollapsed ? "true" : "false")}
     >
+      {!isPopout && (
       <Panel
         id="sidebar"
         defaultSize="18%"
         minSize="12%"
         maxSize="30%"
         collapsible
-        collapsedSize={0}
         panelRef={sidebarPanelRef}
         onResize={() => syncCollapsed(sidebarPanelRef, setLeftCollapsed)}
       >
@@ -1307,12 +1469,17 @@ export default function App() {
           onCollapse={collapseSidebar}
           onOpenSettings={() => setSettingsOpen(true)}
           harnessUpdateAvailable={harnessUpdateAvailable}
+          poppedSessionIds={poppedSessionIds}
+          onPopoutSession={popoutSession}
+          onFocusPopout={focusPopout}
+          onClosePopout={closePopout}
         />
       </Panel>
-      {!leftCollapsed && <Separator className="resize-handle" />}
-      <Panel id="main" minSize="30%">
+      )}
+      {!isPopout && !leftCollapsed && <Separator className="resize-handle" />}
+      <Panel id="main" minSize={isPopout ? "520px" : "30%"}>
         <main className="main">
-          {selectedSessionId ? (
+          {selectedSessionId && (isPopout || !poppedSessionIds.has(selectedSessionId)) ? (
             <Group orientation="vertical" id="main-vertical" className="main-vertical">
               <Panel id="chat-area" minSize="20%">
             <ChatView
@@ -1394,7 +1561,7 @@ export default function App() {
       {!rightCollapsed && <Separator className="resize-handle" />}
       <Panel
         id="side"
-        defaultSize="20%"
+        defaultSize={isPopout ? 0 : "20%"}
         minSize="14%"
         maxSize="34%"
         collapsible
@@ -1402,7 +1569,7 @@ export default function App() {
         panelRef={sidePanelRef}
         onResize={() => syncCollapsed(sidePanelRef, setRightCollapsed)}
       >
-        {selectedSessionId && activeSession ? (
+        {selectedSessionId && activeSession && (isPopout || !poppedSessionIds.has(selectedSessionId)) ? (
           <SidePanel
             sessionId={selectedSessionId}
             rootName={selectedProject?.name || ""}
@@ -1455,6 +1622,21 @@ export default function App() {
         data-tooltip-place="left"
       >
         <PanelRightOpen size={14} />
+      </button>
+    )}
+    {/* popout 窗口专属:置顶 toggle。浮在右上角(macOS 红绿灯右侧)。 */}
+    {isPopout && (
+      <button
+        type="button"
+        className={`panel-rail on-top-toggle ${onTop ? "active" : ""}`}
+        onClick={toggleOnTop}
+        data-testid="toggle-on-top"
+        aria-label={t("app.toggleAlwaysOnTop")}
+        data-tooltip-id="md-tip"
+        data-tooltip-content={t("app.toggleAlwaysOnTop")}
+        data-tooltip-place="left"
+      >
+        <Pin size={14} />
       </button>
     )}
     {newSession && (
