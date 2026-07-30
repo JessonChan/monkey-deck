@@ -593,10 +593,11 @@ func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorkt
 				slog.Warn("persist session base ref failed", "err", err)
 			} else {
 				se.BaseRef = resolvedBase
-				// 记住本次选择(per-project),下次新建该项目的对话默认选它(§5.3 本地是真相来源)。
-				if err := s.st.SetSetting(s.ctx, "baseRef:"+projectID, resolvedBase); err != nil {
-					slog.Warn("persist last baseRef", "err", err)
-				}
+				// Record this selection into the per-project recent history so the
+				// NewSessionModal "Recently used" group surfaces it next time (most-recent-
+				// first, deduped, capped). §5.3 local-is-truth; per-project because base
+				// branches differ across projects.
+				s.recordBaseRefHistory(projectID, resolvedBase)
 			}
 		}
 	}
@@ -2701,10 +2702,15 @@ func (s *ChatService) IsGitProject(projectID string) (bool, error) {
 	return worktree.IsRepo(proj.Path), nil
 }
 
-// ResolveBaseRefDefault 返回 NewSessionModal 的默认基线分支(预选 + 星标 + 置顶)。
-// 优先级:① 记住的上次选择(per-project setting `baseRef:<id>`),验证分支仍存在 → 用它;
-// ② 探测仓库默认(origin/HEAD → main/master probe);③ 都没有 → Ok=false(必选,Route A strict)。
-// 「记住上次选择」让重复新建零摩擦;per-project 是因为不同项目基线不同(A=main,B=develop)。
+// ResolveBaseRefDefault returns the repo's detected default branch (origin/HEAD →
+// main/master probe) for the NewSessionModal. It is pinned to the top of the selector
+// as the "Default branch" group and starred. Detection failure → Ok=false (selector
+// still works, just no Default group).
+//
+// This NO LONGER pre-selects a base nor folds in the last selection: the user must pick
+// a base explicitly (pre-selection caused wrong-base mistakes). Recent selections are
+// surfaced separately via RecentBaseRefs. §1.4 explicit base, never silently fall back
+// to HEAD.
 func (s *ChatService) ResolveBaseRefDefault(projectID string) (worktree.DefaultBaseRef, error) {
 	proj, err := s.st.GetProject(s.ctx, projectID)
 	if err != nil {
@@ -2713,16 +2719,10 @@ func (s *ChatService) ResolveBaseRefDefault(projectID string) (worktree.DefaultB
 	if proj == nil {
 		return worktree.DefaultBaseRef{}, fmt.Errorf("project not found: %s", projectID)
 	}
-	// ① 上次选择:仍存在就用它(用户最近一次的意图最可信)。
-	if last, _ := s.st.GetSetting(s.ctx, "baseRef:"+projectID); last != "" {
-		if worktree.RefExists(proj.Path, last) {
-			return worktree.DefaultBaseRef{BaseRef: last, Ok: true}, nil
-		}
-	}
-	// ② 探测默认。
 	name, err := worktree.ResolveDefaultBaseRef(proj.Path)
 	if err != nil {
-		// 探测不到不算错误:返回 Ok=false 让前端走「必选」态。
+		// Detection failure is not an error: return Ok=false so the selector simply omits
+		// the Default group (user still picks from recent + all).
 		return worktree.DefaultBaseRef{BaseRef: "", Ok: false}, nil
 	}
 	return worktree.DefaultBaseRef{BaseRef: name, Ok: true}, nil
@@ -2739,6 +2739,67 @@ func (s *ChatService) SearchBaseRefs(projectID string) ([]worktree.BranchInfo, e
 		return nil, fmt.Errorf("project not found: %s", projectID)
 	}
 	return worktree.ListBranches(proj.Path)
+}
+
+// RecentBaseRefs returns the project's recently-selected base branches (most-recent-
+// first), filtered to refs that still exist. Powers the NewSessionModal "Recently used"
+// group. Per-project (baseRefHistory:<id> setting, JSON array).
+func (s *ChatService) RecentBaseRefs(projectID string) ([]string, error) {
+	proj, err := s.st.GetProject(s.ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if proj == nil {
+		return nil, fmt.Errorf("project not found: %s", projectID)
+	}
+	raw, _ := s.st.GetSetting(s.ctx, "baseRefHistory:"+projectID)
+	if raw == "" {
+		return []string{}, nil
+	}
+	var hist []string
+	if err := json.Unmarshal([]byte(raw), &hist); err != nil {
+		return []string{}, nil
+	}
+	// Drop branches that no longer exist; preserve recency order.
+	out := make([]string, 0, len(hist))
+	for _, h := range hist {
+		if worktree.RefExists(proj.Path, h) {
+			out = append(out, h)
+		}
+	}
+	return out, nil
+}
+
+// recordBaseRefHistory prepends baseRef to the per-project recent-selection history
+// (most-recent-first, deduped, capped at 5). Best-effort: errors are logged, not fatal.
+func (s *ChatService) recordBaseRefHistory(projectID, baseRef string) {
+	if baseRef == "" {
+		return
+	}
+	const histCap = 5
+	var hist []string
+	if raw, _ := s.st.GetSetting(s.ctx, "baseRefHistory:"+projectID); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &hist)
+	}
+	// Dedup: drop any existing occurrence of baseRef, then prepend (most-recent-first).
+	deduped := make([]string, 0, len(hist)+1)
+	for _, h := range hist {
+		if h != baseRef {
+			deduped = append(deduped, h)
+		}
+	}
+	out := append([]string{baseRef}, deduped...)
+	if len(out) > histCap {
+		out = out[:histCap]
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		slog.Warn("marshal baseRef history", "err", err)
+		return
+	}
+	if err := s.st.SetSetting(s.ctx, "baseRefHistory:"+projectID, string(data)); err != nil {
+		slog.Warn("persist baseRef history", "err", err)
+	}
 }
 
 // SessionMergeable 报告该 session 是否有可合并内容(branch 有领先基线的已提交 commit)。
