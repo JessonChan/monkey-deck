@@ -21,6 +21,7 @@ interface Props {
   changes: FileChange[] | null;
   mergeResult: string | null;
   mergeable: boolean;  // branch 有无领先基线的已提交 commit(无则 disable + 提示)
+  isGuest: boolean;  // guest(进入已有 worktree)→ 合并禁用 + 「无权合并」提示
   onMerge: () => void;
   // VS Code SCM 风格:暂存 / 取消暂存 / 丢弃 / 提交。paths 为空表示「全部」。
   onStage: (paths: string[]) => Promise<void>;
@@ -52,6 +53,7 @@ export default function GitPanel({
   changes,
   mergeResult,
   mergeable,
+  isGuest,
   onMerge,
   onStage,
   onUnstage,
@@ -297,18 +299,22 @@ export default function GitPanel({
       </Group>
 
       <button
-        className={`merge-btn-full${!mergeable ? " disabled-hint" : ""}`}
+        className={`merge-btn-full${!mergeable || isGuest ? " disabled-hint" : ""}`}
         onClick={onMerge}
-        disabled={busy || !mergeable}
+        disabled={busy || !mergeable || isGuest}
         data-testid="merge-btn"
         data-tooltip-id="md-tip"
-        data-tooltip-content={mergeable
-          ? (baseRef ? t("gitPanel.mergeTipBase", { branch: baseRef }) : t("gitPanel.mergeTipLegacy"))
-          : t("gitPanel.mergeNothingTip")}
+        data-tooltip-content={isGuest
+          ? t("gitPanel.mergeGuestTip")
+          : (mergeable
+              ? (baseRef ? t("gitPanel.mergeTipBase", { branch: baseRef }) : t("gitPanel.mergeTipLegacy"))
+              : t("gitPanel.mergeNothingTip"))}
       >
-        {mergeable
-          ? (baseRef ? t("gitPanel.mergeIntoBase", { branch: baseRef }) : t("gitPanel.mergeBtn"))
-          : t("gitPanel.mergeNothing")}
+        {isGuest
+          ? t("gitPanel.mergeGuest")
+          : (mergeable
+              ? (baseRef ? t("gitPanel.mergeIntoBase", { branch: baseRef }) : t("gitPanel.mergeBtn"))
+              : t("gitPanel.mergeNothing"))}
       </button>
 
       {mergeResult && (

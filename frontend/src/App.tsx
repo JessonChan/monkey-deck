@@ -14,6 +14,7 @@ import type { TerminalTab } from "./lib/terminalTypes";
 import { disposeTerminal } from "./lib/termRegistry";
 import NewSessionModal, { type NewSessionChoice } from "./components/NewSessionModal";
 import SettingsPanel from "./components/SettingsPanel";
+import DeleteWorktreeDialog from "./components/DeleteWorktreeDialog";
 import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import { Group, Panel, Separator, useDefaultLayout, usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
 import { Tooltip } from "react-tooltip";
@@ -113,6 +114,9 @@ export default function App() {
     [harnesses],
   );
   const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean; lastHarness: string; defaultBaseRef: string; recentRefs: string[]; branches: BranchInfo[]; worktrees: WorktreeInfo[] } | null>(null);  // new-chat modal
+  // Owner-with-guests delete flow: when deleting an owner session whose worktree still has
+  // guest chats, defer to a 3-option dialog (delete worktree + all/keep others). null = closed.
+  const [deleteWt, setDeleteWt] = useState<{ sessionId: string; projectId: string; guests: Session[] } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false); // 统一设置中心面板(收敛语言/提示音/权限/harness)
   // 集成终端(per-session,与 agent ACP 通道完全分离;§1.1 agent 永远走 ACP)。
   // 终端面板开关也 per-session:session A 开着,切到 B 时 B 按自己的状态显示(各自独立)。
@@ -748,6 +752,11 @@ export default function App() {
         const mergeable = await ChatService.SessionMergeable(sessionId);
         setMergeableBySession((prev) => ({ ...prev, [sessionId]: mergeable }));
       } catch { /* 非 git session:保持 false */ }
+      // worktree 身份:guest 的合并按钮要禁用 + 给「无权合并」提示(owner/project 正常)。
+      try {
+        const kind = await ChatService.WorktreeKind(sessionId);
+        setWorktreeKindBySession((prev) => ({ ...prev, [sessionId]: kind }));
+      } catch { /* keep absent → treat as project */ }
     },
     [messagesToItems, selectedProjectId, sessionsByProject]
   );
@@ -1160,7 +1169,6 @@ export default function App() {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     refreshTimerRef.current = setTimeout(() => {
       const sid = selectedSessionIdRef.current;
-      if (!sid) return;
       if (statusRef.current === "readonly" || statusRef.current === "empty") return;
       ChatService.RefreshSessionConfig(sid).catch((e) => {
         setError(`${t("chat.refreshConfigFailed")}: ${extractErrMsg(e)}`);
@@ -1172,6 +1180,7 @@ export default function App() {
   const [sessionDiff, setSessionDiff] = useState<string | null>(null);
   const [sessionChanges, setSessionChanges] = useState<FileChange[] | null>(null);
   const [mergeableBySession, setMergeableBySession] = useState<Record<string, boolean>>({});  // per-session:branch 有无领先基线的已提交 commit(决定合并按钮 enable/disable)
+  const [worktreeKindBySession, setWorktreeKindBySession] = useState<Record<string, string>>({});  // per-session:"project"|"owner"|"guest"(guest → 合并禁用 + 提示)
   const mergeSession = useCallback(async () => {
     if (!selectedSessionId) return;
     try {
@@ -1273,52 +1282,110 @@ export default function App() {
     [projects, refreshProjects]
   );
 
-  // 删除 session:后端关 harness + 清 worktree + 删 DB;前端清掉该 session 的所有 per-session 缓存 + 从侧栏列表移除,
-  // 若是当前选中则清空选中态。删除是硬删除(DB 记录也没了),不可恢复。
-  const removeSession = useCallback(
-    async (sessionId: string) => {
-      await ChatService.DeleteSession(sessionId);
-      const drop = <T,>(prev: Record<string, T>) => { if (!(sessionId in prev)) return prev; const n = { ...prev }; delete n[sessionId]; return n; };
-      void TerminalService.KillSessionTerminals(sessionId);
-      setTermTabsBySession(drop);
-      setActiveTermBySession(drop);
-      setTermOpenBySession(drop);
-      setSessionsByProject((prev) => {
-        const next: Record<string, Session[]> = {};
-        for (const [pid, list] of Object.entries(prev)) next[pid] = list.filter((s) => s.id !== sessionId);
-        return next;
-      });
-      setItemsBySession(drop);
-      setHasMoreBySession(drop);
-      setUsageBySession(drop);
-      setStatusBySession(drop);
-      setStatusDetailBySession(drop);
-      setActivityBySession(drop);
-      setUnreadBySession(drop);
-      setPermissionBySession(drop);
-      setQueueBySession(drop);
-      setDraftBySession(drop);
-      setHistoryBySession(drop);
-      setAttachmentsBySession(drop);
-      setMentionsBySession(drop);
-      setImagesBySession(drop);
-      setImageSupportedBySession(drop);
-      setAudiosBySession(drop);
-      setAudioSupportedBySession(drop);
-      setConfigOptionsBySession(drop);
-      queueBySessionRef.current = drop(queueBySessionRef.current);
-      userStoppedBySessionRef.current.delete(sessionId);
-      drainingBySessionRef.current.delete(sessionId);
-      const t = scheduledTimersRef.current[sessionId];
-      if (t) { clearTimeout(t); delete scheduledTimersRef.current[sessionId]; }
-      delete oldestSeqRef.current[sessionId];
-      loadedSessionsRef.current.delete(sessionId);
-      historySeededRef.current.delete(sessionId);
-      configSeededRef.current.delete(sessionId);
-      if (selectedSessionId === sessionId) setSelectedSessionId(null);
-    },
-    [selectedSessionId]
-  );
+  // purgeSessionState drops every per-session cache + removes the session from the sidebar
+  // list + clears selection. Shared by all delete paths. Does NOT call the backend.
+  const purgeSessionState = useCallback((sessionId: string) => {
+    const drop = <T,>(prev: Record<string, T>) => { if (!(sessionId in prev)) return prev; const n = { ...prev }; delete n[sessionId]; return n; };
+    void TerminalService.KillSessionTerminals(sessionId);
+    setTermTabsBySession(drop);
+    setActiveTermBySession(drop);
+    setTermOpenBySession(drop);
+    setSessionsByProject((prev) => {
+      const next: Record<string, Session[]> = {};
+      for (const [pid, list] of Object.entries(prev)) next[pid] = list.filter((s) => s.id !== sessionId);
+      return next;
+    });
+    setItemsBySession(drop);
+    setHasMoreBySession(drop);
+    setUsageBySession(drop);
+    setStatusBySession(drop);
+    setStatusDetailBySession(drop);
+    setActivityBySession(drop);
+    setUnreadBySession(drop);
+    setPermissionBySession(drop);
+    setQueueBySession(drop);
+    setDraftBySession(drop);
+    setHistoryBySession(drop);
+    setAttachmentsBySession(drop);
+    setMentionsBySession(drop);
+    setImagesBySession(drop);
+    setImageSupportedBySession(drop);
+    setAudiosBySession(drop);
+    setAudioSupportedBySession(drop);
+    setConfigOptionsBySession(drop);
+    queueBySessionRef.current = drop(queueBySessionRef.current);
+    userStoppedBySessionRef.current.delete(sessionId);
+    drainingBySessionRef.current.delete(sessionId);
+    const t = scheduledTimersRef.current[sessionId];
+    if (t) { clearTimeout(t); delete scheduledTimersRef.current[sessionId]; }
+    delete oldestSeqRef.current[sessionId];
+    loadedSessionsRef.current.delete(sessionId);
+    historySeededRef.current.delete(sessionId);
+    configSeededRef.current.delete(sessionId);
+    if (selectedSessionId === sessionId) setSelectedSessionId(null);
+  }, [selectedSessionId]);
+
+  // projectIdOf looks up a session's project id from the cached sidebar list.
+  const projectIdOf = useCallback((sessionId: string): string => {
+    for (const list of Object.values(sessionsByProject)) {
+      const s = list.find((x) => x.id === sessionId);
+      if (s) return s.projectId;
+    }
+    return "";
+  }, [sessionsByProject]);
+
+  // Delete a session. Chat-only for guest/project; owner also removes the worktree; owner WITH
+  // guests defers to the 3-option dialog (DeleteWorktreeDialog) since removing the worktree
+  // affects them. Hard delete (DB row gone), unrecoverable.
+  const removeSession = useCallback(async (sessionId: string) => {
+    let kind = "project";
+    try { kind = await ChatService.WorktreeKind(sessionId); } catch { /* treat as project */ }
+    if (kind === "owner") {
+      let guests: Session[] = [];
+      try { guests = await ChatService.WorktreeGuests(sessionId); } catch {}
+      if (guests.length > 0) {
+        setDeleteWt({ sessionId, projectId: projectIdOf(sessionId), guests });
+        return; // the dialog drives the rest
+      }
+      // owner, no guests → delete the worktree (needs the owner row) then the chat.
+      await ChatService.DeleteWorktree(sessionId).catch(() => {});
+    }
+    await ChatService.DeleteSession(sessionId);
+    purgeSessionState(sessionId);
+  }, [projectIdOf, purgeSessionState]);
+
+  // confirmDeleteWorktree runs the owner-with-guests choice:
+  //   "all"  → delete owner + every guest + the worktree;
+  //   "keep" → detach guests (keep their history, fall back to project dir) + delete owner + worktree.
+  const confirmDeleteWorktree = useCallback(async (mode: "all" | "keep") => {
+    const dw = deleteWt;
+    if (!dw) return;
+    setDeleteWt(null);
+    const pid = dw.projectId;
+    try {
+      if (mode === "all") {
+        // Close+delete guests first (their harnesses run in the worktree), then remove the
+        // worktree (owner row still exists), then delete the owner.
+        for (const g of dw.guests) {
+          await ChatService.DeleteSession(g.id);
+          purgeSessionState(g.id);
+        }
+        await ChatService.DeleteWorktree(dw.sessionId).catch(() => {});
+        await ChatService.DeleteSession(dw.sessionId);
+        purgeSessionState(dw.sessionId);
+      } else {
+        // keep: detach guests (clear their worktree ref), remove worktree + owner chat.
+        await ChatService.DetachWorktreeGuests(dw.sessionId).catch(() => {});
+        await ChatService.DeleteWorktree(dw.sessionId).catch(() => {});
+        await ChatService.DeleteSession(dw.sessionId);
+        purgeSessionState(dw.sessionId);
+      }
+      if (pid) await refreshSessions(pid);
+    } catch (e) {
+      setError(extractErrMsg(e));
+      if (pid) await refreshSessions(pid);
+    }
+  }, [deleteWt, purgeSessionState, refreshSessions]);
 
   // popout:把某 session 弹到独立窗口(主窗口打包当前 React state 快照 → 后端中转 → 新窗口还原)。
   const popoutSession = useCallback(async (sessionId: string) => {
@@ -1599,6 +1666,7 @@ export default function App() {
             baseRef={activeSession.baseRef || ""}
             onMerge={mergeSession}
             mergeable={mergeableBySession[selectedSessionId] ?? false}
+            isGuest={worktreeKindBySession[selectedSessionId] === "guest"}
             onStage={stageFiles}
             onUnstage={unstageFiles}
             onDiscard={discardFiles}
@@ -1669,6 +1737,13 @@ export default function App() {
         worktrees={newSession.worktrees}
         onConfirm={confirmNewSession}
         onCancel={() => setNewSession(null)}
+      />
+    )}
+    {deleteWt && (
+      <DeleteWorktreeDialog
+        guests={deleteWt.guests}
+        onConfirm={confirmDeleteWorktree}
+        onCancel={() => setDeleteWt(null)}
       />
     )}
     {settingsOpen && (

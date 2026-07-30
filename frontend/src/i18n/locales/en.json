@@ -381,7 +381,16 @@
     "mergeTipBase": "Merge this session's branch back into {{branch}} (its base). Only committed changes are merged; uncommitted changes stay in the worktree.",
     "mergeTipLegacy": "Merge this session's branch into the main repo's current HEAD (legacy session without explicit base).",
     "mergeNothing": "Nothing to merge",
-    "mergeNothingTip": "No commits ahead of the base branch. Commit your changes first, or this session is already merged."
+    "mergeNothingTip": "No commits ahead of the base branch. Commit your changes first, or this session is already merged.",
+    "mergeGuest": "Merge unavailable",
+    "mergeGuestTip": "You're a guest in this worktree (entered an existing directory) — merge is unavailable. Only the worktree's owner can merge."
+  },
+  "deleteWt": {
+    "title": "Delete this worktree?",
+    "body": "{{count}} other conversation(s) still use this worktree. Deleting it affects them.",
+    "cancel": "Cancel",
+    "keep": "Delete worktree, keep other conversations",
+    "all": "Delete worktree and all conversations"
   },
   "sidePanel": {
     "files": "Files",
