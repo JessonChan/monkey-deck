@@ -12,13 +12,13 @@ import SidePanel from "./components/SidePanel";
 import TerminalPanel from "./components/TerminalPanel";
 import type { TerminalTab } from "./lib/terminalTypes";
 import { disposeTerminal } from "./lib/termRegistry";
-import NewSessionModal from "./components/NewSessionModal";
+import NewSessionModal, { type NewSessionChoice } from "./components/NewSessionModal";
 import SettingsPanel from "./components/SettingsPanel";
 import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import { Group, Panel, Separator, useDefaultLayout, usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
 import { Tooltip } from "react-tooltip";
 import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin } from "lucide-react";
-import type { FileChange, BranchInfo } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
+import type { FileChange, BranchInfo, WorktreeInfo } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import { applyEventToItems as applyEventToItemsPure } from "./lib/streamMerge";
 import { shouldDropOnSwitch } from "./lib/sessionDrop";
 import { isNotifySoundEnabled, playNotifySound } from "./lib/notifySound";
@@ -112,7 +112,7 @@ export default function App() {
     () => harnesses.some((h) => h.upgradeAvailable),
     [harnesses],
   );
-  const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean; lastHarness: string; defaultBaseRef: string; recentRefs: string[]; branches: BranchInfo[] } | null>(null);  // new-chat modal
+  const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean; lastHarness: string; defaultBaseRef: string; recentRefs: string[]; branches: BranchInfo[]; worktrees: WorktreeInfo[] } | null>(null);  // new-chat modal
   const [settingsOpen, setSettingsOpen] = useState(false); // 统一设置中心面板(收敛语言/提示音/权限/harness)
   // 集成终端(per-session,与 agent ACP 通道完全分离;§1.1 agent 永远走 ACP)。
   // 终端面板开关也 per-session:session A 开着,切到 B 时 B 按自己的状态显示(各自独立)。
@@ -798,34 +798,45 @@ export default function App() {
       let defaultBaseRef = "";
       let recentRefs: string[] = [];
       let branches: BranchInfo[] = [];
+      let worktrees: WorktreeInfo[] = [];
       if (isGit) {
-        // defaultBaseRef = detected repo default (origin/HEAD → main/master) for the
-        // "Default branch" group; detection failure just omits that group (Route A strict,
-        // never falls back to HEAD). recentRefs = this project's recently-used bases for
-        // the "Recently used" group. branches = local+remote list for the "All" group.
-        const [def, list, recent] = await Promise.all([
+        // Prefetch everything the modal's two selectors need:
+        //   defaultBaseRef/recentRefs/branches → "new worktree" base-ref selector;
+        //   worktrees → "use existing directory" selector (project main + linked worktrees).
+        const [def, list, recent, wts] = await Promise.all([
           ChatService.ResolveBaseRefDefault(pid).catch(() => ({ baseRef: "", ok: false })),
           ChatService.SearchBaseRefs(pid).catch(() => []),
           ChatService.RecentBaseRefs(pid).catch(() => []),
+          ChatService.ListWorktrees(pid).catch(() => []),
         ]);
         defaultBaseRef = def?.ok ? def.baseRef : "";
         branches = list || [];
         recentRefs = recent || [];
+        worktrees = wts || [];
       }
-      setNewSession({ projectId: pid, isGit, lastHarness, defaultBaseRef, recentRefs, branches });
+      setNewSession({ projectId: pid, isGit, lastHarness, defaultBaseRef, recentRefs, branches, worktrees });
     } catch (e) {
       setError(extractErrMsg(e));
     }
   }, [selectedProjectId]);
 
-  // 用户在弹窗确认后真正创建 session。
-  const confirmNewSession = useCallback(async (harness: string, useWorktree: boolean, baseRef: string) => {
+  // 用户在弹窗确认后真正创建 session。按 mode 分发到三条后端路径:
+  //   project → CreateSession(useWorktree=false);new → CreateSession(useWorktree=true, baseRef);
+  //   enter → CreateGuestSession(enterPath) 钉到已有 worktree(guest)。
+  const confirmNewSession = useCallback(async (choice: NewSessionChoice) => {
     const pid = newSession?.projectId;
     if (!pid) return;
     setNewSession(null);
     try {
       if (pid !== selectedProjectId) await selectProject(pid);
-      const se = await ChatService.CreateSession(pid, "", harness, useWorktree, baseRef);
+      let se: Session | undefined;
+      if (choice.mode === "enter" && choice.enterPath) {
+        se = await ChatService.CreateGuestSession(pid, "", choice.harness, choice.enterPath);
+      } else if (choice.mode === "new") {
+        se = await ChatService.CreateSession(pid, "", choice.harness, true, choice.baseRef ?? "");
+      } else {
+        se = await ChatService.CreateSession(pid, "", choice.harness, false, "");
+      }
       if (se) {
         setItemsBySession((prev) => ({ ...prev, [se.id]: [] }));
         setStatusBySession((prev) => ({ ...prev, [se.id]: "empty" }));
@@ -1655,6 +1666,7 @@ export default function App() {
         defaultBaseRef={newSession.defaultBaseRef}
         recentRefs={newSession.recentRefs}
         branches={newSession.branches}
+        worktrees={newSession.worktrees}
         onConfirm={confirmNewSession}
         onCancel={() => setNewSession(null)}
       />

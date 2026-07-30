@@ -1,38 +1,48 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import type { BranchInfo } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
+import type { BranchInfo, WorktreeInfo } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import HarnessIcon from "./HarnessIcon";
+
+// What the modal hands back on confirm. mode drives which backend create path App.tsx uses:
+//   "project" → CreateSession(useWorktree=false)   — run in the project's main worktree.
+//   "enter"   → CreateGuestSession(enterPath)      — pin to an EXISTING linked worktree (guest).
+//   "new"     → CreateSession(useWorktree=true, baseRef) — fork a fresh md/<id> worktree (owner).
+export type NewSessionChoice = {
+  harness: string;
+  mode: "project" | "enter" | "new";
+  baseRef?: string;   // mode="new": base branch to fork from
+  enterPath?: string; // mode="enter": existing linked worktree path
+};
 
 interface Props {
   harnesses: Harness[];
   isGit: boolean;
   lastHarness: string;
   // Detected repo default branch (origin/HEAD → main/master) from ResolveBaseRefDefault.
-  // Pinned to the top of the selector as the "Default branch" group + starred. Empty =
-  // detection failed (group is simply omitted; user still picks from recent + all).
+  // Pinned to the top of the base-ref selector as the "Default branch" group + starred. Empty
+  // = detection failed (group omitted; user still picks from recent + all). mode="new" only.
   defaultBaseRef: string;
-  // This project's recently-used base branches (most-recent-first) for the "Recently
-  // used" group. Distinct from defaultBaseRef (a repo property) — these reflect user intent.
+  // This project's recently-used base branches (most-recent-first) for the "Recently used"
+  // group. mode="new" only.
   recentRefs: string[];
-  branches: BranchInfo[];  // one-shot local+remote list (frontend filtering/grouping)
-  onConfirm: (harness: string, useWorktree: boolean, baseRef: string) => void;
+  branches: BranchInfo[];     // one-shot local+remote branch list (mode="new" selector)
+  worktrees: WorktreeInfo[];  // git worktree list (mode="existing" selector): main + linked
+  onConfirm: (choice: NewSessionChoice) => void;
   onCancel: () => void;
 }
 
 // A branch row enriched with a formatted date string for display.
 type DecoratedBranch = BranchInfo & { dateStr: string };
 
-// New-chat modal: pick 1) agent harness (omp/opencode) 2) whether to make an isolated
-// worktree 3) when worktree, the base branch (explicit base, never falls back to HEAD —
-// todo/worktree-base-ref-selection.md §2). harness picks which ACP agent to spawn;
-// worktree picks whether to build an isolated git worktree (parallel isolation, §1.4);
-// baseRef is the worktree's start point + merge target (checkout-from = merge-back-to).
-// harness/worktree both require an explicit choice (null = unselected); worktree=true
-// requires an explicit baseRef (NOT pre-selected — pre-selection caused wrong-base
-// mistakes; the most-likely answer is just pinned to the top of the list).
-// Non-git projects hide the worktree option (no branches to make).
-export default function NewSessionModal({ harnesses, isGit, lastHarness, defaultBaseRef, recentRefs, branches, onConfirm, onCancel }: Props) {
+// New-chat modal: pick 1) agent harness 2) working-directory mode:
+//   - "使用已有工作目录" (existing): pick an existing worktree — the project main dir (→ project)
+//     or a linked worktree (→ guest, multiple sessions can share it, e.g. two agents reviewing).
+//   - "新建独立 worktree" (new): fork a fresh md/<id> branch off a chosen base (→ owner).
+// harness + workdir mode both require an explicit choice (null = unselected); each mode then
+// requires its own explicit pick (a directory / a base branch) — nothing is pre-selected
+// (pre-selection caused wrong-base mistakes). Non-git projects hide the workdir choice.
+export default function NewSessionModal({ harnesses, isGit, lastHarness, defaultBaseRef, recentRefs, branches, worktrees, onConfirm, onCancel }: Props) {
   const { t } = useTranslation();
   // harness 必须显式选择:null = 未选。lastHarness 仍可选时默认选它;单 harness 无歧义自动选;否则 null。
   const [harness, setHarness] = useState<string | null>(() => {
@@ -40,24 +50,24 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
     if (harnesses.length === 1) return harnesses[0].id;
     return null;
   });
-  // worktree 必须显式选择:null = 未选(默认),true = 新建,false = 使用项目目录。
-  const [worktree, setWorktree] = useState<boolean | null>(isGit ? null : false);
-  // Base branch: required when worktree=true. NOT pre-selected — starts empty so the user
-  // must pick explicitly (avoids wrong-base mistakes); the selector pins the detected
-  // default + recently-used to the top so the right answer is one click away. Value is
-  // preserved when toggling back to "shared dir" (so a prior pick survives).
+  // workdir mode: null = unselected, "existing" = use an existing worktree, "new" = fork a new one.
+  const [mode, setMode] = useState<"existing" | "new" | null>(null);
+  // Existing-worktree pick (mode="existing"): null = not picked yet. IsMain → project; else → guest.
+  const [existingDir, setExistingDir] = useState<WorktreeInfo | null>(null);
+  // Base branch (mode="new"): required, not pre-selected.
   const [baseRef, setBaseRef] = useState<string>("");
-  const [refOpen, setRefOpen] = useState(false);      // 选择器下拉开关
-  const [refQuery, setRefQuery] = useState("");        // 搜索过滤词
-  const [kindFilter, setKindFilter] = useState<"all" | "local" | "remote">("all");  // 本地/远程过滤
+  // base-ref selector dropdown state.
+  const [refOpen, setRefOpen] = useState(false);
+  const [refQuery, setRefQuery] = useState("");
+  const [kindFilter, setKindFilter] = useState<"all" | "local" | "remote">("all");
+  // existing-worktree selector dropdown state.
+  const [wtOpen, setWtOpen] = useState(false);
+  const [wtQuery, setWtQuery] = useState("");
 
   // Group the branch list into three ordered sections (each branch appears once):
   //   1. Default — detected repo default (defaultBaseRef), starred.
   //   2. Recently used — recentRefs order, excluding the default.
   //   3. All — the rest, in backend committerdate-desc order.
-  // Two-axis filter (name substring + local/remote) applies within every group; empty
-  // groups are hidden. dateStr: unix s → same-year drops year, with HH:MM, local tz.
-  // KISS: one-shot fetch + in-memory grouping, no debounced search (local repos are small).
   const grouped = useMemo(() => {
     const q = refQuery.trim().toLowerCase();
     const now = new Date();
@@ -79,14 +89,12 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
     const byName = new Map(branches.map((b) => [b.name, b]));
     const used = new Set<string>();
 
-    // 1. Default branch (0 or 1).
     let defaultItem: DecoratedBranch | null = null;
     const db = defaultBaseRef ? byName.get(defaultBaseRef) : undefined;
     if (db && matches(db)) {
       defaultItem = decorate(db);
       used.add(db.name);
     }
-    // 2. Recently used, in recency order (recentRefs already most-recent-first), excluding default.
     const recentItems: DecoratedBranch[] = [];
     for (const name of recentRefs) {
       const b = byName.get(name);
@@ -95,28 +103,58 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
         used.add(b.name);
       }
     }
-    // 3. All others in backend date-desc order (branches is already sorted; filter preserves order).
     const restItems = branches.filter((b) => !used.has(b.name) && matches(b)).map(decorate);
-
     return { defaultItem, recentItems, restItems };
   }, [branches, refQuery, kindFilter, defaultBaseRef, recentRefs]);
 
-  // Esc 关闭(§4.2)。
+  // Existing-worktree selector: filter by query (branch or path substring); main first, then
+  // linked. Empty groups hidden.
+  const wtGrouped = useMemo(() => {
+    const q = wtQuery.trim().toLowerCase();
+    const matches = (w: WorktreeInfo) => !q || w.branch.toLowerCase().includes(q) || w.path.toLowerCase().includes(q);
+    let mainItem: WorktreeInfo | null = null;
+    const linked: WorktreeInfo[] = [];
+    for (const w of worktrees) {
+      if (!matches(w)) continue;
+      if (w.isMain && !mainItem) mainItem = w;
+      else linked.push(w);
+    }
+    return { mainItem, linked };
+  }, [worktrees, wtQuery]);
+
+  // Esc close (§4.2).
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
-  // harness required + (non-git or worktree chosen) + baseRef required when worktree=true;
-  // else disable "Create". baseRef is never pre-selected, so worktree sessions always
-  // need an explicit pick.
-  const canConfirm = harness !== null && (!isGit || worktree !== null) && (worktree !== true || baseRef !== "");
+  // harness required + (non-git or mode chosen) + mode's own pick required. Nothing pre-selected.
+  const canConfirm = harness !== null
+    && (!isGit || mode !== null)
+    && (mode !== "existing" || existingDir !== null)
+    && (mode !== "new" || baseRef !== "");
 
-  // Shared option row for all three groups. isDefault adds the ★ marker.
-  const renderOption = (b: DecoratedBranch, isDefault: boolean) => (
+  const handleConfirm = () => {
+    if (harness === null) return;
+    if (!isGit) { onConfirm({ harness, mode: "project" }); return; }
+    if (mode === "existing" && existingDir) {
+      if (existingDir.isMain) onConfirm({ harness, mode: "project" });
+      else onConfirm({ harness, mode: "enter", enterPath: existingDir.path });
+    } else if (mode === "new" && baseRef) {
+      onConfirm({ harness, mode: "new", baseRef });
+    }
+  };
+
+  // Shorten a long worktree path for the secondary line: keep the last segment (an app
+  // worktree's tail is its session id) prefixed with …; full path is in the tooltip (§4.5).
+  const shortPath = (p: string): string => {
+    const parts = p.split("/");
+    return parts.length > 1 ? "…/" + parts[parts.length - 1] : p;
+  };
+
+  // Shared base-ref option row. isDefault adds the ★ marker.
+  const renderBranchOption = (b: DecoratedBranch, isDefault: boolean) => (
     <button
       key={b.name}
       type="button"
@@ -124,7 +162,6 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
       data-testid={`ns-base-ref-option-${b.name}`}
       onClick={() => { setBaseRef(b.name); setRefOpen(false); setRefQuery(""); }}
     >
-      {/* two-row layout: name on row 1, date + kind on row 2 (muted small text) */}
       <span className="ns-baseref-row1">
         <span className="ns-baseref-name">
           {isDefault && <span className="ns-baseref-default">★</span>}
@@ -134,6 +171,29 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
       <span className="ns-baseref-row2">
         {b.dateStr && <span className="ns-baseref-date">{b.dateStr}</span>}
         <span className={`ns-baseref-kind kind-${b.kind}`}>{b.kind === "local" ? t("newSession.baseRefLocal") : t("newSession.baseRefRemote")}</span>
+      </span>
+    </button>
+  );
+
+  // Shared existing-worktree option row. isMain shows the ★ + "项目主目录" title.
+  const renderWtOption = (w: WorktreeInfo, isMain: boolean) => (
+    <button
+      key={w.path}
+      type="button"
+      className={`ns-baseref-option ${existingDir?.path === w.path ? "active" : ""}`}
+      data-testid={`ns-wt-option-${w.path}`}
+      onClick={() => { setExistingDir(w); setWtOpen(false); setWtQuery(""); }}
+    >
+      <span className="ns-baseref-row1">
+        <span className="ns-baseref-name">
+          {isMain && <span className="ns-baseref-default">★</span>}
+          {isMain ? t("newSession.worktreeMain") : (w.branch || t("newSession.worktreeDetached"))}
+        </span>
+      </span>
+      <span className="ns-baseref-row2">
+        {isMain
+          ? (w.branch && <span className="ns-baseref-date">{w.branch}</span>)
+          : <span className="ns-baseref-date" data-tooltip-id="md-tip" data-tooltip-content={w.path}>{shortPath(w.path)}</span>}
       </span>
     </button>
   );
@@ -169,40 +229,101 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
           <div className="ns-field">
             <div className="ns-label">
               {t("newSession.workdir")}
-              {worktree === null && <span className="ns-required">{t("newSession.required")}</span>}
+              {mode === null && <span className="ns-required">{t("newSession.required")}</span>}
             </div>
             <div className="ns-worktree-group">
               <button
-                className={`ns-worktree ${worktree === false ? "active" : ""}`}
-                onClick={() => setWorktree(false)}
-                data-testid="ns-worktree-share"
+                className={`ns-worktree ${mode === "existing" ? "active" : ""}`}
+                onClick={() => setMode("existing")}
+                data-testid="ns-worktree-existing"
               >
-                <span className={`ns-radio ${worktree === false ? "on" : ""}`} />
+                <span className={`ns-radio ${mode === "existing" ? "on" : ""}`} />
                 <span className="ns-worktree-text">
-                  <span className="ns-worktree-title">{t("newSession.shareTitle")}</span>
-                  <span className="ns-worktree-desc">
-                    {t("newSession.shareDesc")}
-                  </span>
+                  <span className="ns-worktree-title">{t("newSession.existingTitle")}</span>
+                  <span className="ns-worktree-desc">{t("newSession.existingDesc")}</span>
                 </span>
               </button>
               <button
-                className={`ns-worktree ${worktree === true ? "active" : ""}`}
-                onClick={() => setWorktree(true)}
+                className={`ns-worktree ${mode === "new" ? "active" : ""}`}
+                onClick={() => setMode("new")}
                 data-testid="ns-worktree-new"
               >
-                <span className={`ns-radio ${worktree === true ? "on" : ""}`} />
+                <span className={`ns-radio ${mode === "new" ? "on" : ""}`} />
                 <span className="ns-worktree-text">
                   <span className="ns-worktree-title">{t("newSession.worktreeTitle")}</span>
-                  <span className="ns-worktree-desc">
-                    {t("newSession.worktreeDesc")}
-                  </span>
+                  <span className="ns-worktree-desc">{t("newSession.worktreeDesc")}</span>
                 </span>
               </button>
             </div>
           </div>
         )}
 
-        {isGit && worktree === true && (
+        {isGit && mode === "existing" && (
+          <div className="ns-field">
+            <div className="ns-label">
+              {t("newSession.existingDir")}
+              {existingDir === null && <span className="ns-required">{t("newSession.required")}</span>}
+            </div>
+            <div className="ns-baseref">
+              <button
+                type="button"
+                className="ns-baseref-trigger"
+                data-testid="ns-existing-select"
+                onClick={() => { setWtOpen((v) => !v); setWtQuery(""); }}
+              >
+                {existingDir ? (
+                  <span className="ns-baseref-value">
+                    {existingDir.isMain && <span className="ns-baseref-default">★</span>}
+                    {existingDir.isMain ? t("newSession.worktreeMain") : (existingDir.branch || t("newSession.worktreeDetached"))}
+                  </span>
+                ) : (
+                  <span className="ns-baseref-placeholder">{t("newSession.existingPlaceholder")}</span>
+                )}
+                <span className="ns-baseref-caret">▾</span>
+              </button>
+              {wtOpen && (
+                <div className="ns-baseref-dropdown" onClick={(e) => e.stopPropagation()}>
+                  <div className="ns-baseref-toolbar">
+                    <input
+                      className="ns-baseref-search"
+                      autoFocus
+                      placeholder={t("newSession.existingSearch")}
+                      value={wtQuery}
+                      onChange={(e) => setWtQuery(e.target.value)}
+                      data-testid="ns-existing-search"
+                    />
+                  </div>
+                  <div className="ns-baseref-list">
+                    {!wtGrouped.mainItem && wtGrouped.linked.length === 0 && (
+                      <div className="ns-baseref-empty">{t("newSession.existingEmpty")}</div>
+                    )}
+                    {wtGrouped.mainItem && (
+                      <div className="ns-baseref-group" data-testid="ns-wt-group-main">
+                        <div className="ns-baseref-grouphead">{t("newSession.worktreeMain")}</div>
+                        {renderWtOption(wtGrouped.mainItem, true)}
+                      </div>
+                    )}
+                    {wtGrouped.linked.length > 0 && (
+                      <div className="ns-baseref-group" data-testid="ns-wt-group-linked">
+                        <div className="ns-baseref-grouphead">{t("newSession.worktreeLinked")}</div>
+                        {wtGrouped.linked.map((w) => renderWtOption(w, false))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="ns-baseref-note">
+              {existingDir
+                ? (existingDir.isMain
+                    ? t("newSession.existingNoteMain")
+                    : t("newSession.existingNoteGuest", { branch: existingDir.branch || t("newSession.worktreeDetached") }))
+                : t("newSession.existingNoteNone")}
+            </div>
+          </div>
+        )}
+
+        {isGit && mode === "new" && (
           <div className="ns-field">
             <div className="ns-label">
               {t("newSession.baseRef")}
@@ -243,7 +364,6 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
                       onChange={(e) => setRefQuery(e.target.value)}
                       data-testid="ns-base-ref-search"
                     />
-                    {/* 本地/远程 filter:紧凑 chip 组,搜索框右侧,不占额外行高(空间小,KISS) */}
                     <div className="ns-baseref-filters" data-testid="ns-base-ref-filter">
                       {(["all", "local", "remote"] as const).map((k) => (
                         <button
@@ -265,19 +385,19 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
                     {grouped.defaultItem && (
                       <div className="ns-baseref-group" data-testid="ns-base-ref-group-default">
                         <div className="ns-baseref-grouphead">{t("newSession.baseRefGroupDefault")}</div>
-                        {renderOption(grouped.defaultItem, true)}
+                        {renderBranchOption(grouped.defaultItem, true)}
                       </div>
                     )}
                     {grouped.recentItems.length > 0 && (
                       <div className="ns-baseref-group" data-testid="ns-base-ref-group-recent">
                         <div className="ns-baseref-grouphead">{t("newSession.baseRefGroupRecent")}</div>
-                        {grouped.recentItems.map((b) => renderOption(b, false))}
+                        {grouped.recentItems.map((b) => renderBranchOption(b, false))}
                       </div>
                     )}
                     {grouped.restItems.length > 0 && (
                       <div className="ns-baseref-group" data-testid="ns-base-ref-group-all">
                         <div className="ns-baseref-grouphead">{t("newSession.baseRefGroupAll")}</div>
-                        {grouped.restItems.map((b) => renderOption(b, false))}
+                        {grouped.restItems.map((b) => renderBranchOption(b, false))}
                       </div>
                     )}
                   </div>
@@ -295,7 +415,7 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
           <button
             className="modal-btn primary"
             disabled={!canConfirm}
-            onClick={() => harness !== null && onConfirm(harness, worktree === true, baseRef)}
+            onClick={handleConfirm}
             data-testid="ns-confirm"
           >
             {t("newSession.createBtn")}
