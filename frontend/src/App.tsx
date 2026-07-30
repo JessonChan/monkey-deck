@@ -17,7 +17,7 @@ import SettingsPanel from "./components/SettingsPanel";
 import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import { Group, Panel, Separator, useDefaultLayout, usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
 import { Tooltip } from "react-tooltip";
-import { PanelLeftOpen, PanelRightOpen, Pin } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin } from "lucide-react";
 import type { FileChange, BranchInfo } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import { applyEventToItems as applyEventToItemsPure } from "./lib/streamMerge";
 import { shouldDropOnSwitch } from "./lib/sessionDrop";
@@ -1472,7 +1472,6 @@ export default function App() {
           unreadBySession={unreadBySession}
           harnesses={harnesses}
           onReorderProjects={reorderProjects}
-          onCollapse={collapseSidebar}
           onOpenSettings={() => setSettingsOpen(true)}
           harnessUpdateAvailable={harnessUpdateAvailable}
           poppedSessionIds={poppedSessionIds}
@@ -1595,46 +1594,48 @@ export default function App() {
             onAICommit={aiCommit}
             onDiff={fileDiff}
             busy={status === "prompting"}
-            onCollapse={collapseSide}
           />
         ) : (
           <div className="side-empty" />
         )}
       </Panel>
     </Group>
-    {leftCollapsed && (
+    {/* Sidebar collapse/expand toggle (fixed anchor): icon stays at the same spot whether
+        the sidebar is open or collapsed — only the icon direction swaps. Hidden in popout
+        (no sidebar there). Traffic lights occupy the top-left, so this anchor sits below them. */}
+    {!isPopout && (
       <button
         type="button"
-        className="panel-rail left"
-        onClick={expandSidebar}
-        data-testid="expand-sidebar"
-        aria-label={t("app.expandSidebar")}
+        className="panel-toggle left"
+        onClick={leftCollapsed ? expandSidebar : collapseSidebar}
+        data-testid={leftCollapsed ? "expand-sidebar" : "collapse-sidebar"}
+        aria-label={leftCollapsed ? t("app.expandSidebar") : t("sidebar.collapse")}
         data-tooltip-id="md-tip"
-        data-tooltip-content={t("app.expandSidebar")}
+        data-tooltip-content={leftCollapsed ? t("app.expandSidebar") : t("sidebar.collapse")}
         data-tooltip-place="right"
       >
-        <PanelLeftOpen size={14} />
+        {leftCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
       </button>
     )}
-    {rightCollapsed && (
-      <button
-        type="button"
-        className="panel-rail right"
-        onClick={expandSide}
-        data-testid="expand-side"
-        aria-label={t("app.expandSidePanel")}
-        data-tooltip-id="md-tip"
-        data-tooltip-content={t("app.expandSidePanel")}
-        data-tooltip-place="left"
-      >
-        <PanelRightOpen size={14} />
-      </button>
-    )}
+    {/* Right side panel collapse/expand toggle (fixed anchor): icon stays pinned to the
+        top-right corner whether the panel is open or collapsed — only direction swaps. */}
+    <button
+      type="button"
+      className="panel-toggle right"
+      onClick={rightCollapsed ? expandSide : collapseSide}
+      data-testid={rightCollapsed ? "expand-side" : "collapse-side"}
+      aria-label={rightCollapsed ? t("app.expandSidePanel") : t("sidePanel.collapse")}
+      data-tooltip-id="md-tip"
+      data-tooltip-content={rightCollapsed ? t("app.expandSidePanel") : t("sidePanel.collapse")}
+      data-tooltip-place="left"
+    >
+      {rightCollapsed ? <PanelRightOpen size={15} /> : <PanelRightClose size={15} />}
+    </button>
     {/* popout 窗口专属:置顶 toggle。浮在右上角(macOS 红绿灯右侧)。 */}
     {isPopout && (
       <button
         type="button"
-        className={`panel-rail on-top-toggle ${onTop ? "active" : ""}`}
+        className={`on-top-toggle ${onTop ? "active" : ""}`}
         onClick={toggleOnTop}
         data-testid="toggle-on-top"
         aria-label={t("app.toggleAlwaysOnTop")}
