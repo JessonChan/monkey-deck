@@ -1441,6 +1441,7 @@ export default function App() {
       defaultLayout={defaultLayout}
       onLayoutChanged={onLayoutChanged}
       data-sidebar-collapsed={isPopout ? "popout" : (leftCollapsed ? "true" : "false")}
+      data-side-collapsed={rightCollapsed ? "true" : "false"}
     >
       {!isPopout && (
       <Panel

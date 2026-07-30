@@ -1519,6 +1519,12 @@ input, textarea { font-family: inherit; }
 /* popout 独立窗口:无 sidebar,红绿灯浮在 chat-header 左上;留略小避让空间。 */
 .app[data-sidebar-collapsed="popout"] .chat-header { padding-left: 78px; }
 
+/* 右侧面板折叠后,ChatView 撑满窗口右边,固定的 .panel-toggle.right 折叠/展开按钮
+   (钉在 top:13px; right:8px,宽 26px)会盖住 chat-header 右端的状态徽标 / Terminal 图标。
+   折叠态给 chat-header 右边留出避让空间(~40px = 按钮 26px + 两侧间距),展开态面板顶栏
+   不与 header 重叠(面板在 header 右边),维持默认右内边距,这样开合都和谐不互相压。 */
+.app[data-side-collapsed="true"] .chat-header { padding-right: 40px; }
+
 /* git-panel 内嵌时去掉顶部留白(tab 已占位) */
 .git-panel.embedded, .side-body .git-panel { padding-top: 12px; }
 
