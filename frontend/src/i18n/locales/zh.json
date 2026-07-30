@@ -89,6 +89,7 @@
     "existingNoteMain": "在项目主目录中运行。",
     "existingNoteGuest": "进入已有 worktree（{{branch}}），作为访客与其所有者共享。",
     "existingNoteNone": "请选择目录：项目主目录，或一个已有 worktree。",
+    "selectModeHint": "请在上方选择一种工作目录模式。",
     "worktreeTitle": "新建独立分支（worktree）",
     "worktreeDesc": "为本次对话创建独立的 git 工作树与分支，多会话互不污染，可合并回基线分支",
     "worktreeMain": "项目主目录",

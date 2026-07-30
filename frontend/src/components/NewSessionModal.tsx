@@ -300,7 +300,9 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
           </div>
         )}
 
-        {isGit && mode === "existing" && (
+        {isGit && (
+          <div className="ns-selector-area" data-testid="ns-selector-area">
+            {mode === "existing" && (
           <div className="ns-field">
             <div className="ns-label">
               {t("newSession.existingDir")}
@@ -380,7 +382,7 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
           </div>
         )}
 
-        {isGit && mode === "new" && (
+            {mode === "new" && (
           <div className="ns-field">
             <div className="ns-label">
               {t("newSession.baseRef")}
@@ -479,6 +481,11 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
             <div className="ns-baseref-note">
               {t("newSession.baseRefNote", { branch: baseRef || t("newSession.baseRefUnselected") })}
             </div>
+          </div>
+        )}
+            {mode === null && (
+              <div className="ns-selector-placeholder">{t("newSession.selectModeHint")}</div>
+            )}
           </div>
         )}
 

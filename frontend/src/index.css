@@ -2135,7 +2135,10 @@ input, textarea { font-family: inherit; }
 }
 .ns-baseref-filter:hover { color: var(--text-2); }
 .ns-baseref-filter.active { background: var(--elev); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
-.ns-baseref-note { font-size: 11px; color: var(--text-3); margin-top: 2px; line-height: 1.4; min-height: 2.8em; /* 固定 2 行:切换已有目录/新建 worktree 时 hint 高度不跳 */ }
+.ns-baseref-note { font-size: 11px; color: var(--text-3); margin-top: 2px; line-height: 1.4; }
+/* 选择器区域固定高度:未选模式时也预留,避免选中 toggle 后突然撑高弹窗 */
+.ns-selector-area { min-height: 120px; display: flex; flex-direction: column; }
+.ns-selector-placeholder { margin: auto 0; color: var(--text-3); font-size: 12px; }
 .ns-quickpicks { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 .ns-quickpick {
   font-family: var(--mono); font-size: 11px; padding: 3px 8px; border-radius: 5px;

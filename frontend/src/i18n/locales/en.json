@@ -89,6 +89,7 @@
     "existingNoteMain": "Runs in the project's main directory.",
     "existingNoteGuest": "Joins the existing worktree on {{branch}} (guest — shares it with its owner).",
     "existingNoteNone": "Pick a directory: the project main, or an existing worktree.",
+    "selectModeHint": "Pick a working-directory mode above.",
     "worktreeTitle": "New isolated branch (worktree)",
     "worktreeDesc": "Create a dedicated git worktree and branch for this session; sessions don't interfere, and changes can be merged back into the base branch.",
     "worktreeMain": "Project main directory",
