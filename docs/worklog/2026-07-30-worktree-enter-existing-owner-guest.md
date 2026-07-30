@@ -72,6 +72,13 @@ bindings:regen(`frontend/bindings/`,gitignored)。
 1. **漏 ChatService binding 包装 → wails3 task build 报 IMPORT_IS_UNDEFINED**:`ListWorktrees` 只加在 worktree 包(包级函数),前端却调 `ChatService.ListWorktree` —— 该 binding 不存在,导出 undefined。`go build` / `go test` / `bun tsc`(对 .js binding 宽松)全过,只有 `wails3 task build` 的 vite/rolldown 阶段拦住。**教训:Go 加了包级函数不够,前端要用的必须再包一层 ChatService 方法;且验收要以 `wails3 task build` 为准,不能只信 `bun tsc`。** 已照 SearchBaseRefs 补包装。
 2. **wails binding .ts/.js 格式抖动暴露 null 类型**:`wails3 generate bindings` 每次产出的 .ts/.js 严格度不稳(记忆里的已知坑)。这次 regen 产出严格 .ts(指针返回 `T|null`),暴露三处:`confirmNewSession` 的 `se`、`removeSession` 的 `guests`、`refreshConfig` 的 `sid`(后者是预存 latent,严格 binding 才显形)。统一做 null 守卫修复。
 
+## 迭代(同日,UX 打磨)
+
+用户 review 后提了 3 个 NewSessionModal 小问题,均已修(`dd554ce` + `7ff30dd`):
+1. **点外面行为反了**:弹窗遮罩原 `onClick={onCancel}` 点外面就关 → 去掉,弹窗只能靠取消/Esc 关;下拉列表反之加 document mousedown 监听,点下拉外面自动收起(原「不选就一直挂」)。
+2. **切模式高度跳**:选择器 hint「已有目录」1 行 / 「基线分支」2 行 → `.ns-baseref-note` 固定 `min-height:2.8em`(2 行),切换不再撑高。
+3. **快捷选择**:两个选择器触发框下常驻 main + 最近 2 个 chip,点一下直选(免展开)。基线=默认+recentRefs[:2];已有目录=项目主目录+按 HEAD date 倒序前 2 个 linked(后端 `WorktreeInfo.Date` 用一条批量 `git log --no-walk` 取齐)。选中后 chip 行原样常驻高亮。
+
 ## 下一步 / OPEN
 
 - **GUI 实测**:桌面 app 点开弹窗验证两选择器、三选项删除弹窗、guest 合并禁用提示的视觉与交互(尤其跨 worktree 共享目录时两 agent 并发的文件竞争——已提示用户,属接受风险)。
