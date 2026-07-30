@@ -51,19 +51,26 @@
 前端:`frontend/src/components/NewSessionModal.tsx`(+`.mount.test.tsx`)、`App.tsx`、`DeleteWorktreeDialog.tsx`(新)、`SidePanel.tsx`、`GitPanel.tsx`、`i18n/locales/{en,zh}.json`、`index.css`。
 bindings:regen(`frontend/bindings/`,gitignored)。
 
-分支 `feat/worktree-enter-existing`,4 个原子 commit:
+分支 `feat/worktree-enter-existing`,7 个原子 commit(5 feat/docs + 2 fix):
 - `ba7cb2a` worktree 原语(ListWorktrees + Remove 四道护栏 + 单测)
 - `f130658` owner/guest 后端(CreateGuestSession + WorktreeKind/Guests + DeleteWorktree + Detach + DeleteSession chat-only + SessionMergeable guest + 单测)
 - `44564ac` 弹窗 workdir 模式 + 已有工作目录选择器 + mount 测试
 - `3b9f09c` 删除流程 + 三选项弹窗 + guest 合并禁用
+- `2edbf3d` fix:补 ChatService.ListWorktrees binding 包装(见踩坑)
+- `4a5d1fc` fix:适配严格 binding 的 null 类型
 
 ## 验证
 
 - `go test ./internal/...` 全绿(worktree 4 道护栏单测 + chat guest 模型 5 个单测)。
 - i18n JSON `python3 json.load` 两份均合法(踩了两次尾逗号坑:`mergeNothingTip` 原是末项无逗号,新增 key 后忘加 / 新末项 `mergeGuestTip` 多了逗号,均已修)。
-- 前端 `tsc --noEmit` 0 错(`DeleteWorktreeDialog` 在 `src/components/` 下需 `../../bindings` 而非 `../bindings`,已修)。
+- 前端 `bun run tsc --noEmit` 0 错。**但 `bun tsc` 对 .js binding 宽松,漏了真问题;以 `wails3 task build` / `package` 为准**(见踩坑)。修复后 build + package 均 ✓(`Monkey Deck.app` 生成并 ad-hoc 签名)。
 - 前端 `bun run test` **150 pass / 0 fail**(含 NewSessionModal mount 测试 3 个:不预选 Create 禁用 / existing 选择器分组+选 linked→enter / new 基线分组+选→new)。
 - 测试覆盖行为;**GUI 真实渲染待用户在桌面 app 验证**(workdir 选择器、三选项弹窗、guest 合并禁用提示的视觉)。
+
+## 踩坑
+
+1. **漏 ChatService binding 包装 → wails3 task build 报 IMPORT_IS_UNDEFINED**:`ListWorktrees` 只加在 worktree 包(包级函数),前端却调 `ChatService.ListWorktree` —— 该 binding 不存在,导出 undefined。`go build` / `go test` / `bun tsc`(对 .js binding 宽松)全过,只有 `wails3 task build` 的 vite/rolldown 阶段拦住。**教训:Go 加了包级函数不够,前端要用的必须再包一层 ChatService 方法;且验收要以 `wails3 task build` 为准,不能只信 `bun tsc`。** 已照 SearchBaseRefs 补包装。
+2. **wails binding .ts/.js 格式抖动暴露 null 类型**:`wails3 generate bindings` 每次产出的 .ts/.js 严格度不稳(记忆里的已知坑)。这次 regen 产出严格 .ts(指针返回 `T|null`),暴露三处:`confirmNewSession` 的 `se`、`removeSession` 的 `guests`、`refreshConfig` 的 `sid`(后者是预存 latent,严格 binding 才显形)。统一做 null 守卫修复。
 
 ## 下一步 / OPEN
 
