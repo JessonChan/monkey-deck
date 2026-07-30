@@ -716,6 +716,10 @@ func TestListWorktrees(t *testing.T) {
 	if normalizePath(wts[1].Path) != normalizePath(wt) {
 		t.Fatalf("linked path mismatch: got %s want %s", wts[1].Path, wt)
 	}
+	// Date = HEAD 的 committerdate,init 提交后应 > 0(供前端「最近 worktree」快捷项排序)。
+	if wts[0].Date <= 0 || wts[1].Date <= 0 {
+		t.Fatalf("worktree Date should be > 0: %+v", wts)
+	}
 }
 
 // TestRemove_Guardrails 锁四道护栏:主工作树拒删 / 非 md 分支拒删 / 非 linked 路径拒删 / 正常 linked+md 放行。

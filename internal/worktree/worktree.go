@@ -561,10 +561,12 @@ type WorktreeInfo struct {
 	Path   string `json:"path"`   // 工作目录绝对路径
 	Branch string `json:"branch"` // 检出的分支短名(如 main / md/abc12345 / feat/x);detached HEAD 时为空
 	IsMain bool   `json:"isMain"` // 是否主工作树(= 项目目录;true = 永不可删,Remove 护栏)
+	Date   int64  `json:"date"`   // 该 worktree HEAD 的 committerdate(unix 秒);前端取「最近 N 个」快捷项用
 }
 
 // ListWorktrees 列出仓库全部 worktree(主 + linked),主工作树(IsMain=true)排第一。
-// 供「使用已有工作目录」选择器:进入已有 worktree(guest)或选项目主目录。detached 的 Branch 留空。
+// Date = 各 worktree HEAD 的 committerdate(一条批量 git log --no-walk 取齐,仅 1 次调用),
+// 供前端「最近 worktree」快捷项。detached 的 Branch 留空。
 func ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
 	out, err := gitRaw(repoPath, "worktree", "list", "--porcelain")
 	if err != nil {
@@ -572,12 +574,13 @@ func ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
 	}
 	mainNorm := normalizePath(repoPath)
 	var res []WorktreeInfo
+	var headOf []string // res[i] 的 HEAD sha,并行,回填 Date 用
 	for _, block := range strings.Split(out, "\n\n") {
 		block = strings.TrimSpace(block)
 		if block == "" {
 			continue
 		}
-		var path, branch string
+		var path, branch, head string
 		for _, line := range strings.Split(block, "\n") {
 			switch {
 			case strings.HasPrefix(line, "worktree "):
@@ -585,6 +588,8 @@ func ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
 			case strings.HasPrefix(line, "branch "):
 				ref := strings.TrimSpace(strings.TrimPrefix(line, "branch "))
 				branch = strings.TrimPrefix(ref, "refs/heads/")
+			case strings.HasPrefix(line, "HEAD "):
+				head = strings.TrimSpace(strings.TrimPrefix(line, "HEAD "))
 			}
 		}
 		if path == "" {
@@ -595,6 +600,36 @@ func ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
 			Branch: branch,
 			IsMain: normalizePath(path) == mainNorm,
 		})
+		headOf = append(headOf, head)
+	}
+	// 批量取每个 HEAD 的 committerdate(去重后一次 git log --no-walk),回填 Date。
+	seen := map[string]struct{}{}
+	var heads []string
+	for _, h := range headOf {
+		if h == "" {
+			continue
+		}
+		if _, ok := seen[h]; !ok {
+			seen[h] = struct{}{}
+			heads = append(heads, h)
+		}
+	}
+	if len(heads) > 0 {
+		dateBySha := make(map[string]int64, len(heads))
+		if dl, err := git(repoPath, append([]string{"log", "--no-walk", "--format=%H_%ct"}, heads...)...); err == nil {
+			for _, line := range strings.Split(dl, "\n") {
+				if sha, ct, ok := strings.Cut(line, "_"); ok {
+					if n, perr := strconv.ParseInt(ct, 10, 64); perr == nil {
+						dateBySha[sha] = n
+					}
+				}
+			}
+		}
+		for i, h := range headOf {
+			if h != "" {
+				res[i].Date = dateBySha[h]
+			}
+		}
 	}
 	return res, nil
 }
