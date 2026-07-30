@@ -78,9 +78,9 @@ const BRANCHES: BranchInfo[] = [
 const DEFAULT = "main";
 const RECENT = ["develop", "feature-x"]; // most-recent-first
 const WORKTREES: WorktreeInfo[] = [
-  { path: "/proj", branch: "main", isMain: true },
-  { path: "/proj/wt-a", branch: "md/aaa11111", isMain: false },
-  { path: "/proj/wt-b", branch: "feat/x", isMain: false },
+  { path: "/proj", branch: "main", isMain: true, date: 300 },
+  { path: "/proj/wt-a", branch: "md/aaa11111", isMain: false, date: 200 },
+  { path: "/proj/wt-b", branch: "feat/x", isMain: false, date: 100 },
 ];
 // Only the static id/name/command fields are read by the modal; the binding's Harness type
 // also carries runtime install/version fields irrelevant to this DOM-level test.
@@ -206,6 +206,72 @@ describe("NewSessionModal new-worktree base-ref selector", () => {
     const confirmBtn = host.querySelector('[data-testid="ns-confirm"]') as HTMLButtonElement;
     expect(confirmBtn.disabled).toBe(false);
     confirmBtn.dispatchEvent(click());
+    await flush();
+    expect(onConfirm).toHaveBeenCalledWith({ harness: "omp", mode: "new", baseRef: "develop" });
+  });
+});
+
+describe("NewSessionModal quick picks", () => {
+  test("existing-dir quick picks: main + 2 recent linked by date desc; click → enter", async () => {
+    const onConfirm = mock((_c: NewSessionChoice) => {});
+    const { host } = mount(
+      <NewSessionModal
+        harnesses={HARNESS}
+        isGit
+        lastHarness="omp"
+        defaultBaseRef={DEFAULT}
+        recentRefs={RECENT}
+        branches={BRANCHES}
+        worktrees={WORKTREES}
+        onConfirm={onConfirm}
+        onCancel={() => {}}
+      />,
+    );
+    await flush();
+    host.querySelector('[data-testid="ns-worktree-existing"]')!.dispatchEvent(click());
+    await flush();
+    const qp = host.querySelector('[data-testid="ns-wt-quickpicks"]');
+    expect(qp).not.toBeNull();
+    const paths = Array.from(qp!.querySelectorAll("button"))
+      .map((b) => b.getAttribute("data-testid")!.slice("ns-wt-quick-".length));
+    // main first, then linked by HEAD date desc: wt-a(200) before wt-b(100).
+    expect(paths).toEqual(["/proj", "/proj/wt-a", "/proj/wt-b"]);
+    // Clicking a linked quick pick selects it (enter) without opening the dropdown.
+    host.querySelector('[data-testid="ns-wt-quick-/proj/wt-a"]')!.dispatchEvent(click());
+    await flush();
+    host.querySelector('[data-testid="ns-confirm"]')!.dispatchEvent(click());
+    await flush();
+    expect(onConfirm).toHaveBeenCalledWith({ harness: "omp", mode: "enter", enterPath: "/proj/wt-a" });
+  });
+
+  test("base-ref quick picks: main + 2 recent; click selects without opening dropdown", async () => {
+    const onConfirm = mock((_c: NewSessionChoice) => {});
+    const { host } = mount(
+      <NewSessionModal
+        harnesses={HARNESS}
+        isGit
+        lastHarness="omp"
+        defaultBaseRef={DEFAULT}
+        recentRefs={RECENT}
+        branches={BRANCHES}
+        worktrees={WORKTREES}
+        onConfirm={onConfirm}
+        onCancel={() => {}}
+      />,
+    );
+    await flush();
+    host.querySelector('[data-testid="ns-worktree-new"]')!.dispatchEvent(click());
+    await flush();
+    const qp = host.querySelector('[data-testid="ns-base-ref-quickpicks"]');
+    expect(qp).not.toBeNull();
+    const names = Array.from(qp!.querySelectorAll("button"))
+      .map((b) => b.getAttribute("data-testid")!.slice("ns-base-ref-quick-".length));
+    // detected default (main) + up to 2 recent, all existing.
+    expect(names).toEqual(["main", "develop", "feature-x"]);
+    // Click develop (dropdown stays closed) → onConfirm mode=new baseRef=develop.
+    host.querySelector('[data-testid="ns-base-ref-quick-develop"]')!.dispatchEvent(click());
+    await flush();
+    host.querySelector('[data-testid="ns-confirm"]')!.dispatchEvent(click());
     await flush();
     expect(onConfirm).toHaveBeenCalledWith({ harness: "omp", mode: "new", baseRef: "develop" });
   });

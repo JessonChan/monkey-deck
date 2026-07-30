@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import type { BranchInfo, WorktreeInfo } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
@@ -122,6 +122,48 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
     return { mainItem, linked };
   }, [worktrees, wtQuery]);
 
+  const refBoxRef = useRef<HTMLDivElement>(null);
+  const wtBoxRef = useRef<HTMLDivElement>(null);
+
+  // Base-branch quick picks (shown below the trigger — no need to open the dropdown): the
+  // detected default (main) + up to 2 recently used; all must still exist in the branch list.
+  const branchQuickPicks = useMemo(() => {
+    const picks: string[] = [];
+    const seen = new Set<string>();
+    const push = (name?: string) => {
+      if (!name || seen.has(name) || !branches.some((b) => b.name === name)) return;
+      seen.add(name);
+      picks.push(name);
+    };
+    push(defaultBaseRef);
+    for (const r of recentRefs) { if (picks.length >= 3) break; push(r); }
+    return picks;
+  }, [defaultBaseRef, recentRefs, branches]);
+
+  // Existing-directory quick picks: project main + up to 2 most-recently-committed linked
+  // worktrees (Date = HEAD committerdate from the backend).
+  const dirQuickPicks = useMemo(() => {
+    const picks: WorktreeInfo[] = [];
+    const mainW = worktrees.find((w) => w.isMain);
+    if (mainW) picks.push(mainW);
+    const linked = worktrees.filter((w) => !w.isMain).sort((a, b) => b.date - a.date);
+    for (const w of linked) { if (picks.length >= 3) break; picks.push(w); }
+    return picks;
+  }, [worktrees]);
+
+  // Collapse an open dropdown on outside click. The modal itself stays open (no overlay
+  // click-to-close) — only the dropdown list collapses.
+  useEffect(() => {
+    if (!refOpen && !wtOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (refOpen && refBoxRef.current && !refBoxRef.current.contains(t)) setRefOpen(false);
+      if (wtOpen && wtBoxRef.current && !wtBoxRef.current.contains(t)) setWtOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [refOpen, wtOpen]);
+
   // Esc close (§4.2).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
@@ -199,7 +241,7 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
   );
 
   return (
-    <div className="modal-overlay" onClick={onCancel}>
+    <div className="modal-overlay">
       <div className="modal-card new-session-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-title">{t("newSession.title")}</div>
 
@@ -264,7 +306,7 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
               {t("newSession.existingDir")}
               {existingDir === null && <span className="ns-required">{t("newSession.required")}</span>}
             </div>
-            <div className="ns-baseref">
+            <div className="ns-baseref" ref={wtBoxRef}>
               <button
                 type="button"
                 className="ns-baseref-trigger"
@@ -313,6 +355,21 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
                 </div>
               )}
             </div>
+            {dirQuickPicks.length > 0 && (
+              <div className="ns-quickpicks" data-testid="ns-wt-quickpicks">
+                {dirQuickPicks.map((w) => (
+                  <button
+                    key={w.path}
+                    type="button"
+                    className={`ns-quickpick ${existingDir?.path === w.path ? "active" : ""}`}
+                    data-testid={`ns-wt-quick-${w.path}`}
+                    onClick={() => { setExistingDir(w); setWtOpen(false); setWtQuery(""); }}
+                  >
+                    {w.isMain ? t("newSession.worktreeMain") : (w.branch || t("newSession.worktreeDetached"))}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="ns-baseref-note">
               {existingDir
                 ? (existingDir.isMain
@@ -336,7 +393,7 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
                 ?
               </span>
             </div>
-            <div className="ns-baseref">
+            <div className="ns-baseref" ref={refBoxRef}>
               <button
                 type="button"
                 className="ns-baseref-trigger"
@@ -404,6 +461,21 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
                 </div>
               )}
             </div>
+            {branchQuickPicks.length > 0 && (
+              <div className="ns-quickpicks" data-testid="ns-base-ref-quickpicks">
+                {branchQuickPicks.map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    className={`ns-quickpick ${baseRef === name ? "active" : ""}`}
+                    data-testid={`ns-base-ref-quick-${name}`}
+                    onClick={() => { setBaseRef(name); setRefOpen(false); setRefQuery(""); }}
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="ns-baseref-note">
               {t("newSession.baseRefNote", { branch: baseRef || t("newSession.baseRefUnselected") })}
             </div>
