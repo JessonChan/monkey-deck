@@ -112,7 +112,7 @@ export default function App() {
     () => harnesses.some((h) => h.upgradeAvailable),
     [harnesses],
   );
-  const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean; lastHarness: string; defaultBaseRef: string; branches: BranchInfo[] } | null>(null);  // 新建对话弹窗
+  const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean; lastHarness: string; defaultBaseRef: string; recentRefs: string[]; branches: BranchInfo[] } | null>(null);  // new-chat modal
   const [settingsOpen, setSettingsOpen] = useState(false); // 统一设置中心面板(收敛语言/提示音/权限/harness)
   // 集成终端(per-session,与 agent ACP 通道完全分离;§1.1 agent 永远走 ACP)。
   // 终端面板开关也 per-session:session A 开着,切到 B 时 B 按自己的状态显示(各自独立)。
@@ -796,17 +796,23 @@ export default function App() {
         ChatService.GetLastHarness(),
       ]);
       let defaultBaseRef = "";
+      let recentRefs: string[] = [];
       let branches: BranchInfo[] = [];
       if (isGit) {
-        // 探测失败不算错误:defaultBaseRef 留空,modal 走「必选」态(Route A strict)。
-        const [def, list] = await Promise.all([
+        // defaultBaseRef = detected repo default (origin/HEAD → main/master) for the
+        // "Default branch" group; detection failure just omits that group (Route A strict,
+        // never falls back to HEAD). recentRefs = this project's recently-used bases for
+        // the "Recently used" group. branches = local+remote list for the "All" group.
+        const [def, list, recent] = await Promise.all([
           ChatService.ResolveBaseRefDefault(pid).catch(() => ({ baseRef: "", ok: false })),
           ChatService.SearchBaseRefs(pid).catch(() => []),
+          ChatService.RecentBaseRefs(pid).catch(() => []),
         ]);
         defaultBaseRef = def?.ok ? def.baseRef : "";
         branches = list || [];
+        recentRefs = recent || [];
       }
-      setNewSession({ projectId: pid, isGit, lastHarness, defaultBaseRef, branches });
+      setNewSession({ projectId: pid, isGit, lastHarness, defaultBaseRef, recentRefs, branches });
     } catch (e) {
       setError(extractErrMsg(e));
     }
@@ -1645,6 +1651,7 @@ export default function App() {
         isGit={newSession.isGit}
         lastHarness={newSession.lastHarness}
         defaultBaseRef={newSession.defaultBaseRef}
+        recentRefs={newSession.recentRefs}
         branches={newSession.branches}
         onConfirm={confirmNewSession}
         onCancel={() => setNewSession(null)}

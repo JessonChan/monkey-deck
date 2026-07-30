@@ -2085,6 +2085,11 @@ input, textarea { font-family: inherit; }
   display: flex; flex-direction: column; max-height: 240px;
 }
 .ns-baseref-list { overflow-y: auto; }
+.ns-baseref-group + .ns-baseref-group { border-top: 1px solid var(--sep); }
+.ns-baseref-grouphead {
+  padding: 6px 11px 3px; font-size: 9.5px; font-weight: 600; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
 .ns-baseref-empty { padding: 10px; font-size: 11.5px; color: var(--text-3); text-align: center; }
 .ns-baseref-option {
   display: flex; flex-direction: column; gap: 2px;

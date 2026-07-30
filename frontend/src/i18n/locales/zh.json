@@ -96,6 +96,9 @@
     "baseRefRemote": "远程",
     "baseRefNote": "新分支 md/<id> 将基于 {{branch}} 创建；合并时合回 {{branch}}。",
     "baseRefUnselected": "（未选择）",
+    "baseRefGroupDefault": "默认分支",
+    "baseRefGroupRecent": "最近使用",
+    "baseRefGroupAll": "全部分支",
     "createBtn": "新建"
   },
   "capability": {

@@ -8,20 +8,31 @@ interface Props {
   harnesses: Harness[];
   isGit: boolean;
   lastHarness: string;
-  // 基线预选:App 打开 modal 时预取 ResolveBaseRefDefault。空 = 探测失败(必选);非空 = 预选 + 星标。
+  // Detected repo default branch (origin/HEAD → main/master) from ResolveBaseRefDefault.
+  // Pinned to the top of the selector as the "Default branch" group + starred. Empty =
+  // detection failed (group is simply omitted; user still picks from recent + all).
   defaultBaseRef: string;
-  branches: BranchInfo[];  // 一次性拉取的分支列表(供选择器前端过滤)
+  // This project's recently-used base branches (most-recent-first) for the "Recently
+  // used" group. Distinct from defaultBaseRef (a repo property) — these reflect user intent.
+  recentRefs: string[];
+  branches: BranchInfo[];  // one-shot local+remote list (frontend filtering/grouping)
   onConfirm: (harness: string, useWorktree: boolean, baseRef: string) => void;
   onCancel: () => void;
 }
 
-// 新建对话弹窗:让用户选择 1) 使用的 agent harness(omp/opencode)2) 是否新建独立分支(worktree)
-// 3) worktree 时选基线分支(显式基线,绝不回退 HEAD,todo/worktree-base-ref-selection.md §2)。
-// harness 决定 spawn 哪个 ACP agent;worktree 决定是否建独立 git 工作树(并行隔离,§1.4);
-// baseRef 是 worktree 的起点 + 合并的终点(从哪 checkout 就合回哪,对称)。
-// harness/worktree 都要求显式选择(null = 未选);worktree=true 时 baseRef 必选(探测到则预选)。
-// 非 git 项目不展示 worktree 选项(无法建分支)。
-export default function NewSessionModal({ harnesses, isGit, lastHarness, defaultBaseRef, branches, onConfirm, onCancel }: Props) {
+// A branch row enriched with a formatted date string for display.
+type DecoratedBranch = BranchInfo & { dateStr: string };
+
+// New-chat modal: pick 1) agent harness (omp/opencode) 2) whether to make an isolated
+// worktree 3) when worktree, the base branch (explicit base, never falls back to HEAD —
+// todo/worktree-base-ref-selection.md §2). harness picks which ACP agent to spawn;
+// worktree picks whether to build an isolated git worktree (parallel isolation, §1.4);
+// baseRef is the worktree's start point + merge target (checkout-from = merge-back-to).
+// harness/worktree both require an explicit choice (null = unselected); worktree=true
+// requires an explicit baseRef (NOT pre-selected — pre-selection caused wrong-base
+// mistakes; the most-likely answer is just pinned to the top of the list).
+// Non-git projects hide the worktree option (no branches to make).
+export default function NewSessionModal({ harnesses, isGit, lastHarness, defaultBaseRef, recentRefs, branches, onConfirm, onCancel }: Props) {
   const { t } = useTranslation();
   // harness 必须显式选择:null = 未选。lastHarness 仍可选时默认选它;单 harness 无歧义自动选;否则 null。
   const [harness, setHarness] = useState<string | null>(() => {
@@ -31,17 +42,23 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
   });
   // worktree 必须显式选择:null = 未选(默认),true = 新建,false = 使用项目目录。
   const [worktree, setWorktree] = useState<boolean | null>(isGit ? null : false);
-  // 基线分支:worktree=true 时必选。初始 = 预选(App 预取探测结果):非空预选(常见情况一键创建),
-  // 空 = 探测失败(必选,「新建」禁用)。切回「共享目录」时保留值不重置(再切回来还在)。
-  const [baseRef, setBaseRef] = useState<string>(defaultBaseRef);
+  // Base branch: required when worktree=true. NOT pre-selected — starts empty so the user
+  // must pick explicitly (avoids wrong-base mistakes); the selector pins the detected
+  // default + recently-used to the top so the right answer is one click away. Value is
+  // preserved when toggling back to "shared dir" (so a prior pick survives).
+  const [baseRef, setBaseRef] = useState<string>("");
   const [refOpen, setRefOpen] = useState(false);      // 选择器下拉开关
   const [refQuery, setRefQuery] = useState("");        // 搜索过滤词
   const [kindFilter, setKindFilter] = useState<"all" | "local" | "remote">("all");  // 本地/远程过滤
 
-  // 前端过滤分支列表 + 日期格式化(本地仓库够用,KISS:一次性拉取 + 内存处理,无 debounced 搜索)。
-  // 两维过滤:名称模糊(搜索词)+ kind(本地/远程 tab)。后端已按 committerdate 倒序,过滤保序。
-  // dateStr:unix 秒 → 同年省年、带时分秒(MM-DD HH:MM 或 YYYY-MM-DD HH:MM),按本地时区。
-  const filteredBranches = useMemo(() => {
+  // Group the branch list into three ordered sections (each branch appears once):
+  //   1. Default — detected repo default (defaultBaseRef), starred.
+  //   2. Recently used — recentRefs order, excluding the default.
+  //   3. All — the rest, in backend committerdate-desc order.
+  // Two-axis filter (name substring + local/remote) applies within every group; empty
+  // groups are hidden. dateStr: unix s → same-year drops year, with HH:MM, local tz.
+  // KISS: one-shot fetch + in-memory grouping, no debounced search (local repos are small).
+  const grouped = useMemo(() => {
     const q = refQuery.trim().toLowerCase();
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
@@ -52,18 +69,37 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
       const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
       return d.getFullYear() === now.getFullYear() ? `${md} ${hm}` : `${d.getFullYear()}-${md} ${hm}`;
     };
-    return branches.filter((b) => {
+    const matches = (b: BranchInfo) => {
       if (kindFilter !== "all" && b.kind !== kindFilter) return false;
       if (q && !b.name.toLowerCase().includes(q)) return false;
       return true;
-    }).map((b) => ({ ...b, dateStr: fmt(b.date) })).sort((a, b) => {
-      // 默认分支(上次选择或探测到的 main)钉在列表第一,忽略日期排序:
-      // main 常是最旧的但几乎总是想要的;上次选择是用户意图,最可信。其余按原日期序(filter 保序)。
-      if (a.name === defaultBaseRef) return -1;
-      if (b.name === defaultBaseRef) return 1;
-      return 0;
-    });
-  }, [branches, refQuery, kindFilter, defaultBaseRef]);
+    };
+    const decorate = (b: BranchInfo): DecoratedBranch => ({ ...b, dateStr: fmt(b.date) });
+
+    const byName = new Map(branches.map((b) => [b.name, b]));
+    const used = new Set<string>();
+
+    // 1. Default branch (0 or 1).
+    let defaultItem: DecoratedBranch | null = null;
+    const db = defaultBaseRef ? byName.get(defaultBaseRef) : undefined;
+    if (db && matches(db)) {
+      defaultItem = decorate(db);
+      used.add(db.name);
+    }
+    // 2. Recently used, in recency order (recentRefs already most-recent-first), excluding default.
+    const recentItems: DecoratedBranch[] = [];
+    for (const name of recentRefs) {
+      const b = byName.get(name);
+      if (b && !used.has(b.name) && matches(b)) {
+        recentItems.push(decorate(b));
+        used.add(b.name);
+      }
+    }
+    // 3. All others in backend date-desc order (branches is already sorted; filter preserves order).
+    const restItems = branches.filter((b) => !used.has(b.name) && matches(b)).map(decorate);
+
+    return { defaultItem, recentItems, restItems };
+  }, [branches, refQuery, kindFilter, defaultBaseRef, recentRefs]);
 
   // Esc 关闭(§4.2)。
   useEffect(() => {
@@ -74,8 +110,33 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
-  // harness 必选 + (非 git 或 worktree 已选)+ worktree=true 时 baseRef 必选;否则禁用「新建」。
+  // harness required + (non-git or worktree chosen) + baseRef required when worktree=true;
+  // else disable "Create". baseRef is never pre-selected, so worktree sessions always
+  // need an explicit pick.
   const canConfirm = harness !== null && (!isGit || worktree !== null) && (worktree !== true || baseRef !== "");
+
+  // Shared option row for all three groups. isDefault adds the ★ marker.
+  const renderOption = (b: DecoratedBranch, isDefault: boolean) => (
+    <button
+      key={b.name}
+      type="button"
+      className={`ns-baseref-option ${baseRef === b.name ? "active" : ""}`}
+      data-testid={`ns-base-ref-option-${b.name}`}
+      onClick={() => { setBaseRef(b.name); setRefOpen(false); setRefQuery(""); }}
+    >
+      {/* two-row layout: name on row 1, date + kind on row 2 (muted small text) */}
+      <span className="ns-baseref-row1">
+        <span className="ns-baseref-name">
+          {isDefault && <span className="ns-baseref-default">★</span>}
+          {b.name}
+        </span>
+      </span>
+      <span className="ns-baseref-row2">
+        {b.dateStr && <span className="ns-baseref-date">{b.dateStr}</span>}
+        <span className={`ns-baseref-kind kind-${b.kind}`}>{b.kind === "local" ? t("newSession.baseRefLocal") : t("newSession.baseRefRemote")}</span>
+      </span>
+    </button>
+  );
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
@@ -198,30 +259,27 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
                     </div>
                   </div>
                   <div className="ns-baseref-list">
-                    {filteredBranches.length === 0 && (
+                    {!grouped.defaultItem && grouped.recentItems.length === 0 && grouped.restItems.length === 0 && (
                       <div className="ns-baseref-empty">{t("newSession.baseRefEmpty")}</div>
                     )}
-                    {filteredBranches.map((b) => (
-                      <button
-                        key={b.name}
-                        type="button"
-                        className={`ns-baseref-option ${baseRef === b.name ? "active" : ""}`}
-                        data-testid={`ns-base-ref-option-${b.name}`}
-                        onClick={() => { setBaseRef(b.name); setRefOpen(false); setRefQuery(""); }}
-                      >
-                        {/* 双行布局:第一行分支名(省空间给名字),第二行日期+kind 副信息(灰小字) */}
-                        <span className="ns-baseref-row1">
-                          <span className="ns-baseref-name">
-                            {defaultBaseRef === b.name && <span className="ns-baseref-default">★</span>}
-                            {b.name}
-                          </span>
-                        </span>
-                        <span className="ns-baseref-row2">
-                          {b.dateStr && <span className="ns-baseref-date">{b.dateStr}</span>}
-                          <span className={`ns-baseref-kind kind-${b.kind}`}>{b.kind === "local" ? t("newSession.baseRefLocal") : t("newSession.baseRefRemote")}</span>
-                        </span>
-                      </button>
-                    ))}
+                    {grouped.defaultItem && (
+                      <div className="ns-baseref-group" data-testid="ns-base-ref-group-default">
+                        <div className="ns-baseref-grouphead">{t("newSession.baseRefGroupDefault")}</div>
+                        {renderOption(grouped.defaultItem, true)}
+                      </div>
+                    )}
+                    {grouped.recentItems.length > 0 && (
+                      <div className="ns-baseref-group" data-testid="ns-base-ref-group-recent">
+                        <div className="ns-baseref-grouphead">{t("newSession.baseRefGroupRecent")}</div>
+                        {grouped.recentItems.map((b) => renderOption(b, false))}
+                      </div>
+                    )}
+                    {grouped.restItems.length > 0 && (
+                      <div className="ns-baseref-group" data-testid="ns-base-ref-group-all">
+                        <div className="ns-baseref-grouphead">{t("newSession.baseRefGroupAll")}</div>
+                        {grouped.restItems.map((b) => renderOption(b, false))}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

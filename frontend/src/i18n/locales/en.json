@@ -96,6 +96,9 @@
     "baseRefRemote": "remote",
     "baseRefNote": "New branch md/<id> will be based on {{branch}}; merge goes back to {{branch}}.",
     "baseRefUnselected": "(unselected)",
+    "baseRefGroupDefault": "Default branch",
+    "baseRefGroupRecent": "Recently used",
+    "baseRefGroupAll": "All branches",
     "createBtn": "Create"
   },
   "capability": {
