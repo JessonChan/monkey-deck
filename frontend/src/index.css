@@ -286,9 +286,11 @@ input, textarea { font-family: inherit; }
 .session-dot.thinking { background: #ffd60a; }
 .session-dot.executing { background: var(--accent-2); }
 .session-dot.replying { background: var(--green); }
-/* 草稿指示(空闲 session 有未发文本时显示铅笔图标,与 perm-dot 同尺寸) */
-.draft-indicator { display: inline-flex; align-items: center; justify-content: center; width: 8px; height: 8px; border-radius: 50%; color: var(--accent-2); background: rgba(100, 210, 255, 0.16); }
-.draft-indicator svg { width: 5px; height: 5px; display: block; }
+/* Draft indicator: shown on idle sessions with unsent composer text. Sized for clear
+   visibility on hi-DPI screens (matches the visual weight of perm-dot/unread-dot, with a
+   Pencil glyph instead of a plain dot). */
+.draft-indicator { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex-shrink: 0; border-radius: 50%; color: var(--accent-2); background: rgba(100, 210, 255, 0.16); }
+.draft-indicator svg { width: 9px; height: 9px; display: block; }
 .session-dot.error { background: var(--red); }
 /* ─── 右键菜单 ─── */
 .ctx-menu {
