@@ -139,7 +139,6 @@ input, textarea { font-family: inherit; }
 .icon-btn:hover { background: var(--hover); color: var(--text); }
 .icon-btn.small { width: 22px; height: 22px; }
 .sidebar-header-acts { display: inline-flex; align-items: center; gap: 1px; --wails-draggable: no-drag; }
-.side-collapse-btn { margin-left: auto; flex-shrink: 0; }
 
 .project-list { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
 .sidebar-empty { padding: 16px 12px; color: var(--text-3); font-size: 12px; line-height: 1.5; }
@@ -1472,31 +1471,31 @@ input, textarea { font-family: inherit; }
 .side-body > * { flex: 1; min-width: 0; }
 .side-empty { width: 100%; height: 100%; }
 
-/* ─── 面板收起后的展开把手(细条):贴左/右窗口边,点击展开对应面板 ─── */
-/* 左把手从标题栏下方开始,避开 macOS 红绿灯(原生窗口控件,webview 之上)。 */
-.panel-rail {
+/* ─── 面板折叠/展开 toggle(固定锚点):图标位置不随面板开合跳动,只换方向 ─── */
+/* 锚定在面板头部右端(展开态按钮的原位),折叠后按钮留在原处,消除「折叠/展开按钮位置割裂」。
+   左 toggle 让开 macOS 红绿灯(原生窗口控件,webview 之上),从标题栏下方开始。 */
+.panel-toggle {
   position: fixed;
-  top: 52px;
-  bottom: 0;
-  width: 14px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 8px;
-  background: var(--sidebar-solid);
+  z-index: 60;
+  width: 26px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-sm);
   color: var(--text-3);
-  z-index: 25;
+  background: transparent;
   --wails-draggable: no-drag;
   transition: background 0.12s, color 0.12s;
 }
-.panel-rail.left { left: 0; border-right: 1px solid var(--sep); }
-.panel-rail.right { right: 0; top: 0; border-left: 1px solid var(--sep); }
-.panel-rail:hover { background: var(--hover); color: var(--text); }
-.panel-rail svg { pointer-events: none; }
-/* popout 窗口置顶 toggle:浮在右上角顶部(避开红绿灯,贴近右侧边缘)。 */
+.panel-toggle:hover { background: var(--hover); color: var(--text); }
+.panel-toggle svg { pointer-events: none; }
+/* 右 toggle:钉在窗口右上角(右侧面板头部右端,面板是最右元素所以≈窗口右边)。 */
+.panel-toggle.right { top: 13px; right: 8px; }
+/* 左 toggle:钉在窗口左上,但让开红绿灯(从标题栏下方开始)。 */
+.panel-toggle.left { top: 58px; left: 8px; }
+/* popout 窗口置顶 toggle:浮在右上角顶部(避开红绿灯,贴近右侧边缘)。
+   与 .panel-toggle.right 同处右上,纵向错开避免重叠(panel-toggle 在上,置顶其下)。 */
 .on-top-toggle {
   position: fixed;
-  top: 14px;
+  top: 48px;
   right: 14px;
   z-index: 100;
   width: 28px;

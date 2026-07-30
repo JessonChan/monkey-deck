@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Search, X, Pin, PinOff, PanelLeftClose, Settings, SquareTerminal, ExternalLink } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Search, X, Pin, PinOff, Settings, SquareTerminal, ExternalLink } from "lucide-react";
 import {
   DndContext,
   PointerSensor,
@@ -39,7 +39,6 @@ interface Props {
   // session.harness 仅 ID,显示名「Oh My Pi / OpenCode」更友好)。
   harnesses?: Harness[];
   onReorderProjects: (ids: string[]) => void;
-  onCollapse?: () => void;
   onOpenSettings: () => void;
   // 有 harness 新版时,齿轮入口亮红点(§设置入口/harness 菜单红点)。
   harnessUpdateAvailable?: boolean;
@@ -266,9 +265,6 @@ export default function Sidebar(props: Props) {
       <div className="sidebar-header" onDoubleClick={onTitleDoubleClick}>
         <span className="sidebar-title">{t("app.brand")}</span>
         <span className="sidebar-header-acts">
-          <button className="icon-btn" data-testid="collapse-sidebar" onClick={() => props.onCollapse?.()} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.collapse")} data-tooltip-place="bottom">
-            <PanelLeftClose size={16} />
-          </button>
           <button className="icon-btn has-update-dot" data-testid="open-settings" onClick={props.onOpenSettings} data-tooltip-id="md-tip" data-tooltip-content={props.harnessUpdateAvailable ? t("settings.center.openTipUpdate") : t("settings.center.openTip")} data-tooltip-place="bottom">
             <Settings size={16} />
             {props.harnessUpdateAvailable && <span className="update-dot" />}
