@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Search, X, Pin, PinOff, PanelLeftClose, Settings, SquareTerminal, ExternalLink } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Search, X, Pin, PinOff, PanelLeftClose, Settings, SquareTerminal, ExternalLink, Pencil } from "lucide-react";
 import {
   DndContext,
   PointerSensor,
@@ -389,7 +389,7 @@ export default function Sidebar(props: Props) {
                           ) : (() => {
                             const dh = props.draftBySession?.[s.id];
                             return dh && dh.trim() ? (
-                              <span className="session-draft" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.draftTip")}>{t("sidebar.draft")}</span>
+                              <span className="draft-indicator" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.draftTip", { text: dh.trim() })} data-testid={`draft-${s.id}`}><Pencil /></span>
                             ) : <span className="session-time" data-tooltip-id="md-tip" data-tooltip-content={formatDateTime(s.updatedAt)}>{timeAgo(s.updatedAt)}</span>;
                           })()}
                         </button>
