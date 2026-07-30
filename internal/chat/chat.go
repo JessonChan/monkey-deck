@@ -2883,6 +2883,19 @@ func (s *ChatService) SearchBaseRefs(projectID string) ([]worktree.BranchInfo, e
 	return worktree.ListBranches(proj.Path)
 }
 
+// ListWorktrees returns the project's git worktrees (main + linked) for the NewSessionModal
+// "use existing directory" selector. Main (IsMain=true) is first; branch resolved from git.
+func (s *ChatService) ListWorktrees(projectID string) ([]worktree.WorktreeInfo, error) {
+	proj, err := s.st.GetProject(s.ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if proj == nil {
+		return nil, fmt.Errorf("project not found: %s", projectID)
+	}
+	return worktree.ListWorktrees(proj.Path)
+}
+
 // RecentBaseRefs returns the project's recently-selected base branches (most-recent-
 // first), filtered to refs that still exist. Powers the NewSessionModal "Recently used"
 // group. Per-project (baseRefHistory:<id> setting, JSON array).
