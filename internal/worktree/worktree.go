@@ -55,6 +55,18 @@ func gitRaw(repoPath string, args ...string) (string, error) {
 	return string(out), nil
 }
 
+// normalizePath 归一化绝对路径用于比对:EvalSymlinks 解软链(失败回退 Clean)。
+// 防软链 / 尾斜杠 / 大小写差异导致「是不是主 worktree」误判(Remove 护栏 + ListWorktrees IsMain 都靠它)。
+func normalizePath(p string) string {
+	if p == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(p)
+}
+
 // gitDiff 跑 git diff 并返回输出。git diff 的退出码语义特殊:1 = 有差异(正常结果),
 // 仅其它非零才报错。故不走 git()(它把任意非零当 error)。
 func gitDiff(repoPath string, args ...string) (string, error) {
@@ -105,15 +117,39 @@ func Create(repoPath, branch, targetPath, baseRef string) error {
 	return err
 }
 
-// Remove 删除工作树 targetPath 与其分支 branch(worktree remove + branch -D)。
-// 容错:worktree 已不在/分支已删不报错。
+// mdPrefix 是 app 自建会话分支的前缀(§1.4:md/<session-id-8>)。Remove 只允许删这种分支。
+const mdPrefix = "md/"
+
+// Remove 删除 linked worktree targetPath 与其分支 branch。owner-only 的原子操作。
+//
+// 四道护栏(defense in depth —— 绝不删主工作树 / 客户真实代码):
+//  1. targetPath 归一化后 ≠ 主工作树(repoPath);
+//  2. branch 必须以 md/ 开头(只删 app 自建会话分支;main / develop / feature 等真实分支一律拒);
+//  3. targetPath 必须仍是 git 登记中的 linked worktree(已 prune / 已被手动删 → 拒,避免误伤);
+//  4. git 自身拒删主工作树(兜底)。
+//
+// 任一护栏不满足 → 返回 error,worktree 与 branch 都不动(宁可留孤儿 md/ 分支,也不冒险删错)。
 func Remove(repoPath, targetPath, branch string) error {
-	if _, err := git(repoPath, "worktree", "remove", "--force", targetPath); err != nil {
-		// 兜底:prune 掉失效登记
-		_, _ = git(repoPath, "worktree", "prune")
+	target := normalizePath(targetPath)
+	if target == "" || target == normalizePath(repoPath) {
+		return fmt.Errorf("refuse to remove main worktree: %s", targetPath)
 	}
-	if branch != "" {
-		_, _ = git(repoPath, "branch", "-D", branch) // 强删会话分支(已 merge 的也删)
+	if !strings.HasPrefix(branch, mdPrefix) {
+		return fmt.Errorf("refuse to delete non-app branch %q (only %s* allowed)", branch, mdPrefix)
+	}
+	linked, err := isLinkedWorktree(repoPath, target)
+	if err != nil {
+		return fmt.Errorf("check linked worktree: %w", err)
+	}
+	if !linked {
+		return fmt.Errorf("not a linked worktree (gone or main): %s", targetPath)
+	}
+	if _, err := git(repoPath, "worktree", "remove", "--force", targetPath); err != nil {
+		_, _ = git(repoPath, "worktree", "prune")
+		return fmt.Errorf("git worktree remove: %w", err)
+	}
+	if _, err := git(repoPath, "branch", "-D", branch); err != nil {
+		return fmt.Errorf("git branch -D %s: %w", branch, err)
 	}
 	return nil
 }
@@ -516,6 +552,65 @@ func ListBranches(repoPath string) ([]BranchInfo, error) {
 		res = append(res, BranchInfo{Name: short, Kind: kind, Date: ts})
 	}
 	return res, nil
+}
+
+// WorktreeInfo 一条 worktree 信息(供 NewSessionModal「使用已有工作目录」选择器)。
+type WorktreeInfo struct {
+	Path   string `json:"path"`   // 工作目录绝对路径
+	Branch string `json:"branch"` // 检出的分支短名(如 main / md/abc12345 / feat/x);detached HEAD 时为空
+	IsMain bool   `json:"isMain"` // 是否主工作树(= 项目目录;true = 永不可删,Remove 护栏)
+}
+
+// ListWorktrees 列出仓库全部 worktree(主 + linked),主工作树(IsMain=true)排第一。
+// 供「使用已有工作目录」选择器:进入已有 worktree(guest)或选项目主目录。detached 的 Branch 留空。
+func ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
+	out, err := gitRaw(repoPath, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	mainNorm := normalizePath(repoPath)
+	var res []WorktreeInfo
+	for _, block := range strings.Split(out, "\n\n") {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+		var path, branch string
+		for _, line := range strings.Split(block, "\n") {
+			switch {
+			case strings.HasPrefix(line, "worktree "):
+				path = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+			case strings.HasPrefix(line, "branch "):
+				ref := strings.TrimSpace(strings.TrimPrefix(line, "branch "))
+				branch = strings.TrimPrefix(ref, "refs/heads/")
+			}
+		}
+		if path == "" {
+			continue
+		}
+		res = append(res, WorktreeInfo{
+			Path:   path,
+			Branch: branch,
+			IsMain: normalizePath(path) == mainNorm,
+		})
+	}
+	return res, nil
+}
+
+// isLinkedWorktree 报告 target 是否是 repoPath 的一个 linked worktree(非主工作树、且仍在 git 登记中)。
+// Remove 护栏 3 用:确认要删的目标确实是个现存 linked worktree,而不是主仓库 / 已失效路径。
+func isLinkedWorktree(repoPath, target string) (bool, error) {
+	targetNorm := normalizePath(target)
+	wts, err := ListWorktrees(repoPath)
+	if err != nil {
+		return false, err
+	}
+	for _, w := range wts {
+		if !w.IsMain && normalizePath(w.Path) == targetNorm {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // mergeInDir 在 dir 所在的工作树里把 branch 合并进当前(已 checkout 在 target 的)HEAD,

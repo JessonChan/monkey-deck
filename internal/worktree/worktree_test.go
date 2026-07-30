@@ -679,3 +679,81 @@ func TestMergeBranchInto_TargetOccupiedDirty(t *testing.T) {
 		t.Fatalf("expected dirty error, got: %v", err)
 	}
 }
+
+// TestListWorktrees 列出主 + linked worktree,IsMain 推导正确,linked 带 md/ 分支。
+func TestListWorktrees(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	must(t, runGit(root, "init", "-q", root))
+	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("a"), 0o644))
+	must(t, runGit(root, "add", "."))
+	must(t, runGit(root, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init"))
+
+	wt := filepath.Join(t.TempDir(), "wt-a")
+	must(t, Create(root, "md/sess-a", wt, ""))
+
+	wts, err := ListWorktrees(root)
+	must(t, err)
+	if len(wts) != 2 {
+		t.Fatalf("want 2 worktrees, got %d: %+v", len(wts), wts)
+	}
+	// main 排第一且 IsMain=true、路径 == root。
+	if !wts[0].IsMain {
+		t.Fatalf("first worktree should be main: %+v", wts[0])
+	}
+	if normalizePath(wts[0].Path) != normalizePath(root) {
+		t.Fatalf("main path mismatch: got %s want %s", wts[0].Path, root)
+	}
+	// linked:IsMain=false、分支 md/sess-a、路径 == wt。
+	if wts[1].IsMain {
+		t.Fatalf("second worktree should not be main: %+v", wts[1])
+	}
+	if wts[1].Branch != "md/sess-a" {
+		t.Fatalf("linked branch = %q, want md/sess-a", wts[1].Branch)
+	}
+	if normalizePath(wts[1].Path) != normalizePath(wt) {
+		t.Fatalf("linked path mismatch: got %s want %s", wts[1].Path, wt)
+	}
+}
+
+// TestRemove_Guardrails 锁四道护栏:主工作树拒删 / 非 md 分支拒删 / 非 linked 路径拒删 / 正常 linked+md 放行。
+// 任一护栏失守 = 可能删客户真实代码,这是整个 owner/guest 模型的安全底线。
+func TestRemove_Guardrails(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	must(t, runGit(root, "init", "-q", root))
+	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("a"), 0o644))
+	must(t, runGit(root, "add", "."))
+	must(t, runGit(root, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init"))
+
+	wt := filepath.Join(t.TempDir(), "wt-a")
+	must(t, Create(root, "md/sess-a", wt, ""))
+
+	// 护栏 1:目标 == 主工作树 → 拒(绝不删项目目录)。
+	if err := Remove(root, root, "md/sess-a"); err == nil {
+		t.Fatal("Remove main worktree must fail")
+	}
+	// 护栏 2:非 md/ 分支 → 拒(main / feature 等真实分支一律不删)。
+	if err := Remove(root, wt, "main"); err == nil {
+		t.Fatal("Remove non-md branch must fail")
+	}
+	// 护栏 3:不是现存 linked worktree 的路径 → 拒。
+	if err := Remove(root, filepath.Join(t.TempDir(), "nope"), "md/sess-a"); err == nil {
+		t.Fatal("Remove non-existent worktree must fail")
+	}
+	// 被拒三次后 worktree + 分支应仍在(护栏是「什么也不动」)。
+	if !BranchExists(root, "md/sess-a") {
+		t.Fatal("branch vanished after a refused Remove")
+	}
+	// 正常:linked worktree + md/ 分支 → 放行删除。
+	if err := Remove(root, wt, "md/sess-a"); err != nil {
+		t.Fatalf("Remove valid linked worktree: %v", err)
+	}
+	if BranchExists(root, "md/sess-a") {
+		t.Fatal("branch still exists after Remove")
+	}
+}
