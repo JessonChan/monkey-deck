@@ -117,8 +117,10 @@ func Create(repoPath, branch, targetPath, baseRef string) error {
 	return err
 }
 
-// mdPrefix 是 app 自建会话分支的前缀(§1.4:md/<session-id-8>)。Remove 只允许删这种分支。
-const mdPrefix = "md/"
+// MDPrefix is the prefix of app-created session branches (§1.4: md/<session-id-8>).
+// Remove only deletes branches with this prefix; chat.worktreeKindOf uses it to tell owner
+// from guest. Exported so the md/<id8> convention has a single source of truth.
+const MDPrefix = "md/"
 
 // Remove 删除 linked worktree targetPath 与其分支 branch。owner-only 的原子操作。
 //
@@ -134,8 +136,8 @@ func Remove(repoPath, targetPath, branch string) error {
 	if target == "" || target == normalizePath(repoPath) {
 		return fmt.Errorf("refuse to remove main worktree: %s", targetPath)
 	}
-	if !strings.HasPrefix(branch, mdPrefix) {
-		return fmt.Errorf("refuse to delete non-app branch %q (only %s* allowed)", branch, mdPrefix)
+	if !strings.HasPrefix(branch, MDPrefix) {
+		return fmt.Errorf("refuse to delete non-app branch %q (only %s* allowed)", branch, MDPrefix)
 	}
 	linked, err := isLinkedWorktree(repoPath, target)
 	if err != nil {
@@ -597,20 +599,30 @@ func ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
 	return res, nil
 }
 
-// isLinkedWorktree 报告 target 是否是 repoPath 的一个 linked worktree(非主工作树、且仍在 git 登记中)。
-// Remove 护栏 3 用:确认要删的目标确实是个现存 linked worktree,而不是主仓库 / 已失效路径。
-func isLinkedWorktree(repoPath, target string) (bool, error) {
+// ResolveWorktreeBranch reports whether target is a current linked worktree of repoPath
+// (non-main); if so returns its checked-out branch short name (empty for detached HEAD).
+// CreateGuestSession uses it to validate the entered path AND resolve its branch from git
+// truth (the branch is not trusted from the caller — single source).
+func ResolveWorktreeBranch(repoPath, target string) (branch string, ok bool, err error) {
 	targetNorm := normalizePath(target)
 	wts, err := ListWorktrees(repoPath)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	for _, w := range wts {
 		if !w.IsMain && normalizePath(w.Path) == targetNorm {
-			return true, nil
+			return w.Branch, true, nil
 		}
 	}
-	return false, nil
+	return "", false, nil
+}
+
+// isLinkedWorktree reports whether target is a current linked worktree (non-main) of repoPath.
+// Remove guardrail 3: confirms the deletion target is a live linked worktree, not the main
+// repo or a stale path.
+func isLinkedWorktree(repoPath, target string) (bool, error) {
+	_, ok, err := ResolveWorktreeBranch(repoPath, target)
+	return ok, err
 }
 
 // mergeInDir 在 dir 所在的工作树里把 branch 合并进当前(已 checkout 在 target 的)HEAD,

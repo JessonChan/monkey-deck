@@ -173,3 +173,34 @@ func (s *Store) SetSessionBaseRef(ctx context.Context, id, baseRef string) error
 		baseRef, now(), id)
 	return err
 }
+
+// SessionsByWorktreePath lists every session mounted at worktreePath under projectID
+// (the owner + its guests). Powers WorktreeGuests (find guests) and the delete flow.
+func (s *Store) SessionsByWorktreePath(ctx context.Context, projectID, worktreePath string) ([]Session, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+sessionColumns+` FROM sessions WHERE project_id=? AND worktree_path=? ORDER BY created_at`,
+		projectID, worktreePath)
+	if err != nil {
+		return nil, fmt.Errorf("sessions by worktree: %w", err)
+	}
+	defer rows.Close()
+	var out []Session
+	for rows.Next() {
+		var se Session
+		if err := scanSession(rows, &se); err != nil {
+			return nil, err
+		}
+		out = append(out, se)
+	}
+	return out, rows.Err()
+}
+
+// ClearWorktreeRefsByPath clears the worktree ref (worktree_path/branch/base_ref) on every
+// session mounted at worktreePath, except keepSessionID. Used to detach guests back to the
+// project dir (history kept) when the owner deletes the worktree.
+func (s *Store) ClearWorktreeRefsByPath(ctx context.Context, projectID, worktreePath, keepSessionID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET worktree_path='', branch='', base_ref='', updated_at=? WHERE project_id=? AND worktree_path=? AND id<>?`,
+		now(), projectID, worktreePath, keepSessionID)
+	return err
+}

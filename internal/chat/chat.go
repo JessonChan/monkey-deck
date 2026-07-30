@@ -511,13 +511,29 @@ func (s *ChatService) RemoveProject(id string) error {
 	for _, sid := range stopped {
 		s.stopReconnect(sid)
 	}
-	// 清理该项目下所有 session 的 worktree + 分支。
-	if sess, err := s.st.ListSessions(s.ctx, id); err == nil {
+	// Capture owner worktrees + repoPath BEFORE deleting the project (DeleteProject wipes the
+	// row, so proj.Path is gone after). Guest sessions share owner worktrees and are removed
+	// with the project, so only owner worktrees need physical removal.
+	sess, _ := s.st.ListSessions(s.ctx, id)
+	repoPath := ""
+	if proj, _ := s.st.GetProject(s.ctx, id); proj != nil {
+		repoPath = proj.Path
+	}
+	if err := s.st.DeleteProject(s.ctx, id); err != nil {
+		return err
+	}
+	// DB cleared (all session rows gone, incl. guests → no dangling refs); now remove each
+	// owner worktree. worktree.Remove's 4 guardrails refuse anything non-md / non-linked / main.
+	if repoPath != "" {
 		for _, se := range sess {
-			s.cleanupWorktree(&se)
+			if worktreeKindOf(&se) == "owner" {
+				if err := worktree.Remove(repoPath, se.WorktreePath, se.Branch); err != nil {
+					slog.Warn("remove project worktree", "session", se.ID, "err", err)
+				}
+			}
 		}
 	}
-	return s.st.DeleteProject(s.ctx, id)
+	return nil
 }
 
 // --- Sessions ---
@@ -606,33 +622,159 @@ func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorkt
 	return se, nil
 }
 
-// cleanupWorktree 删除某 session 的 worktree + 分支(若存在)。非 git session 无操作。
-func (s *ChatService) cleanupWorktree(se *store.Session) {
-	if se.WorktreePath == "" || se.Branch == "" {
-		return
+// worktreeKindOf derives a session's worktree role from its fields (no DB column, no
+// migration): WorktreePath empty → "project"; Branch == md/<own id8> → "owner"; else
+// "guest" (entered an existing worktree). The md/<id8> convention is the single source
+// (§1.4); worktree.MDPrefix keeps it DRY.
+func worktreeKindOf(se *store.Session) string {
+	if se.WorktreePath == "" {
+		return "project"
 	}
-	proj, err := s.st.GetProject(s.ctx, se.ProjectID)
-	if err != nil || proj == nil {
-		return
+	short := se.ID
+	if len(short) > 8 {
+		short = short[:8]
 	}
-	if err := worktree.Remove(proj.Path, se.WorktreePath, se.Branch); err != nil {
-		slog.Warn("cleanup worktree", "session", se.ID, "err", err)
+	if se.Branch == worktree.MDPrefix+short {
+		return "owner"
 	}
+	return "guest"
 }
 
-// DeleteSession 删除 session(关闭活跃 harness + 清理 worktree + 删 DB 记录)。
+// WorktreeKind returns the session's worktree role: "project" (uses project dir, no
+// worktree) / "owner" (created the worktree) / "guest" (entered an existing worktree).
+// The frontend drives the delete flow + disables merge for guests off this.
+func (s *ChatService) WorktreeKind(sessionID string) (string, error) {
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if se == nil {
+		return "", fmt.Errorf("session not found: %s", sessionID)
+	}
+	return worktreeKindOf(se), nil
+}
+
+// WorktreeGuests returns the guest sessions sharing the owner's worktree (same worktreePath,
+// excluding the owner). Powers the owner-delete 3-option dialog ("N chats still use this
+// worktree"). Non-owner (no worktreePath) → empty.
+func (s *ChatService) WorktreeGuests(sessionID string) ([]store.Session, error) {
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if se == nil || se.WorktreePath == "" {
+		return []store.Session{}, nil
+	}
+	all, err := s.st.SessionsByWorktreePath(s.ctx, se.ProjectID, se.WorktreePath)
+	if err != nil {
+		return nil, err
+	}
+	guests := make([]store.Session, 0, len(all))
+	for _, g := range all {
+		if g.ID != sessionID {
+			guests = append(guests, g)
+		}
+	}
+	return guests, nil
+}
+
+// CreateGuestSession creates a session that ENTERS an existing worktree (a "guest"): no new
+// worktree/branch is created — the session is pinned to enterPath (a live linked worktree).
+// Multiple sessions can share one worktree (e.g. two agents collaborating / reviewing in the
+// same dir). A guest only ever deletes its own chat; the worktree/branch belongs to the owner
+// (DeleteWorktree). enterPath must be a current linked worktree of the project; its branch is
+// resolved from git truth (not trusted from the caller). Non-git / main worktree / missing → error.
+func (s *ChatService) CreateGuestSession(projectID, title, harnessID, enterPath string) (*store.Session, error) {
+	proj, err := s.st.GetProject(s.ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if proj == nil {
+		return nil, fmt.Errorf("project not found: %s", projectID)
+	}
+	if !worktree.IsRepo(proj.Path) {
+		return nil, fmt.Errorf("not a git project")
+	}
+	branch, ok, err := worktree.ResolveWorktreeBranch(proj.Path, enterPath)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("not an existing worktree of this project: %s", enterPath)
+	}
+	model := proj.Model
+	if model == "" {
+		model = s.cfg.DefaultModel
+	}
+	hid := harness.Normalize(harnessID)
+	if err := s.st.SetSetting(s.ctx, "lastHarness", hid); err != nil {
+		slog.Warn("persist lastHarness", "err", err)
+	}
+	se, err := s.st.CreateSession(s.ctx, projectID, title, model, hid)
+	if err != nil {
+		return nil, err
+	}
+	// Pin to the existing worktree (guest): no new branch; store path + git-resolved branch.
+	// No baseRef — a guest has no fork base / merge target of its own.
+	if err := s.st.SetSessionWorktree(s.ctx, se.ID, enterPath, branch); err != nil {
+		slog.Warn("persist guest worktree", "err", err)
+	} else {
+		se.WorktreePath, se.Branch = enterPath, branch
+	}
+	return se, nil
+}
+
+// DeleteWorktree removes the owner's worktree + branch (atomic; 4 guardrails in
+// worktree.Remove). Owner-only: guest/project → error (no right to delete the worktree).
+// The frontend calls this in the owner-delete flow (alone, or after DeleteSession/Detach).
+func (s *ChatService) DeleteWorktree(sessionID string) error {
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if se == nil {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+	if worktreeKindOf(se) != "owner" {
+		return fmt.Errorf("only the worktree owner can delete it (this session is a %s)", worktreeKindOf(se))
+	}
+	proj, err := s.st.GetProject(s.ctx, se.ProjectID)
+	if err != nil {
+		return err
+	}
+	if proj == nil {
+		return fmt.Errorf("project not found: %s", se.ProjectID)
+	}
+	return worktree.Remove(proj.Path, se.WorktreePath, se.Branch)
+}
+
+// DetachWorktreeGuests clears the worktree ref on every guest of the owner's worktree, so
+// they fall back to the project dir while keeping their chat history. Used by the owner-delete
+// "keep other conversations" option. The owner keeps its own ref (cleared by its DeleteSession).
+func (s *ChatService) DetachWorktreeGuests(sessionID string) error {
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if se == nil || se.WorktreePath == "" {
+		return nil
+	}
+	return s.st.ClearWorktreeRefsByPath(s.ctx, se.ProjectID, se.WorktreePath, sessionID)
+}
+
+// DeleteSession deletes a session's chat + harness + DB row. It NEVER touches the worktree:
+// worktree deletion is a separate atomic op (DeleteWorktree); the frontend orchestrates owner
+// deletion (chat + DeleteWorktree) and the owner-with-guests 3-option dialog. Guests only ever
+// delete their own chat — the worktree/branch belongs to the owner.
 func (s *ChatService) DeleteSession(sessionID string) error {
 	s.mu.Lock()
 	if ls, ok := s.active[sessionID]; ok {
 		ls.chat.Close()
 		delete(s.active, sessionID)
 	}
-	s.reconnectGiveUp[sessionID] = true // 抑制自动重连(session 要删了)
+	s.reconnectGiveUp[sessionID] = true // suppress auto-reconnect (session is being deleted)
 	s.mu.Unlock()
 	s.stopReconnect(sessionID)
-	if se, _ := s.st.GetSession(s.ctx, sessionID); se != nil {
-		s.cleanupWorktree(se)
-	}
 	return s.st.DeleteSession(s.ctx, sessionID)
 }
 
@@ -2811,7 +2953,7 @@ func (s *ChatService) SessionMergeable(sessionID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if se == nil || se.Branch == "" {
+	if se == nil || se.Branch == "" || worktreeKindOf(se) == "guest" {
 		return false, nil
 	}
 	proj, err := s.st.GetProject(s.ctx, se.ProjectID)
