@@ -838,7 +838,7 @@ export default function App() {
     setNewSession(null);
     try {
       if (pid !== selectedProjectId) await selectProject(pid);
-      let se: Session | undefined;
+      let se: Session | null | undefined = undefined;
       if (choice.mode === "enter" && choice.enterPath) {
         se = await ChatService.CreateGuestSession(pid, "", choice.harness, choice.enterPath);
       } else if (choice.mode === "new") {
@@ -1169,7 +1169,7 @@ export default function App() {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     refreshTimerRef.current = setTimeout(() => {
       const sid = selectedSessionIdRef.current;
-      if (statusRef.current === "readonly" || statusRef.current === "empty") return;
+      if (!sid || statusRef.current === "readonly" || statusRef.current === "empty") return;
       ChatService.RefreshSessionConfig(sid).catch((e) => {
         setError(`${t("chat.refreshConfigFailed")}: ${extractErrMsg(e)}`);
       });
@@ -1342,7 +1342,7 @@ export default function App() {
     try { kind = await ChatService.WorktreeKind(sessionId); } catch { /* treat as project */ }
     if (kind === "owner") {
       let guests: Session[] = [];
-      try { guests = await ChatService.WorktreeGuests(sessionId); } catch {}
+      try { guests = (await ChatService.WorktreeGuests(sessionId)) ?? []; } catch {}
       if (guests.length > 0) {
         setDeleteWt({ sessionId, projectId: projectIdOf(sessionId), guests });
         return; // the dialog drives the rest
