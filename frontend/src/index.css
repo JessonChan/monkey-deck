@@ -2190,3 +2190,78 @@ input, textarea { font-family: inherit; }
 .terminal-context-item { display: block; width: 100%; padding: 6px 10px; font-size: 12.5px; text-align: left; color: var(--text); background: transparent; border: none; border-radius: 5px; cursor: pointer; }
 .terminal-context-item:hover { background: var(--accent); color: #fff; }
 .terminal-context-item.danger:hover { background: #ff453a; }
+
+/* Wrapper for Panel#main contents: stacks [TabBar, main] vertically. main is height:100% by
+   itself; this column gives the tab bar its row and lets main fill the rest. */
+.main-col { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; }
+
+/* ─── Session tab bar (main window top strip) ───
+   Visual reference: the project's own .terminal-tab* idiom (same "tab + close button" pattern).
+   Sits in the title-bar drag region, so the container is draggable and every interactive control
+   inside is explicitly no-drag (otherwise the window drag handler swallows tab/close clicks). */
+.tabbar {
+  display: flex; align-items: stretch; flex-shrink: 0; height: 34px;
+  border-bottom: 1px solid var(--sep); background: var(--bg);
+  --wails-draggable: drag;
+}
+.tabbar-scroll {
+  display: flex; align-items: center; flex: 1; min-width: 0;
+  overflow-x: auto;
+  /* Reserve a dedicated bottom lane for the overlay scrollbar. The strip is 34px tall; tabs are
+     25px and centered. Without this padding the WebKit scrollbar lane overlaps the bottom edge
+     of the tabs (and the .tabbar border-bottom), making the thumb both visually blended with the
+     tab background and nearly impossible to hit. The padding gives the thumb its own non-over
+     lapping space at the very bottom of the strip, so it is both clearly visible and clickable. */
+  padding: 0 2px 7px;
+  /* ROOT CAUSE of "scrollbar never shows": the STANDARD `scrollbar-width` property is honored by
+     modern Chromium (WebView2/Win, Chrome 121+) and increasingly by WKWebView. `none` means "draw
+     NO scrollbar" on those engines AND makes the ::-webkit-scrollbar rules below a no-op there — so
+     the bar was hidden regardless of the height/display/thumb rules. The old comment wrongly assumed
+     `scrollbar-width` only affected Firefox. Fix: `thin` (slim, visible) + `scrollbar-color` to theme
+     it. Specificity beats the global `* { scrollbar-width: none }` above. Mirrors .cv-scroll. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-3) transparent;
+}
+/* Two independent mechanisms so a scrollbar shows on every engine (same strategy as .cv-scroll):
+   (1) standard scrollbar-width/scrollbar-color above — modern Chromium/Firefox;
+   (2) ::-webkit-scrollbar here — Safari/WKWebView & older Chromium (they ignore the standard props).
+   `display: block` defeats the app-wide `::-webkit-scrollbar { display: none }` (top of this file):
+   without it the global `display: none` wins for `display` and nothing renders on those engines. */
+.tabbar-scroll::-webkit-scrollbar { height: 7px; width: 7px; display: block; }
+.tabbar-scroll::-webkit-scrollbar-track { background: transparent; }
+/* Always-visible thumb (NOT hover-gated). The earlier transparent→:hover design was fragile and the
+   bar looked permanently absent. --text-3 (not the near-invisible --sep-strong) so it reads clearly
+   against the tab-row background; brightens to --text-2 on hover. Track transparent in both states. */
+.tabbar-scroll::-webkit-scrollbar-thumb {
+  background: var(--text-3); border-radius: 4px;
+}
+.tabbar-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-2); }
+/* Tabs shrink instead of overflowing: the strip stays within the main column width and each tab
+   compresses (down to its min-width) as more tabs are added — the browser tab-bar strategy.
+   flex: 0 1 auto = "don't grow, can shrink, natural size basis". */
+.tabbar-tab {
+  display: inline-flex; align-items: center; gap: 6px; height: 25px;
+  flex: 0 1 auto; min-width: 90px; max-width: 190px;
+  padding: 0 4px 0 8px; margin-right: 1px;
+  border-radius: 6px; cursor: pointer; color: var(--text-2);
+  white-space: nowrap; transition: background 0.1s, color 0.1s;
+  --wails-draggable: no-drag;
+}
+.tabbar-tab:hover { background: var(--hover); color: var(--text); }
+.tabbar-tab.active { background: var(--sel); color: var(--text); }
+.tabbar-tab .session-dot { flex-shrink: 0; }
+/* Title takes the shrinking load: as the tab compresses, the ellipsis title gives way first
+   (the dot + close button keep their fixed sizes via flex-shrink: 0). */
+.tabbar-tab-title {
+  overflow: hidden; text-overflow: ellipsis; font-size: 12px;
+  min-width: 0; flex: 1 1 auto;
+}
+.tabbar-tab-close {
+  display: flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; flex-shrink: 0; border: none; border-radius: 4px;
+  background: transparent; color: var(--text-3); opacity: 0; cursor: pointer;
+  --wails-draggable: no-drag;
+}
+.tabbar-tab:hover .tabbar-tab-close,
+.tabbar-tab.active .tabbar-tab-close { opacity: 1; }
+.tabbar-tab-close:hover { background: var(--sep-strong); color: var(--text); }

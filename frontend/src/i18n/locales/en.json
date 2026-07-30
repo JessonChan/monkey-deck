@@ -32,6 +32,20 @@
     "mergeFailed": "❌ Merge failed: {{error}}",
     "noActiveSession": "No active session"
   },
+  "tabbar": {
+    "closeTab": "Close tab",
+    "closeTabTip": "Close tab ({{title}})",
+    "moveToWindow": "Move tab to new window",
+    "sessionTooltip": "{{title}} · {{project}}",
+    "generating": "Generating…"
+  },
+  "closeTab": {
+    "title": "Chat is still generating",
+    "body": "\"{{title}}\" is still generating. Closing the tab won't stop the turn on its own.",
+    "cancel": "Cancel",
+    "detach": "Close tab only",
+    "stop": "Stop & close"
+  },
   "sidebar": {
     "collapse": "Collapse sidebar",
     "addProject": "Add project directory",

@@ -6,6 +6,7 @@ import * as TerminalService from "../bindings/github.com/jessonchan/monkey-deck/
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention, ImageAttachment, AudioAttachment, PlanEntry, LivePlan, Usage } from "./types";
 import Sidebar from "./components/Sidebar";
+import TabBar from "./components/TabBar";
 import ChatView, { type ChatViewHandle } from "./components/ChatView";
 import { Sparkles } from "lucide-react";
 import SidePanel from "./components/SidePanel";
@@ -15,6 +16,7 @@ import { disposeTerminal } from "./lib/termRegistry";
 import NewSessionModal, { type NewSessionChoice } from "./components/NewSessionModal";
 import SettingsPanel from "./components/SettingsPanel";
 import DeleteWorktreeDialog from "./components/DeleteWorktreeDialog";
+import CloseTabDialog from "./components/CloseTabDialog";
 import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import { Group, Panel, Separator, useDefaultLayout, usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
 import { Tooltip } from "react-tooltip";
@@ -69,6 +71,14 @@ export default function App() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [sessionsByProject, setSessionsByProject] = useState<Record<string, Session[]>>({});
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  // Multi-tab bar: ordered list of session ids the user has opened as tabs in the main window.
+  // Explicit state (NOT derived from cache-map keys) — the memory saver drops idle sessions'
+  // itemsBySession on switch, so deriving tabs from Object.keys(itemsBySession) would make tabs
+  // "disappear" when their cache gets evicted. Tab semantics = "user opened it, hasn't closed it",
+  // independent of whether its cache is currently resident in memory. §5.3: respect the data
+  // source, don't derive from heuristics. Popout windows never show the tab bar, so they don't
+  // maintain this state.
+  const [openTabs, setOpenTabs] = useState<string[]>([]);
   // popout 模式:本窗口是某 session 的独立窗口(由后端 OpenSessionWindow 创建,URL 带 #popout=<sid>)。
   // popout 模式下隐藏 Sidebar、启动时直接 openSession 目标 session、不处理 poppedSessionIds 过滤
   // (它是主窗口专属:主窗口对已 popout 的 session 视而不见,避免权限/状态/声音双弹)。
@@ -117,6 +127,9 @@ export default function App() {
   // Owner-with-guests delete flow: when deleting an owner session whose worktree still has
   // guest chats, defer to a 3-option dialog (delete worktree + all/keep others). null = closed.
   const [deleteWt, setDeleteWt] = useState<{ sessionId: string; projectId: string; guests: Session[] } | null>(null);
+  // Closing a still-generating tab ("prompting") is deferred to CloseTabDialog (stop vs detach).
+  // null = no dialog pending.
+  const [pendingCloseTab, setPendingCloseTab] = useState<{ sessionId: string; title: string } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false); // 统一设置中心面板(收敛语言/提示音/权限/harness)
   // 集成终端(per-session,与 agent ACP 通道完全分离;§1.1 agent 永远走 ACP)。
   // 终端面板开关也 per-session:session A 开着,切到 B 时 B 按自己的状态显示(各自独立)。
@@ -160,6 +173,10 @@ export default function App() {
   const selectedSessionIdRef = useRef<string | null>(null);
   const chatViewRef = useRef<ChatViewHandle>(null);
   selectedSessionIdRef.current = selectedSessionId;
+  // openTabs 的 ref:closeTab 需读「邻居」选下一个 tab,用 ref 读最新值避免把它进依赖
+  // (每次 tab 增减都重建 closeTab 会牵连 TabBar 整树重渲染)。与 selectedSessionIdRef 同理。
+  const openTabsRef = useRef<string[]>([]);
+  openTabsRef.current = openTabs;
   // sessionsByProject 的 ref:status 事件 handler 里查「session 属于哪个 project」用,
   // 不进 effect 依赖(避免每次 sessionsByProject 变化都重订阅事件)。
   const sessionsByProjectRef = useRef(sessionsByProject);
@@ -577,6 +594,11 @@ export default function App() {
         if (popped) next.add(sessionId); else next.delete(sessionId);
         return next;
       });
+      // Closing a popout window restores the session back into the main window's tab strip —
+      // the same "bring it back to main" restore path the popout feature had before tabs existed.
+      // The main window resumes rendering/handling it (poppedSessionIds just dropped it above);
+      // re-registering it as a tab makes that visible instead of leaving the user to hunt the sidebar.
+      if (!popped) setOpenTabs((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
     });
     return () => { offPopout(); };
   }, [isPopout]);
@@ -683,6 +705,11 @@ export default function App() {
       }
       if (projectId && projectId !== selectedProjectId) setSelectedProjectId(projectId);
       setSelectedSessionId(sessionId);
+      // Multi-tab: register this session as an open tab in the main window. openSession is the
+      // single choke point for "open a session" (sidebar click, tab click, popout boot), so
+      // registering here means every entry path auto-tracks the tab. Skip popout windows (they
+      // don't render the tab bar and shouldn't maintain openTabs).
+      if (!isPopout) setOpenTabs((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
       setUnreadBySession((prev) => { if (!prev[sessionId]) return prev; const n = { ...prev }; delete n[sessionId]; return n; });
       userStoppedBySessionRef.current.delete(sessionId);
       setError(null);
@@ -898,12 +925,20 @@ export default function App() {
     [selectedSessionId]
   );
 
+  // stopSessionById cancels a session's in-flight turn by explicit id (not the selected one).
+  // Used both by the composer Stop button (for the active session) and by CloseTabDialog's
+  // "stop & close" choice (for a tab that may not be the active one). Marks the session as
+  // user-stopped so the next idle event won't auto-continue the queue (§ drainSession guard).
+  const stopSessionById = useCallback(async (sid: string) => {
+    userStoppedBySessionRef.current.add(sid);
+    await ChatService.StopSession(sid);
+  }, []);
+
   // 回合结束 drainSession 自动续发(由 chat:status 事件按 sessionId 触发);idle 直发,status 由 chat:status 事件驱动。
   const stopSession = useCallback(async () => {
     if (!selectedSessionId) return;
-    userStoppedBySessionRef.current.add(selectedSessionId); // 抑制本 session 下个 idle 的 auto-continue(用户主动停,不自动续发;队列保留)
-    await ChatService.StopSession(selectedSessionId);
-  }, [selectedSessionId]);
+    await stopSessionById(selectedSessionId);
+  }, [selectedSessionId, stopSessionById]);
 
   // 继续会话:只读态(懒 spawn)下用户点「继续会话」时显式触发 spawn,切为可交互态。
   // 已活跃则后端 no-op。发新消息也会自动触发 spawn(走 SendMessage→ensureLive)。
@@ -1320,6 +1355,8 @@ export default function App() {
     loadedSessionsRef.current.delete(sessionId);
     historySeededRef.current.delete(sessionId);
     configSeededRef.current.delete(sessionId);
+    // Also drop from the tab strip so deleted/purged sessions don't linger as phantom tabs.
+    setOpenTabs((prev) => (prev.includes(sessionId) ? prev.filter((id) => id !== sessionId) : prev));
   }, []);
 
   // purgeSessionState = evictSessionCache + remove the sidebar list entry + clear selection.
@@ -1342,6 +1379,93 @@ export default function App() {
     }
     return "";
   }, [sessionsByProject]);
+
+  // sessionById resolves a session object by id across all projects. Used by the tab bar to
+  // render titles/status for open tabs (a tab may belong to any project, not just the selected
+  // one). Returns undefined if the session isn't in the cached sidebar list (e.g. mid-refresh).
+  const sessionById = useCallback((sessionId: string): Session | undefined => {
+    for (const list of Object.values(sessionsByProject)) {
+      const s = list.find((x) => x.id === sessionId);
+      if (s) return s;
+    }
+    return undefined;
+  }, [sessionsByProject]);
+
+  // projectNameById resolves a project's display name by id. Used by the tab bar's hover tooltip
+  // to disambiguate tabs across projects (e.g. two "refactor" sessions in different projects).
+  // Falls back to empty string if the project isn't loaded.
+  const projectNameById = useCallback((projectId: string): string => {
+    const p = projects.find((x) => x.id === projectId);
+    return p?.name ?? "";
+  }, [projects]);
+
+  // closeTab closes a main-window tab: evict the session's in-memory cache (free the memory the
+  // tab was holding) and remove it from the tab strip. This is NOT a delete — the session stays in
+  // the DB and the sidebar list; the user just dismissed it from the tab bar. If the closed tab was
+  // the active one, pick a neighbor tab (next, else prev) to focus, else fall back to the empty
+  // state. Uses evictSessionCache (not purgeSessionState) precisely because the sidebar entry must
+  // survive (evictSessionCache also drops the id from openTabs). Reads openTabs from a ref to avoid
+  // re-creating the callback on every tab reorder.
+  //
+  // Guard: if the session is still generating (status "prompting"), closing is ambiguous — the
+  // turn is running on the backend. Defer to CloseTabDialog ("stop & close" vs "detach": close tab
+  // only, let the turn finish in the background) instead of silently evicting. Idle / error /
+  // closed sessions close directly. "detach" + a still-running turn means the in-memory cache is
+  // gone but the turn keeps streaming into SQLite; reopen the session later to see the output.
+  const closeTab = useCallback((sessionId: string) => {
+    if (statusBySession[sessionId] === "prompting") {
+      const se = sessionById(sessionId);
+      setPendingCloseTab({ sessionId, title: se?.title || t("sidebar.sessionDraftFallback") });
+      return;
+    }
+    evictSessionCache(sessionId);  // also removes from openTabs (choke point)
+    const prevTabs = openTabsRef.current;
+    if (selectedSessionIdRef.current === sessionId) {
+      const idx = prevTabs.indexOf(sessionId);
+      const next = prevTabs[idx + 1] ?? prevTabs[idx - 1] ?? null;
+      if (next) void openSession(next, projectIdOf(next));
+      else setSelectedSessionId(null);
+    }
+  }, [statusBySession, sessionById, t, evictSessionCache, openSession, projectIdOf]);
+
+  // confirmCloseTab resolves the CloseTabDialog choice for a still-generating tab:
+  //   "stop"   — StopSession (cancel the turn) then evict the tab;
+  //   "detach" — evict the tab only; the turn keeps running, its output lands in SQLite.
+  const confirmCloseTab = useCallback(async (mode: "stop" | "detach") => {
+    const pc = pendingCloseTab;
+    if (!pc) return;
+    setPendingCloseTab(null);
+    const sid = pc.sessionId;
+    if (mode === "stop") {
+      await stopSessionById(sid);
+    }
+    evictSessionCache(sid);
+    const prevTabs = openTabsRef.current;
+    if (selectedSessionIdRef.current === sid) {
+      const idx = prevTabs.indexOf(sid);
+      const next = prevTabs[idx + 1] ?? prevTabs[idx - 1] ?? null;
+      if (next) void openSession(next, projectIdOf(next));
+      else setSelectedSessionId(null);
+    }
+  }, [pendingCloseTab, stopSessionById, evictSessionCache, openSession, projectIdOf]);
+
+  // ⌘W / Ctrl+W closes the active tab (browser / VS Code convention). Wails3 / macOS would
+  // otherwise close the whole window; we override that to close just the current session tab and
+  // switch to a neighbor. Main-window only (popout windows have no tab bar — ⌘W there keeps its
+  // native "close window" meaning). No-op when nothing is selected.
+  useEffect(() => {
+    if (isPopout) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "w" || e.key === "W")) {
+        const sid = selectedSessionIdRef.current;
+        if (!sid) return;
+        e.preventDefault();
+        closeTab(sid);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isPopout, closeTab]);
 
   // Delete a session. Chat-only for guest/project; owner also removes the worktree; owner WITH
   // guests defers to the 3-option dialog (DeleteWorktreeDialog) since removing the worktree
@@ -1416,6 +1540,10 @@ export default function App() {
     await ChatService.OpenSessionWindow(sessionId);
     // 乐观更新:立即标记为 popped,让主窗口对该 session 视而不见(不等 popout-changed 事件往返)。
     setPoppedSessionIds((prev) => { const n = new Set(prev); n.add(sessionId); return n; });
+    // Mutually exclusive with tabs: once popped out to its own window, the session leaves the tab
+    // strip. (Re-popping back to main does NOT auto-restore it as a tab — MVP decision; the user
+    // re-opens it from the sidebar, which re-registers it via openSession.)
+    setOpenTabs((prev) => prev.filter((id) => id !== sessionId));
   }, [itemsBySession, queueBySession, draftBySession, livePlanBySession, permissionBySession, termOpenBySession, termTabsBySession, activeTermBySession]);
   // 临时调试:暴露 popoutSession 到 window,供 server 模式浏览器测试调用。
   useEffect(() => { (window as unknown as Record<string, unknown>).__popoutSession = popoutSession; }, [popoutSession]);
@@ -1571,6 +1699,31 @@ export default function App() {
       )}
       {!isPopout && !leftCollapsed && <Separator className="resize-handle" />}
       <Panel id="main" minSize={isPopout ? "520px" : "30%"}>
+        <div className="main-col">
+        {!isPopout && openTabs.length > 0 && (
+          <TabBar
+            tabs={openTabs
+              // Skip sessions popped out to standalone windows (mutual exclusion between tabs
+              // and popout — a session is either a tab or a popout, never both) and sessions that
+              // aren't in the cached sidebar list (race during refresh / delete mid-render).
+              .filter((id) => !poppedSessionIds.has(id) && sessionById(id))
+              .map((id) => {
+                const se = sessionById(id)!;
+                return {
+                  id,
+                  title: se.title || t("sidebar.sessionDraftFallback"),
+                  projectName: projectNameById(se.projectId),
+                  status: statusBySession[id],
+                  activity: activityBySession[id],
+                  unread: !!unreadBySession[id],
+                };
+              })}
+            activeId={selectedSessionId}
+            onSelect={(id) => void openSession(id, projectIdOf(id))}
+            onClose={closeTab}
+            onPopout={(id) => void popoutSession(id)}
+          />
+        )}
         <main className="main">
           {selectedSessionId && (isPopout || !poppedSessionIds.has(selectedSessionId)) ? (
             <Group orientation="vertical" id="main-vertical" className="main-vertical">
@@ -1650,6 +1803,7 @@ export default function App() {
             <EmptyState />
           )}
         </main>
+        </div>
       </Panel>
       {!rightCollapsed && <Separator className="resize-handle" />}
       <Panel
@@ -1753,6 +1907,13 @@ export default function App() {
         guests={deleteWt.guests}
         onConfirm={confirmDeleteWorktree}
         onCancel={() => setDeleteWt(null)}
+      />
+    )}
+    {pendingCloseTab && (
+      <CloseTabDialog
+        title={pendingCloseTab.title}
+        onConfirm={confirmCloseTab}
+        onCancel={() => setPendingCloseTab(null)}
       />
     )}
     {settingsOpen && (

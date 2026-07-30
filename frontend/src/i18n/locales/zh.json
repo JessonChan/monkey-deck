@@ -32,6 +32,20 @@
     "mergeFailed": "❌ 合并失败: {{error}}",
     "noActiveSession": "无活动 session"
   },
+  "tabbar": {
+    "closeTab": "关闭标签页",
+    "closeTabTip": "关闭标签页({{title}})",
+    "moveToWindow": "移到独立窗口",
+    "sessionTooltip": "{{title}} · {{project}}",
+    "generating": "生成中…"
+  },
+  "closeTab": {
+    "title": "对话正在生成中",
+    "body": "「{{title}}」正在生成，关闭标签页不会停止本次输出。",
+    "cancel": "取消",
+    "detach": "仅关闭标签页",
+    "stop": "停止并关闭"
+  },
   "sidebar": {
     "collapse": "收起侧栏",
     "addProject": "添加项目目录",
