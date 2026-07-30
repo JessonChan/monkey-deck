@@ -1282,19 +1282,17 @@ export default function App() {
     [projects, refreshProjects]
   );
 
-  // purgeSessionState drops every per-session cache + removes the session from the sidebar
-  // list + clears selection. Shared by all delete paths. Does NOT call the backend.
-  const purgeSessionState = useCallback((sessionId: string) => {
+  // evictSessionCache drops every per-session cache (maps + refs + seed guards) + kills the
+  // session's terminals. Pure cache eviction — does NOT remove the sidebar list entry, does NOT
+  // touch selection, does NOT call the backend. Shared building block for purgeSessionState
+  // (hard delete) and closeTab (close a tab without deleting the session). §5.3: don't scatter
+  // eviction logic — one place to drop a session's in-memory footprint.
+  const evictSessionCache = useCallback((sessionId: string) => {
     const drop = <T,>(prev: Record<string, T>) => { if (!(sessionId in prev)) return prev; const n = { ...prev }; delete n[sessionId]; return n; };
     void TerminalService.KillSessionTerminals(sessionId);
     setTermTabsBySession(drop);
     setActiveTermBySession(drop);
     setTermOpenBySession(drop);
-    setSessionsByProject((prev) => {
-      const next: Record<string, Session[]> = {};
-      for (const [pid, list] of Object.entries(prev)) next[pid] = list.filter((s) => s.id !== sessionId);
-      return next;
-    });
     setItemsBySession(drop);
     setHasMoreBySession(drop);
     setUsageBySession(drop);
@@ -1322,8 +1320,19 @@ export default function App() {
     loadedSessionsRef.current.delete(sessionId);
     historySeededRef.current.delete(sessionId);
     configSeededRef.current.delete(sessionId);
+  }, []);
+
+  // purgeSessionState = evictSessionCache + remove the sidebar list entry + clear selection.
+  // Used by all hard-delete paths (delete session / delete worktree). Does NOT call the backend.
+  const purgeSessionState = useCallback((sessionId: string) => {
+    evictSessionCache(sessionId);
+    setSessionsByProject((prev) => {
+      const next: Record<string, Session[]> = {};
+      for (const [pid, list] of Object.entries(prev)) next[pid] = list.filter((s) => s.id !== sessionId);
+      return next;
+    });
     if (selectedSessionId === sessionId) setSelectedSessionId(null);
-  }, [selectedSessionId]);
+  }, [selectedSessionId, evictSessionCache]);
 
   // projectIdOf looks up a session's project id from the cached sidebar list.
   const projectIdOf = useCallback((sessionId: string): string => {
