@@ -124,7 +124,12 @@
     "baseRefGroupDefault": "Default branch",
     "baseRefGroupRecent": "Recently used",
     "baseRefGroupAll": "All branches",
-    "createBtn": "Create"
+    "createBtn": "Create",
+    "mcp": {
+      "title": "MCP servers",
+      "desc": "Pick which to connect for this session. Changes need a new session (MCP is fixed at session start).",
+      "count": "{{n}} selected"
+    }
   },
   "capability": {
     "probing": "Detecting capabilities…",
@@ -157,6 +162,7 @@
   "chat": {
     "newSessionTitle": "New chat",
     "toggleTerminalTip": "Terminal (⌘J)",
+    "mcpChipTip": "MCP servers in this session: {{names}}",
     "toggleTerminal": "Toggle terminal",
     "refreshConfigFailed": "Failed to refresh model list",
     "placeholder": "Send a message to start…",
@@ -442,6 +448,7 @@
         "conversation": "Conversation",
         "permissions": "Permissions",
         "models": "Models & harness",
+        "mcp": "MCP servers",
         "sound": "Sound"
       },
       "general": {
@@ -496,6 +503,30 @@
       "moveUp": "Higher priority",
       "moveDown": "Lower priority",
       "delete": "Delete rule"
+    },
+    "mcp": {
+      "desc": "MCP servers registered globally. Pick which to connect per session in the new-chat dialog. Stored locally (SQLite); import an opencode / OMP config to bulk-add.",
+      "empty": "No MCP servers registered yet.",
+      "addBtn": "Add server",
+      "addTitle": "Add MCP server",
+      "editTitle": "Edit MCP server",
+      "importBtn": "Import config",
+      "importTitle": "Import MCP config",
+      "importDesc": "Paste an opencode (\"mcp\" key) or OMP (\".mcp.json\" / \"mcpServers\") config — format is auto-detected. Existing names are skipped. OAuth/auth fields can't be carried over ACP and are dropped.",
+      "impAdded": "Added {{n}}: {{names}}",
+      "impSkipped": "Skipped {{n}} (exist): {{names}}",
+      "impWarnings": "Warnings",
+      "impErrors": "Errors",
+      "defaultOn": "Default on",
+      "defaultOnTip": "Pre-checked when starting a new session",
+      "fName": "Name",
+      "fTransport": "Transport",
+      "fCommand": "Command",
+      "fArgs": "Args (space-separated)",
+      "fEnv": "Environment (KEY=VALUE per line)",
+      "fUrl": "URL",
+      "fHeaders": "Headers (KEY=VALUE per line)",
+      "transport": { "stdio": "stdio", "http": "http", "sse": "sse" }
     },
     "harness": {
       "desc": "Auto-discovered ACP harnesses installed on this machine. Versions are detected locally and checked against their upstream release.",

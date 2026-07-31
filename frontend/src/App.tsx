@@ -867,11 +867,11 @@ export default function App() {
       if (pid !== selectedProjectId) await selectProject(pid);
       let se: Session | null | undefined = undefined;
       if (choice.mode === "enter" && choice.enterPath) {
-        se = await ChatService.CreateGuestSession(pid, "", choice.harness, choice.enterPath);
+        se = await ChatService.CreateGuestSession(pid, "", choice.harness, choice.enterPath, choice.mcpServerIDs);
       } else if (choice.mode === "new") {
-        se = await ChatService.CreateSession(pid, "", choice.harness, true, choice.baseRef ?? "");
+        se = await ChatService.CreateSession(pid, "", choice.harness, true, choice.baseRef ?? "", choice.mcpServerIDs);
       } else {
-        se = await ChatService.CreateSession(pid, "", choice.harness, false, "");
+        se = await ChatService.CreateSession(pid, "", choice.harness, false, "", choice.mcpServerIDs);
       }
       if (se) {
         setItemsBySession((prev) => ({ ...prev, [se.id]: [] }));

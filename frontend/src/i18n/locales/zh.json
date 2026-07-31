@@ -124,7 +124,12 @@
     "baseRefGroupDefault": "默认分支",
     "baseRefGroupRecent": "最近使用",
     "baseRefGroupAll": "全部分支",
-    "createBtn": "新建"
+    "createBtn": "新建",
+    "mcp": {
+      "title": "MCP 服务器",
+      "desc": "选择本次会话要连接的。改动需新建会话(MCP 在会话开始时固定)。",
+      "count": "已选 {{n}} 个"
+    }
   },
   "capability": {
     "probing": "能力检测中…",
@@ -157,6 +162,7 @@
   "chat": {
     "newSessionTitle": "新对话",
     "toggleTerminalTip": "终端 (⌘J)",
+    "mcpChipTip": "本会话的 MCP 服务器:{{names}}",
     "toggleTerminal": "切换终端",
     "refreshConfigFailed": "刷新模型列表失败",
     "placeholder": "发一条消息开始对话…",
@@ -442,6 +448,7 @@
         "conversation": "对话",
         "permissions": "权限",
         "models": "模型与 harness",
+        "mcp": "MCP 服务器",
         "sound": "声音"
       },
       "general": {
@@ -496,6 +503,30 @@
       "moveUp": "提高优先级",
       "moveDown": "降低优先级",
       "delete": "删除规则"
+    },
+    "mcp": {
+      "desc": "全局注册的 MCP 服务器。每次新建会话时勾选要连接的。配置存本地(SQLite);可导入 opencode / OMP 配置批量添加。",
+      "empty": "尚未注册任何 MCP 服务器。",
+      "addBtn": "添加服务器",
+      "addTitle": "添加 MCP 服务器",
+      "editTitle": "编辑 MCP 服务器",
+      "importBtn": "导入配置",
+      "importTitle": "导入 MCP 配置",
+      "importDesc": "粘贴 opencode(mcp 段)或 OMP(.mcp.json / mcpServers)配置 —— 自动识别格式。已存在的名字会跳过。OAuth/auth 字段无法经 ACP 传递,会被丢弃。",
+      "impAdded": "新增 {{n}} 个:{{names}}",
+      "impSkipped": "跳过 {{n}} 个(已存在):{{names}}",
+      "impWarnings": "警告",
+      "impErrors": "错误",
+      "defaultOn": "默认开启",
+      "defaultOnTip": "新建会话时默认勾选",
+      "fName": "名称",
+      "fTransport": "传输方式",
+      "fCommand": "命令",
+      "fArgs": "参数(空格分隔)",
+      "fEnv": "环境变量(每行 KEY=VALUE)",
+      "fUrl": "URL",
+      "fHeaders": "请求头(每行 KEY=VALUE)",
+      "transport": { "stdio": "stdio", "http": "http", "sse": "sse" }
     },
     "harness": {
       "desc": "本机自动发现的 ACP harness。版本号取自本地可执行文件,并对照上游发布源检查是否有新版。",

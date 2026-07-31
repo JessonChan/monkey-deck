@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import type { BranchInfo, WorktreeInfo } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
+import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
+import { models } from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat";
 import HarnessIcon from "./HarnessIcon";
 
 // What the modal hands back on confirm. mode drives which backend create path App.tsx uses:
@@ -13,6 +15,7 @@ export type NewSessionChoice = {
   mode: "project" | "enter" | "new";
   baseRef?: string;   // mode="new": base branch to fork from
   enterPath?: string; // mode="enter": existing linked worktree path
+  mcpServerIDs: string[]; // selected MCP servers (catalog subset); injected into session/new
 };
 
 interface Props {
@@ -63,6 +66,26 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
   // existing-worktree selector dropdown state.
   const [wtOpen, setWtOpen] = useState(false);
   const [wtQuery, setWtQuery] = useState("");
+  // MCP server 选择(per-session):加载全局 catalog,预勾 defaultEnabled 的。空 catalog → 无 MCP 段。
+  // 改 MCP 需新建 session(ACP 在 session/new 钉死);这里只决定本次会话用哪些。
+  const [mcpServers, setMcpServers] = useState<models.McpServer[]>([]);
+  const [mcpSel, setMcpSel] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    ChatService.ListMcpServers()
+      .then((list) => {
+        setMcpServers(list ?? []);
+        setMcpSel(new Set((list ?? []).filter((s) => s.defaultEnabled).map((s) => s.id)));
+      })
+      .catch(() => { /* 无 catalog 不阻塞建会话 */ });
+  }, []);
+  const mcpIDs = () => Array.from(mcpSel);
+  const toggleMcp = (id: string) =>
+    setMcpSel((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   // Group the branch list into three ordered sections (each branch appears once):
   //   1. Default — detected repo default (defaultBaseRef), starred.
@@ -179,12 +202,13 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
 
   const handleConfirm = () => {
     if (harness === null) return;
-    if (!isGit) { onConfirm({ harness, mode: "project" }); return; }
+    const mcp = mcpIDs();
+    if (!isGit) { onConfirm({ harness, mode: "project", mcpServerIDs: mcp }); return; }
     if (mode === "existing" && existingDir) {
-      if (existingDir.isMain) onConfirm({ harness, mode: "project" });
-      else onConfirm({ harness, mode: "enter", enterPath: existingDir.path });
+      if (existingDir.isMain) onConfirm({ harness, mode: "project", mcpServerIDs: mcp });
+      else onConfirm({ harness, mode: "enter", enterPath: existingDir.path, mcpServerIDs: mcp });
     } else if (mode === "new" && baseRef) {
-      onConfirm({ harness, mode: "new", baseRef });
+      onConfirm({ harness, mode: "new", baseRef, mcpServerIDs: mcp });
     }
   };
 
@@ -486,6 +510,31 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
             {mode === null && (
               <div className="ns-selector-placeholder">{t("newSession.selectModeHint")}</div>
             )}
+          </div>
+        )}
+
+        {mcpServers.length > 0 && (
+          <div className="ns-field" style={{ marginTop: 12 }}>
+            <div className="ns-label">
+              {t("newSession.mcp.title")}
+              <span className="settings-row-sub" style={{ marginLeft: 6 }}>
+                ({t("newSession.mcp.count", { n: mcpSel.size })})
+              </span>
+            </div>
+            <div className="settings-row-sub" style={{ marginBottom: 6 }}>{t("newSession.mcp.desc")}</div>
+            <div className="settings-list" style={{ maxHeight: 140, overflowY: "auto" }}>
+              {mcpServers.map((s) => (
+                <label key={s.id} className="settings-row" style={{ cursor: "pointer", padding: "6px 8px" }} data-testid={`ns-mcp-${s.name}`}>
+                  <input type="checkbox" checked={mcpSel.has(s.id)} onChange={() => toggleMcp(s.id)} style={{ marginRight: 8 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="settings-row-title">
+                      {s.name}
+                      <span className="settings-row-sub" style={{ marginLeft: 8 }}>{t(`settings.mcp.transport.${s.transport}`)}</span>
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
           </div>
         )}
 
