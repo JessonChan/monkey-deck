@@ -20,7 +20,9 @@ import (
 	"strings"
 
 	"github.com/coder/acp-go-sdk"
+	"github.com/jessonchan/monkey-deck/internal/mcp"
 	"github.com/jessonchan/monkey-deck/internal/permissions"
+	"github.com/jessonchan/monkey-deck/internal/store"
 )
 
 // maxListPages:session/list 分页拉取的页数上限(防 misbehaving peer 永远返回非空 cursor
@@ -107,15 +109,24 @@ type ChatSession struct {
 // NewChatSession 创建持久对话 session:spawn harness → initialize → newSession(cwd=workDir)。
 // onEvent 接收每条扁平化的 SessionUpdate(→ 前端流式渲染);
 // onPermission 接收权限裁决提示(→ 前端弹窗,§3.4)。调用方负责 Close()。
-func (r *Runner) NewChatSession(ctx context.Context, workDir string, onEvent func(SessionEvent), onPermission func(PermissionPrompt)) (*ChatSession, error) {
+//
+// mcps 是该 session 选中的 MCP server(catalog 子集);按 Initialize 协商的 mcpCapability
+// 转成 ACP 线格式注入 session/new。stdio 免协商,http/sse 不被支持则丢弃并告警。严格 harness
+// (如 OMP)任一 server 连接失败会让 NewSession 整个失败——上层据此在 NewSessionModal 原样展示
+// 报错,用户取消勾选可疑 server 后重试(本次不选,catalog 不动)。
+func (r *Runner) NewChatSession(ctx context.Context, workDir string, mcps []store.McpServer, onEvent func(SessionEvent), onPermission func(PermissionPrompt)) (*ChatSession, error) {
 	handler := NewHandler(workDir, onEvent, onPermission, 0)
 	proc, conn, initResp, err := r.spawnAndInit(ctx, workDir, handler)
 	if err != nil {
 		return nil, err
 	}
+	acpServers, skipped := mcp.ToAcpServers(mcps, initResp.AgentCapabilities.McpCapabilities)
+	if len(skipped) > 0 {
+		slog.Warn("mcp servers skipped (transport unsupported by harness)", "cwd", workDir, "skipped", skipped)
+	}
 	sess, err := conn.NewSession(ctx, acp.NewSessionRequest{
 		Cwd:        workDir,
-		McpServers: []acp.McpServer{},
+		McpServers: acpServers,
 	})
 	if err != nil {
 		proc.shutdown()
@@ -134,7 +145,7 @@ func (r *Runner) NewChatSession(ctx context.Context, workDir string, onEvent fun
 
 // LoadChatSession 恢复已有 session:spawn harness → initialize → loadSession(resume)(§1.4)。
 // 用于应用重启后恢复对话上下文(Cwd 必须匹配原 session)。
-func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string, onEvent func(SessionEvent), onPermission func(PermissionPrompt)) (*ChatSession, error) {
+func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string, mcps []store.McpServer, onEvent func(SessionEvent), onPermission func(PermissionPrompt)) (*ChatSession, error) {
 	handler := NewHandler(workDir, onEvent, onPermission, 0)
 	proc, conn, initResp, err := r.spawnAndInit(ctx, workDir, handler)
 	if err != nil {
@@ -144,10 +155,14 @@ func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string,
 	// 重放会重复显示。临时把 OnEvent 换成 no-op,resume 完再恢复。
 	realOnEvent := handler.OnEvent
 	handler.OnEvent = func(SessionEvent) {}
+	acpServers, skipped := mcp.ToAcpServers(mcps, initResp.AgentCapabilities.McpCapabilities)
+	if len(skipped) > 0 {
+		slog.Warn("mcp servers skipped (transport unsupported by harness)", "cwd", workDir, "skipped", skipped)
+	}
 	resumeResp, err := conn.ResumeSession(ctx, acp.ResumeSessionRequest{
 		SessionId:  acp.SessionId(sessionID),
 		Cwd:        workDir,
-		McpServers: []acp.McpServer{},
+		McpServers: acpServers,
 	})
 	handler.OnEvent = realOnEvent
 	if err != nil {

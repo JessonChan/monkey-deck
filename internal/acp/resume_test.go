@@ -19,7 +19,7 @@ func TestDiagResume(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. 新建 + 一轮对话,拿到 acp session id
-	cs1, err := runner.NewChatSession(ctx, cwd, func(SessionEvent) {}, nil)
+	cs1, err := runner.NewChatSession(ctx, cwd, nil, func(SessionEvent) {}, nil)
 	if err != nil {
 		t.Fatalf("NewChatSession: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestDiagResume(t *testing.T) {
 
 	// 2. resume → 再问一个会读文件的问题(cwd 空,用简单问题)
 	time.Sleep(time.Second)
-	cs2, err := runner.LoadChatSession(ctx, cwd, sid, func(SessionEvent) {}, nil)
+	cs2, err := runner.LoadChatSession(ctx, cwd, sid, nil, func(SessionEvent) {}, nil)
 	if err != nil {
 		t.Fatalf("LoadChatSession: %v", err)
 	}

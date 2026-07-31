@@ -1298,14 +1298,21 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 
 	// harness 生命周期挂到 s.ctx(随应用退出);运行期不独立 cancel ——
 	// 关闭 session 走 Close()(kill 进程组),停止单轮走 turnCancel(干净 session/cancel)。
+	// 该 session 选中的 MCP server(catalog 子集)→ 注入 NewSession/ResumeSession(§1.6)。
+	// 严格 harness(如 OMP)任一 server 连接失败会让 session 创建整个失败 → 此处返回 error
+	// → 前端 NewSessionModal 原样展示报错,用户取消勾选可疑 server 后重试(本次不选,catalog 不动)。
+	mcps, mcpErr := s.st.GetSessionMcpServers(s.ctx, se.ID)
+	if mcpErr != nil {
+		return fmt.Errorf("load session mcp selection: %w", mcpErr)
+	}
 	var (
 		chat *acp.ChatSession
 		err  error
 	)
 	if resume {
-		chat, err = runner.LoadChatSession(s.ctx, cwd, acpSessionID, onEvent, onPermission)
+		chat, err = runner.LoadChatSession(s.ctx, cwd, acpSessionID, mcps, onEvent, onPermission)
 	} else {
-		chat, err = runner.NewChatSession(s.ctx, cwd, onEvent, onPermission)
+		chat, err = runner.NewChatSession(s.ctx, cwd, mcps, onEvent, onPermission)
 	}
 	if err != nil {
 		return fmt.Errorf("start acp session: %w", err)

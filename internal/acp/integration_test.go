@@ -30,7 +30,7 @@ func TestIntegrationChatSession(t *testing.T) {
 		}
 	}
 
-	cs, err := runner.NewChatSession(ctx, tmp, onEvent, nil)
+	cs, err := runner.NewChatSession(ctx, tmp, nil, onEvent, nil)
 	if err != nil {
 		t.Fatalf("NewChatSession: %v", err)
 	}
