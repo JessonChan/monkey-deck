@@ -952,10 +952,12 @@ input, textarea { font-family: inherit; }
 .slash-cmd { font-family: var(--mono); color: var(--accent-2); font-weight: 500; }
 .slash-desc { font-size: 11.5px; color: var(--text-3); }
 
-/* @ 提及面板:紧凑(不撑满整行宽度),靠左;结果跨目录,显完整相对路径(basename + dim 目录前缀)。 */
-.mention-popover { right: auto; min-width: 220px; max-width: 340px; }
+/* @ mention panel: full width of the compose-card (== the input box), not compact.
+   It inherits .slash-popover's left:28px; right:28px stretch, so its left/right edges
+   align exactly with the compose-card below it. Results span directories; show the full
+   relative path (basename + dim dir prefix) so same-named files in different dirs differ. */
 .mention-popover .slash-item { padding: 5px 9px; gap: 8px; }
-.mention-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-dir { color: var(--text-3); font-weight: 400; }
 /* 目录项:文件夹图标用强调色,右侧 drill chevron 提示「可下钻」(点击/Enter 钻进,不引用)。 */
 .mention-item.is-dir .mention-ico-dir { color: var(--accent-2); flex-shrink: 0; }
@@ -964,7 +966,7 @@ input, textarea { font-family: inherit; }
 .mention-item.active .mention-drill-chev,
 .mention-item:hover .mention-drill-chev { color: var(--text-2); }
 /* 返回上一级行:用 text-3 弱化(非主体选项),与普通项区分;图标 + 文案。 */
-.mention-up { color: var(--text-3); font-size: 11.5px; }
+.mention-up { color: var(--text-3); font-size: 11.5px; justify-content: flex-start; }
 .mention-up.active, .mention-up:hover { color: var(--text-2); }
 .mention-up .mention-up-label { font-family: var(--mono); font-weight: 400; }
 
