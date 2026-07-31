@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
-import type { models } from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat";
+import type { McpServer } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import { Plug } from "lucide-react";
 
 // 聊天头部 MCP 只读状态 chip(§4.4):显示当前 session 选用了哪几个 MCP server。
@@ -11,7 +11,7 @@ import { Plug } from "lucide-react";
 // 选中 0 个 → 不渲染 chip(无 MCP 的 session 不占位)。
 export default function McpChip({ sessionId }: { sessionId: string }) {
   const { t } = useTranslation();
-  const [servers, setServers] = useState<models.McpServer[]>([]);
+  const [servers, setServers] = useState<McpServer[]>([]);
 
   useEffect(() => {
     let alive = true;

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import type { BranchInfo, WorktreeInfo } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
-import { models } from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat";
+import type { McpServer } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import HarnessIcon from "./HarnessIcon";
 
 // What the modal hands back on confirm. mode drives which backend create path App.tsx uses:
@@ -68,7 +68,7 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
   const [wtQuery, setWtQuery] = useState("");
   // MCP server 选择(per-session):加载全局 catalog,预勾 defaultEnabled 的。空 catalog → 无 MCP 段。
   // 改 MCP 需新建 session(ACP 在 session/new 钉死);这里只决定本次会话用哪些。
-  const [mcpServers, setMcpServers] = useState<models.McpServer[]>([]);
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [mcpSel, setMcpSel] = useState<Set<string>>(new Set());
   useEffect(() => {
     ChatService.ListMcpServers()

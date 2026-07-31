@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
-import { models } from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat";
+import type { McpServer } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import { Plug, Plus, Trash2, Upload, Loader2, AlertTriangle, CheckCircle2, Pencil, X } from "lucide-react";
 
 // MCP server 全局 catalog pane(设置中心 → MCP)。
@@ -42,8 +42,12 @@ function parseKV(text: string): Record<string, string> {
   return out;
 }
 
-function toKV(map: Record<string, string>): string {
-  return Object.entries(map).map(([k, v]) => `${k}=${v}`).join("\n");
+function toKV(map: { [_ in string]?: string } | null | undefined): string {
+  if (!map) return "";
+  return Object.entries(map)
+    .filter(([, v]) => v !== undefined && v !== "")
+    .map(([k, v]) => `${k}=${v}`)
+    .join("\n");
 }
 
 // 脱敏展示 env/headers 值:含敏感关键词的值只显示前 4 字符 + …(§4.4,抄 orca maskMcpEnv 思路)。
@@ -55,12 +59,15 @@ function maskValue(k: string, v: string): string {
 
 export default function McpSettings() {
   const { t } = useTranslation();
-  const [servers, setServers] = useState<models.McpServer[]>([]);
+  const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState<models.McpServer | null>(null);
+  const [editing, setEditing] = useState<McpServer | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState<FormData>(emptyForm());
   const [saving, setSaving] = useState(false);
+  // err = 真实错误(红 + 三角);notice = 导入结果汇总等中性信息(无三角)。两者互斥展示。
   const [err, setErr] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
   const [importing, setImporting] = useState(false);
@@ -79,7 +86,15 @@ export default function McpSettings() {
 
   useEffect(() => { void reload(); }, [reload]);
 
-  const startEdit = (s: models.McpServer) => {
+  const openAdd = () => {
+    setEditing(null);
+    setForm(emptyForm());
+    setErr(null);
+    setNotice(null);
+    setFormOpen(true);
+  };
+
+  const openEdit = (s: McpServer) => {
     setEditing(s);
     setForm({
       name: s.name, transport: s.transport as Transport,
@@ -88,19 +103,22 @@ export default function McpSettings() {
       defaultEnabled: s.defaultEnabled,
     });
     setErr(null);
+    setNotice(null);
+    setFormOpen(true);
   };
 
-  const startAdd = () => {
+  const closeForm = () => {
+    setFormOpen(false);
     setEditing(null);
     setForm(emptyForm());
-    setErr(null);
   };
 
   const save = async () => {
     setSaving(true);
     setErr(null);
     try {
-      const m = new models.McpServer({
+      const m: McpServer = {
+        id: editing?.id ?? "",
         name: form.name.trim(),
         transport: form.transport,
         command: form.transport === "stdio" ? form.command.trim() : "",
@@ -109,15 +127,15 @@ export default function McpSettings() {
         url: form.transport !== "stdio" ? form.url.trim() : "",
         headers: form.transport !== "stdio" ? parseKV(form.headersText) : {},
         defaultEnabled: form.defaultEnabled,
-      });
+        createdAt: editing?.createdAt ?? 0,
+        updatedAt: editing?.updatedAt ?? 0,
+      };
       if (editing) {
-        m.id = editing.id;
         await ChatService.UpdateMcpServer(m);
       } else {
         await ChatService.CreateMcpServer(m);
       }
-      setEditing(null);
-      setForm(emptyForm());
+      closeForm();
       await reload();
     } catch (e) {
       setErr(String(e));
@@ -135,9 +153,8 @@ export default function McpSettings() {
     }
   };
 
-  const toggleDefault = async (s: models.McpServer) => {
-    const m = new models.McpServer(s);
-    m.defaultEnabled = !s.defaultEnabled;
+  const toggleDefault = async (s: McpServer) => {
+    const m: McpServer = { ...s, defaultEnabled: !s.defaultEnabled };
     try {
       await ChatService.UpdateMcpServer(m);
       await reload();
@@ -149,6 +166,7 @@ export default function McpSettings() {
   const doImport = async () => {
     setImporting(true);
     setErr(null);
+    setNotice(null);
     try {
       const res = await ChatService.ImportMcpConfig(importText);
       const parts: string[] = [];
@@ -156,7 +174,7 @@ export default function McpSettings() {
       if (res.skipped?.length) parts.push(t("settings.mcp.impSkipped", { n: res.skipped.length, names: res.skipped.join(", ") }));
       if (res.warnings?.length) parts.push(t("settings.mcp.impWarnings") + ": " + res.warnings.join("; "));
       if (res.errors?.length) parts.push(t("settings.mcp.impErrors") + ": " + res.errors.join("; "));
-      setErr(parts.join(" · "));
+      setNotice(parts.join(" · ") || t("settings.mcp.empty"));
       setImportOpen(false);
       setImportText("");
       await reload();
@@ -174,17 +192,22 @@ export default function McpSettings() {
       <div className="pane-desc">{t("settings.mcp.desc")}</div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-        <button className="btn" onClick={startAdd} data-testid="mcp-add">
+        <button className="btn" onClick={openAdd} data-testid="mcp-add">
           <Plus size={13} /> {t("settings.mcp.addBtn")}
         </button>
-        <button className="btn" onClick={() => { setImportOpen(true); setErr(null); }} data-testid="mcp-import">
+        <button className="btn" onClick={() => { setImportOpen(true); setErr(null); setNotice(null); }} data-testid="mcp-import">
           <Upload size={13} /> {t("settings.mcp.importBtn")}
         </button>
       </div>
 
       {err && (
-        <div className="settings-row-sub" style={{ color: "var(--text-muted)", marginBottom: 8 }}>
+        <div className="settings-row-sub" style={{ color: "var(--danger, var(--text-muted))", marginBottom: 8 }}>
           <AlertTriangle size={12} style={{ verticalAlign: "middle", marginRight: 4 }} />{err}
+        </div>
+      )}
+      {!err && notice && (
+        <div className="settings-row-sub" style={{ marginBottom: 8 }}>
+          <CheckCircle2 size={12} style={{ verticalAlign: "middle", marginRight: 4 }} />{notice}
         </div>
       )}
 
@@ -217,7 +240,7 @@ export default function McpSettings() {
                 <input type="checkbox" checked={s.defaultEnabled} onChange={() => toggleDefault(s)} data-testid={`mcp-default-${s.name}`} />
                 <span className="settings-row-sub">{t("settings.mcp.defaultOn")}</span>
               </label>
-              <button className="icon-btn" onClick={() => startEdit(s)} data-tooltip-id="md-tip" data-tooltip-content={t("common.edit")} data-testid={`mcp-edit-${s.name}`}>
+              <button className="icon-btn" onClick={() => openEdit(s)} data-tooltip-id="md-tip" data-tooltip-content={t("common.edit")} data-testid={`mcp-edit-${s.name}`}>
                 <Pencil size={13} />
               </button>
               <button className="icon-btn" onClick={() => remove(s.id)} data-tooltip-id="md-tip" data-tooltip-content={t("common.delete")} data-testid={`mcp-del-${s.name}`}>
@@ -228,12 +251,12 @@ export default function McpSettings() {
         </div>
       )}
 
-      {(editing !== null || form.name !== "" || err !== null) && (
-        <div className="modal-overlay" onClick={startAdd} style={{ zIndex: 100 }}>
+      {formOpen && (
+        <div className="modal-overlay" onClick={closeForm} style={{ zIndex: 100 }} data-testid="mcp-form-overlay">
           <div className="settings-card" style={{ maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
             <div className="settings-head">
               <div className="settings-title"><Plug size={15} /><span>{editing ? t("settings.mcp.editTitle") : t("settings.mcp.addTitle")}</span></div>
-              <button className="icon-btn" onClick={() => { setEditing(null); setForm(emptyForm()); }}><X size={15} /></button>
+              <button className="icon-btn" onClick={closeForm}><X size={15} /></button>
             </div>
             <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
               <label className="field">
@@ -279,8 +302,13 @@ export default function McpSettings() {
                 <input type="checkbox" checked={form.defaultEnabled} onChange={(e) => setForm({ ...form, defaultEnabled: e.target.checked })} />
                 <span className="settings-row-sub">{t("settings.mcp.defaultOn")}</span>
               </label>
+              {err && (
+                <div className="settings-row-sub" style={{ color: "var(--danger, var(--text-muted))" }}>
+                  <AlertTriangle size={12} style={{ verticalAlign: "middle", marginRight: 4 }} />{err}
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                <button className="btn" onClick={() => { setEditing(null); setForm(emptyForm()); }}>{t("common.cancel")}</button>
+                <button className="btn" onClick={closeForm}>{t("common.cancel")}</button>
                 <button className="btn primary" disabled={saving || !form.name.trim() || (isStdio ? !form.command.trim() : !form.url.trim())} onClick={save} data-testid="mcp-form-save">
                   {saving ? <Loader2 size={13} className="spin" /> : <CheckCircle2 size={13} />} {t("common.save")}
                 </button>

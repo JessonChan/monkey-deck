@@ -809,21 +809,28 @@ func (s *ChatService) ImportMcpConfig(jsonData string) (McpImportResult, error) 
 	if err != nil {
 		return McpImportResult{}, err
 	}
+	// 预取已有 catalog 名字:重复的直接归 skipped,不靠解析 SQLite 错误文本(驱动相关、脆弱,§5.3)。
+	existing, err := s.st.ListMcpServers(s.ctx)
+	if err != nil {
+		return McpImportResult{}, fmt.Errorf("list mcp servers: %w", err)
+	}
+	existingNames := make(map[string]struct{}, len(existing))
+	for _, e := range existing {
+		existingNames[e.Name] = struct{}{}
+	}
 	out := McpImportResult{Warnings: rep.Warnings, Errors: rep.Errors}
 	for _, m := range parsed {
-		created, createErr := s.st.CreateMcpServer(s.ctx, m)
-		switch {
-		case createErr != nil:
-			// name 重复(UNIQUE)归为 skipped,其余真实错误归 errors。
-			msg := createErr.Error()
-			if strings.Contains(msg, "UNIQUE") || strings.Contains(msg, "unique") {
-				out.Skipped = append(out.Skipped, m.Name)
-			} else {
-				out.Errors = append(out.Errors, fmt.Sprintf("%s: %v", m.Name, createErr))
-			}
-		default:
-			out.Added = append(out.Added, created.Name)
+		if _, dup := existingNames[m.Name]; dup {
+			out.Skipped = append(out.Skipped, m.Name)
+			continue
 		}
+		created, createErr := s.st.CreateMcpServer(s.ctx, m)
+		if createErr != nil {
+			out.Errors = append(out.Errors, fmt.Sprintf("%s: %v", m.Name, createErr))
+			continue
+		}
+		existingNames[created.Name] = struct{}{} // 同次导入里若出现同名,后者也跳过
+		out.Added = append(out.Added, created.Name)
 	}
 	return out, nil
 }
