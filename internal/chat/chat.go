@@ -24,6 +24,7 @@ import (
 	"github.com/jessonchan/monkey-deck/internal/config"
 	"github.com/jessonchan/monkey-deck/internal/fsview"
 	"github.com/jessonchan/monkey-deck/internal/harness"
+	"github.com/jessonchan/monkey-deck/internal/mcp"
 	"github.com/jessonchan/monkey-deck/internal/permissions"
 	"github.com/jessonchan/monkey-deck/internal/store"
 	"github.com/jessonchan/monkey-deck/internal/titlegen"
@@ -560,7 +561,7 @@ func (s *ChatService) SetSessionPinned(sessionID string, pinned bool) error {
 // baseRef:worktree 的基线分支(本地分支名,如 main/develop);useWorktree=true 时必填——
 // 空则后端探测默认(探测不到返回 errBaseRefRequired,Route A strict 不回退 HEAD);
 // useWorktree=false 时忽略。
-func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorktree bool, baseRef string) (*store.Session, error) {
+func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorktree bool, baseRef string, mcpServerIDs []string) (*store.Session, error) {
 	proj, err := s.st.GetProject(s.ctx, projectID)
 	if err != nil {
 		return nil, err
@@ -580,6 +581,11 @@ func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorkt
 	se, err := s.st.CreateSession(s.ctx, projectID, title, model, hid)
 	if err != nil {
 		return nil, err
+	}
+	// 落该 session 的 MCP 选择(catalog 子集);startLive 注入 session/new(§1.6)。
+	// 忽略不存在的 id(用户可能删了 catalog 里的 server):store 只插存在的行,无效 id 自然落空。
+	if err := s.persistSessionMcp(se.ID, mcpServerIDs); err != nil {
+		slog.Warn("persist session mcp selection", "err", err)
 	}
 	// git 项目 + 用户选择建 worktree:为该 session 建独立 worktree+分支(并行隔离;失败降级用项目目录)。
 	if useWorktree && worktree.IsRepo(proj.Path) {
@@ -684,7 +690,7 @@ func (s *ChatService) WorktreeGuests(sessionID string) ([]store.Session, error) 
 // same dir). A guest only ever deletes its own chat; the worktree/branch belongs to the owner
 // (DeleteWorktree). enterPath must be a current linked worktree of the project; its branch is
 // resolved from git truth (not trusted from the caller). Non-git / main worktree / missing → error.
-func (s *ChatService) CreateGuestSession(projectID, title, harnessID, enterPath string) (*store.Session, error) {
+func (s *ChatService) CreateGuestSession(projectID, title, harnessID, enterPath string, mcpServerIDs []string) (*store.Session, error) {
 	proj, err := s.st.GetProject(s.ctx, projectID)
 	if err != nil {
 		return nil, err
@@ -714,6 +720,9 @@ func (s *ChatService) CreateGuestSession(projectID, title, harnessID, enterPath 
 	if err != nil {
 		return nil, err
 	}
+	if err := s.persistSessionMcp(se.ID, mcpServerIDs); err != nil {
+		slog.Warn("persist session mcp selection", "err", err)
+	}
 	// Pin to the existing worktree (guest): no new branch; store path + git-resolved branch.
 	// No baseRef — a guest has no fork base / merge target of its own.
 	if err := s.st.SetSessionWorktree(s.ctx, se.ID, enterPath, branch); err != nil {
@@ -722,6 +731,101 @@ func (s *ChatService) CreateGuestSession(projectID, title, harnessID, enterPath 
 		se.WorktreePath, se.Branch = enterPath, branch
 	}
 	return se, nil
+}
+
+// persistSessionMcp 落某 session 的 MCP 选择(catalog 子集)。Create[Guest]Session 调用。
+// 直接存前端传来的 id 列表;不存在的 id 在 GetSessionMcpServers 的 JOIN 里自然落空,无害。
+func (s *ChatService) persistSessionMcp(sessionID string, serverIDs []string) error {
+	if s.st == nil {
+		return errors.New("store 未就绪")
+	}
+	return s.st.SetSessionMcp(s.ctx, sessionID, serverIDs)
+}
+
+// McpImportResult 一次 MCP 导入的结果汇总(前端人话呈现,§4.4)。
+type McpImportResult struct {
+	Added    []string `json:"added"`    // 成功新增进 catalog 的 server 名
+	Skipped  []string `json:"skipped"`  // 已存在(name 重复)跳过的
+	Warnings []string `json:"warnings"` // 字段丢失 / 可能失败的告警(per-server)
+	Errors   []string `json:"errors"`   // 完全无法解析的(per-server)
+}
+
+// ListMcpServers 列出全局 MCP catalog(name 升序)。设置面板 + NewSession 勾选用。
+func (s *ChatService) ListMcpServers() ([]store.McpServer, error) {
+	if s.st == nil {
+		return nil, errors.New("store 未就绪")
+	}
+	return s.st.ListMcpServers(s.ctx)
+}
+
+// CreateMcpServer 新增一个 MCP server 到 catalog。name 重复返回 error(前端提示换名)。
+func (s *ChatService) CreateMcpServer(m store.McpServer) (*store.McpServer, error) {
+	if s.st == nil {
+		return nil, errors.New("store 未就绪")
+	}
+	return s.st.CreateMcpServer(s.ctx, m)
+}
+
+// UpdateMcpServer 全量更新一个 MCP server(按 id;name 不可改)。
+func (s *ChatService) UpdateMcpServer(m store.McpServer) error {
+	if s.st == nil {
+		return errors.New("store 未就绪")
+	}
+	n, err := s.st.UpdateMcpServer(s.ctx, m)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("mcp server not found: %s", m.ID)
+	}
+	return nil
+}
+
+// DeleteMcpServer 删除一个 MCP server(级联清理 session_mcp 引用)。
+func (s *ChatService) DeleteMcpServer(id string) error {
+	if s.st == nil {
+		return errors.New("store 未就绪")
+	}
+	return s.st.DeleteMcpServer(s.ctx, id)
+}
+
+// GetSessionMcpServers 取某 session 选用的 MCP server(聊天头部只读状态 chip 用,§4.4)。
+// 注意:只反映「选了哪些」(创建时定死),不反映实时连接状态(ACP 不回报,见 docs/worklog)。
+func (s *ChatService) GetSessionMcpServers(sessionID string) ([]store.McpServer, error) {
+	if s.st == nil {
+		return nil, errors.New("store 未就绪")
+	}
+	return s.st.GetSessionMcpServers(s.ctx, sessionID)
+}
+
+// ImportMcpConfig 一次性导入 harness 的 MCP 配置 JSON(自动识别 opencode mcp 段 / OMP mcpServers 段)。
+// 这是「导入」不是「发现」:解析进 catalog 后文件即弃,SQLite 仍是唯一真相(§1.5)。
+// name 重复的跳过(不覆盖用户已改过的);逐条 Create,收集 added/skipped/warnings/errors。
+func (s *ChatService) ImportMcpConfig(jsonData string) (McpImportResult, error) {
+	if s.st == nil {
+		return McpImportResult{}, errors.New("store 未就绪")
+	}
+	parsed, rep, err := mcp.ImportAuto([]byte(jsonData))
+	if err != nil {
+		return McpImportResult{}, err
+	}
+	out := McpImportResult{Warnings: rep.Warnings, Errors: rep.Errors}
+	for _, m := range parsed {
+		created, createErr := s.st.CreateMcpServer(s.ctx, m)
+		switch {
+		case createErr != nil:
+			// name 重复(UNIQUE)归为 skipped,其余真实错误归 errors。
+			msg := createErr.Error()
+			if strings.Contains(msg, "UNIQUE") || strings.Contains(msg, "unique") {
+				out.Skipped = append(out.Skipped, m.Name)
+			} else {
+				out.Errors = append(out.Errors, fmt.Sprintf("%s: %v", m.Name, createErr))
+			}
+		default:
+			out.Added = append(out.Added, created.Name)
+		}
+	}
+	return out, nil
 }
 
 // DeleteWorktree removes the owner's worktree + branch (atomic; 4 guardrails in

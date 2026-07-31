@@ -58,7 +58,7 @@ func setupGuestService(t *testing.T) (*ChatService, *store.Project, string) {
 func TestWorktreeKind_OwnerGuestProject(t *testing.T) {
 	svc, proj, _ := setupGuestService(t)
 
-	projSe, err := svc.CreateSession(proj.ID, "proj", "", false, "")
+	projSe, err := svc.CreateSession(proj.ID, "proj", "", false, "", nil)
 	if err != nil {
 		t.Fatalf("CreateSession project: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestWorktreeKind_OwnerGuestProject(t *testing.T) {
 		t.Fatalf("project kind = %q, want project", k)
 	}
 
-	owner, err := svc.CreateSession(proj.ID, "owner", "", true, "")
+	owner, err := svc.CreateSession(proj.ID, "owner", "", true, "", nil)
 	if err != nil {
 		t.Fatalf("CreateSession owner: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestWorktreeKind_OwnerGuestProject(t *testing.T) {
 		t.Fatalf("owner kind = %q, want owner", k)
 	}
 
-	guest, err := svc.CreateGuestSession(proj.ID, "guest", "", owner.WorktreePath)
+	guest, err := svc.CreateGuestSession(proj.ID, "guest", "", owner.WorktreePath, nil)
 	if err != nil {
 		t.Fatalf("CreateGuestSession: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestWorktreeKind_OwnerGuestProject(t *testing.T) {
 
 func TestDeleteSession_KeepsWorktree(t *testing.T) {
 	svc, proj, _ := setupGuestService(t)
-	owner, err := svc.CreateSession(proj.ID, "owner", "", true, "")
+	owner, err := svc.CreateSession(proj.ID, "owner", "", true, "", nil)
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -120,11 +120,11 @@ func TestDeleteSession_KeepsWorktree(t *testing.T) {
 
 func TestDeleteWorktree_OwnerOnly(t *testing.T) {
 	svc, proj, _ := setupGuestService(t)
-	owner, err := svc.CreateSession(proj.ID, "owner", "", true, "")
+	owner, err := svc.CreateSession(proj.ID, "owner", "", true, "", nil)
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
-	guest, err := svc.CreateGuestSession(proj.ID, "guest", "", owner.WorktreePath)
+	guest, err := svc.CreateGuestSession(proj.ID, "guest", "", owner.WorktreePath, nil)
 	if err != nil {
 		t.Fatalf("CreateGuestSession: %v", err)
 	}
@@ -145,15 +145,15 @@ func TestDeleteWorktree_OwnerOnly(t *testing.T) {
 
 func TestDetachWorktreeGuests(t *testing.T) {
 	svc, proj, _ := setupGuestService(t)
-	owner, err := svc.CreateSession(proj.ID, "owner", "", true, "")
+	owner, err := svc.CreateSession(proj.ID, "owner", "", true, "", nil)
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
-	g1, err := svc.CreateGuestSession(proj.ID, "g1", "", owner.WorktreePath)
+	g1, err := svc.CreateGuestSession(proj.ID, "g1", "", owner.WorktreePath, nil)
 	if err != nil {
 		t.Fatalf("CreateGuestSession g1: %v", err)
 	}
-	g2, err := svc.CreateGuestSession(proj.ID, "g2", "", owner.WorktreePath)
+	g2, err := svc.CreateGuestSession(proj.ID, "g2", "", owner.WorktreePath, nil)
 	if err != nil {
 		t.Fatalf("CreateGuestSession g2: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestDetachWorktreeGuests(t *testing.T) {
 
 func TestSessionMergeable_GuestFalse(t *testing.T) {
 	svc, proj, _ := setupGuestService(t)
-	owner, err := svc.CreateSession(proj.ID, "owner", "", true, "")
+	owner, err := svc.CreateSession(proj.ID, "owner", "", true, "", nil)
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestSessionMergeable_GuestFalse(t *testing.T) {
 		t.Fatal("owner should be mergeable (branch ahead of base)")
 	}
 	// Guest shares the same ahead branch but must NOT be mergeable (guest guard short-circuits).
-	guest, err := svc.CreateGuestSession(proj.ID, "guest", "", owner.WorktreePath)
+	guest, err := svc.CreateGuestSession(proj.ID, "guest", "", owner.WorktreePath, nil)
 	if err != nil {
 		t.Fatalf("CreateGuestSession: %v", err)
 	}
