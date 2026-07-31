@@ -324,7 +324,8 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     });
   };
 
-  // 列表项激活(Enter/Tab/Click):目录 → 钻进;文件 → 选为提及。
+  // Mouse click on a list item: directory drills in, file is picked as a mention. (Keyboard
+  // model differs: ← / → navigate dirs, Enter commits — see onKeyDown.)
   const activateMention = (node: FileNode) => {
     if (node.isDir) drillMention(node);
     else pickMention(node);
@@ -342,16 +343,29 @@ export default function Composer({ value, onChange, disabled, prompting, configO
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickSlash(filtered[slashIdx]); return; }
       if (e.key === "Escape") { e.preventDefault(); setSlashOpen(false); return; }
     }
-    // @ 提及菜单:目录可下钻、文件可选中。↑↓ 导航,Enter/Tab 激活(目录钻进/文件选中),
-    // Esc 关闭。Backspace 在 term 为空(光标紧跟 / )时退一级(等价点 ..)。
+    // @ mention menu: ↑↓ move selection, ← go up one dir level (drill state only),
+    // → drill into the highlighted directory, Enter/Tab commit the highlighted item as a
+    // mention (files AND directories both reference — dir navigation is via ← / →).
+    // Esc closes. Backspace at an empty term (cursor right after '/') also goes up a level.
     if (mentionOpen) {
       if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((i) => Math.min(i + 1, mentionItems.length - 1)); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => Math.max(i - 1, -1)); return; }
+      // → : drill into the highlighted directory. Files / go-up row fall through (cursor stays).
+      if (e.key === "ArrowRight") {
+        const node = mentionItems[mentionIdx];
+        if (node?.isDir) { e.preventDefault(); drillMention(node); return; }
+      }
+      // ← : go up one directory level; only in drill state (query has '/'), else let the cursor move left.
+      if (e.key === "ArrowLeft") {
+        const info = detectMention(value, cursorRef.current);
+        if (info && info.query.includes("/")) { e.preventDefault(); goUpMention(); return; }
+      }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
-        // mentionIdx=-1(焦点在 go-up 行)→ 退一级;否则激活当前项(目录钻进/文件选中)。
+        // mentionIdx=-1 (go-up row focused) → up one level; otherwise commit the highlighted
+        // item as a mention (files and directories alike).
         if (mentionIdx < 0) goUpMention();
-        else activateMention(mentionItems[mentionIdx]);
+        else pickMention(mentionItems[mentionIdx]);
         return;
       }
       if (e.key === "Escape") { e.preventDefault(); setMentionOpen(false); return; }

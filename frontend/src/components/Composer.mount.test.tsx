@@ -452,3 +452,82 @@ describe("Composer @ mention drill-down + scope + go-up (Task #23449)", () => {
     expect(goUp.classList.contains("active")).toBe(false);
   });
 });
+
+// Keyboard navigation for the @ mention menu: ←/→ + Enter model.
+// Pins the new contract: Enter/Tab commit the highlighted item as a mention (files AND dirs
+// alike), → drills into a highlighted directory, ← goes up one dir level in drill state.
+// Each would fail on the old code (Enter on a dir drilled instead of picking; ←/→ did nothing).
+describe("Composer @ mention keyboard nav (← → Enter)", () => {
+  beforeEach(() => {
+    chatServiceMock.SessionFuzzyFind.mockClear();
+    fuzzyFindResult = [];
+  });
+
+  // Wait for the composer's 150ms fuzzy-find debounce to fire and resolve (rule: withResolvers).
+  const waitForDebounce = () => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 200);
+    return promise;
+  };
+
+  test("Enter on a highlighted directory picks it as a mention (not drill)", async () => {
+    fuzzyFindResult = [{ path: "src", name: "src", isDir: true }];
+    const onChange = mock(() => {});
+    const onMentionsChange = mock(() => {});
+    const { host } = mount(<Composer value={"@"} {...STUB_PROPS} sessionId={"sid"} onChange={onChange} onMentionsChange={onMentionsChange} />);
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, 1);
+    await waitForDebounce();
+    await flush();
+
+    const dirItem = host.querySelector('button.slash-item.is-dir') as HTMLElement;
+    expect(dirItem).not.toBeNull();
+    // Selection sits on the first item (idx=0 = the dir). Enter commits it as a mention.
+    ta.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flush();
+
+    // pickMention: "@src" + trailing space (NOT "@src/" which would be a drill).
+    const lastText = onChange.mock.calls[onChange.mock.calls.length - 1][0] as string;
+    expect(lastText).toBe("@src ");
+    const mentioned = onMentionsChange.mock.calls[onMentionsChange.mock.calls.length - 1][0] as { path: string; name: string }[];
+    expect(mentioned.some((m) => m.path === "src")).toBe(true);
+  });
+
+  test("ArrowRight on a highlighted directory drills in (text becomes '@src/')", async () => {
+    fuzzyFindResult = [{ path: "src", name: "src", isDir: true }];
+    const onChange = mock(() => {});
+    const { host } = mount(<Composer value={"@"} {...STUB_PROPS} sessionId={"sid"} onChange={onChange} />);
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, 1);
+    await waitForDebounce();
+    await flush();
+
+    const dirItem = host.querySelector('button.slash-item.is-dir') as HTMLElement;
+    expect(dirItem).not.toBeNull();
+    ta.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    await flush();
+
+    const last = onChange.mock.calls[onChange.mock.calls.length - 1][0] as string;
+    expect(last).toBe("@src/");
+  });
+
+  test("ArrowLeft in drill state (@src/) goes up one level to '@'", async () => {
+    fuzzyFindResult = [{ path: "src/foo.ts", name: "foo.ts", isDir: false }];
+    const onChange = mock(() => {});
+    const { host } = mount(<Composer value={"@src/"} {...STUB_PROPS} sessionId={"sid"} onChange={onChange} />);
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, 5); // cursor at end of "@src/"
+    await waitForDebounce();
+    await flush();
+
+    ta.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    await flush();
+
+    const last = onChange.mock.calls[onChange.mock.calls.length - 1][0] as string;
+    // goUpMention: "src/" → strip trailing segment → "" (root).
+    expect(last).toBe("@");
+  });
+});
