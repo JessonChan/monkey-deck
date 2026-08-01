@@ -151,10 +151,19 @@ func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string,
 	if err != nil {
 		return nil, err
 	}
-	// 抑制 resume 期间 opencode 重放的历史事件:前端已从 DB 加载历史,
-	// 重放会重复显示。临时把 OnEvent 换成 no-op,resume 完再恢复。
+	// 抑制 resume 期间 harness 重放的历史消息/工具/plan 事件:前端已从 DB 加载历史,重放会重复显示。
+	// 但不能 blanket 吞——available_commands 是会话级元数据(不在 load 响应里、也不入库),opencode 在
+	// load 响应*之前*发它(service.ts sendAvailableCommands 在 return 前),会落在 ResumeSession 阻塞窗口
+	// 里被吞掉、永久丢失。故只抑制历史重放,放行元数据(available_commands / config_option 等)。
 	realOnEvent := handler.OnEvent
-	handler.OnEvent = func(SessionEvent) {}
+	handler.OnEvent = func(e SessionEvent) {
+		switch e.Kind {
+		case "agent_message_chunk", "agent_thought_chunk", "user_message_chunk",
+			"tool_call", "tool_call_update", "plan", "plan_update", "plan_removed":
+			return // 历史重放:前端已从 DB 加载,丢弃
+		}
+		realOnEvent(e) // 会话级元数据:放行
+	}
 	acpServers, skipped := mcp.ToAcpServers(mcps, initResp.AgentCapabilities.McpCapabilities)
 	if len(skipped) > 0 {
 		slog.Warn("mcp servers skipped (transport unsupported by harness)", "cwd", workDir, "skipped", skipped)
