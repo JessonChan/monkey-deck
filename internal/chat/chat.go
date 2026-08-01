@@ -26,6 +26,7 @@ import (
 	"github.com/jessonchan/monkey-deck/internal/harness"
 	"github.com/jessonchan/monkey-deck/internal/mcp"
 	"github.com/jessonchan/monkey-deck/internal/permissions"
+	"github.com/jessonchan/monkey-deck/internal/shellenv"
 	"github.com/jessonchan/monkey-deck/internal/store"
 	"github.com/jessonchan/monkey-deck/internal/titlegen"
 	"github.com/jessonchan/monkey-deck/internal/worktree"
@@ -2591,6 +2592,12 @@ func (s *ChatService) UpdateUserHarness(id, name, command string) ([]harness.Har
 func (s *ChatService) refreshHarnessesAsync() {
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
+	// First merge the login-shell PATH into the process, fixing the case where
+	// a Finder/Dock double-click launch misses user-level dirs like ~/.bun/bin
+	// (§5.4 #8). Idempotent: spawns the shell at most once per process; on
+	// failure it degrades silently (PATH untouched, Discover still runs — it just
+	// may not find the harness).
+	_ = shellenv.Resolve(ctx)
 	list := harness.Discover(ctx)
 	s.harnessCache.Store(&list)
 	s.emit(EventHarnesses, nil)

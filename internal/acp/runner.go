@@ -12,6 +12,7 @@ package acp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"github.com/coder/acp-go-sdk"
 	"github.com/jessonchan/monkey-deck/internal/mcp"
 	"github.com/jessonchan/monkey-deck/internal/permissions"
+	"github.com/jessonchan/monkey-deck/internal/shellenv"
 	"github.com/jessonchan/monkey-deck/internal/store"
 )
 
@@ -193,6 +195,11 @@ func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string,
 // 返回 harnessProcess(独占 cmd.Wait + exit 根因日志,见 proc.go)+ stderr ring。
 // 失败时已 shutdown(回收进程组);调用方无需再清理。
 func (r *Runner) spawnAndInit(ctx context.Context, workDir string, handler *Handler) (*harnessProcess, *acp.ClientSideConnection, acp.InitializeResponse, error) {
+	// Ensure PATH includes the user's login-shell dirs before resolving the
+	// harness binary. Fixes Finder/Dock double-click launch (launchd gives a
+	// minimal PATH that misses ~/.bun/bin etc.); idempotent per process, so this
+	// is a fast no-op if the Discover path already resolved it (§5.4 #17).
+	_ = shellenv.Resolve(ctx)
 	cmd := exec.CommandContext(ctx, r.HarnessCmd[0], r.HarnessCmd[1:]...)
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(), r.Env...)
@@ -210,6 +217,15 @@ func (r *Runner) spawnAndInit(ctx context.Context, workDir string, handler *Hand
 		return nil, nil, acp.InitializeResponse{}, fmt.Errorf("stdout pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
+		// ErrNotFound = binary not on PATH (exec.Command's internal LookPath failed).
+		// Surface a human-readable message instead of a raw technical error (§4.4:
+		// never expose raw technical format to users). The session record stays in
+		// the DB, so the user can install the harness later and resume (§1.4).
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, nil, acp.InitializeResponse{}, fmt.Errorf(
+				"找不到 %s 命令,请确认该 harness 已安装(或已在终端用 `open` 启动本应用)。错误: %w",
+				r.HarnessCmd[0], err)
+		}
 		return nil, nil, acp.InitializeResponse{}, fmt.Errorf("start harness: %w", err)
 	}
 	slog.Info("harness started", "cmd", strings.Join(r.HarnessCmd, " "), "cwd", workDir)
