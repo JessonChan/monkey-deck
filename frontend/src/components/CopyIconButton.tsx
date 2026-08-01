@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Copy } from "lucide-react";
+import { copyText } from "../lib/clipboard";
 
 // Global "copy icon button": click → write `text` to clipboard → show Check icon +
 // "copied" tooltip for 1.2s, then revert. Each instance owns its copied state, so
@@ -20,12 +21,10 @@ export default function CopyIconButton({
 }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
-  const copy = () => {
-    try {
-      navigator.clipboard?.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch { /* noop */ }
+  const copy = async () => {
+    await copyText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
   };
   return (
     <button

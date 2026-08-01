@@ -14,6 +14,7 @@ import FilePreviewOverlay, { type PreviewTarget } from "./FilePreviewOverlay";
 import MermaidRenderer from "./MermaidRenderer";
 import PathLinkified from "./PathLinkified";
 import CopyIconButton from "./CopyIconButton";
+import { copyText } from "../lib/clipboard";
 import { countDiffLines, diffLineCls } from "../lib/diff";
 import { highlightToLines } from "../lib/highlight";
 import "../hljs-theme.css";
@@ -176,9 +177,9 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   const activePath = props.session?.worktreePath || props.project?.path || "";
   // 复制工作目录到剪贴板(对话区右键菜单调用);无路径时不执行(openCtxMenu 入口已兜底)。
   // 不做 copied 反馈:右键菜单点击即关闭,反馈不可见(与 Sidebar 项目菜单一致)。
-  const copyPath = useCallback(async () => {
+  const copyPath = useCallback(() => {
     if (!activePath) return;
-    try { await navigator.clipboard.writeText(activePath); } catch { /* noop */ }
+    void copyText(activePath);
   }, [activePath]);
   // ─── 对话区右键菜单(复用 Sidebar ctx-menu 范式:fixed 定位 + 全局 Esc / outside-mousedown / resize 关闭 + 视口裁剪)───
   // 仅放与工作目录相关的项(复制路径 / 在 Finder 打开),与 Sidebar 项目菜单的路径项对齐。
@@ -914,7 +915,7 @@ function MessageActions({ text, className = "", testId = "copy-msg" }: { text: s
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* noop */ }
+    await copyText(text); setCopied(true); setTimeout(() => setCopied(false), 1500);
   };
   return (
     <div className={`msg-actions${className ? ` ${className}` : ""}`}>
@@ -1169,8 +1170,8 @@ function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, 
   const [copiedOut, setCopiedOut] = useState(false);
   const inputR = item.rawInput != null ? extractToolText(item.rawInput) : null;
   const outputR = item.rawOutput != null ? extractToolText(item.rawOutput) : null;
-  const copyIn = async () => { try { await navigator.clipboard.writeText(inputR?.text || ""); setCopiedIn(true); setTimeout(() => setCopiedIn(false), 1200); } catch { /* noop */ } };
-  const copyOut = async () => { try { await navigator.clipboard.writeText(outputR?.text || ""); setCopiedOut(true); setTimeout(() => setCopiedOut(false), 1200); } catch { /* noop */ } };
+  const copyIn = async () => { await copyText(inputR?.text || ""); setCopiedIn(true); setTimeout(() => setCopiedIn(false), 1200); };
+  const copyOut = async () => { await copyText(outputR?.text || ""); setCopiedOut(true); setTimeout(() => setCopiedOut(false), 1200); };
   return (
     <Collapsible
       className="tool-card"
@@ -1223,7 +1224,7 @@ function BashToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
   const outputR = item.rawOutput != null ? extractToolText(item.rawOutput) : null;
   const [copiedCmd, setCopiedCmd] = useState(false);
   const copyCmd = async () => {
-    try { await navigator.clipboard.writeText(command || ""); setCopiedCmd(true); setTimeout(() => setCopiedCmd(false), 1200); } catch { /* noop */ }
+    await copyText(command || ""); setCopiedCmd(true); setTimeout(() => setCopiedCmd(false), 1200);
   };
   return (
     <Collapsible
@@ -1588,8 +1589,8 @@ function CodeBox({ language, raw }: { language: string; raw: string }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    // copy 保持纯文本:始终写 raw(原始源码),不取高亮后的 HTML。
-    try { await navigator.clipboard.writeText(raw); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* noop */ }
+    // Keep copy as plain text: always write raw (original source), not highlighted HTML.
+    await copyText(raw); setCopied(true); setTimeout(() => setCopied(false), 1500);
   };
   // 复用 lib/highlight 的 highlightToLines(Task #15088):显式 language 优先,否则 highlightAuto。
   // 流式下 raw 每次变化都会重算 —— highlight.js 同步快、对不完整代码也安全(不抛错、降级转义),

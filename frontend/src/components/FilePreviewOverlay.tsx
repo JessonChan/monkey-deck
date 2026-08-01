@@ -4,6 +4,7 @@ import { File as FileIcon, Copy, X } from "lucide-react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import CodeViewer from "./CodeViewer";
 import { isImageFile } from "../utils";
+import { copyText } from "../lib/clipboard";
 
 // 文件预览覆盖层(Task #15084;Task #15088 升级为 CodeViewer —— 语法高亮 + 行号 + 目标行)。
 // 由对话/工具卡片里的路径点击触发:加载文件内容,展示;有行号则定位/滚动/高亮该行。
@@ -77,13 +78,9 @@ export default function FilePreviewOverlay({
   }, [target, onClose]);
 
   const copy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch {
-      /* noop */
-    }
+    await copyText(content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
   }, [content]);
 
   if (!target) return null;

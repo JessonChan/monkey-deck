@@ -16,6 +16,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Code2, Copy, GitGraph as DiagramIcon, Maximize2, RefreshCw, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
+import { copyText } from "../lib/clipboard";
 import { renderMermaid, type MermaidRenderResult } from "../lib/mermaidRenderer";
 
 interface Props {
@@ -217,11 +218,9 @@ export default function MermaidRenderer({ code, streaming = false }: Props) {
   }, [code, streaming]);
 
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch { /* noop */ }
+    await copyText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
   };
 
   // streaming 期间:展示源码(让用户看到图在被写),不渲染。

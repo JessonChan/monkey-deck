@@ -5,6 +5,7 @@ import { Command } from "cmdk";
 import type { ConfigOption, Mention, ImageAttachment, AudioAttachment, Usage, SlashCommand } from "../types";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
+import { copyText } from "../lib/clipboard";
 import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
 import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, ListPlus, GitBranch, Check, CornerUpLeft } from "lucide-react";
 
@@ -118,7 +119,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   // 分支 chip 点击复制分支名(与项目内 copy 范式一致:1200ms copied 反馈)。
   const [branchCopied, setBranchCopied] = useState(false);
   const copyBranch = async () => {
-    try { await navigator.clipboard.writeText(branch); setBranchCopied(true); setTimeout(() => setBranchCopied(false), 1200); } catch { /* noop */ }
+    await copyText(branch); setBranchCopied(true); setTimeout(() => setBranchCopied(false), 1200);
   };
 
   // --- 长文本折叠(展示态)---

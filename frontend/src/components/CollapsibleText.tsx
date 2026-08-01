@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, ChevronDown, ChevronUp, Copy } from "lucide-react";
+import { copyText } from "../lib/clipboard";
 import { splitByPaths } from "../lib/filePath";
 
 // 可复用的「长文本折叠」块(AGENTS.md §5.3:references 优先参考——形态沿用本项目
@@ -156,11 +157,9 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
   }, [isLong, lines, text.length, headLines, tailLines, lineUnitText, t]);
 
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch { /* noop */ }
+    await copyText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
   };
   const expand = () => setCollapsed(false);
 

@@ -5,6 +5,7 @@ import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/
 import type { FileChange } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import CodeViewer from "./CodeViewer";
 import { isImageFile } from "../utils";
+import { copyText } from "../lib/clipboard";
 import {
   ChevronRight,
   ChevronDown,
@@ -317,7 +318,7 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
               <span className="preview-name" title={preview.path}>{preview.name}</span>
               <span className="preview-path">{preview.path}</span>
               {preview.kind === "text" && (
-                <button className="tool-btn" title={t("filePanel.copyContent")} onClick={() => { void navigator.clipboard?.writeText(preview.content); }}><Copy size={14} /></button>
+                <button className="tool-btn" title={t("filePanel.copyContent")} onClick={() => { void copyText(preview.content); }}><Copy size={14} /></button>
               )}
               <button className="tool-btn" title={t("common.closeEsc")} onClick={() => setPreview(null)}><X size={16} /></button>
             </div>
@@ -349,7 +350,7 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
             style={{ left: ctxMenu.x, top: ctxMenu.y }}
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <button className="ctx-item" onClick={() => { const p = absPath(node.path); if (p) void navigator.clipboard?.writeText(p); closeCtxMenu(); }}>
+            <button className="ctx-item" onClick={() => { const p = absPath(node.path); if (p) void copyText(p); closeCtxMenu(); }}>
               <Copy size={13} /> {t("filePanel.copyPath")}
             </button>
             <button className="ctx-item" onClick={() => { const p = absPath(node.path); if (p) void ChatService.RevealPath(p); closeCtxMenu(); }}>

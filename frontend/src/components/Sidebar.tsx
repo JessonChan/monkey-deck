@@ -15,6 +15,7 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { timeAgo, formatDateTime } from "../utils";
+import { copyText } from "../lib/clipboard";
 import HarnessIcon from "./HarnessIcon";
 
 interface Props {
@@ -415,7 +416,7 @@ export default function Sidebar(props: Props) {
 
       {ctx?.kind === "project" && (
         <div ref={menuRef} className="ctx-menu" style={{ left: ctx.x, top: ctx.y }} onMouseDown={(e) => e.stopPropagation()}>
-          <button className="ctx-item" onClick={() => { void navigator.clipboard?.writeText(ctx.project.path); closeCtx(); }}>
+          <button className="ctx-item" onClick={() => { void copyText(ctx.project.path); closeCtx(); }}>
             <Copy size={13} /> {t("sidebar.copyWorkdir")}
           </button>
           <button className="ctx-item" onClick={() => { void ChatService.RevealPath(ctx.project.path); closeCtx(); }}>
@@ -450,14 +451,14 @@ export default function Sidebar(props: Props) {
           <button className="ctx-item" onClick={() => { void props.onTogglePin(ctx.session.id, !ctx.session.pinned); closeCtx(); }}>
             {ctx.session.pinned ? <><PinOff size={13} /> {t("sidebar.unpin")}</> : <><Pin size={13} /> {t("sidebar.pin")}</>}
           </button>
-          <button className="ctx-item" onClick={() => { void navigator.clipboard?.writeText(ctx.session.id); closeCtx(); }}>
+          <button className="ctx-item" onClick={() => { void copyText(ctx.session.id); closeCtx(); }}>
             <Copy size={13} /> {t("sidebar.copySessionId")}
           </button>
           <button
             className="ctx-item"
             onClick={() => {
               const project = props.projects.find((p) => p.id === ctx.session.projectId);
-              void navigator.clipboard?.writeText(ctx.session.worktreePath || project?.path || "");
+              void copyText(ctx.session.worktreePath || project?.path || "");
               closeCtx();
             }}
           >
