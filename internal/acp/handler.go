@@ -58,6 +58,7 @@ type SessionEvent struct {
 	Title             string         `json:"title,omitempty"`         // session_info 标题
 	ConfigOptions     []ConfigOption `json:"configOptions,omitempty"` // config_option:model/mode/effort 等(agent 自报)
 	PlanEntries       []PlanEntry    `json:"planEntries,omitempty"`   // plan:agent 执行计划(整表替换,ACP protocol)
+	Commands          []SlashCommand `json:"commands,omitempty"`      // available_commands:harness 自报的斜杠命令(动态,非硬编码;§1.6)
 	// ImageSupported:agent 是否支持 image prompt 能力(Initialize 响应 promptCapabilities.image)。
 	// 随 config_option 事件下发,前端据此门控图片输入入口(不支持则隐藏/禁用,§3.5)。
 	ImageSupported bool `json:"imageSupported,omitempty"`
@@ -93,6 +94,18 @@ type ConfigOptionEntry struct {
 	Value       string `json:"value"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+}
+
+// SlashCommand is a harness-advertised slash command (ACP available_commands_update).
+// Per protocol: commands are invoked by sending the command text (e.g. "/model list")
+// as a regular user message in session/prompt; the harness recognizes the "/" prefix.
+// Name carries NO leading "/". InputHint is the argument hint (may be empty).
+// Each harness advertises a different, dynamic list (not hardcoded); this is only the
+// flattened wire shape forwarded to the frontend.
+type SlashCommand struct {
+	Name        string `json:"name"`                  // command name WITHOUT leading "/" (e.g. "model")
+	Description string `json:"description"`           // human-readable summary
+	InputHint   string `json:"inputHint,omitempty"`   // argument hint (ACP AvailableCommandInput.hint)
 }
 
 // FlattenConfigOptions 把 SDK 的 configOption union(Select/Boolean)拍平为前端友好的 []ConfigOption。
@@ -747,6 +760,20 @@ func flattenUpdate(sessionID string, u acp.SessionUpdate) (SessionEvent, bool) {
 	case u.ConfigOptionUpdate != nil:
 		e.Kind = "config_option"
 		e.ConfigOptions = FlattenConfigOptions(u.ConfigOptionUpdate.ConfigOptions)
+		return e, true
+	case u.AvailableCommandsUpdate != nil:
+		// ACP available_commands_update:harness 自报的斜杠命令列表(每个 harness 不同、动态)。
+		// 命令名不含 "/"(调用时前端拼 "/"+name 作为普通 prompt 文本发送,协议 §slash-commands)。
+		e.Kind = "available_commands"
+		cmds := u.AvailableCommandsUpdate.AvailableCommands
+		e.Commands = make([]SlashCommand, 0, len(cmds))
+		for _, c := range cmds {
+			sc := SlashCommand{Name: c.Name, Description: c.Description}
+			if c.Input != nil && c.Input.Unstructured != nil {
+				sc.InputHint = c.Input.Unstructured.Hint
+			}
+			e.Commands = append(e.Commands, sc)
+		}
 		return e, true
 	default:
 		return e, false
