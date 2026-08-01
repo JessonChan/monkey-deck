@@ -17,7 +17,8 @@
     "newFolder": "新建文件夹",
     "refresh": "刷新",
     "expand": "展开",
-    "collapse": "收起"
+    "collapse": "收起",
+    "dismiss": "忽略"
   },
   "app": {
     "brand": "Monkey Deck",
@@ -290,6 +291,10 @@
     "addImageTip": "添加图片(经 ACP Image 块发送 · 也可直接粘贴)",
     "addAudioTip": "添加音频(经 ACP Audio 块发送)",
     "slashMenuTip": "输入 / 召出命令菜单",
+    "slashUnknown": "命令 /{{cmd}} 不存在",
+    "slashUnknownHint": "当前 agent 不认识它,直接发送可能报错或被忽略。",
+    "sendAsPlain": "作为普通文本发送",
+    "sendAsPlainTip": "前导加空格,绕过命令解析后按普通消息发送",
     "referencesCount": "{{count}} 引用",
     "stopTip": "停止当前生成(不清理队列)",
     "sendTip": "发送",
@@ -303,25 +308,6 @@
       "model": "模型",
       "mode": "模式",
       "thought": "思考"
-    },
-    "slash": {
-      "explainDesc": "解释代码",
-      "explainInsert": "请解释这段代码,讲清逻辑与关键点:",
-      "reviewDesc": "代码审查",
-      "reviewInsert": "请 review 这段代码,指出问题、风险与改进建议:",
-      "testsDesc": "生成测试",
-      "testsInsert": "请为这段代码编写单元测试,覆盖边界:",
-      "refactorDesc": "重构",
-      "refactorInsert": "请重构这段代码,提升可读性与可维护性,保持行为不变:",
-      "fixDesc": "修复 bug",
-      "fixInsert": "请找出并修复这里的 bug,说明根因:",
-      "docDesc": "写文档",
-      "docInsert": "请为这段代码编写清晰的文档/注释:",
-      "summaryDesc": "总结文件",
-      "summaryInsert": "请总结这个文件的作用、结构与关键逻辑:",
-      "newDesc": "新对话",
-      "clearDesc": "清空(新会话)",
-      "stopDesc": "停止生成"
     },
     "mention": {
       "goUp": "返回上级",

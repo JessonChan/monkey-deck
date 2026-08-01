@@ -4,7 +4,7 @@ import { Events } from "@wailsio/runtime";
 import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import * as TerminalService from "../bindings/github.com/jessonchan/monkey-deck/internal/terminal/terminalservice";
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention, ImageAttachment, AudioAttachment, PlanEntry, LivePlan, Usage } from "./types";
+import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention, ImageAttachment, AudioAttachment, PlanEntry, LivePlan, Usage, SlashCommand } from "./types";
 import Sidebar from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import ChatView, { type ChatViewHandle } from "./components/ChatView";
@@ -113,6 +113,7 @@ export default function App() {
   const [imageSupportedBySession, setImageSupportedBySession] = useState<Record<string, boolean>>({});  // agent 是否声明 image prompt 能力(门控图片输入入口)
   const [audioSupportedBySession, setAudioSupportedBySession] = useState<Record<string, boolean>>({});  // agent 是否声明 audio prompt 能力(门控音频输入入口)
   const [configOptionsBySession, setConfigOptionsBySession] = useState<Record<string, ConfigOption[]>>({}); // model/mode/effort(agent 自报)
+  const [commandsBySession, setCommandsBySession] = useState<Record<string, SlashCommand[]>>({}); // harness 自报斜杠命令(动态,available_commands_update;每 harness 不同)
   // 当前 turn 的实时 plan(进行中的 turn 由 plan 事件流式刷新;turn 结束转为持久化 plan item)。
   // 历史 turn 的 plan 不在这里 —— 它们作为 role='plan' message 持久化,重开会话时由
   // messagesToItems 转为 type:'plan' ChatItem 内联渲染。null = 当前无实时 plan。
@@ -261,6 +262,12 @@ export default function App() {
       setAudioSupportedBySession((prev) => (prev[ev.sessionId] === ev.audioSupported ? prev : { ...prev, [ev.sessionId]: !!ev.audioSupported }));
       return;
     }
+    if (ev.kind === "available_commands") {
+      // harness 自报斜杠命令(ACP available_commands_update,动态、随 harness 不同、非硬编码)。
+      // 整表替换;切走再切回不重读(命令随 session 存活期常驻内存,事件覆盖最新全量)。
+      setCommandsBySession((prev) => ({ ...prev, [ev.sessionId]: ev.commands ?? [] }));
+      return;
+    }
     if (ev.kind === "plan") {
       // agent 执行计划(ACP protocol:整表替换)。plan 按 turn 索引:当前 turn = 实时(livePlan,
       // 由 plan 事件整表刷新);turn 结束时后端把最终快照落库为 role='plan' message,重开会话时
@@ -306,6 +313,7 @@ export default function App() {
   const imageSupported = !!(selectedSessionId && imageSupportedBySession[selectedSessionId]);
   const audioSupported = !!(selectedSessionId && audioSupportedBySession[selectedSessionId]);
   const configOptions = (selectedSessionId ? configOptionsBySession[selectedSessionId] : undefined) ?? [];
+  const commands = (selectedSessionId ? commandsBySession[selectedSessionId] : undefined) ?? [];
   const livePlan = (selectedSessionId ? livePlanBySession[selectedSessionId] : undefined) ?? null;
   const onComposerChange = useCallback((text: string) => {
     const sid = selectedSessionIdRef.current;
@@ -1063,17 +1071,6 @@ export default function App() {
     if (statusRef.current !== "prompting") void drainSession(sid);
   }, [armScheduleTimer, drainSession]);
 
-  const handleComposerAction = useCallback(
-    (action: "clear" | "new" | "stop") => {
-      if (action === "stop") {
-        void stopSession();
-      } else {
-        void createSession();
-      }
-    },
-    [stopSession, createSession]
-  );
-
   const respondPermission = useCallback(
     async (optionId: string) => {
       if (!selectedSessionId) return;
@@ -1743,7 +1740,6 @@ export default function App() {
               onEnqueue={enqueueMessage}
               onStop={stopSession}
               onContinue={continueSession}
-              onAction={handleComposerAction}
               onRespondPermission={respondPermission}
               onToggleTerminal={toggleTerminalPanel}
               mergeResult={mergeResults[selectedSessionId] || null}
@@ -1771,6 +1767,7 @@ export default function App() {
               activity={activityBySession[selectedSessionId]}
               sessionId={selectedSessionId}
               configOptions={configOptions}
+              commands={commands}
               livePlan={livePlan}
               onSetConfig={setSessionConfig}
               onRefreshConfig={refreshConfig}

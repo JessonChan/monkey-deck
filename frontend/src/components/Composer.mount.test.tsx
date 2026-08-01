@@ -140,7 +140,6 @@ const STUB_PROPS = {
   onSend: () => {},
   onEnqueue: () => {},
   onStop: () => {},
-  onAction: () => {},
 };
 
 // >8 lines so isLong is true on mount.
@@ -529,5 +528,87 @@ describe("Composer @ mention keyboard nav (← → Enter)", () => {
     const last = onChange.mock.calls[onChange.mock.calls.length - 1][0] as string;
     // goUpMention: "src/" → strip trailing segment → "" (root).
     expect(last).toBe("@");
+  });
+});
+
+// Unknown slash-command guard (ACP available_commands): submitting /<unknown> is blocked
+// with a warning + "send as plain text" escape (leading space bypasses harness command parsing,
+// which errors/swallows unknown commands on harnesses like opencode). Covers send + enqueue.
+describe("Composer unknown slash-command guard", () => {
+  const CMDS = [{ name: "model", description: "Show model", inputHint: "" }];
+
+  test("unknown /cmd blocks send and shows warning (not sent)", async () => {
+    const onSend = mock(() => {});
+    const { host } = mount(
+      <Composer value={"/unknown"} {...STUB_PROPS} commands={CMDS} onSend={onSend} />
+    );
+    await flush();
+    const btn = host.querySelector('[data-testid="send-btn"]') as HTMLElement;
+    btn.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(host.querySelector('[data-testid="slash-warn"]')).not.toBeNull();
+  });
+
+  test("known /cmd passes through (sent, no warning)", async () => {
+    const onSend = mock(() => {});
+    const { host } = mount(
+      <Composer value={"/model"} {...STUB_PROPS} commands={CMDS} onSend={onSend} />
+    );
+    await flush();
+    const btn = host.querySelector('[data-testid="send-btn"]') as HTMLElement;
+    btn.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0][0]).toBe("/model");
+    expect(host.querySelector('[data-testid="slash-warn"]')).toBeNull();
+  });
+
+  test("empty command list → no guard (sent as-is, harness decides)", async () => {
+    const onSend = mock(() => {});
+    const { host } = mount(
+      <Composer value={"/unknown"} {...STUB_PROPS} commands={[]} onSend={onSend} />
+    );
+    await flush();
+    const btn = host.querySelector('[data-testid="send-btn"]') as HTMLElement;
+    btn.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[data-testid="slash-warn"]')).toBeNull();
+  });
+
+  test('"send as plain text" prepends a space and sends (escape)', async () => {
+    const onSend = mock(() => {});
+    const { host } = mount(
+      <Composer value={"/unknown"} {...STUB_PROPS} commands={CMDS} onSend={onSend} />
+    );
+    await flush();
+    const btn = host.querySelector('[data-testid="send-btn"]') as HTMLElement;
+    btn.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    const plain = host.querySelector('[data-testid="slash-warn-plain"]') as HTMLElement;
+    expect(plain).not.toBeNull();
+    plain.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(onSend).toHaveBeenCalledTimes(1);
+    // Leading space bypasses harness "/" command parsing.
+    expect(onSend.mock.calls[0][0]).toBe(" /unknown");
+  });
+
+  test("enqueue mode warns too; escape enqueues with leading space", async () => {
+    const onEnqueue = mock(() => {});
+    const { host } = mount(
+      <Composer value={"/unknown"} {...STUB_PROPS} commands={CMDS} onEnqueue={onEnqueue} />
+    );
+    await flush();
+    const btn = host.querySelector('[data-testid="enqueue-btn"]') as HTMLElement;
+    btn.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(onEnqueue).not.toHaveBeenCalled();
+    const plain = host.querySelector('[data-testid="slash-warn-plain"]') as HTMLElement;
+    plain.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(onEnqueue).toHaveBeenCalledTimes(1);
+    expect(onEnqueue.mock.calls[0][0]).toBe(" /unknown");
   });
 });

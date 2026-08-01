@@ -12,7 +12,8 @@ export interface SessionEvent {
     | "usage_update"
     | "plan"
     | "session_info"
-    | "config_option";
+    | "config_option"
+    | "available_commands";
   text?: string; // agent/thought 为累积全文
   messageId?: string; // ACP messageId:同一条逻辑消息的所有 chunk 共享(§5.4 #11),主键归并用
   seq?: number; // 单调序号(防流式乱序)
@@ -44,6 +45,7 @@ export interface SessionEvent {
   audioSupported?: boolean;
   embeddedContextSupported?: boolean;
   planEntries?: PlanEntry[]; // plan:agent 执行计划(整表替换,ACP protocol)
+  commands?: SlashCommand[]; // available_commands:harness 自报斜杠命令(动态,非硬编码;§1.6)
 }
 
 // agent 执行计划的一项(与后端 internal/acp.PlanEntry 对齐)。
@@ -59,6 +61,14 @@ export interface PlanEntry {
 export interface LivePlan {
   turnId: string;
   entries: PlanEntry[];
+}
+
+// harness 自报的斜杠命令(ACP available_commands_update,动态、随 harness 不同)。
+// name 不含前导 "/"(调用时前端拼 "/"+name 作为普通 prompt 文本发送,协议 §slash-commands)。
+export interface SlashCommand {
+  name: string;
+  description: string;
+  inputHint?: string; // 参数提示(ACP AvailableCommandInput.hint),可空
 }
 
 // session config option(agent 经 NewSession/config_option_update 自报,前端渲染下拉)。

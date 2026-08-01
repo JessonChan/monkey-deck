@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem, Mention, ImageAttachment, AudioAttachment, PlanEntry, LivePlan, Usage } from "../types";
+import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem, Mention, ImageAttachment, AudioAttachment, PlanEntry, LivePlan, Usage, SlashCommand } from "../types";
 import Composer from "./Composer";
 import McpChip from "./McpChip";
 import QueuePanel from "./QueuePanel";
@@ -36,7 +36,6 @@ interface Props {
   onEnqueue: (text: string, mentions: Mention[], images?: ImageAttachment[], audios?: AudioAttachment[]) => void;
   onStop: () => void;
   onContinue: () => void;
-  onAction: (action: "clear" | "new" | "stop") => void;
   onRespondPermission: (optionId: string) => void;
   onToggleTerminal: () => void;
   onRefreshConfig: () => void;
@@ -62,6 +61,7 @@ interface Props {
   history: string[];
   sessionId: string;
   configOptions: ConfigOption[];
+  commands: SlashCommand[];
   // 当前 turn 的实时 plan(进行中的 turn 由 plan 事件流式刷新;turn 结束转为持久化
   // type:'plan' ChatItem 内联渲染在 items 里)。null = 当前无实时 plan。
   livePlan: LivePlan | null;
@@ -687,12 +687,12 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           disabled={!props.session}
           prompting={props.status === "prompting"}
           configOptions={props.configOptions}
+          commands={props.commands}
           onSetConfig={props.onSetConfig}
           onRefreshConfig={props.onRefreshConfig}
           onSend={props.onSend}
           onEnqueue={props.onEnqueue}
           onStop={props.onStop}
-          onAction={props.onAction}
           history={props.history}
           sessionId={props.sessionId}
         />

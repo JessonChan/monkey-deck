@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { useTranslation } from "react-i18next";
 import * as Popover from "@radix-ui/react-popover";
 import { Command } from "cmdk";
-import type { ConfigOption, Mention, ImageAttachment, AudioAttachment, Usage } from "../types";
+import type { ConfigOption, Mention, ImageAttachment, AudioAttachment, Usage, SlashCommand } from "../types";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
@@ -33,24 +33,8 @@ interface Props {
   onSend: (text: string, mentions: Mention[], images?: ImageAttachment[], audios?: AudioAttachment[]) => void;
   onEnqueue: (text: string, mentions: Mention[], images?: ImageAttachment[], audios?: AudioAttachment[]) => void;  // 主动入队列(并列发送):无论 idle/prompting 都入队
   onStop: () => void;
-  onAction: (action: "clear" | "new" | "stop") => void;
+  commands: SlashCommand[];      // harness 自报斜杠命令(动态,available_commands_update;每 harness 不同)
 }
-
-// 斜杠命令(wesight 风格)。insert=插入模板;action=执行动作。
-// desc/insert 经 i18n key 在渲染/插入时翻译(支持语言切换)。
-interface SlashCommand { cmd: string; descKey: string; insertKey?: string; action?: "clear" | "new" | "stop"; }
-const SLASH_COMMANDS: SlashCommand[] = [
-  { cmd: "/explain", descKey: "composer.slash.explainDesc", insertKey: "composer.slash.explainInsert" },
-  { cmd: "/review", descKey: "composer.slash.reviewDesc", insertKey: "composer.slash.reviewInsert" },
-  { cmd: "/tests", descKey: "composer.slash.testsDesc", insertKey: "composer.slash.testsInsert" },
-  { cmd: "/refactor", descKey: "composer.slash.refactorDesc", insertKey: "composer.slash.refactorInsert" },
-  { cmd: "/fix", descKey: "composer.slash.fixDesc", insertKey: "composer.slash.fixInsert" },
-  { cmd: "/doc", descKey: "composer.slash.docDesc", insertKey: "composer.slash.docInsert" },
-  { cmd: "/summary", descKey: "composer.slash.summaryDesc", insertKey: "composer.slash.summaryInsert" },
-  { cmd: "/new", descKey: "composer.slash.newDesc", action: "new" },
-  { cmd: "/clear", descKey: "composer.slash.clearDesc", action: "clear" },
-  { cmd: "/stop", descKey: "composer.slash.stopDesc", action: "stop" },
-];
 
 // 长文本折叠阈值:超过则折叠成 TUI 风格紧凑块(首尾若干行 + 中间省略),避免撑爆输入区。
 // 折叠仅为展示态,提交内容仍是完整 value(见 submit)。
@@ -118,10 +102,13 @@ const AUDIO_MIME_ALLOWED = ["audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3
 // 单音频大小上限(base64 前,字节):25MB。音频比图片体积更大,但仍需控量以不爆上下文。
 const AUDIO_MAX_BYTES = 25 * 1024 * 1024;
 
-export default function Composer({ value, onChange, disabled, prompting, configOptions, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, audios, onAudiosChange, audioSupported, usage, branch, onSend, onEnqueue, onStop, onAction }: Props) {
+export default function Composer({ value, onChange, disabled, prompting, configOptions, commands, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, audios, onAudiosChange, audioSupported, usage, branch, onSend, onEnqueue, onStop }: Props) {
   const { t } = useTranslation();
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
+  // 未知命令拦截:发送/入队时若 /<cmd> 不在 harness 自报命令表里,阻止发送并提示。
+  // mode 记录用户触发方式(send/enqueue),「作为普通文本发送」按同模式转义重发(前导空格绕过命令解析)。
+  const [slashWarn, setSlashWarn] = useState<{ cmd: string; mode: "send" | "enqueue" } | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const cursorRef = useRef(0);                                       // 光标位置(命令式读写,供 @ 插入定位)
   const [cursorPos, setCursorPos] = useState(0);                     // 光标位置(仅作 mention useMemo 的重算触发器;cursorRef 才是权威值)
@@ -194,8 +181,8 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     return rest.includes(" ") ? null : rest;
   }, [value]);
   const filtered = useMemo(
-    () => (slashQuery == null ? [] : SLASH_COMMANDS.filter((c) => c.cmd.slice(1).startsWith(slashQuery))),
-    [slashQuery]
+    () => (slashQuery == null ? [] : commands.filter((c) => c.name.startsWith(slashQuery))),
+    [slashQuery, commands]
   );
   useEffect(() => {
     setSlashOpen(filtered.length > 0);
@@ -233,12 +220,13 @@ export default function Composer({ value, onChange, disabled, prompting, configO
 
   const baseName = (p: string) => p.split(/[/\\]/).pop() || p;
   const empty = !value.trim() && attachments.length === 0 && mentions.length === 0 && images.length === 0 && audios.length === 0;
-
   // mode: "send" = 默认发送(idle 直发 / prompting 入队由 App 决定);
   //       "enqueue" = 主动入队列(始终压入前端队列,与发送按钮并列的显式入口)。
-  const submit = (finalText?: string, mode: "send" | "enqueue" = "send") => {
+  // forcePlain=true:已转义(前导空格),跳过未知命令校验、不 trim 前导空格 —— 供「作为普通文本发送」复用。
+  const submit = (finalText?: string, mode: "send" | "enqueue" = "send", forcePlain = false) => {
     if (disabled) return;
-    const t = (finalText ?? value).trim();
+    const raw = finalText ?? value;
+    const t = forcePlain ? raw : raw.trim();
     // 收集有效提及:@autocomplete 选中的需仍在文本里(用户可能已删掉);用词边界防 @src/foo 误命中 @src/foobar。
     const inline = mentions.filter((m) => {
       const token = "@" + m.path;
@@ -252,6 +240,17 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     const imgs = images.length > 0 ? images : undefined;
     const aus = audios.length > 0 ? audios : undefined;
     if (!t && all.length === 0 && images.length === 0 && audios.length === 0) return;
+    // 未知命令拦截(§slash-commands):消息以 "/" 开头时,首个 token 是命令名。若 harness 已自报命令表
+    // (commands 非空)且该命令不在表里 → 阻止发送并提示(各 harness 对未知 /cmd 行为不一:opencode 报错/
+    // 静默吞,omp 落到模型)。commands 为空(尚未收到 available_commands)时不拦,交给 harness。
+    if (!forcePlain && t.startsWith("/")) {
+      const cmdName = t.slice(1).split(/\s+/)[0];
+      if (cmdName && commands.length > 0 && !commands.some((c) => c.name === cmdName)) {
+        setSlashWarn({ cmd: cmdName, mode });
+        return;
+      }
+    }
+    setSlashWarn(null);
     (mode === "enqueue" ? onEnqueue : onSend)(t, all, imgs, aus);
     onChange("");
     onAttachmentsChange([]);
@@ -264,11 +263,27 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     setSlashOpen(false);
     requestAnimationFrame(() => { if (ref.current) ref.current.style.height = "auto"; });
   };
+  // 选中一个命令:把当前 "/query" 整体替换成 "/<name> "(尾随空格,便于紧接输入参数)。
+  // 命令是真实的 harness 斜杠命令——提交时作为普通 prompt 文本原样发送(协议 §slash-commands,
+  // agent 识别前缀执行),不在 client 侧执行任何动作。
   const pickSlash = (c: SlashCommand) => {
-    if (c.action) onAction(c.action);
-    else if (c.insertKey) onChange(t(c.insertKey));
+    const next = "/" + c.name + " ";
+    cursorRef.current = next.length;
+    onChange(next);
     setSlashOpen(false);
-    requestAnimationFrame(() => ref.current?.focus());
+    setSlashWarn(null);
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (el) { el.focus(); el.selectionStart = el.selectionEnd = cursorRef.current; }
+    });
+  };
+
+  // 「作为普通文本发送」:前导加空格转义(绕过 harness 的 "/" 命令解析,用户已实测对 opencode 有效),
+  // 按用户原本触发的模式(send/enqueue)重发,跳过未知命令校验。
+  const sendAsPlain = () => {
+    if (!slashWarn) return;
+    const mode = slashWarn.mode;
+    submit(" " + value, mode, true);
   };
 
   // 选中一个 @ 候选:把 @query 替换成 @完整路径 + 尾随空格,记录提及,关闭面板。
@@ -343,6 +358,8 @@ export default function Composer({ value, onChange, disabled, prompting, configO
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickSlash(filtered[slashIdx]); return; }
       if (e.key === "Escape") { e.preventDefault(); setSlashOpen(false); return; }
     }
+    // 未知命令提示:Esc 关闭(编辑也会清,这里兜底键盘流)
+    if (slashWarn && e.key === "Escape") { e.preventDefault(); setSlashWarn(null); return; }
     // @ mention menu: ↑↓ move selection, ← go up one dir level (drill state only),
     // → drill into the highlighted directory, Enter/Tab commit the highlighted item as a
     // mention (files AND directories both reference — dir navigation is via ← / →).
@@ -429,6 +446,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     setCursorPos(cursorRef.current);
     navRef.current = -1; // 真实输入(非翻历史)→ 退出翻历史模式
     setNavDisplay(-1);
+    setSlashWarn(null); // 编辑输入 → 撤销未知命令提示
     onChange(e.target.value);
   };
   const handleSelect = () => {
@@ -514,9 +532,10 @@ export default function Composer({ value, onChange, disabled, prompting, configO
       {slashOpen && (
         <div className="slash-popover" data-testid="slash-popover">
           {filtered.map((c, i) => (
-            <button key={c.cmd} className={`slash-item ${i === slashIdx ? "active" : ""}`} onMouseEnter={() => setSlashIdx(i)} onClick={() => pickSlash(c)}>
-              <span className="slash-cmd">{c.cmd}</span>
-              <span className="slash-desc">{t(c.descKey)}</span>
+            <button key={c.name} className={`slash-item ${i === slashIdx ? "active" : ""}`} onMouseEnter={() => setSlashIdx(i)} onClick={() => pickSlash(c)} title={c.description}>
+              <span className="slash-cmd">/{c.name}</span>
+              <span className="slash-desc">{c.description}</span>
+              {c.inputHint && <span className="slash-hint">{c.inputHint}</span>}
             </button>
           ))}
         </div>
@@ -558,6 +577,20 @@ export default function Composer({ value, onChange, disabled, prompting, configO
               </button>
             );
           })}
+        </div>
+      )}
+      {slashWarn && (
+        <div className="slash-warn" data-testid="slash-warn" role="alert">
+          <span className="slash-warn-msg">
+            {t("composer.slashUnknown", { cmd: slashWarn.cmd })}
+            <span className="slash-warn-hint">{t("composer.slashUnknownHint")}</span>
+          </span>
+          <span className="slash-warn-actions">
+            <button className="slash-warn-plain" data-testid="slash-warn-plain" onClick={sendAsPlain} title={t("composer.sendAsPlainTip")}>
+              {t("composer.sendAsPlain")}
+            </button>
+            <button className="slash-warn-x" onClick={() => setSlashWarn(null)} title={t("common.dismiss")}><X size={13} /></button>
+          </span>
         </div>
       )}
 

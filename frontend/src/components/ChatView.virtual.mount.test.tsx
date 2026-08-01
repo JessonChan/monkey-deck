@@ -183,7 +183,6 @@ function baseProps(items: ChatItem[]) {
     onEnqueue: () => {},
     onStop: () => {},
     onContinue: () => {},
-    onAction: () => {},
     onRespondPermission: () => {},
     onToggleTerminal: () => {},
     onRefreshConfig: () => {},

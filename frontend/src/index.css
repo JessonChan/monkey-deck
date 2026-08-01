@@ -951,6 +951,15 @@ input, textarea { font-family: inherit; }
 .slash-item.active, .slash-item:hover { background: var(--sel-accent); color: var(--text); }
 .slash-cmd { font-family: var(--mono); color: var(--accent-2); font-weight: 500; }
 .slash-desc { font-size: 11.5px; color: var(--text-3); }
+.slash-hint { font-size: 10.5px; color: var(--text-4); font-family: var(--mono); }
+/* 未知命令拦截横幅:发送 /<未知命令> 时阻止并提示,提供「作为普通文本发送」转义入口。 */
+.slash-warn { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 28px 6px; padding: 7px 10px; border-radius: var(--r-sm); background: var(--warn-bg, rgba(204,102,0,.12)); border: 1px solid var(--warn-bd, rgba(204,102,0,.35)); font-size: 12px; color: var(--text-2); }
+.slash-warn-msg { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.slash-warn-hint { font-size: 11px; color: var(--text-3); }
+.slash-warn-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.slash-warn-plain { padding: 3px 9px; border-radius: var(--r-sm); font-size: 11.5px; background: var(--accent-2); color: #fff; }
+.slash-warn-plain:hover { filter: brightness(1.08); }
+.slash-warn-x { display: flex; align-items: center; justify-content: center; color: var(--text-3); }
 
 /* @ mention panel: full width of the compose-card (== the input box), not compact.
    It inherits .slash-popover's left:28px; right:28px stretch, so its left/right edges

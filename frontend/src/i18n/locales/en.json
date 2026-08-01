@@ -17,7 +17,8 @@
     "newFolder": "New Folder",
     "refresh": "Refresh",
     "expand": "Expand",
-    "collapse": "Collapse"
+    "collapse": "Collapse",
+    "dismiss": "Dismiss"
   },
   "app": {
     "brand": "Monkey Deck",
@@ -290,6 +291,10 @@
     "addImageTip": "Add image (sent as ACP Image block · paste also works)",
     "addAudioTip": "Add audio (sent as ACP Audio block)",
     "slashMenuTip": "Type / for command menu",
+    "slashUnknown": "Command /{{cmd}} doesn't exist",
+    "slashUnknownHint": "The current agent doesn't recognize it; sending as-is may error or be silently ignored.",
+    "sendAsPlain": "Send as plain text",
+    "sendAsPlainTip": "Prepend a space to bypass command parsing and send as a normal message",
     "referencesCount": "{{count}} refs",
     "stopTip": "Stop current generation (keeps queue)",
     "sendTip": "Send",
@@ -303,25 +308,6 @@
       "model": "Model",
       "mode": "Mode",
       "thought": "Thought"
-    },
-    "slash": {
-      "explainDesc": "Explain code",
-      "explainInsert": "Please explain this code, covering the logic and key points:",
-      "reviewDesc": "Code review",
-      "reviewInsert": "Please review this code, pointing out issues, risks, and improvement suggestions:",
-      "testsDesc": "Generate tests",
-      "testsInsert": "Please write unit tests for this code, covering edge cases:",
-      "refactorDesc": "Refactor",
-      "refactorInsert": "Please refactor this code, improving readability and maintainability while keeping behavior unchanged:",
-      "fixDesc": "Fix bug",
-      "fixInsert": "Please find and fix the bug here, explaining the root cause:",
-      "docDesc": "Write docs",
-      "docInsert": "Please write clear documentation/comments for this code:",
-      "summaryDesc": "Summarize file",
-      "summaryInsert": "Please summarize this file's purpose, structure, and key logic:",
-      "newDesc": "New chat",
-      "clearDesc": "Clear (new session)",
-      "stopDesc": "Stop generation"
     },
     "mention": {
       "goUp": "Go up",

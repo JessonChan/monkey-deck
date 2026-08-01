@@ -140,7 +140,6 @@ function baseProps(overrides = {}) {
     onSend: () => {},
     onEnqueue: () => {},
     onStop: () => {},
-    onAction: () => {},
     ...overrides,
   };
 }
