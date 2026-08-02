@@ -2,12 +2,12 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { useTranslation } from "react-i18next";
 import * as Popover from "@radix-ui/react-popover";
 import { Command } from "cmdk";
-import type { ConfigOption, Mention, ImageAttachment, AudioAttachment, Usage, SlashCommand } from "../types";
+import type { ConfigOption, Mention, ImageAttachment, AudioAttachment, Usage, SlashCommand, ElicitationPrompt } from "../types";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import { copyText } from "../lib/clipboard";
 import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
-import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, ListPlus, GitBranch, Check, CornerUpLeft } from "lucide-react";
+import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, ListPlus, GitBranch, Check, CornerUpLeft, ListChecks } from "lucide-react";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -35,6 +35,12 @@ interface Props {
   onEnqueue: (text: string, mentions: Mention[], images?: ImageAttachment[], audios?: AudioAttachment[]) => void;  // 主动入队列(并列发送):无论 idle/prompting 都入队
   onStop: () => void;
   commands: SlashCommand[];      // harness 自报斜杠命令(动态,available_commands_update;每 harness 不同)
+  // Elicitation (ACP v1 standard protocol): harness requests structured user input
+  // (omp /review mode select, /fast confirm). Rendered inline at the top of the
+  // compose-card (inside the input box, above attachments) — agent is waiting on the
+  // user, so it stays pinned to the input they act on, not buried in the scroll stream.
+  elicitation: ElicitationPrompt | null;
+  onRespondElicitation: (action: "accept" | "decline" | "cancel", content: Record<string, unknown>) => void;
 }
 
 // 长文本折叠阈值:超过则折叠成 TUI 风格紧凑块(首尾若干行 + 中间省略),避免撑爆输入区。
@@ -103,7 +109,7 @@ const AUDIO_MIME_ALLOWED = ["audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3
 // 单音频大小上限(base64 前,字节):25MB。音频比图片体积更大,但仍需控量以不爆上下文。
 const AUDIO_MAX_BYTES = 25 * 1024 * 1024;
 
-export default function Composer({ value, onChange, disabled, prompting, configOptions, commands, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, audios, onAudiosChange, audioSupported, usage, branch, onSend, onEnqueue, onStop }: Props) {
+export default function Composer({ value, onChange, disabled, prompting, configOptions, commands, elicitation, onRespondElicitation, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, audios, onAudiosChange, audioSupported, usage, branch, onSend, onEnqueue, onStop }: Props) {
   const { t } = useTranslation();
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
@@ -596,6 +602,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
       )}
 
       <div className="compose-card">
+        {elicitation && <ElicitationCard prompt={elicitation} onRespond={onRespondElicitation} />}
         {(attachments.length > 0 || mentions.length > 0 || images.length > 0 || audios.length > 0) && (
           <div className="att-chips" data-testid="att-chips">
             {attachments.map((p) => (
@@ -1076,6 +1083,92 @@ function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupB
           </Command>
         </Popover.Content>
       </Popover.Portal>
-    </Popover.Root>
+     </Popover.Root>
+   );
+}
+
+// ElicitationCard: ACP elicitation/create inline form (protocol v1 standard, SDK UNSTABLE).
+// Rendered at the top of the compose-card (inside the input box) — agent is waiting on the
+// user, so it lives where the user acts, not in the scroll stream. omp's single "value" field
+// (select/confirm) gets a compact one-row layout; multi-field falls back to a vertical form.
+// Buttons: Submit (accept, primary) + Skip (decline, lets harness degrade gracefully).
+// cancel == Stop button (always available mid-turn), not duplicated here.
+function ElicitationCard({ prompt, onRespond }: { prompt: ElicitationPrompt; onRespond: (action: "accept" | "decline" | "cancel", content: Record<string, unknown>) => void }) {
+  const { t } = useTranslation();
+  const isSingle = prompt.fields.length === 1;
+  const single = isSingle ? prompt.fields[0] : null;
+  const [values, setValues] = useState<Record<string, unknown>>(() => {
+    const init: Record<string, unknown> = {};
+    for (const f of prompt.fields) {
+      if (f.type === "boolean") init[f.name] = false;
+      else if (f.enum && f.enum.length > 0) init[f.name] = f.default || f.enum[0];
+      else init[f.name] = f.default || "";
+    }
+    return init;
+  });
+  const setField = (name: string, v: unknown) => setValues((prev) => ({ ...prev, [name]: v }));
+  const submit = () => onRespond("accept", values);
+
+  if (isSingle && single) {
+    const label = single.title || single.description || prompt.message;
+    return (
+      <div className="elicit-inline" data-testid="elicitation-card">
+        <ListChecks size={15} className="elicit-icon" />
+        <span className="elicit-msg">{prompt.message || t("chat.elicitationTitleFallback")}</span>
+        <div className="elicit-control">
+          {single.type === "boolean" ? (
+            <label className="elicit-bool">
+              <input type="checkbox" data-testid={`elicit-${single.name}`} checked={values[single.name] === true} onChange={(e) => setField(single.name, e.target.checked)} />
+              <span>{label}</span>
+            </label>
+          ) : single.enum && single.enum.length > 0 ? (
+            <select className="elicit-select" data-testid={`elicit-${single.name}`} value={String(values[single.name] ?? "")} onChange={(e) => setField(single.name, e.target.value)}>
+              {single.enum.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+            </select>
+          ) : (
+            <input className="elicit-input" type="text" data-testid={`elicit-${single.name}`} placeholder={single.description || ""} value={String(values[single.name] ?? "")} onChange={(e) => setField(single.name, e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+          )}
+        </div>
+        <button className="elicit-btn elicit-submit" data-testid="elicit-accept" onClick={submit}>{t("chat.elicitAccept")}</button>
+        <button className="elicit-btn elicit-skip" data-testid="elicit-decline" onClick={() => onRespond("decline", {})}>{t("chat.elicitSkip")}</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="elicit-inline elicit-inline-multi" data-testid="elicitation-card">
+      <div className="elicit-head">
+        <ListChecks size={15} className="elicit-icon" />
+        <span className="elicit-msg">{prompt.message || t("chat.elicitationTitleFallback")}</span>
+      </div>
+      <div className="elicit-fields">
+        {prompt.fields.map((f) => (
+          <div key={f.name} className="elicit-field">
+            {f.type === "boolean" ? (
+              <label className="elicit-bool">
+                <input type="checkbox" data-testid={`elicit-${f.name}`} checked={values[f.name] === true} onChange={(e) => setField(f.name, e.target.checked)} />
+                <span>{f.title || f.description || f.name}</span>
+              </label>
+            ) : f.enum && f.enum.length > 0 ? (
+              <>
+                {(f.title || f.description) && <div className="elicit-label">{f.title || f.description}</div>}
+                <select className="elicit-select" data-testid={`elicit-${f.name}`} value={String(values[f.name] ?? "")} onChange={(e) => setField(f.name, e.target.value)}>
+                  {f.enum.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              </>
+            ) : (
+              <>
+                {(f.title || f.description) && <div className="elicit-label">{f.title || f.description}</div>}
+                <input className="elicit-input" type="text" data-testid={`elicit-${f.name}`} placeholder={f.description || ""} value={String(values[f.name] ?? "")} onChange={(e) => setField(f.name, e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="elicit-actions">
+        <button className="elicit-btn elicit-submit" data-testid="elicit-accept" onClick={submit}>{t("chat.elicitAccept")}</button>
+        <button className="elicit-btn elicit-skip" data-testid="elicit-decline" onClick={() => onRespond("decline", {})}>{t("chat.elicitSkip")}</button>
+      </div>
+    </div>
   );
 }

@@ -127,3 +127,24 @@ omp 约定:select/confirm/input 都包装成 `{type:object, properties:{value:<s
 - `go build . ./internal/...` + `go test ./internal/...` 全绿(15 包);`bun run tsc --noEmit` 0 error。
 - `bun run test`:7 fail 全是既有(ChatView 虚拟化/NewSessionModal/msgmeta),与本变更无关。
 - [OPEN] server 模式浏览器实测新的固定栏布局 + 紧凑单行渲染留作下次。
+
+## 方向再修正:移进 Composer(compose-card 内部,用户拍板)
+
+上一版「固定 `.elicit-bar` 在 header/body 之间」用户仍不满意:位置偏离输入框、语义上 elicitation
+是「输入」不是「消息」。用户明确:**放进聊天窗口(输入框 Composer)里面**。
+
+修法(方案 B,最终版):
+- `ElicitationCard` 组件从 ChatView.tsx **移到 Composer.tsx**(它现在只在 Composer 用,KISS)。
+- 渲染点:`.compose-card` 内部最前面(att-chips 之前,textarea 之上)——即「输入框卡片里的第一个区块」。
+  agent 在等用户输入时,表单就在用户即将操作的输入框里,不会被误读为消息流的一部分。
+- ChatView 不再渲染,只透传 props(elicitation + onRespondElicitation)给 Composer。
+- CSS:`.elicit-bar`(固定栏样式,border-bottom/bg)→ `.elicit-inline`(compose-card 内部表单,
+  accent 描边突出「这是待办输入」,与 compose-card 融为一体)。单字段紧凑单行 / 多字段竖排表单不变。
+
+### 改了哪些文件(方向再修正)
+
+- `frontend/src/components/Composer.tsx`:加 `elicitation`/`onRespondElicitation` props + 解构 +
+  compose-card 内部首位渲染 + `ElicitationCard` 组件定义(从 ChatView 搬来)+ `ListChecks` import。
+- `frontend/src/components/ChatView.tsx`:删顶层 `.elicit-bar` 挂载 + 删 ElicitationCard 组件定义
+  (已移走)+ Composer 调用处透传 elicitation/onRespondElicitation。
+- `frontend/src/index.css`:`.elicit-bar` → `.elicit-inline`(compose-card 内部表单样式,accent 描边)。
