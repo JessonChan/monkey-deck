@@ -1858,6 +1858,10 @@ func (s *ChatService) SendMessage(sessionID, text string, attachments []acp.Atta
 // 推 user 事件 → 推 prompting。
 func (s *ChatService) startTurn(ls *liveSession, sessionID, text string, attachments []acp.Attachment) error {
 	ls.resetBuffers()
+	// 新 turn 开头清 elicitDeclined 标志:保证它只反映当前 turn(防上一轮的 decline 经
+	// Stop/peer-断等提前返回路径残留到下一轮的 empty-turn 判定,§3.x elicitation)。
+	// 读后即清(见 empty-turn / 非空 turn 末尾)是第二道防线,本处是第一道。
+	ls.chat.ResetElicitDeclined()
 	ls.mu.Lock()
 	ls.busy = true
 	ls.mu.Unlock()

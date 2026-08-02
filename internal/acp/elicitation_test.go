@@ -212,3 +212,61 @@ func TestUnstableCreateElicitationTimeoutDeclines(t *testing.T) {
 		t.Fatalf("returned too fast (%v), should wait ~permTTL", elapsed)
 	}
 }
+
+// ctx 取消(如 StopSession / session 关闭)中断等待中的 elicitation:
+// 返 Cancel + 清空 pendingElicit + 触发 OnElicitationResolved(让前端清残留卡片)。
+// 锁死 teardown 不泄漏、不残留卡片的契约(review nit:此前该路径无测试保护)。
+func TestUnstableCreateElicitationCtxCancel(t *testing.T) {
+	resolved := make(chan string, 1)
+	h := NewHandler("/tmp/proj", nil, nil, nil, 0)
+	h.permTTL = 5 * time.Minute // 长 TTL,确保是 ctx 取消而非超时触发
+	h.OnElicitationResolved = func(id string) { resolved <- id }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		resp, _ := h.UnstableCreateElicitation(ctx, acp.UnstableCreateElicitationRequest{
+			Form: &acp.UnstableCreateElicitationForm{
+				Message: "x",
+				RequestedSchema: acp.UnstableElicitationSchema{
+					Properties: map[string]any{"value": map[string]any{"type": "string"}},
+				},
+			},
+		})
+		// ctx 取消应命中 ctx.Done() 分支 → 返 Cancel。
+		if resp.Cancel == nil {
+			t.Errorf("ctx cancel should return Cancel, got %+v", resp)
+		}
+		close(done)
+	}()
+
+	// 等 dispatch(OnElicitation 在测试环境为 nil,但 pendingElicit 已注册)。
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("CreateElicitation did not return after ctx cancel")
+	}
+	// pendingElicit 应已清空(防 goroutine 泄漏 + 残留响应通道)。
+	h.mu.Lock()
+	leak := len(h.pendingElicit)
+	h.mu.Unlock()
+	if leak != 0 {
+		t.Fatalf("pendingElicit should be empty after ctx cancel, got %d", leak)
+	}
+	// OnElicitationResolved 应被触发(让前端清残留卡片)。
+	select {
+	case id := <-resolved:
+		if id == "" {
+			t.Fatal("resolved id should be non-empty")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("OnElicitationResolved not triggered after ctx cancel")
+	}
+	// 取消后对该 id 的 RespondElicitation 应失败(已被 ctx 路径清掉)。
+	if h.RespondElicitation("any-id-after-cancel", ElicitationResponse{Action: "accept"}) {
+		t.Fatal("RespondElicitation should fail after ctx cancel (entry removed)")
+	}
+}

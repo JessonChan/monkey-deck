@@ -62,12 +62,17 @@ func TestEmptyTurnDetectedAsNotice(t *testing.T) {
 
 // 用户主动 decline(Skip)elicitation 后,harness 命令直接 end_turn 零输出(omp /review 实测)。
 // 这种空 turn 是用户自己的选择,不当错误提示 —— 静默推 idle(§3.x elicitation)。
-// 对照 TestEmptyTurnDetectedAsError(无 decline 的真异常空 turn → 仍报 error)。
+// 对照 TestEmptyTurnDetectedAsNotice(无 decline 的空 turn → 推 notice 温和提示)。
+//
+// 忠实模拟:declined 标志必须在 turn 内(Prompt 进行中)置位 —— 真实流程是用户在 Prompt 期间点
+// Skip。startTurn 开头会 ResetElicitDeclined,故 SendMessage 前置位会被清掉(不忠实)。用 emitHook
+// 在 release 触发时(Prompt 即将返回 end_turn 前)置位,贴合真实时序。
 func TestEmptyTurnAfterElicitDeclineIsSilentIdle(t *testing.T) {
 	svc, sessionID, fc := newTestService(t)
 
-	fc.emitHook = nil              // 模拟 harness 返回空 turn(无 SessionUpdate)
-	fc.declined.Store(true)        // 模拟用户本 turn 主动 decline 过 elicitation
+	// emitHook 在 release(Prompt 返回前)触发:模拟用户在 turn 进行中 decline 了 elicitation。
+	// 不产出任何 SessionUpdate(emitHook 本就不 emit),保持空 turn 语义。
+	fc.emitHook = func(_ string) { fc.declined.Store(true) }
 
 	var lastPayload StatusPayload
 	svc.emitHook = func(name string, data any) {
@@ -82,7 +87,7 @@ func TestEmptyTurnAfterElicitDeclineIsSilentIdle(t *testing.T) {
 	waitStarted(t, fc, 1)
 	fc.release()
 
-	// 等终态(应直接到 idle,不经 error)。
+	// 等终态(应直接到 idle,不经 notice/error)。
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && (lastPayload.Status == "" || lastPayload.Status == "prompting") {
 		time.Sleep(2 * time.Millisecond)
