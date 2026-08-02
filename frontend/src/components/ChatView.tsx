@@ -560,6 +560,11 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         </div>
       )}
 
+      {/* 固定 elicitation 栏(脱离滚动,常驻可见):agent 正在等用户输入时不被滚动隐藏。
+          独立于权限卡(语义不同:权限=二选一放行,elicitation=填表提交)+ 独立 CSS。
+          omp 单字段 value(select/confirm)走紧凑单行布局,多字段走竖排表单。 */}
+      {props.elicitation && <ElicitationCard prompt={props.elicitation} onRespond={props.onRespondElicitation} />}
+
       <div className="chat-body" key={props.sessionId} ref={scrollRef} onScroll={onScroll} onContextMenu={openCtxMenu} data-testid="chat-body">
         {/* 内容层:显式高度 = 布局 total(撑开滚动条),行绝对定位(top = layout.tops,与 scrollTop 同系)。 */}
         <div className="chat-content" ref={contentRef} style={{ height: layout.total }}>
@@ -601,7 +606,6 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           {/* 尾部区:权限卡 + 实时 plan + 打字指示。实测高度 tailHRef(data-iid=__tail__)。 */}
           <div className="cv-tail" data-iid="__tail__" style={{ top: layout.tailTop }}>
             {props.permission && <PermissionCard prompt={props.permission} onRespond={props.onRespondPermission} />}
-            {props.elicitation && <ElicitationCard prompt={props.elicitation} onRespond={props.onRespondElicitation} />}
             {/* 当前 turn 的实时 plan(进行中,带 spinner)。turn 结束后由 App.tsx 转为持久化
                 type:'plan' ChatItem 内联渲染在 items 里(无 spinner 的静态展示)。 */}
             {props.livePlan && props.livePlan.entries.length > 0 && (
@@ -1442,10 +1446,15 @@ function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRes
 
 // ElicitationCard:ACP elicitation/create 的前端表单(协议 v1 标准,SDK 标 UNSTABLE)。
 // harness(如 omp /review、/fast confirm)请求结构化用户输入;桌面有人在场,弹表单给用户填。
-// 按 field.type 渲染:string→input、string+enum→select、boolean→checkbox。accept 提交,decline/cancel 退出。
+// 挂在 chat-header 与 chat-body 之间的固定 .elicit-bar(脱离滚动,常驻可见):agent 正在等
+// 输入时不能被滚动隐藏。独立于权限卡(语义不同)+ 独立 CSS。
+// 按 field.type 渲染:string→input、string+enum→select、boolean→checkbox。
+// omp 常见形态 = 单字段 "value"(select/confirm),走紧凑单行布局;多字段走竖排表单。
+// 按钮:提交(accept,主)+ 跳过(decline,次,让 harness 优雅降级)。cancel 等价 Stop 按钮,不在此暴露。
 function ElicitationCard({ prompt, onRespond }: { prompt: ElicitationPrompt; onRespond: (action: "accept" | "decline" | "cancel", content: Record<string, unknown>) => void }) {
   const { t } = useTranslation();
-  // 本地表单状态:每个字段的当前值。string 默认取 field.default 或枚举首项;boolean 默认 false。
+  const isSingle = prompt.fields.length === 1;
+  const single = isSingle ? prompt.fields[0] : null;
   const [values, setValues] = useState<Record<string, unknown>>(() => {
     const init: Record<string, unknown> = {};
     for (const f of prompt.fields) {
@@ -1458,59 +1467,67 @@ function ElicitationCard({ prompt, onRespond }: { prompt: ElicitationPrompt; onR
   const setField = (name: string, v: unknown) => setValues((prev) => ({ ...prev, [name]: v }));
   const submit = () => onRespond("accept", values);
 
-  // 单字段且是 select/boolean 时,布局更紧凑(直接横排选项);多字段或 input 走竖排表单。
+  // 单字段 compact 渲染:label + 控件 + 按钮一行(omp select/confirm 的常见形态)。
+  if (isSingle && single) {
+    const label = single.title || single.description || prompt.message;
+    return (
+      <div className="elicit-bar" data-testid="elicitation-card">
+        <ListChecks size={16} className="elicit-icon" />
+        <span className="elicit-msg">{prompt.message || t("chat.elicitationTitleFallback")}</span>
+        <div className="elicit-control">
+          {single.type === "boolean" ? (
+            <label className="elicit-bool">
+              <input type="checkbox" data-testid={`elicit-${single.name}`} checked={values[single.name] === true} onChange={(e) => setField(single.name, e.target.checked)} />
+              <span>{label}</span>
+            </label>
+          ) : single.enum && single.enum.length > 0 ? (
+            <select className="elicit-select" data-testid={`elicit-${single.name}`} value={String(values[single.name] ?? "")} onChange={(e) => setField(single.name, e.target.value)}>
+              {single.enum.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+            </select>
+          ) : (
+            <input className="elicit-input" type="text" data-testid={`elicit-${single.name}`} placeholder={single.description || ""} value={String(values[single.name] ?? "")} onChange={(e) => setField(single.name, e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+          )}
+        </div>
+        <button className="elicit-btn elicit-submit" data-testid="elicit-accept" onClick={submit}>{t("chat.elicitAccept")}</button>
+        <button className="elicit-btn elicit-skip" data-testid="elicit-decline" onClick={() => onRespond("decline", {})}>{t("chat.elicitSkip")}</button>
+      </div>
+    );
+  }
+
+  // 多字段竖排表单。
   return (
-    <div className="permission-card elicitation-card" data-testid="elicitation-card">
-      <div className="permission-head">
-        <Sparkles size={18} />
-        <div className="permission-title">{prompt.message || t("chat.elicitationTitleFallback")}</div>
+    <div className="elicit-bar elicit-bar-multi" data-testid="elicitation-card">
+      <div className="elicit-head">
+        <ListChecks size={16} className="elicit-icon" />
+        <span className="elicit-msg">{prompt.message || t("chat.elicitationTitleFallback")}</span>
       </div>
       <div className="elicit-fields">
         {prompt.fields.map((f) => (
           <div key={f.name} className="elicit-field">
             {f.type === "boolean" ? (
               <label className="elicit-bool">
-                <input
-                  type="checkbox"
-                  data-testid={`elicit-${f.name}`}
-                  checked={values[f.name] === true}
-                  onChange={(e) => setField(f.name, e.target.checked)}
-                />
+                <input type="checkbox" data-testid={`elicit-${f.name}`} checked={values[f.name] === true} onChange={(e) => setField(f.name, e.target.checked)} />
                 <span>{f.title || f.description || f.name}</span>
               </label>
             ) : f.enum && f.enum.length > 0 ? (
               <>
                 {(f.title || f.description) && <div className="elicit-label">{f.title || f.description}</div>}
-                <select
-                  className="elicit-select"
-                  data-testid={`elicit-${f.name}`}
-                  value={String(values[f.name] ?? "")}
-                  onChange={(e) => setField(f.name, e.target.value)}
-                >
+                <select className="elicit-select" data-testid={`elicit-${f.name}`} value={String(values[f.name] ?? "")} onChange={(e) => setField(f.name, e.target.value)}>
                   {f.enum.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                 </select>
               </>
             ) : (
               <>
                 {(f.title || f.description) && <div className="elicit-label">{f.title || f.description}</div>}
-                <input
-                  className="elicit-input"
-                  type="text"
-                  data-testid={`elicit-${f.name}`}
-                  placeholder={f.description || ""}
-                  value={String(values[f.name] ?? "")}
-                  onChange={(e) => setField(f.name, e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-                />
+                <input className="elicit-input" type="text" data-testid={`elicit-${f.name}`} placeholder={f.description || ""} value={String(values[f.name] ?? "")} onChange={(e) => setField(f.name, e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
               </>
             )}
           </div>
         ))}
       </div>
-      <div className="permission-actions">
-        <button className="perm-btn perm-allow" data-testid="elicit-accept" onClick={submit}>{t("chat.elicitAccept")}</button>
-        <button className="perm-btn perm-deny" data-testid="elicit-decline" onClick={() => onRespond("decline", {})}>{t("chat.elicitDecline")}</button>
-        <button className="perm-btn perm-deny" data-testid="elicit-cancel" onClick={() => onRespond("cancel", {})}>{t("chat.elicitCancel")}</button>
+      <div className="elicit-actions">
+        <button className="elicit-btn elicit-submit" data-testid="elicit-accept" onClick={submit}>{t("chat.elicitAccept")}</button>
+        <button className="elicit-btn elicit-skip" data-testid="elicit-decline" onClick={() => onRespond("decline", {})}>{t("chat.elicitSkip")}</button>
       </div>
     </div>
   );

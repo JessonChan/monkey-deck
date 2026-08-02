@@ -86,3 +86,44 @@ omp 约定:select/confirm/input 都包装成 `{type:object, properties:{value:<s
   可给 omp 提 issue / PR(根因在 `acp-agent.ts:392` select 返 undefined 时 review 未回退 headless)。
 - elicitation 超时降级用 decline(不是 cancel):decline 更中性,让 harness 优雅降级;cancel 可能被
   harness 当作"用户中止 turn"。omp 实测 decline 后命令直接结束(无副作用)。
+
+## Review 修正(同 commit 序列,design-verdict: approve-with-changes)
+
+外部 review 三点全中(已全部实测验证后修):
+
+1. **major · 卡片放错容器**:ElicitationCard 原挂在 `.cv-tail`(虚拟滚动 `.chat-content` 内,随消息滚),
+   向上翻阅时阻塞交互卡片滚出视口、与普通消息气泡混排、无「agent 在等你」强提示。
+   **修法(方案 A)**:移出 `.chat-body`,作为 `.chat-header` 与 `.chat-body` 之间的固定兄弟节点
+   `.elicit-bar`(`.chat-view` 是 flex column,`chat-body` flex:1,插入 flex 子节点天然占内容高,
+   空时零高)。独立 CSS(不再复用 `.permission-card` —— 语义不同:权限=二选一放行,elicitation=填表提交)。
+   omp 单字段 value(select/confirm)走紧凑单行布局;多字段走竖排表单。
+   Composer 内联(方案 B)留作 follow-up。
+
+2. **minor · 图标/按钮语义混淆**:头部原用 `Sparkles`(与 agent 消息头像 line 727 同图标,无法一眼区分
+   「agent 发言」vs「agent 请求输入」)→ 换 `ListChecks`(已 import,语义更近「待填项」)。
+   decline/cancel 原都红色 `perm-deny` 但语义不同(decline=让 harness 优雅降级继续、cancel=中止本轮)
+   → 精简为两按钮:提交(accept,主,accent)+ 跳过(decline,次,muted 描边)。cancel 等价 Stop 按钮
+   (turn 进行中始终可用),不在此重复暴露。
+
+3. **minor · 超时后卡片残留**:后端超时/ctx 取消分支只 removePendingElicit 返 decline,**不通知前端**
+   → 卡片最多残留 permTTL=5min;期间点击后端报 no pending、前端 await 无 try/catch 静默吞掉。
+   **修法**:后端加 `OnElicitationResolved` 回调 + `EventElicitationResolved`(`chat:elicitation-resolved`,
+   payload `{sessionId,id}`),在「无用户操作」终结(超时/ctx 取消)时推;用户正常响应路径不触发(前端已
+   乐观清卡)。前端 listen 后按 id 清对应卡片;`respondElicitation` 包 try/catch(与 resolved 竞态时撞
+   no pending 不抛 unhandled)。
+
+### Review 修正改了哪些文件
+
+- 后端:`internal/acp/handler.go`(加 `OnElicitationResolved` 字段)、`internal/acp/elicitation.go`
+  (timeout/cancel 分支调 `notifyElicitationResolved`)、`internal/chat/chat.go`(`EventElicitationResolved`
+  常量 + startLive 注入回调)。
+- 前端:`frontend/src/components/ChatView.tsx`(ElicitationCard 移到固定 `.elicit-bar` + 重写组件:
+  ListChecks/紧凑单行/两按钮)、`frontend/src/App.tsx`(listen resolved + try/catch)、
+  `frontend/src/index.css`(`.elicit-bar` 独立样式,删旧的复用 permission 上下文的 `.elicit-*`)、
+  `frontend/src/i18n/locales/{zh,en}.json`(`elicitDecline`/`elicitCancel` → `elicitSkip`)。
+
+### Review 修正验证
+
+- `go build . ./internal/...` + `go test ./internal/...` 全绿(15 包);`bun run tsc --noEmit` 0 error。
+- `bun run test`:7 fail 全是既有(ChatView 虚拟化/NewSessionModal/msgmeta),与本变更无关。
+- [OPEN] server 模式浏览器实测新的固定栏布局 + 紧凑单行渲染留作下次。

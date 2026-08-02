@@ -443,6 +443,12 @@ export default function App() {
         setElicitationBySession((prev) => ({ ...prev, [e.data.sessionId]: e.data }));
       }
     });
+    // 后端在「无用户操作」终结(超时降级 decline / ctx 取消)时推 resolved:清残留卡片,
+    // 否则卡片最多残留 permTTL=5min,期间点击后端报 no pending(见 respondElicitation 的 try/catch)。
+    const offElicitResolved = Events.On("chat:elicitation-resolved", (e: { data: { sessionId: string; id: string } }) => {
+      if (!e.data) return;
+      setElicitationBySession((prev) => (prev[e.data.sessionId]?.id === e.data.id ? { ...prev, [e.data.sessionId]: null } : prev));
+    });
     const offStatus = Events.On("chat:status", (e: { data: StatusPayload }) => {
       const s = e.data;
       if (!s) return;
@@ -559,6 +565,7 @@ export default function App() {
       offUpdate();
       offPerm();
       offElicit();
+      offElicitResolved();
       offStatus();
       offMeta();
       offHarnesses();
@@ -1098,7 +1105,13 @@ export default function App() {
       const elicit = elicitationBySession[selectedSessionId];
       if (!elicit) return;
       setElicitationBySession((prev) => ({ ...prev, [selectedSessionId]: null }));
-      await ChatService.RespondElicitation(selectedSessionId, elicit.id, action, action === "accept" ? JSON.stringify(content) : "");
+      // try/catch:卡片可能已因后端超时降级被 resolved 事件清掉,但本回调与 resolved 竞态时
+      // 仍可能撞 no pending。失败不抛 unhandled —— 卡片已乐观清,用户无感(§5.3 尊重数据源)。
+      try {
+        await ChatService.RespondElicitation(selectedSessionId, elicit.id, action, action === "accept" ? JSON.stringify(content) : "");
+      } catch (err) {
+        console.warn("RespondElicitation failed (likely already auto-resolved)", err);
+      }
     },
     [selectedSessionId, elicitationBySession]
   );

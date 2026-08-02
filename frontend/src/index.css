@@ -899,17 +899,38 @@ input, textarea { font-family: inherit; }
 .perm-allow { background: var(--green); color: #042b12; }
 .perm-deny { background: var(--elev); color: var(--red); border-color: var(--sep); }
 
-/* Elicitation form (ACP v1 standard protocol): string input / enum select / boolean checkbox. */
-.elicit-fields { display: flex; flex-direction: column; gap: 10px; margin: 10px 0; }
+/* Elicitation bar (ACP v1 standard protocol): fixed between header and chat-body,
+   out of scroll stream. Independent from permission-card (different semantics).
+   Single-field (omp select/confirm) = compact one-row; multi-field = vertical form. */
+.elicit-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 16px; border-bottom: 1px solid var(--sep);
+  background: var(--elev); font-size: 13px;
+}
+.elicit-bar-multi { flex-direction: column; align-items: stretch; gap: 8px; }
+.elicit-head { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.elicit-icon { color: var(--accent); flex-shrink: 0; }
+.elicit-msg { font-weight: 500; color: var(--fg); }
+.elicit-control { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 180px; }
+.elicit-fields { display: flex; flex-direction: column; gap: 10px; }
 .elicit-field { display: flex; flex-direction: column; gap: 4px; }
 .elicit-label { font-size: 12.5px; color: var(--fg-muted); }
 .elicit-input, .elicit-select {
-  font-size: 13px; padding: 7px 10px; border-radius: var(--r-sm);
+  font-size: 13px; padding: 6px 10px; border-radius: var(--r-sm);
   background: var(--bg); color: var(--fg); border: 1px solid var(--sep);
+  min-width: 0; flex: 1;
 }
 .elicit-input:focus, .elicit-select:focus { outline: none; border-color: var(--accent); }
-.elicit-bool { display: flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; }
+.elicit-bool { display: flex; align-items: center; gap: 7px; cursor: pointer; }
 .elicit-bool input { width: 15px; height: 15px; accent-color: var(--accent); }
+.elicit-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.elicit-btn {
+  font-size: 12.5px; padding: 6px 16px; border-radius: var(--r-sm); font-weight: 500;
+  border: 1px solid transparent; transition: filter 0.1s; cursor: pointer;
+}
+.elicit-btn:hover { filter: brightness(1.1); }
+.elicit-submit { background: var(--accent); color: #fff; }
+.elicit-skip { background: transparent; color: var(--fg-muted); border-color: var(--sep); }
 
 .typing-indicator { max-width: 1080px; margin: 0 auto; padding: 4px 67px; display: flex; gap: 4px; }
 .typing-indicator span {

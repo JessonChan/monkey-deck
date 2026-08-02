@@ -86,6 +86,7 @@ func (h *Handler) UnstableCreateElicitation(ctx context.Context, req acp.Unstabl
 		return elicitResponseToSDK(resp), nil
 	case <-ctx.Done():
 		h.removePendingElicit(id)
+		h.notifyElicitationResolved(id)
 		slog.Warn("elicitation cancelled by context", "id", id, "err", ctx.Err())
 		return acp.UnstableCreateElicitationResponse{
 			Cancel: &acp.UnstableCreateElicitationCancel{Action: "cancel"},
@@ -94,11 +95,26 @@ func (h *Handler) UnstableCreateElicitation(ctx context.Context, req acp.Unstabl
 		// 超时降级:decline(让 harness 优雅降级,如 omp review 走 undefined 后整体返空;
 		// 比 cancel 更中性 —— cancel 可能被 harness 当作"用户中止 turn")。
 		h.removePendingElicit(id)
+		h.notifyElicitationResolved(id)
 		slog.Warn("elicitation timed out, degrade to decline", "id", id)
 		return acp.UnstableCreateElicitationResponse{
 			Decline: &acp.UnstableCreateElicitationDecline{Action: "decline"},
 		}, nil
 	}
+}
+
+// notifyElicitationResolved 在「无用户操作」终结(超时/ctx 取消)时通知前端清残留卡片。
+// 用户正常响应路径不调本方法(前端已乐观清卡)。OnElicitationResolved 为 nil 时 no-op(handler 单测)。
+func (h *Handler) notifyElicitationResolved(id string) {
+	if h.OnElicitationResolved == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("elicitation resolved notify panic recovered", "id", id, "panic", r)
+		}
+	}()
+	h.OnElicitationResolved(id)
 }
 
 // dispatchElicitation 通知前端弹窗(service → Wails3 event),带 panic 恢复(同 dispatchPrompt)。

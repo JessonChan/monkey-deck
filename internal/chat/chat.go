@@ -38,6 +38,9 @@ const (
 	EventUpdate      = "chat:event"        // SessionEvent(流式 chunk / tool / usage)
 	EventPermission  = "chat:permission"   // PermissionPrompt(需用户裁决)
 	EventElicitation = "chat:elicitation"  // ElicitationPrompt(需用户填表单/选择,ACP v1 标准协议)
+	// EventElicitationResolved:一次 elicitation 在「无用户操作」下被终结(超时降级 decline /
+	// ctx 取消)。前端据此清残留卡片 —— 否则卡片最多残留 permTTL,期间点击后端报 no pending。
+	EventElicitationResolved = "chat:elicitation-resolved"
 	EventStatus      = "chat:status"       // StatusPayload(会话状态:started/prompting/idle/error/closed)
 	EventSessionMeta = "chat:session-meta" // SessionMetaPayload(标题等元信息更新)
 	EventHarnesses   = "chat:harnesses"    // harness 发现/版本变更(前端据此重拉 ListHarnesses)
@@ -1426,6 +1429,13 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 		e.SessionID = se.ID // 对齐到 db sessionID(同 onPermission)
 		s.emit(EventElicitation, e)
 	}
+	onElicitationResolved := func(id string) {
+		// 超时/ctx 取消时清前端残留卡片(用户正常响应走乐观清卡,不经此路)。
+		s.emit(EventElicitationResolved, struct {
+			SessionID string `json:"sessionId"`
+			ID        string `json:"id"`
+		}{SessionID: se.ID, ID: id})
+	}
 
 	// harness 生命周期挂到 s.ctx(随应用退出);运行期不独立 cancel ——
 	// 关闭 session 走 Close()(kill 进程组),停止单轮走 turnCancel(干净 session/cancel)。
@@ -1458,6 +1468,7 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 	// 注册「全局允许」回调:用户在某 session 选 onRespond("global") 时,handler 把当前请求
 	// 固化成的准确匹配 allow 规则交回 service 持久化进 DB + 刷新全部活跃 session(跨 session/project 全局生效,§3.4)。
 	chat.Handler.OnGlobalRule = s.persistGlobalPermissionRule
+	chat.Handler.OnElicitationResolved = onElicitationResolved
 
 	s.mu.Lock()
 	s.active[se.ID] = ls

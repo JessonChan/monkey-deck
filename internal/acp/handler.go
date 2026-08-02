@@ -202,6 +202,11 @@ type Handler struct {
 	// 响应 → service 调 RespondElicitation → 唤醒等待的 UnstableCreateElicitation。
 	// 场景:omp /review 选 review 模式、/fast on|off 确认 等(类比 §3.4 权限裁决,桌面有人在场)。
 	OnElicitation func(ElicitationPrompt)
+	// OnElicitationResolved:当一次 elicitation 在「无用户操作」下被终结(超时降级 decline /
+	// ctx 取消 cancel)时回调 service,由 service 推 chat:elicitation-resolved 让前端清掉残留
+	// 卡片(否则卡片最多残留 permTTL=5min,期间点击后端报 no pending,前端无反馈)。
+	// 用户正常响应(RespondElicitation)不触发本回调 —— 前端已乐观清卡。
+	OnElicitationResolved func(id string)
 	// OnGlobalRule:用户选「全局允许」(RespondPermission 传 "global")时回调 service,
 	// 把由当前请求固化出的「准确匹配」allow 规则(permissions.ExactMatchRule)交由 service
 	// 持久化进 DB + 刷新全部活跃 session 的规则快照(跨 session/project 全局生效,§3.4)。
