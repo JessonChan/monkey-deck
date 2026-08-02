@@ -104,6 +104,9 @@ export default function App() {
   const [permissionBySession, setPermissionBySession] = useState<Record<string, PermissionPrompt | null>>({});
   const [elicitationBySession, setElicitationBySession] = useState<Record<string, ElicitationPrompt | null>>({});
   const [error, setError] = useState<string | null>(null);
+  // notice:非异常的温和提示(如 empty-turn:本轮无输出,但连接正常)。与 error 分开:
+  // 蓝色而非红色,语义是「提示」不是「出错」。只对当前查看的 session 显示(同 error)。
+  const [notice, setNotice] = useState<string | null>(null);
   const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({});  // 前端 FIFO 队列(按 session 隔离,切走保留)
   const [draftBySession, setDraftBySession] = useState<Record<string, string>>({});  // composer 草稿(按 session 隔离,切走保留)
   const [historyBySession, setHistoryBySession] = useState<Record<string, string[]>>({});  // 输入框历史(上下键翻):按 session 隔离,seed 自 DB + 每次发送追加
@@ -374,7 +377,7 @@ export default function App() {
     setQueueBySession(queueBySessionRef.current);
     // error 条只对当前查看的 session 弹(后台 session 续发失败不打扰用户视图)。
     const isViewing = sid === selectedSessionIdRef.current;
-    if (isViewing) setError(null);
+    if (isViewing) { setError(null); setNotice(null); }
     setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
     try {
       await ChatService.SendMessage(sid, next.text, buildAttachments(next.mentions, next.images, next.audios));
@@ -483,6 +486,12 @@ export default function App() {
       // 有 code 时按 code 经 i18n 翻译(harness 断连等稳定文案);否则用 detail;最后兜底。
       if (s.status === "error" && s.sessionId === selectedSessionIdRef.current && !poppedSessionIdsRef.current.has(s.sessionId)) {
         setError(s.code ? t(`chat.error.${s.code}`) : (s.detail || t("app.errorFallback")));
+      }
+      // notice(温和提示):非异常的零输出等,蓝色提示条。同 error 的 session/popup 门控。
+      // code 经 i18n 翻译(chat.notice.*),detail 兜底。
+      if (s.status === "notice" && s.sessionId === selectedSessionIdRef.current && !poppedSessionIdsRef.current.has(s.sessionId)) {
+        setNotice(s.code ? t(`chat.notice.${s.code}`) : (s.detail || ""));
+        setError(null); // 清掉可能的旧 error,避免两条叠显
       }
       // 回合结束:清掉该 session 最后 agent/thought 的 streaming 标志(去光标 + 显复制按钮);
       // 同时把残留的中间态 tool(in_progress/pending)收口到终态 —— Prompt 正常返回(idle)
@@ -737,7 +746,7 @@ export default function App() {
       if (!isPopout) setOpenTabs((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
       setUnreadBySession((prev) => { if (!prev[sessionId]) return prev; const n = { ...prev }; delete n[sessionId]; return n; });
       userStoppedBySessionRef.current.delete(sessionId);
-      setError(null);
+      setError(null); setNotice(null);
       await ChatService.OpenSession(sessionId);
       // 从持久化的 session 用量恢复 token 占比(无 live 记录时),使重开会话不归零(§1.6)。
       const se = (pid ? sessionsByProject[pid] : undefined)?.find((x) => x.id === sessionId);
@@ -1771,6 +1780,7 @@ export default function App() {
               usage={usage}
               branch={branchBySession[selectedSessionId] || activeSession?.branch || ""}
               error={error}
+              notice={notice}
               permission={permission}
               elicitation={elicitation}
               onSend={sendMessage}

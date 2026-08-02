@@ -30,6 +30,8 @@ interface Props {
   usage: Usage;
   branch: string;  // 透传给 Composer(空则不显示)
   error: string | null;
+  // notice:非异常温和提示(蓝色条,如 empty-turn:本轮无输出)。与 error(红色)分开渲染。
+  notice: string | null;
   permission: PermissionPrompt | null;
   elicitation: ElicitationPrompt | null;
   mergeResult: string | null;
@@ -654,6 +656,11 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         <div className="error-bar">
           <span className="error-bar-msg">⚠ {props.error}</span>
           <CopyIconButton text={props.error || ""} />
+        </div>
+      )}
+      {props.notice && (
+        <div className="notice-bar">
+          <span className="notice-bar-msg">ℹ {props.notice}</span>
         </div>
       )}
       {props.mergeResult && (

@@ -35,17 +35,18 @@ func TestEmptyTurnDetectedAsError(t *testing.T) {
 	waitStarted(t, fc, 1)
 	fc.release()
 
-	// 等 runPrompt 收尾(跳过中间 prompting,等终态 error/idle)。
+	// 等 runPrompt 收尾(跳过中间 prompting,等终态 notice/idle)。
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && (lastPayload.Status == "" || lastPayload.Status == "prompting") {
 		time.Sleep(2 * time.Millisecond)
 	}
-	if lastPayload.Status != "error" {
-		t.Fatalf("empty turn should emit error, got status=%q", lastPayload.Status)
+	// 非异常的零输出 end_turn 推 notice(温和提示,前端蓝色条),不推 error(红色,吓人)。
+	if lastPayload.Status != "notice" {
+		t.Fatalf("empty turn should emit notice (gentle, not error), got status=%q", lastPayload.Status)
 	}
 	// Code 驱动:i18n 翻译键必须是稳定 code,而非中文 Detail(§4.4 / §5.3)。
 	if lastPayload.Code != ErrCodeHarnessEmptyTurn {
-		t.Fatalf("empty turn error Code=%q, want %q (回退中文 Detail 会导致英文 locale 看到 i18n 回归)",
+		t.Fatalf("empty turn notice Code=%q, want %q (回退中文 Detail 会导致英文 locale 看到 i18n 回归)",
 			lastPayload.Code, ErrCodeHarnessEmptyTurn)
 	}
 	if lastPayload.Detail != "" {

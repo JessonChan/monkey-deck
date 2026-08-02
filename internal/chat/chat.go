@@ -2099,8 +2099,11 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 			s.emitStatus(sessionID, "idle", "elicit-declined")
 			return
 		}
+		// 非异常的零输出 end_turn(connection 没坏,只是这轮没产出):推 notice 状态而非 error。
+		// 前端用温和颜色(蓝/黄)渲染,不吓人。常见场景:omp /review 选了无 diff 的 base、
+		// interactive 命令在 headless 无产出等。i18n 文案见 chat.notice.*(注意不是 chat.error.*)。
 		slog.Warn("prompt empty turn", "session", sessionID, "stopReason", stopReason)
-		s.emitError(sessionID, ErrCodeHarnessEmptyTurn)
+		s.emit(EventStatus, StatusPayload{SessionID: sessionID, Status: "notice", Code: ErrCodeHarnessEmptyTurn})
 		return
 	}
 	// 非空 turn 也清(防 decline 标志跨 turn 残留:用户 decline 后 agent 仍可能产出内容)。
