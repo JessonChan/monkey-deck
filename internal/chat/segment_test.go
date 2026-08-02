@@ -166,3 +166,31 @@ func TestSegmentFallbackIsolatedFromMessageId(t *testing.T) {
 		t.Fatalf("segments not isolated: %+v", segs)
 	}
 }
+
+// TestSegmentFallbackToolCallUpdateNoBreak locks the deliberate behavior that a
+// tool_call_update does NOT break an in-progress fallback message stream. A late
+// async tool result arriving mid-stream (no new tool_call between chunks) must keep
+// the chunks merging — clearing fallbackRole on tool_call_update would wrongly split a
+// streaming message in two. Only tool_call (the announcement) is a hard boundary.
+func TestSegmentFallbackToolCallUpdateNoBreak(t *testing.T) {
+	svc, sessionID, _ := newTestService(t)
+	ls := svc.active[sessionID]
+
+	// Announce + complete a tool, then the agent streams a message.
+	svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "tool_call", ToolCallID: "t1", ToolTitle: "read", ToolStatus: "in_progress"})
+	svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "tool_call_update", ToolCallID: "t1", ToolStatus: "completed"})
+	svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "a"})
+	svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "b"})
+	// A late tool_call_update for the already-completed tool arrives mid-stream.
+	svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "tool_call_update", ToolCallID: "t1", ToolStatus: "completed"})
+	// The agent keeps streaming the same message — must merge, not split.
+	svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "c"})
+
+	ls.mu.Lock()
+	segs := ls.segmentEntries()
+	ls.mu.Unlock()
+
+	if len(segs) != 1 || segs[0].role != "agent" || segs[0].content != "abc" {
+		t.Fatalf("tool_call_update must not break the stream; want one agent segment %q, got %+v", "abc", segs)
+	}
+}

@@ -2177,7 +2177,7 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 		id := messageKey(ls, e.MessageID, role)
 		entry := ls.index[id]
 		if entry == nil || entry.kind != "message" || entry.role != role {
-			// 新 entry(messageId 变化 / role 变化 / 首条):归并中断,新开一条。
+			// New entry (messageId changed / role changed / first chunk): merge interrupted, start fresh.
 			entry = &turnEntry{id: id, kind: "message", role: role}
 			ls.appendEntry(entry)
 		}
