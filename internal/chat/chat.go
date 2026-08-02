@@ -59,7 +59,9 @@ type StatusPayload struct {
 const (
 	// ErrCodeHarnessDisconnected:harness 崩溃/断连或 Prompt 失败,连接已重置,正在/将自动重连。
 	ErrCodeHarnessDisconnected = "harness_disconnected"
-	// ErrCodeHarnessEmptyTurn:Prompt 成功返回但零输出(通常 resume 后 session 状态损坏),按错误处理并重连。
+	// ErrCodeHarnessEmptyTurn:Prompt 成功返回但零输出。end_turn 是协议合法返回,连接本身是好的,
+	// 故只提示、不 teardown、不重连 —— 让用户可见地知道「本轮 agent 没回应」,连接保留可继续操作
+	// (实测 omp /review 在无 elicitation 能力的 client 下命中:hasUI 误判 → 走交互菜单 → 静默空)。
 	ErrCodeHarnessEmptyTurn = "harness_empty_turn"
 	// ErrCodeHarnessReconnectFailed:断连后自动重连耗尽重试上限仍失败,需用户手动(发消息)触发再次尝试。
 	ErrCodeHarnessReconnectFailed = "harness_reconnect_failed"
@@ -2059,15 +2061,13 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 		s.startReconnect(sessionID)
 		return
 	}
-	// 空响应检测:Prompt 成功返回但零输出(timeline 空)——通常是 resume 后
-	// harness 内部 session 状态损坏(§5.4)。不静默当成功,否则用户发了消息没反应。
-	// 按 error 路径处理:拆连接 + 用户可见提示,下条消息走 ensureLive 重连。
+	// 空响应检测:Prompt 成功返回但零输出(timeline 空)。end_turn + 零输出是协议合法结果
+	// (实测 omp /review 在 client 无 elicitation 时命中),连接本身是好的 —— 只提示用户、不
+	// teardown、不重连,让用户可见地知道「本轮 agent 没回应」并保留连接供继续操作。原来一律
+	// teardown+重连是基于「空 turn = resume 损坏」的过强假设(§5.3:外部事实先验证 —— 已证伪)。
 	if len(timeline) == 0 {
-		s.teardownLive(sessionID, ls)
-		slog.Error("prompt empty turn", "session", sessionID, "stopReason", stopReason)
+		slog.Warn("prompt empty turn", "session", sessionID, "stopReason", stopReason)
 		s.emitError(sessionID, ErrCodeHarnessEmptyTurn)
-		// 空响应也是 harness 状态损坏的信号:尝试自动重连(新 harness + resume 可能恢复)。
-		s.startReconnect(sessionID)
 		return
 	}
 	// 取 harness 生成的权威标题覆盖兜底标题(§5.4 #14)。

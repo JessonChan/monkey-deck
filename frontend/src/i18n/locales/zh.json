@@ -266,7 +266,7 @@
     },
     "error": {
       "harness_disconnected": "agent 连接已重置,正在自动重连",
-      "harness_empty_turn": "agent 未产生响应,连接已重置,正在自动重连",
+      "harness_empty_turn": "本轮 agent 未产生响应(连接正常,可继续操作或换个指令重试)",
       "harness_reconnect_failed": "自动重连失败,请发送消息手动重试",
       "agent_turn_incomplete": "agent 这一轮未能正常结束(常见:所选模型当前不可用、被拒绝,或触上限)。连接正常——可直接重试,或在模型选择器里切换模型后再发。"
     }

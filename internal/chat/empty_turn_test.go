@@ -5,14 +5,16 @@ import (
 	"time"
 )
 
-// 回归(AGENTS.md §5.3):Prompt 成功返回但零输出(resume 后 harness 内部状态损坏)
-// 时,runPrompt 曾静默 emit idle → 用户发消息没反应。
-// 修复:检测空 turn(segments+tools 全空)→ teardown + emit error,下条消息自动重连。
+// 回归(AGENTS.md §5.3):Prompt 成功返回但零输出时,runPrompt 曾静默 emit idle → 用户发消息没反应。
+// 修复:检测空 turn(segments+tools 全空)→ emit error(用户可见提示)。
 //
 // 钉死 code 驱动分支(Task #21306 回归):error 状态必须携带稳定 Code
 // (ErrCodeHarnessEmptyTurn)且 Detail 留空 —— 不许回退到后端硬编码中文 Detail
 // (如 "agent 未产生响应…")。否则切英文 locale 用户仍看到中文文案(i18n 回归)。
 // 有人把 emitError 还原成 emitStatus("error", "<中文硬编码>"),本测试必须红。
+//
+// 2026-08-02 修正:不再 teardown/重连。end_turn + 零输出是协议合法结果(实测 omp /review 在
+// client 无 elicitation 时命中),连接本身是好的 —— 只提示、保留连接供用户继续操作。
 func TestEmptyTurnDetectedAsError(t *testing.T) {
 	svc, sessionID, fc := newTestService(t)
 
@@ -50,8 +52,9 @@ func TestEmptyTurnDetectedAsError(t *testing.T) {
 		t.Fatalf("empty turn error must carry Code with empty Detail (no hardcoded/raw text), got Detail=%q", lastPayload.Detail)
 	}
 
-	// session 应已被 teardown(active 中不应再有该 session)。
-	if svc.isActive(sessionID) {
-		t.Fatal("session should be torn down after empty turn")
+	// 连接必须保留(不 teardown):end_turn + 零输出是协议合法结果,连接本身是好的。
+	// 用户可见提示后可继续操作(发下条消息、换命令);原来一刀切 teardown+重连是过度反应。
+	if !svc.isActive(sessionID) {
+		t.Fatal("session must stay active after empty turn (connection preserved)")
 	}
 }
