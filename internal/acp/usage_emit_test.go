@@ -12,7 +12,7 @@ import (
 // 断言:明细字段正确填充、指针类型(*int)安全解引用、cost 携带最近 streaming 快照。
 func TestEmitTurnUsageForwardsBreakdown(t *testing.T) {
 	var got []SessionEvent
-	h := NewHandler("/work", func(e SessionEvent) { got = append(got, e) }, nil, 0)
+	h := NewHandler("/work", func(e SessionEvent) { got = append(got, e) }, nil, nil, 0)
 	// 模拟 streaming 阶段已收到一条 UsageUpdate(used/size/cost)。
 	h.lastUsed = 12000
 	h.lastSize = 200000
@@ -56,7 +56,7 @@ func TestEmitTurnUsageForwardsBreakdown(t *testing.T) {
 // TestEmitTurnUsageNilSafe:nil handler / nil OnEvent / nil usage 不 panic(零值安全)。
 func TestEmitTurnUsageNilSafe(t *testing.T) {
 	t.Run("nil usage", func(t *testing.T) {
-		h := NewHandler("/work", func(SessionEvent) {}, nil, 0)
+		h := NewHandler("/work", func(SessionEvent) {}, nil, nil, 0)
 		h.EmitTurnUsage("s", nil) // 不应 panic
 	})
 	t.Run("nil handler", func(t *testing.T) {
@@ -69,7 +69,7 @@ func TestEmitTurnUsageNilSafe(t *testing.T) {
 // 记录到 handler,供后续 EmitTurnUsage 携带转发(否则前端用 0 覆盖占比)。
 func TestSessionUpdateTracksStreamingUsage(t *testing.T) {
 	var events []SessionEvent
-	h := NewHandler("/work", func(e SessionEvent) { events = append(events, e) }, nil, 0)
+	h := NewHandler("/work", func(e SessionEvent) { events = append(events, e) }, nil, nil, 0)
 	// 发一条 streaming UsageUpdate。
 	_ = h.SessionUpdate(context.Background(), acp.SessionNotification{
 		SessionId: "sess-1",

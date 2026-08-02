@@ -110,14 +110,15 @@ type ChatSession struct {
 
 // NewChatSession 创建持久对话 session:spawn harness → initialize → newSession(cwd=workDir)。
 // onEvent 接收每条扁平化的 SessionUpdate(→ 前端流式渲染);
-// onPermission 接收权限裁决提示(→ 前端弹窗,§3.4)。调用方负责 Close()。
+// onPermission 接收权限裁决提示(→ 前端弹窗,§3.4);
+// onElicitation 接收 elicitation 提示(→ 前端弹窗,ACP v1 标准协议)。调用方负责 Close()。
 //
 // mcps 是该 session 选中的 MCP server(catalog 子集);按 Initialize 协商的 mcpCapability
 // 转成 ACP 线格式注入 session/new。stdio 免协商,http/sse 不被支持则丢弃并告警。严格 harness
 // (如 OMP)任一 server 连接失败会让 NewSession 整个失败——上层据此在 NewSessionModal 原样展示
 // 报错,用户取消勾选可疑 server 后重试(本次不选,catalog 不动)。
-func (r *Runner) NewChatSession(ctx context.Context, workDir string, mcps []store.McpServer, onEvent func(SessionEvent), onPermission func(PermissionPrompt)) (*ChatSession, error) {
-	handler := NewHandler(workDir, onEvent, onPermission, 0)
+func (r *Runner) NewChatSession(ctx context.Context, workDir string, mcps []store.McpServer, onEvent func(SessionEvent), onPermission func(PermissionPrompt), onElicitation func(ElicitationPrompt)) (*ChatSession, error) {
+	handler := NewHandler(workDir, onEvent, onPermission, onElicitation, 0)
 	proc, conn, initResp, err := r.spawnAndInit(ctx, workDir, handler)
 	if err != nil {
 		return nil, err
@@ -147,8 +148,8 @@ func (r *Runner) NewChatSession(ctx context.Context, workDir string, mcps []stor
 
 // LoadChatSession 恢复已有 session:spawn harness → initialize → loadSession(resume)(§1.4)。
 // 用于应用重启后恢复对话上下文(Cwd 必须匹配原 session)。
-func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string, mcps []store.McpServer, onEvent func(SessionEvent), onPermission func(PermissionPrompt)) (*ChatSession, error) {
-	handler := NewHandler(workDir, onEvent, onPermission, 0)
+func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string, mcps []store.McpServer, onEvent func(SessionEvent), onPermission func(PermissionPrompt), onElicitation func(ElicitationPrompt)) (*ChatSession, error) {
+	handler := NewHandler(workDir, onEvent, onPermission, onElicitation, 0)
 	proc, conn, initResp, err := r.spawnAndInit(ctx, workDir, handler)
 	if err != nil {
 		return nil, err
@@ -244,6 +245,12 @@ func (r *Runner) spawnAndInit(ctx context.Context, workDir string, handler *Hand
 			Fs: acp.FileSystemCapabilities{
 				ReadTextFile:  true,
 				WriteTextFile: true,
+			},
+			// Elicitation(ACP v1 标准协议,SDK 标 UNSTABLE):声明 form 能力,让 harness(如 omp)
+			// 把 interactive 命令(/review 选模式、/fast 确认)桥接成 elicitation/create → 前端弹窗。
+			// 不声明时 omp 的 select/confirm/input 返 undefined → 命令静默空(§5.4 #12)。
+			Elicitation: &acp.ElicitationCapabilities{
+				Form: &acp.ElicitationFormCapabilities{},
 			},
 		},
 	})
@@ -379,6 +386,11 @@ func (cs *ChatSession) RespondPermission(id, optionID string) bool {
 	return cs.Handler.RespondPermission(id, optionID)
 }
 
+// RespondElicitation 透传给 handler(前端用户响应 elicitation 提示,ACP v1 标准协议)。
+func (cs *ChatSession) RespondElicitation(id string, resp ElicitationResponse) bool {
+	return cs.Handler.RespondElicitation(id, resp)
+}
+
 // SetPermissionRules 更新该 session 的分级权限规则快照(§3.4)。透传给 handler。
 func (cs *ChatSession) SetPermissionRules(rules []permissions.Rule) {
 	cs.Handler.SetPermissionRules(rules)
@@ -483,7 +495,7 @@ func (cs *ChatSession) SupportsEmbeddedContext() bool {
 //
 // 成功后覆盖 cs.ConfigOptions / cs.PromptCapabilities 为最新全量,返回扁平化结果。
 func (cs *ChatSession) RefreshConfig(ctx context.Context) ([]ConfigOption, error) {
-	handler := NewHandler(cs.WorkDir, func(SessionEvent) {}, func(PermissionPrompt) {}, 0)
+	handler := NewHandler(cs.WorkDir, func(SessionEvent) {}, func(PermissionPrompt) {}, nil, 0)
 	proc, conn, initResp, err := cs.Runner.spawnAndInit(ctx, cs.WorkDir, handler)
 	if err != nil {
 		return nil, fmt.Errorf("refresh config: spawn probe: %w", err)

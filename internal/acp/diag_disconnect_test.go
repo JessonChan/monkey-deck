@@ -33,7 +33,7 @@ func TestDiagDisconnectReason(t *testing.T) {
 
 	cmd, stdin, stdout := spawnWithLogs(t, ctx, cwd, stderrBuf)
 	defer cmd.Process.Kill()
-	handler := &Handler{WorkDir: cwd, OnEvent: func(SessionEvent) {}, pending: map[string]*pendingPermission{}, permTTL: 5 * time.Minute}
+	handler := &Handler{WorkDir: cwd, OnEvent: func(SessionEvent) {}, pending: map[string]*pendingPermission{}, pendingElicit: map[string]*pendingElicitation{}, permTTL: 5 * time.Minute}
 	conn := acp.NewClientSideConnection(handler, stdin, stdout)
 	if _, err := conn.Initialize(ctx, acp.InitializeRequest{ProtocolVersion: acp.ProtocolVersionNumber, ClientCapabilities: acp.ClientCapabilities{Fs: acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true}}}); err != nil {
 		t.Fatalf("init: %v", err)

@@ -32,6 +32,7 @@ func (m *mockChatConn) Prompt(ctx context.Context, message string, attachments [
 func (m *mockChatConn) Close()                                                            { m.closed.Store(true) }
 func (m *mockChatConn) IsAlive() bool                                                     { return !m.closed.Load() }
 func (m *mockChatConn) RespondPermission(id, optionID string) bool                        { return false }
+func (m *mockChatConn) RespondElicitation(id string, resp acp.ElicitationResponse) bool   { return false }
 func (m *mockChatConn) SessionTitle(ctx context.Context) (string, error)                  { return "", nil }
 func (m *mockChatConn) FlatConfigOptions() []acp.ConfigOption                             { return nil }
 func (m *mockChatConn) SupportsImage() bool                                               { return false }

@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, ConfigOption, PermissionPrompt, StatusPayload, QueueItem, Mention, ImageAttachment, AudioAttachment, PlanEntry, LivePlan, Usage, SlashCommand } from "../types";
+import type { ChatItem, ConfigOption, PermissionPrompt, ElicitationPrompt, StatusPayload, QueueItem, Mention, ImageAttachment, AudioAttachment, PlanEntry, LivePlan, Usage, SlashCommand } from "../types";
 import Composer from "./Composer";
 import McpChip from "./McpChip";
 import QueuePanel from "./QueuePanel";
@@ -31,6 +31,7 @@ interface Props {
   branch: string;  // 透传给 Composer(空则不显示)
   error: string | null;
   permission: PermissionPrompt | null;
+  elicitation: ElicitationPrompt | null;
   mergeResult: string | null;
   sessionDiff: string | null;
   onSend: (text: string, mentions: Mention[], images?: ImageAttachment[], audios?: AudioAttachment[]) => void;
@@ -38,6 +39,7 @@ interface Props {
   onStop: () => void;
   onContinue: () => void;
   onRespondPermission: (optionId: string) => void;
+  onRespondElicitation: (action: "accept" | "decline" | "cancel", content: Record<string, unknown>) => void;
   onToggleTerminal: () => void;
   onRefreshConfig: () => void;
   onMerge: () => void;
@@ -599,6 +601,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           {/* 尾部区:权限卡 + 实时 plan + 打字指示。实测高度 tailHRef(data-iid=__tail__)。 */}
           <div className="cv-tail" data-iid="__tail__" style={{ top: layout.tailTop }}>
             {props.permission && <PermissionCard prompt={props.permission} onRespond={props.onRespondPermission} />}
+            {props.elicitation && <ElicitationCard prompt={props.elicitation} onRespond={props.onRespondElicitation} />}
             {/* 当前 turn 的实时 plan(进行中,带 spinner)。turn 结束后由 App.tsx 转为持久化
                 type:'plan' ChatItem 内联渲染在 items 里(无 spinner 的静态展示)。 */}
             {props.livePlan && props.livePlan.entries.length > 0 && (
@@ -1432,6 +1435,82 @@ function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRes
         <button className="perm-btn perm-allow" data-testid="perm-project" onClick={() => onRespond("project")}>{t("chat.permAllowProject")}</button>
         <button className="perm-btn perm-allow" data-testid="perm-global" onClick={() => onRespond("global")}>{t("chat.permAllowGlobal")}</button>
         <button className="perm-btn perm-deny" data-testid="perm-deny" onClick={() => onRespond("deny")}>{t("chat.permDeny")}</button>
+      </div>
+    </div>
+  );
+}
+
+// ElicitationCard:ACP elicitation/create 的前端表单(协议 v1 标准,SDK 标 UNSTABLE)。
+// harness(如 omp /review、/fast confirm)请求结构化用户输入;桌面有人在场,弹表单给用户填。
+// 按 field.type 渲染:string→input、string+enum→select、boolean→checkbox。accept 提交,decline/cancel 退出。
+function ElicitationCard({ prompt, onRespond }: { prompt: ElicitationPrompt; onRespond: (action: "accept" | "decline" | "cancel", content: Record<string, unknown>) => void }) {
+  const { t } = useTranslation();
+  // 本地表单状态:每个字段的当前值。string 默认取 field.default 或枚举首项;boolean 默认 false。
+  const [values, setValues] = useState<Record<string, unknown>>(() => {
+    const init: Record<string, unknown> = {};
+    for (const f of prompt.fields) {
+      if (f.type === "boolean") init[f.name] = false;
+      else if (f.enum && f.enum.length > 0) init[f.name] = f.default || f.enum[0];
+      else init[f.name] = f.default || "";
+    }
+    return init;
+  });
+  const setField = (name: string, v: unknown) => setValues((prev) => ({ ...prev, [name]: v }));
+  const submit = () => onRespond("accept", values);
+
+  // 单字段且是 select/boolean 时,布局更紧凑(直接横排选项);多字段或 input 走竖排表单。
+  return (
+    <div className="permission-card elicitation-card" data-testid="elicitation-card">
+      <div className="permission-head">
+        <Sparkles size={18} />
+        <div className="permission-title">{prompt.message || t("chat.elicitationTitleFallback")}</div>
+      </div>
+      <div className="elicit-fields">
+        {prompt.fields.map((f) => (
+          <div key={f.name} className="elicit-field">
+            {f.type === "boolean" ? (
+              <label className="elicit-bool">
+                <input
+                  type="checkbox"
+                  data-testid={`elicit-${f.name}`}
+                  checked={values[f.name] === true}
+                  onChange={(e) => setField(f.name, e.target.checked)}
+                />
+                <span>{f.title || f.description || f.name}</span>
+              </label>
+            ) : f.enum && f.enum.length > 0 ? (
+              <>
+                {(f.title || f.description) && <div className="elicit-label">{f.title || f.description}</div>}
+                <select
+                  className="elicit-select"
+                  data-testid={`elicit-${f.name}`}
+                  value={String(values[f.name] ?? "")}
+                  onChange={(e) => setField(f.name, e.target.value)}
+                >
+                  {f.enum.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              </>
+            ) : (
+              <>
+                {(f.title || f.description) && <div className="elicit-label">{f.title || f.description}</div>}
+                <input
+                  className="elicit-input"
+                  type="text"
+                  data-testid={`elicit-${f.name}`}
+                  placeholder={f.description || ""}
+                  value={String(values[f.name] ?? "")}
+                  onChange={(e) => setField(f.name, e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+                />
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="permission-actions">
+        <button className="perm-btn perm-allow" data-testid="elicit-accept" onClick={submit}>{t("chat.elicitAccept")}</button>
+        <button className="perm-btn perm-deny" data-testid="elicit-decline" onClick={() => onRespond("decline", {})}>{t("chat.elicitDecline")}</button>
+        <button className="perm-btn perm-deny" data-testid="elicit-cancel" onClick={() => onRespond("cancel", {})}>{t("chat.elicitCancel")}</button>
       </div>
     </div>
   );

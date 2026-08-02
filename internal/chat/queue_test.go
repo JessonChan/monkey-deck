@@ -80,6 +80,7 @@ func (f *fakeChat) Prompt(ctx context.Context, msg string, _ []acp.Attachment) (
 func (f *fakeChat) Close()                                         {}
 func (f *fakeChat) IsAlive() bool                                  { return f.alive.Load() }
 func (f *fakeChat) RespondPermission(_, _ string) bool             { return true }
+func (f *fakeChat) RespondElicitation(_ string, _ acp.ElicitationResponse) bool { return true }
 func (f *fakeChat) SessionTitle(_ context.Context) (string, error) { return f.title, nil }
 func (f *fakeChat) FlatConfigOptions() []acp.ConfigOption          { return nil }
 func (f *fakeChat) SupportsImage() bool                            { return false }

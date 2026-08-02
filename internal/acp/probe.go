@@ -195,7 +195,7 @@ func ProbeHarness(ctx context.Context, command string) *ConformanceReport {
 			handler.RespondPermission(p.ID, p.Options[0].OptionID)
 		}
 	}
-	handler = NewHandler(workDir, onEvent, onPermission, 0)
+	handler = NewHandler(workDir, onEvent, onPermission, nil, 0)
 
 	// 1. spawn + Initialize。
 	initCtx, cancelInit := context.WithTimeout(ctx, probeInitTimeout)

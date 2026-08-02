@@ -4,7 +4,7 @@ import { Events } from "@wailsio/runtime";
 import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import * as TerminalService from "../bindings/github.com/jessonchan/monkey-deck/internal/terminal/terminalservice";
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, ConfigOption, PermissionPrompt, SessionEvent, StatusPayload, QueueItem, Mention, ImageAttachment, AudioAttachment, PlanEntry, LivePlan, Usage, SlashCommand } from "./types";
+import type { ChatItem, ConfigOption, PermissionPrompt, ElicitationPrompt, SessionEvent, StatusPayload, QueueItem, Mention, ImageAttachment, AudioAttachment, PlanEntry, LivePlan, Usage, SlashCommand } from "./types";
 import Sidebar from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import ChatView, { type ChatViewHandle } from "./components/ChatView";
@@ -102,6 +102,7 @@ export default function App() {
   const [activityBySession, setActivityBySession] = useState<Record<string, "thinking" | "executing" | "replying">>({});
   const [unreadBySession, setUnreadBySession] = useState<Record<string, boolean>>({});
   const [permissionBySession, setPermissionBySession] = useState<Record<string, PermissionPrompt | null>>({});
+  const [elicitationBySession, setElicitationBySession] = useState<Record<string, ElicitationPrompt | null>>({});
   const [error, setError] = useState<string | null>(null);
   const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({});  // 前端 FIFO 队列(按 session 隔离,切走保留)
   const [draftBySession, setDraftBySession] = useState<Record<string, string>>({});  // composer 草稿(按 session 隔离,切走保留)
@@ -295,6 +296,7 @@ export default function App() {
   useEffect(() => { statusRef.current = status; }, [status]);
   const statusDetail = (selectedSessionId ? statusDetailBySession[selectedSessionId] : undefined) ?? "";
   const permission = (selectedSessionId ? permissionBySession[selectedSessionId] : undefined) ?? null;
+  const elicitation = (selectedSessionId ? elicitationBySession[selectedSessionId] : undefined) ?? null;
   // 侧栏状态指示用:哪些 session 正有待决权限。openSession 不再清权限(原 316 行会清掉 →
   // 切回该 session 卡片消失、再也点不到,只能等 5 分钟超时),故待决权限跨切换保留,切回仍可见。
   const permPendingBySession = useMemo(
@@ -435,6 +437,12 @@ export default function App() {
         setPermissionBySession((prev) => ({ ...prev, [e.data.sessionId]: e.data }));
       }
     });
+    const offElicit = Events.On("chat:elicitation", (e: { data: ElicitationPrompt }) => {
+      // elicitation 同 permission:按 session 缓存,popout 不双弹。
+      if (e.data && !poppedSessionIdsRef.current.has(e.data.sessionId)) {
+        setElicitationBySession((prev) => ({ ...prev, [e.data.sessionId]: e.data }));
+      }
+    });
     const offStatus = Events.On("chat:status", (e: { data: StatusPayload }) => {
       const s = e.data;
       if (!s) return;
@@ -550,6 +558,7 @@ export default function App() {
     return () => {
       offUpdate();
       offPerm();
+      offElicit();
       offStatus();
       offMeta();
       offHarnesses();
@@ -578,6 +587,7 @@ export default function App() {
         if (typeof snap.draft === "string") setDraftBySession((prev) => ({ ...prev, [popoutMode]: snap.draft }));
         if (snap.livePlan) setLivePlanBySession((prev) => ({ ...prev, [popoutMode]: snap.livePlan }));
         if (snap.permission) setPermissionBySession((prev) => ({ ...prev, [popoutMode]: snap.permission }));
+        if (snap.elicitation) setElicitationBySession((prev) => ({ ...prev, [popoutMode]: snap.elicitation }));
         // 终端:恢复面板开关 + tab 列表 + active tab。tab.id 指向后端同一 PTY;
         // termRegistry 会为每个 id 新建 xterm(独立 JS 上下文),订阅同一 terminal:data。
         // scrollback 历史:TerminalView mount → useTerminal → acquireTerminal 时由 ring buffer replay
@@ -1082,6 +1092,17 @@ export default function App() {
     [selectedSessionId, permissionBySession]
   );
 
+  const respondElicitation = useCallback(
+    async (action: "accept" | "decline" | "cancel", content: Record<string, unknown>) => {
+      if (!selectedSessionId) return;
+      const elicit = elicitationBySession[selectedSessionId];
+      if (!elicit) return;
+      setElicitationBySession((prev) => ({ ...prev, [selectedSessionId]: null }));
+      await ChatService.RespondElicitation(selectedSessionId, elicit.id, action, action === "accept" ? JSON.stringify(content) : "");
+    },
+    [selectedSessionId, elicitationBySession]
+  );
+
 
   // —— 集成终端(per-session,与 agent ACP 通道分离)——
   const createTerminal = useCallback(async () => {
@@ -1333,6 +1354,7 @@ export default function App() {
     setActivityBySession(drop);
     setUnreadBySession(drop);
     setPermissionBySession(drop);
+    setElicitationBySession(drop);
     setQueueBySession(drop);
     setDraftBySession(drop);
     setHistoryBySession(drop);
@@ -1527,6 +1549,7 @@ export default function App() {
       draft: draftBySession[sessionId] ?? "",
       livePlan: livePlanBySession[sessionId] ?? null,
       permission: permissionBySession[sessionId] ?? null,
+      elicitation: elicitationBySession[sessionId] ?? null,
       // 终端:面板开关 + tab 列表 + active tab。tab.id 对应后端同一 PTY —— popout 新建 xterm
       // 后订阅同一 id 的 terminal:data,并调 GetTerminalScrollback replay 历史(ring buffer)。
       termOpen: termOpenBySession[sessionId] ?? false,
@@ -1736,11 +1759,13 @@ export default function App() {
               branch={branchBySession[selectedSessionId] || activeSession?.branch || ""}
               error={error}
               permission={permission}
+              elicitation={elicitation}
               onSend={sendMessage}
               onEnqueue={enqueueMessage}
               onStop={stopSession}
               onContinue={continueSession}
               onRespondPermission={respondPermission}
+              onRespondElicitation={respondElicitation}
               onToggleTerminal={toggleTerminalPanel}
               mergeResult={mergeResults[selectedSessionId] || null}
               onMerge={mergeSession}

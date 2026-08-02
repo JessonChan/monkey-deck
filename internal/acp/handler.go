@@ -197,6 +197,11 @@ type Handler struct {
 	// 权限裁决(§3.4):harness 请求权限时,通过 OnPermission 通知前端弹窗,
 	// 用户在前端响应 → service 调 RespondPermission → 唤醒等待的 RequestPermission。
 	OnPermission func(PermissionPrompt)
+	// Elicitation(ACP v1 标准协议,SDK 标 UNSTABLE):harness 请求结构化用户输入
+	// (select/confirm/input/多字段 form)时,通过 OnElicitation 通知前端弹窗,用户在前端
+	// 响应 → service 调 RespondElicitation → 唤醒等待的 UnstableCreateElicitation。
+	// 场景:omp /review 选 review 模式、/fast on|off 确认 等(类比 §3.4 权限裁决,桌面有人在场)。
+	OnElicitation func(ElicitationPrompt)
 	// OnGlobalRule:用户选「全局允许」(RespondPermission 传 "global")时回调 service,
 	// 把由当前请求固化出的「准确匹配」allow 规则(permissions.ExactMatchRule)交由 service
 	// 持久化进 DB + 刷新全部活跃 session 的规则快照(跨 session/project 全局生效,§3.4)。
@@ -207,6 +212,10 @@ type Handler struct {
 	pending map[string]*pendingPermission // id → 待裁决
 	permSeq int
 	permTTL time.Duration // 权限裁决总等待预算(超时后按策略降级,§3.4)
+	// elicitation 等待表(§3.x elicitation):id → 待响应。复用 permTTL 作超时预算
+	// (语义一致:用户交互超时兜底)。elicitSeq 自增序号生成 id。
+	pendingElicit map[string]*pendingElicitation
+	elicitSeq     int
 	// 权限回调失败自动恢复(§3.4 + Task #15115):
 	// permRetries:用户未响应时「重发提示」的额外次数(含首次共 retries+1 轮),
 	//   每轮把总预算 permTTL 均分;0=只发一次(等价旧行为)。应对「提示丢失/用户没看到」。
@@ -240,6 +249,19 @@ type pendingPermission struct {
 	response chan string // 用户选中的 OptionId
 }
 
+// pendingElicitation:一次 elicitation/create 请求的等待项。
+// response 携带用户在前端的选择(action + content)。action ∈ {accept, decline, cancel}。
+type pendingElicitation struct {
+	prompt   ElicitationPrompt
+	response chan ElicitationResponse
+}
+
+// ElicitationResponse 是前端对一次 elicitation 提示的响应。
+type ElicitationResponse struct {
+	Action  string         `json:"action"`            // accept | decline | cancel
+	Content map[string]any `json:"content,omitempty"` // accept 时:字段名 → 值(omp 约定单字段 "value")
+}
+
 // 权限回调恢复默认(§3.4 + Task #15115)。
 const (
 	defaultPermRetries       = 1                      // 用户未响应时额外重发 1 次(共 2 轮通知)
@@ -258,18 +280,20 @@ func timeoutPolicyAllow(policy string) bool {
 }
 
 // NewHandler 构造一个 Handler。permTTL=0 时用默认 5 分钟。
-func NewHandler(workDir string, onEvent func(SessionEvent), onPermission func(PermissionPrompt), permTTL time.Duration) *Handler {
+func NewHandler(workDir string, onEvent func(SessionEvent), onPermission func(PermissionPrompt), onElicitation func(ElicitationPrompt), permTTL time.Duration) *Handler {
 	if permTTL <= 0 {
 		permTTL = 5 * time.Minute
 	}
 	return &Handler{
-		Log:               slog.Default(),
-		WorkDir:           workDir,
-		OnEvent:           onEvent,
-		OnPermission:      onPermission,
-		pending:           map[string]*pendingPermission{},
-		permTTL:           permTTL,
-		permRetries:       defaultPermRetries,
+		Log:            slog.Default(),
+		WorkDir:        workDir,
+		OnEvent:        onEvent,
+		OnPermission:   onPermission,
+		OnElicitation:  onElicitation,
+		pending:        map[string]*pendingPermission{},
+		pendingElicit:  map[string]*pendingElicitation{},
+		permTTL:        permTTL,
+		permRetries:    defaultPermRetries,
 		permTimeoutPolicy: defaultPermTimeoutPolicy,
 	}
 }
@@ -298,6 +322,25 @@ func (h *Handler) RespondPermission(id, optionID string) bool {
 	}
 	select {
 	case p.response <- optionID:
+	default:
+	}
+	return true
+}
+
+// RespondElicitation 由 service 调(前端用户对 elicitation 提示做了选择)。非阻塞;
+// 返回 ok=false 表示无此待响应项(已被取消/超时/响应过)。action 见 ElicitationResponse。
+func (h *Handler) RespondElicitation(id string, resp ElicitationResponse) bool {
+	h.mu.Lock()
+	p, ok := h.pendingElicit[id]
+	if ok {
+		delete(h.pendingElicit, id)
+	}
+	h.mu.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case p.response <- resp:
 	default:
 	}
 	return true

@@ -30,7 +30,7 @@ func TestRequestPermissionMemoryAutoAllowsAllRequestTypes(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			called := false
-			h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { called = true }, 0)
+			h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { called = true }, nil, 0)
 			c.setup(h)
 
 			kind := acp.ToolKind("bash") // 命令执行;Locations 空 → isExternalAccess=false
@@ -62,7 +62,7 @@ func TestRequestPermissionMemoryAutoAllowsAllRequestTypes(t *testing.T) {
 // 用带超时的 ctx:弹窗分支等不到响应 → ctx 取消返回 Cancelled,同时 OnPermission 应被调。
 func TestRequestPermissionNoMemoryStillPrompts(t *testing.T) {
 	called := false
-	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { called = true }, 0)
+	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { called = true }, nil, 0)
 
 	kind := acp.ToolKind("bash")
 	req := acp.RequestPermissionRequest{

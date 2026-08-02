@@ -158,7 +158,7 @@ func (r *Runner) ProbeCapabilities(ctx context.Context, harnessID, workDir strin
 			probeObs.plan = true
 		}
 	}
-	handler := NewHandler(workDir, onEvent, func(PermissionPrompt) {}, 0)
+	handler := NewHandler(workDir, onEvent, func(PermissionPrompt) {}, nil, 0)
 
 	proc, conn, initResp, err := r.spawnAndInit(ctx, workDir, handler)
 	if err != nil {

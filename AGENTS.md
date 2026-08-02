@@ -204,11 +204,18 @@ monkey-deck/
 - **但禁止阻塞**:ACP 调用挂起等待用户响应时,必须设**默认动作 + 超时兜底**（超时按默认级别放行/拒绝），不能让整个 ACP 连接因没人点按钮而永久卡死。用户可选「记住本次会话/该项目」减少打扰。
 - 低危可配自动放行、高危必须人工,级别可配。**理由**:有人才是桌面客户端,但「人在但走开了」也要能自洽。
 
-### 3.5 model/provider 注入基本原则（已知坑,先防）
+### 3.5 elicitation:交互命令桥接成前端弹窗(ACP v1 标准协议)
+- **elicitation 是 ACP v1 标准协议**(schema 已正式收录;acp-go-sdk 标 UNSTABLE 但可用,omp 已依赖)。harness(如 omp)的 interactive 命令(`/review` 选模式、`/fast` 确认)在 ACP 下经 `elicitation/create` 请求 client 用 form 收集结构化用户输入。
+- **桌面客户端有人在场,声明 `elicitation.form` 能力 + 实现回调,把这类请求桥接成前端弹窗给用户裁决**(类比 §3.4 权限裁决)。不声明时 omp 的 select/confirm/input 返 undefined → 命令静默空(§5.4 #12)。
+- **不阻塞**:同 §3.4,回调挂起等待用户响应时设超时兜底(超时降级 decline,让 harness 优雅处理,不卡死连接)。
+- url-based elicitation 暂不支持(omp 不用,decline)。form 的 schema 扁平化为字段(string→input、string+enum→select、boolean→checkbox),多字段支持(omp 约定单字段 "value")。
+- 实现:`internal/acp/elicitation.go` + 前端 `ElicitationCard`。详见 `docs/worklog/2026-08-02-acp-elicitation-support.md`。
+
+### 3.6 model/provider 注入基本原则（已知坑,先防）
 - 给 agent 传 model 必须是 **`provider/model` 格式**（如 `volcengine-agent-plan/glm-5.1`），**裸名（如 `glm-5.1`）会被解析失败 → fallback 到占位无效 model → agent 创建 session 后 0 产出 → 静默 idle**。
 - harness 在 session 创建时钉死 model,修改 model 后可能需新建 session 才能生效。
 
-### 3.6 代码注释默认使用英文(硬约束)
+### 3.7 代码注释默认使用英文(硬约束)
 - **新增注释一律用英文**:Go / TS / TSX / SQL 等源码文件里新写的注释(`//`、`/* */`、`--` 等)默认用英文,不再写中文注释。
 - **旧中文注释触及即转英文**:修改到带中文注释的代码时,顺带把本次改动涉及的注释改为英文;**不要求一次性全仓翻译**,但「碰到就要顺手转」。不主动去改与本次改动无关的文件。
 - **适用范围仅限源码注释**:**文档文件**(AGENTS.md、`docs/worklog/*`、README、THIRD_PARTY_LICENSES 等)**仍用中文**——这些是给人读的项目文档,不在本约束内。commit message 规范见 §6.2,不在此约束。
@@ -360,7 +367,7 @@ WAILS_SERVER_PORT=9246 ./bin/monkey-deck-server      # 或 wails3 task run:serve
 - [ ] 开工前读过 `docs/worklog/` 最近几条?(§0.3)
 - [ ] 收工前已在 `docs/worklog/` 新增工作日志?(§0.3)
 - [ ] 原子提交、commit message 清楚、没夹带无关改动、没提交构建产物?(§6.2)
-- [ ] 新增代码注释用英文;本次改动触及的旧中文注释已转英文?(§3.6)
+- [ ] 新增代码注释用英文;本次改动触及的旧中文注释已转英文?(§3.7)
 - [ ] 没碰外部参考库(`/tmp/monkey-deck-reference`,见 §0.2)下任何文件?
 - [ ] 借用参考库下任何项目的代码已按其原始协议署名(版权声明 + 许可文本 + THIRD_PARTY_LICENSES 登记;openwork 避开 `ee/`)?(§0.4)
 - [ ] ACP 单测用 mock,没启真 harness?(§5.1)

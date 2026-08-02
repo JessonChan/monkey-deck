@@ -37,6 +37,7 @@ import (
 const (
 	EventUpdate      = "chat:event"        // SessionEvent(流式 chunk / tool / usage)
 	EventPermission  = "chat:permission"   // PermissionPrompt(需用户裁决)
+	EventElicitation = "chat:elicitation"  // ElicitationPrompt(需用户填表单/选择,ACP v1 标准协议)
 	EventStatus      = "chat:status"       // StatusPayload(会话状态:started/prompting/idle/error/closed)
 	EventSessionMeta = "chat:session-meta" // SessionMetaPayload(标题等元信息更新)
 	EventHarnesses   = "chat:harnesses"    // harness 发现/版本变更(前端据此重拉 ListHarnesses)
@@ -117,6 +118,8 @@ type chatConn interface {
 	// IsAlive 报告 harness 进程是否存活(预热后空闲断连兜底:活跃但进程已死 → 拆掉重 spawn)。
 	IsAlive() bool
 	RespondPermission(id, optionID string) bool
+	// RespondElicitation 转发用户对 elicitation 提示的响应(ACP v1 标准协议,§3.x elicitation)。
+	RespondElicitation(id string, resp acp.ElicitationResponse) bool
 	// SessionTitle 经 ACP session/list 拉 harness 生成的权威标题(§5.4 #14)。
 	SessionTitle(ctx context.Context) (string, error)
 	// FlatConfigOptions 返回扁平化的 config options(给前端渲染下拉)。
@@ -1419,6 +1422,10 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 		p.SessionID = se.ID // 对齐到 db sessionID(便于前端按 session 过滤)
 		s.emit(EventPermission, p)
 	}
+	onElicitation := func(e acp.ElicitationPrompt) {
+		e.SessionID = se.ID // 对齐到 db sessionID(同 onPermission)
+		s.emit(EventElicitation, e)
+	}
 
 	// harness 生命周期挂到 s.ctx(随应用退出);运行期不独立 cancel ——
 	// 关闭 session 走 Close()(kill 进程组),停止单轮走 turnCancel(干净 session/cancel)。
@@ -1434,9 +1441,9 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 		err  error
 	)
 	if resume {
-		chat, err = runner.LoadChatSession(s.ctx, cwd, acpSessionID, mcps, onEvent, onPermission)
+		chat, err = runner.LoadChatSession(s.ctx, cwd, acpSessionID, mcps, onEvent, onPermission, onElicitation)
 	} else {
-		chat, err = runner.NewChatSession(s.ctx, cwd, mcps, onEvent, onPermission)
+		chat, err = runner.NewChatSession(s.ctx, cwd, mcps, onEvent, onPermission, onElicitation)
 	}
 	if err != nil {
 		return fmt.Errorf("start acp session: %w", err)
@@ -2295,6 +2302,29 @@ func (s *ChatService) RespondPermission(sessionID, reqID, level string) error {
 	}
 	if !ls.chat.RespondPermission(reqID, level) {
 		return fmt.Errorf("no pending permission: %s", reqID)
+	}
+	return nil
+}
+
+// RespondElicitation 用户在前端对某 elicitation 提示做出响应(ACP v1 标准协议,§3.x elicitation)。
+// action: accept(提交 content)/ decline(拒绝)/ cancel(取消)。
+// contentJSON: accept 时表单字段的 JSON 字符串(如 '{"value":"selected"}');非 accept 传空串。
+// 经 JSON 中转:Wails3 binding 生成器对 map[string]any 不生成 TS 类型,故用 string 传输 + 此处反序列化。
+func (s *ChatService) RespondElicitation(sessionID, reqID, action, contentJSON string) error {
+	s.mu.RLock()
+	ls, ok := s.active[sessionID]
+	s.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("session not active")
+	}
+	var content map[string]any
+	if action == "accept" && contentJSON != "" {
+		if err := json.Unmarshal([]byte(contentJSON), &content); err != nil {
+			return fmt.Errorf("invalid contentJSON: %w", err)
+		}
+	}
+	if !ls.chat.RespondElicitation(reqID, acp.ElicitationResponse{Action: action, Content: content}) {
+		return fmt.Errorf("no pending elicitation: %s", reqID)
 	}
 	return nil
 }

@@ -15,7 +15,7 @@ import (
 // 让用户明确「哪个工具/动作/目标」,而非泛泛确认。
 func TestPermissionPromptCarriesDecisionContext(t *testing.T) {
 	var got PermissionPrompt
-	h := NewHandler("/tmp/proj", nil, func(p PermissionPrompt) { got = p }, 0)
+	h := NewHandler("/tmp/proj", nil, func(p PermissionPrompt) { got = p }, nil, 0)
 
 	kind := acp.ToolKind("execute")
 	title := "Run bash"
@@ -56,7 +56,7 @@ func TestPermissionPromptCarriesDecisionContext(t *testing.T) {
 // retries=2 → 共 3 轮通知;用短总预算让重试在测试时限内发生。
 func TestPermissionRetryReNotify(t *testing.T) {
 	var dispatches atomic.Int32
-	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { dispatches.Add(1) }, 0)
+	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { dispatches.Add(1) }, nil, 0)
 	// 总预算 300ms,retries=2 → 3 轮,每轮 100ms。无用户响应 → 3 次分发。
 	h.permTTL = 300 * time.Millisecond
 	h.SetPermissionRecovery(2, "allow")
@@ -93,7 +93,7 @@ func TestPermissionRetryReNotify(t *testing.T) {
 // permTimeoutPolicy="deny" + 用户未响应 → 取 reject 选项拒绝(而非默认放行)。
 func TestPermissionTimeoutDegradeDeny(t *testing.T) {
 	var dispatches atomic.Int32
-	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { dispatches.Add(1) }, 0)
+	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { dispatches.Add(1) }, nil, 0)
 	h.permTTL = 120 * time.Millisecond
 	h.SetPermissionRecovery(0, "deny") // 不重试,直接等总预算耗尽
 
@@ -121,7 +121,7 @@ func TestPermissionTimeoutDegradeDeny(t *testing.T) {
 
 // TestPermissionTimeoutDegradeDenyNoRejectOption harness 未给 reject 选项 + deny 策略 → cancelled。
 func TestPermissionTimeoutDegradeDenyNoRejectOption(t *testing.T) {
-	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) {}, 0)
+	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) {}, nil, 0)
 	h.permTTL = 100 * time.Millisecond
 	h.SetPermissionRecovery(0, "deny")
 
@@ -153,7 +153,7 @@ func TestPermissionDispatchPanicRecovered(t *testing.T) {
 		if attempts.Load() == 1 {
 			panic("simulated dispatch explosion")
 		}
-	}, 0)
+	}, nil, 0)
 	h.permTTL = 5 * time.Minute
 	h.SetPermissionRecovery(0, "allow")
 

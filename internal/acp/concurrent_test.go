@@ -55,7 +55,7 @@ func TestDiagConcurrentSameCwd(t *testing.T) {
 				r.err = "start: " + err.Error()
 				return
 			}
-			handler := &Handler{Log: nil, WorkDir: cwd, OnEvent: func(SessionEvent) {}, OnPermission: nil, pending: map[string]*pendingPermission{}, permTTL: 5 * time.Minute}
+			handler := &Handler{Log: nil, WorkDir: cwd, OnEvent: func(SessionEvent) {}, OnPermission: nil, pending: map[string]*pendingPermission{}, pendingElicit: map[string]*pendingElicitation{}, permTTL: 5 * time.Minute}
 			conn := acp.NewClientSideConnection(handler, stdin, stdout)
 			if _, err := conn.Initialize(ctx, acp.InitializeRequest{
 				ProtocolVersion:    acp.ProtocolVersionNumber,

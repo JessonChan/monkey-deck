@@ -27,7 +27,7 @@ func TestRequestPermissionGlobalEmitsExactMatchRule(t *testing.T) {
 		case promptCh <- p.ID:
 		default:
 		}
-	}, 0)
+	}, nil, 0)
 	h.SetPermissionRecovery(0, "allow") // 单次分发,简化 channel 时序
 	h.OnGlobalRule = func(r permissions.Rule) { gotRule = r; emitted = true }
 
@@ -107,7 +107,7 @@ func TestRequestPermissionGlobalFSShapePath(t *testing.T) {
 		case promptCh <- p.ID:
 		default:
 		}
-	}, 0)
+	}, nil, 0)
 	h.SetPermissionRecovery(0, "allow")
 	h.OnGlobalRule = func(r permissions.Rule) { gotRule = r; emitted = true }
 
@@ -159,7 +159,7 @@ func TestRequestPermissionGlobalNoCallbackStillAllows(t *testing.T) {
 		case promptCh <- p.ID:
 		default:
 		}
-	}, 0)
+	}, nil, 0)
 	h.SetPermissionRecovery(0, "allow")
 	// OnGlobalRule 不设(nil)
 

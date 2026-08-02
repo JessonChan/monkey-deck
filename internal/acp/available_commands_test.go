@@ -14,7 +14,7 @@ import (
 // are forwarded, commands without input still flatten (empty InputHint).
 func TestSessionUpdateFlattensAvailableCommands(t *testing.T) {
 	var events []SessionEvent
-	h := NewHandler("/work", func(e SessionEvent) { events = append(events, e) }, nil, 0)
+	h := NewHandler("/work", func(e SessionEvent) { events = append(events, e) }, nil, nil, 0)
 
 	_ = h.SessionUpdate(context.Background(), acp.SessionNotification{
 		SessionId: "sess-1",

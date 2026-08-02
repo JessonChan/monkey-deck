@@ -1,0 +1,88 @@
+# 2026-08-02 实现 ACP elicitation 支持(让 omp /review 等交互命令可用)
+
+## 起因
+
+紧接 `2026-08-02-empty-turn-not-teardown.md`:omp `/review` 在 client 无 elicitation 能力时静默空。
+根因是 omp 把 interactive 命令的 `select/confirm/input` 桥接成 ACP `elicitation/create`,client 不声明
+`elicitation.form` 能力 → omp 的 select 返 undefined → 命令整体返空 → end_turn。
+
+A 修了我们对「合法零输出」的过度反应(不再 teardown)。B 是治本:**声明 elicitation 能力 + 实现
+回调 + 前端弹窗**,让 omp 的交互类命令(`/review` 选模式、`/fast` 确认)真正可用。
+
+## elicitation 是标准协议吗
+
+是。协议官网 v1 schema 已正式收录 `elicitation/create`、`elicitation/complete` 方法 +
+`ClientCapabilities.elicitation` 能力声明位(form / url 两种 mode)。我们用的 `acp-go-sdk@v0.13.5`
+把它标 `UNSTABLE`(注释 "not part of the spec yet")——SDK 是 elicitation 刚成型那版,协议未定稿;
+标 UNSTABLE 不代表不能用。omp 已实际依赖它(`acp-agent.ts:390` 检查 `clientCapabilities?.elicitation?.form`)。
+故支持无心理负担(§5.3:外部事实先验证 —— 已验证协议位真实存在、对端真在用)。
+
+## 设计
+
+镜像 §3.4 权限裁决(RequestPermission)的全链路模式:
+
+1. **Initialize 声明能力**:`ClientCapabilities.Elicitation.Form = &ElicitationFormCapabilities{}`。
+2. **Handler 实现 `UnstableCreateElicitation` 回调**(SDK 经 interface 断言调用):
+   - `req.Form` → 从 `RequestedSchema.Properties` 扁平化出字段列表 → 推前端(经 OnElicitation)。
+   - 等用户响应 / ctx 取消 / 超时降级(decline)。
+   - accept → `UnstableCreateElicitationAccept{Content}`;decline/cancel/超时各自分支。
+   - `req.Url` → 暂不支持(omp 不用),decline 让 harness 自行处理。
+3. **service 层**:`onElicitation` 回调对齐 SessionID + emit `chat:elicitation` event;暴露
+   `ChatService.RespondElicitation`(前端用户响应后调)。
+4. **前端 ElicitationCard**:按 field.type 渲染(string→input、string+enum→select、boolean→checkbox),
+   accept 提交,decline/cancel 退出。
+
+omp 约定:select/confirm/input 都包装成 `{type:object, properties:{value:<schema>}, required:["value"]}`
+(字段名固定 "value")。我们的扁平化支持多字段(单字段是其特例)。
+
+## 改了哪些文件
+
+后端:
+- `internal/acp/elicitation.go`(新):`ElicitationPrompt`/`ElicitationField`/`ElicitationResponse` 类型 +
+  `UnstableCreateElicitation` 方法 + `elicitFields`(schema 扁平化)+ `elicitResponseToSDK`。
+- `internal/acp/handler.go`:加 `OnElicitation`/`pendingElicit`/`elicitSeq` 字段 + `RespondElicitation`
+  方法 + `NewHandler` 加 `onElicitation` 参数。
+- `internal/acp/runner.go`:`NewChatSession`/`LoadChatSession` 加 `onElicitation` 参数透传;
+  `ChatSession.RespondElicitation` 透传方法;**Initialize 声明 `elicitation.form` 能力**;
+  `RefreshConfig`/`capability.go`/`probe.go` 的 NewHandler 调用补 nil 参数。
+- `internal/acp/elicitation_test.go`(新):7 个测试(schema 扁平化 select/boolean、拒绝非法、响应转换、
+  端到端 dispatch/respond、url decline、超时 decline)。
+- `internal/chat/chat.go`:`chatConn` 接口加 `RespondElicitation`;`EventElicitation` 常量;
+  `startLive` 加 `onElicitation`(emit event + SessionID 对齐);`ChatService.RespondElicitation`
+  导出方法(content 经 JSON string 中转:Wails3 binding 生成器对 `map[string]any` 不生成 TS)。
+- mock 补 `RespondElicitation` stub:`internal/chat/{idle_reaper_test,queue_test}.go`。
+- `internal/acp/*_test.go`:NewHandler 调用补 nil 参数(sed 批量,18 处)。
+
+前端:
+- `frontend/src/types.ts`:`ElicitationPrompt`/`ElicitationField` 类型。
+- `frontend/src/components/ChatView.tsx`:`ElicitationCard` 组件(string/enum/boolean 三种渲染)+ props
+  透传 + 挂载在尾部区(紧随 PermissionCard)。
+- `frontend/src/App.tsx`:监听 `chat:elicitation` event + `elicitationBySession` state + derived +
+  `respondElicitation`(JSON.stringify content)+ popout 快照/还原 + evictSessionCache 清理 + 透传 ChatView。
+- `frontend/src/i18n/locales/{zh,en}.json`:`elicitationTitleFallback`/`elicitAccept`/`elicitDecline`/`elicitCancel`。
+- `frontend/src/index.css`:`.elicit-*` 样式(复用 permission-card 容器)。
+- `frontend/bindings/...`(regen:`wails3 generate bindings`)。
+
+## 验证
+
+- `go build . ./internal/...` 通过。
+- `go test ./internal/...` 全绿(15 包 ok);elicitation 新增 7 测试全过。
+- `bun run tsc --noEmit` 0 error。
+- `bun run test`:7 fail 全是既有(ChatView 虚拟化 / NewSessionModal / msgmeta,均 McpChip.GetSessionMcpServers
+  在测试环境的问题 + 预选逻辑,与本变更无关)。
+- **ACP 探针协议链路实测(关键验证)**:`acp_elicit_verify.py` 起 omp acp,client 声明 `elicitation.form`,
+  发 `/review`:
+  1. omp 立即发 `elicitation/create`(mode=form, message="Review Mode", schema enum 4 选项)。
+  2. accept 第一个选项后,omp **继续发第二个 elicitation**(选 base branch)——级联交互正常。
+  3. 第二次 accept 后,omp **正常进入 review 流程**:`agent_thought_chunk` 流入("This is a code review
+     request for a large PR (230 files, +25597/-1543 lines)..."),**不再是空 end_turn**。
+  对比 A 之前(无 elicitation 能力):零输出 + end_turn。协议链路完全打通。
+
+## 下一步 / OPEN
+
+- [OPEN] server 模式浏览器驱动实测 ElicitationCard 真实渲染(select 下拉 / checkbox 交互)——协议层已
+  验证,UI 层留作下次。ElicitationCard 逻辑与探针一致(accept 时 content = {字段:值})。
+- [OPEN] omp 那个 bug 仍存在:client 无 elicitation 能力时它该降级到 headless prompt 而非静默空。
+  可给 omp 提 issue / PR(根因在 `acp-agent.ts:392` select 返 undefined 时 review 未回退 headless)。
+- elicitation 超时降级用 decline(不是 cancel):decline 更中性,让 harness 优雅降级;cancel 可能被
+  harness 当作"用户中止 turn"。omp 实测 decline 后命令直接结束(无副作用)。

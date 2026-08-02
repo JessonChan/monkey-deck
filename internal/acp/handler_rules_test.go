@@ -13,7 +13,7 @@ import (
 // 用户未选记忆,但规则集里有「只读 allow」→ read 工具的 RequestPermission 应直接放行、不弹窗。
 func TestRequestPermissionRuleAllowAutoAllows(t *testing.T) {
 	called := false
-	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { called = true }, 0)
+	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { called = true }, nil, 0)
 	h.SetPermissionRules([]permissions.Rule{
 		{ID: "r", ActionType: permissions.ActionRead, Level: permissions.LevelAllow, Enabled: true},
 	})
@@ -44,7 +44,7 @@ func TestRequestPermissionRuleAllowAutoAllows(t *testing.T) {
 // 危险命令(rm -rf)即使 harness 给了 allow 选项,也应被规则 deny 拦下、返回 reject。
 func TestRequestPermissionRuleDenyAutoRejects(t *testing.T) {
 	called := false
-	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { called = true }, 0)
+	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { called = true }, nil, 0)
 	h.SetPermissionRules([]permissions.Rule{
 		{ID: "deny", ActionType: permissions.ActionExec, CommandPattern: `\brm\s+-\w*r\w*f`, Level: permissions.LevelDeny, Enabled: true},
 	})
@@ -71,7 +71,7 @@ func TestRequestPermissionRuleDenyAutoRejects(t *testing.T) {
 // TestRequestPermissionRuleAskStillPrompts 规则档为 ask(或无规则)时仍弹前端确认。
 func TestRequestPermissionRuleAskStillPrompts(t *testing.T) {
 	called := false
-	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { called = true }, 0)
+	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { called = true }, nil, 0)
 	h.SetPermissionRules([]permissions.Rule{
 		{ID: "ask", ActionType: permissions.ActionWrite, Level: permissions.LevelAsk, Enabled: true},
 	})
@@ -98,7 +98,7 @@ func TestRequestPermissionRuleAskStillPrompts(t *testing.T) {
 // 即便有 deny 规则,记忆命中仍放行。语义:用户已对整项目/会话授权,不再二次拦截。
 func TestRequestPermissionMemoryBeatsRules(t *testing.T) {
 	called := false
-	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { called = true }, 0)
+	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { called = true }, nil, 0)
 	h.SetProjectAllowExternal(true) // 模拟项目级记忆
 	// 同时挂一条 deny-all 规则
 	h.SetPermissionRules([]permissions.Rule{

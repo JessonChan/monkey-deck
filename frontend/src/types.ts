@@ -103,6 +103,26 @@ export interface PermissionPrompt {
   options: PermissionOption[];
 }
 
+// Elicitation prompt (ACP v1 standard protocol, SDK marked UNSTABLE).
+// Harness requests structured user input (e.g. omp /review mode select, /fast confirm).
+// Fields drive rendering: string→input, string+enum→select, boolean→checkbox.
+export interface ElicitationPrompt {
+  id: string;
+  sessionId: string;
+  message: string;
+  fields: ElicitationField[];
+}
+
+export interface ElicitationField {
+  name: string; // property key (omp convention: "value")
+  type: "string" | "boolean" | string;
+  title?: string;
+  description?: string;
+  enum?: string[];
+  default?: string;
+  required?: boolean;
+}
+
 export interface StatusPayload {
   sessionId: string;
   status: "started" | "prompting" | "idle" | "error" | "closed" | "readonly";
