@@ -161,6 +161,14 @@ type liveSession struct {
 	index    map[string]*turnEntry // 主键 → entry(归并用);message 主键=mid+role,tool 主键=toolCallId
 	seq      int64                 // 单调序号,流式事件防乱序(§4.3)
 
+	// Fallback message merging (§5.3). messageId is UNSTABLE/optional in ACP; some
+	// harnesses never send it (e.g. Reasonix). When a chunk carries no messageId,
+	// consecutive same-role chunks append into one entry; a role change or a
+	// tool_call rotates to a fresh entry. Only reached when MessageID=="" — harnesses
+	// that always send messageId (omp/opencode) are entirely unaffected. Caller holds ls.mu.
+	fallbackRole string // role of the open fallback entry; "" = none open (next chunk starts fresh)
+	fallbackSeq  int64  // monotonic counter folded into the fallback key (rotated on each boundary)
+
 	// 当前 turn 的标识与 plan 快照(用于按 turn 保留历史 plan):
 	//   - currentTurnID:开启该 turn 的 user message ID(由 client 生成,协议无 turnId)。
 	//     plan 事件携带它,前端据此把 plan 钉在对应 turn 上。
@@ -190,6 +198,8 @@ func (ls *liveSession) resetBuffers() {
 	ls.index = map[string]*turnEntry{}
 	ls.currentTurnID = ""
 	ls.currentPlan = nil
+	ls.fallbackRole = ""
+	ls.fallbackSeq = 0
 }
 
 // appendEntry 新建 entry 并入队 timeline + 登记 index。调用方须持 ls.mu。
@@ -2137,16 +2147,22 @@ func (s *ChatService) persistConfigCache(sessionID string, opts []acp.ConfigOpti
 	}
 }
 
-// handleEvent 处理一条 SessionUpdate:按稳定标识归并进 timeline + 推前端(§5.4 #11/#12)。
+// handleEvent processes one SessionUpdate: merges it into the timeline by a stable
+// key and forwards it to the frontend (§5.4 #11/#12).
 //
-// 归并主键(对标 omp/opencode 的"对象归并"):
-//   - message: messageId(协议,优先)+ role 复合。同 messageId+role 的 chunk 累积进同一条 entry。
-//     协议 messageId 是 UNSTABLE,harness 可能不发 → 回退:role 变化 / 被 tool 打断 = 新 entry
-//     (把启发式降级成 fallback,主干仍是主键归并)。
-//   - tool: toolCallId(协议必填)。tool_call 注册新 entry;update 就地 patch,**不动位置**。
+// Merge keys (mirrors omp/opencode "object merging"):
+//   - message: messageId (protocol, primary) + role. All chunks sharing a
+//     messageId+role accumulate into one entry. messageId is UNSTABLE and some
+//     harnesses never send it → fallback: consecutive same-role chunks merge, and a
+//     role change or tool_call starts a new entry (heuristic demoted to fallback;
+//     the primary path stays primary-key merging). See messageKey.
+//   - tool: toolCallId (protocol-required). tool_call registers a new entry;
+//     tool_call_update patches it in place without moving it.
 //
-// agent/thought 发增量 text → 按 id 累积成全文,对外发累积全文 + 单调 seq(前端按 seq 替换防乱序)。
-// tool_call_update 只命中 tool entry(toolCallId),物理上碰不到 message entry → #11 构造性消灭。
+// agent/thought chunks carry incremental text → accumulated to full text by key,
+// emitted as the accumulated full text with a monotonic seq (frontend replaces by
+// seq to stay ordered). tool_call_update only hits a tool entry (by toolCallId) and
+// physically cannot touch a message entry → #11 eliminated by construction.
 func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.SessionEvent) {
 	e.SessionID = sessionID
 	ls.mu.Lock()
@@ -2168,6 +2184,7 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 		entry.text.WriteString(e.Text)
 		e.Text = entry.text.String()
 	case "tool_call":
+		ls.fallbackRole = "" // tool_call is a hard boundary: next chunk opens a new fallback entry
 		t, exists := ls.index[e.ToolCallID]
 		if exists && t.kind == "tool" && t.tool != nil {
 			// 重复 tool_call(异常):就地更新,不动位置。
@@ -2240,21 +2257,25 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 	s.emit(EventUpdate, e)
 }
 
-// messageKey 生成 message entry 的归并主键:messageId(协议,优先)+ role 复合。
-// messageId 为空(协议 UNSTABLE,harness 可能不发)时回退:每条都新开 —— 这样 role 变化
-// 或被 tool 打断后,新 chunk 落到新 entry(等价旧的"段边界"语义,但只在无 id 时启用)。
-// 调用方须持 ls.mu。
+// messageKey returns the merge key for a message entry.
+//
+// Primary path (§5.3): messageId + role — all chunks sharing a messageId merge
+// into one entry. omp/opencode always send messageId, so they use this path.
+//
+// Fallback path: messageId is UNSTABLE/optional and some harnesses (e.g. Reasonix)
+// never send it. Then consecutive same-role chunks append into one entry; a role
+// change rotates the key (fallbackSeq++), and a tool_call clears fallbackRole so the
+// next chunk also opens a new entry. This best-effort fallback is the documented
+// no-messageId behavior; it does not affect the primary path. Caller holds ls.mu.
 func messageKey(ls *liveSession, messageId, role string) string {
 	if messageId != "" {
 		return "msg:" + messageId + ":" + role
 	}
-	return "msg:_" + role + ":" + nextSyntheticID(ls)
-}
-
-// nextSyntheticID 生成一次性合成 id(无 messageId 时的兜底主键)。调用方须持 ls.mu。
-func nextSyntheticID(ls *liveSession) string {
-	ls.seq++ // 复用 seq 计数器(已在 ls.seq++ 基础上再自增,保证唯一)
-	return strconv.FormatInt(ls.seq, 36)
+	if ls.fallbackRole != role {
+		ls.fallbackRole = role
+		ls.fallbackSeq++
+	}
+	return "msg:_fb:" + strconv.FormatInt(ls.fallbackSeq, 36) + ":" + role
 }
 
 // RespondPermission 用户在前端对某权限请求做出裁决(§3.4)。
