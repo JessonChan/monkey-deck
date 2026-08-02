@@ -273,7 +273,7 @@
       "agent_turn_incomplete": "agent 这一轮未能正常结束(常见:所选模型当前不可用、被拒绝,或触上限)。连接正常——可直接重试,或在模型选择器里切换模型后再发。"
     },
     "notice": {
-      "harness_empty_turn": "本轮 agent 未产生响应(连接正常,可继续操作或换个指令重试)"
+      "harness_empty_turn": "该命令本轮没有更多回复。连接正常,可继续操作。"
     }
   },
   "composer": {
