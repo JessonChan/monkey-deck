@@ -148,3 +148,26 @@ omp 约定:select/confirm/input 都包装成 `{type:object, properties:{value:<s
 - `frontend/src/components/ChatView.tsx`:删顶层 `.elicit-bar` 挂载 + 删 ElicitationCard 组件定义
   (已移走)+ Composer 调用处透传 elicitation/onRespondElicitation。
 - `frontend/src/index.css`:`.elicit-bar` → `.elicit-inline`(compose-card 内部表单样式,accent 描边)。
+
+## Skip(decline)导致空 turn 不报错(用户反馈修正)
+
+实测确认:用户点 Skip(decline)→ omp 收到 decline → 命令直接 `end_turn` + **零输出**(omp 未降级
+headless 的 bug 仍在)。这与「agent 自己挂了的空 turn」结构相同 → 命中 empty-turn 检测 → 报
+「本轮无响应」错误。但用户主动跳过不是异常,不该报错。
+
+修法:handler 加 `elicitDeclined atomic.Bool`,**只在用户主动 decline 分支**(`<-p.response` 且
+`resp.Action == "decline"`)置位(超时降级虽也返 decline 给 harness,但那是兜底非用户意愿,不置位)。
+runPrompt empty-turn 检测据此区分:
+- `ElicitDeclined() == true` → 静默推 idle(用户主动跳过,不是异常)。
+- 否则 → 报 empty-turn 错误(真异常,连接没坏但用户该知道)。
+读后即清(`ResetElicitDeclined`),防上一轮的 decline 残留到下一轮判定;非空 turn 也清(用户 decline
+后 agent 仍可能产出内容)。
+
+### 改了哪些文件(Skip 修正)
+
+- `internal/acp/handler.go`:`elicitDeclined atomic.Bool` 字段。
+- `internal/acp/elicitation.go`:用户主动 decline 分支(`<-p.response` + `resp.Action=="decline"`)置位。
+- `internal/acp/runner.go`:`ChatSession.ElicitDeclined()` / `ResetElicitDeclined()` 暴露方法。
+- `internal/chat/chat.go`:`chatConn` 接口加两方法;empty-turn 检测加 decline 分支(静默 idle)+ 读后即清。
+- `internal/chat/queue_test.go`:`fakeChat` 加 `declined atomic.Bool` + 两方法实现。
+- `internal/chat/empty_turn_test.go`:`TestEmptyTurnAfterElicitDeclineIsSilentIdle`(decline 后空 turn → idle,无 error code);对照 `TestEmptyTurnDetectedAsError`(无 decline 的真异常空 turn → 仍 error)。

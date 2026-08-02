@@ -391,6 +391,17 @@ func (cs *ChatSession) RespondElicitation(id string, resp ElicitationResponse) b
 	return cs.Handler.RespondElicitation(id, resp)
 }
 
+// ElicitDeclined 报告本次 turn 期间用户是否主动 decline 过 elicitation(Skip)。
+// runPrompt 的 empty-turn 检测据此区分「用户主动跳过导致的空 turn」(静默)与「真异常空 turn」(提示)。
+func (cs *ChatSession) ElicitDeclined() bool {
+	return cs.Handler.elicitDeclined.Load()
+}
+
+// ResetElicitDeclined 清除 decline 标志(新 turn 开始时调,保证只反映当前 turn)。
+func (cs *ChatSession) ResetElicitDeclined() {
+	cs.Handler.elicitDeclined.Store(false)
+}
+
 // SetPermissionRules 更新该 session 的分级权限规则快照(§3.4)。透传给 handler。
 func (cs *ChatSession) SetPermissionRules(rules []permissions.Rule) {
 	cs.Handler.SetPermissionRules(rules)

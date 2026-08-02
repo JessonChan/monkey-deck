@@ -123,6 +123,10 @@ type chatConn interface {
 	RespondPermission(id, optionID string) bool
 	// RespondElicitation 转发用户对 elicitation 提示的响应(ACP v1 标准协议,§3.x elicitation)。
 	RespondElicitation(id string, resp acp.ElicitationResponse) bool
+	// ElicitDeclined / ResetElicitDeclined:用户主动 decline(Skip)elicitation 的 turn 标志,
+	// 供 runPrompt empty-turn 检测区分「用户主动跳过导致的空 turn」(静默)与「真异常空 turn」(提示)。
+	ElicitDeclined() bool
+	ResetElicitDeclined()
 	// SessionTitle 经 ACP session/list 拉 harness 生成的权威标题(§5.4 #14)。
 	SessionTitle(ctx context.Context) (string, error)
 	// FlatConfigOptions 返回扁平化的 config options(给前端渲染下拉)。
@@ -2083,11 +2087,24 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 	// (实测 omp /review 在 client 无 elicitation 时命中),连接本身是好的 —— 只提示用户、不
 	// teardown、不重连,让用户可见地知道「本轮 agent 没回应」并保留连接供继续操作。原来一律
 	// teardown+重连是基于「空 turn = resume 损坏」的过强假设(§5.3:外部事实先验证 —— 已证伪)。
+	//
+	// 例外:用户主动 decline(Skip)过 elicitation 时,空 turn 是用户自己的选择(decline 让
+	// harness 命令直接 end_turn 零输出,如 omp /review)—— 静默推 idle,不当错误提示(§3.x)。
+	// 读后即清(ResetElicitDeclined):防上一轮的 decline 残留到下一轮的 empty-turn 判定。
 	if len(timeline) == 0 {
+		declined := ls.chat.ElicitDeclined()
+		ls.chat.ResetElicitDeclined()
+		if declined {
+			slog.Info("empty turn after user declined elicitation, silent idle", "session", sessionID)
+			s.emitStatus(sessionID, "idle", "elicit-declined")
+			return
+		}
 		slog.Warn("prompt empty turn", "session", sessionID, "stopReason", stopReason)
 		s.emitError(sessionID, ErrCodeHarnessEmptyTurn)
 		return
 	}
+	// 非空 turn 也清(防 decline 标志跨 turn 残留:用户 decline 后 agent 仍可能产出内容)。
+	ls.chat.ResetElicitDeclined()
 	// 取 harness 生成的权威标题覆盖兜底标题(§5.4 #14)。
 	s.syncSessionTitle(ls, sessionID)
 	// agent 非 end_turn 结束(cancelled/refusal/max_tokens/max_turn_requests):harness 仍活、

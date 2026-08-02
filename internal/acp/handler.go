@@ -221,6 +221,12 @@ type Handler struct {
 	// (语义一致:用户交互超时兜底)。elicitSeq 自增序号生成 id。
 	pendingElicit map[string]*pendingElicitation
 	elicitSeq     int
+	// elicitDeclined:本次 turn 期间用户主动 decline 过 elicitation(Skip 按钮)。
+	// runPrompt 的 empty-turn 检测据此判定:用户主动跳过导致的空 turn 不是异常(decline
+	// 让命令直接 end_turn 零输出,如 omp /review),静默推 idle 不报错。仅用户主动 decline 置位
+	// (超时降级虽也返 decline 给 harness,但那是兜底不是用户意愿,不置位 → 仍走 empty-turn 提示)。
+	// runPrompt 开头(startTurn)清零,保证只反映当前 turn。
+	elicitDeclined atomic.Bool
 	// 权限回调失败自动恢复(§3.4 + Task #15115):
 	// permRetries:用户未响应时「重发提示」的额外次数(含首次共 retries+1 轮),
 	//   每轮把总预算 permTTL 均分;0=只发一次(等价旧行为)。应对「提示丢失/用户没看到」。

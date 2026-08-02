@@ -58,3 +58,39 @@ func TestEmptyTurnDetectedAsError(t *testing.T) {
 		t.Fatal("session must stay active after empty turn (connection preserved)")
 	}
 }
+
+// 用户主动 decline(Skip)elicitation 后,harness 命令直接 end_turn 零输出(omp /review 实测)。
+// 这种空 turn 是用户自己的选择,不当错误提示 —— 静默推 idle(§3.x elicitation)。
+// 对照 TestEmptyTurnDetectedAsError(无 decline 的真异常空 turn → 仍报 error)。
+func TestEmptyTurnAfterElicitDeclineIsSilentIdle(t *testing.T) {
+	svc, sessionID, fc := newTestService(t)
+
+	fc.emitHook = nil              // 模拟 harness 返回空 turn(无 SessionUpdate)
+	fc.declined.Store(true)        // 模拟用户本 turn 主动 decline 过 elicitation
+
+	var lastPayload StatusPayload
+	svc.emitHook = func(name string, data any) {
+		if name == EventStatus {
+			lastPayload = data.(StatusPayload)
+		}
+	}
+
+	if err := svc.SendMessage(sessionID, "hello", nil); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	waitStarted(t, fc, 1)
+	fc.release()
+
+	// 等终态(应直接到 idle,不经 error)。
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && (lastPayload.Status == "" || lastPayload.Status == "prompting") {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if lastPayload.Status != "idle" {
+		t.Fatalf("decline-induced empty turn should emit idle (silent), got status=%q code=%q detail=%q",
+			lastPayload.Status, lastPayload.Code, lastPayload.Detail)
+	}
+	if lastPayload.Code != "" {
+		t.Fatalf("decline-induced empty turn must carry NO error code, got %q", lastPayload.Code)
+	}
+}

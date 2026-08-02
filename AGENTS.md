@@ -209,6 +209,7 @@ monkey-deck/
 - **桌面客户端有人在场,声明 `elicitation.form` 能力 + 实现回调,把这类请求桥接成前端弹窗给用户裁决**(类比 §3.4 权限裁决)。不声明时 omp 的 select/confirm/input 返 undefined → 命令静默空(§5.4 #12)。
 - **不阻塞**:同 §3.4,回调挂起等待用户响应时设超时兜底(超时降级 decline,让 harness 优雅处理,不卡死连接)。
 - url-based elicitation 暂不支持(omp 不用,decline)。form 的 schema 扁平化为字段(string→input、string+enum→select、boolean→checkbox),多字段支持(omp 约定单字段 "value")。
+- **用户主动 decline(Skip)导致的空 turn 不报错**:decline 让 harness 命令直接 end_turn 零输出(如 omp /review),与「agent 自己挂了的空 turn」结构相同但语义不同(用户主动 vs 异常)。handler 用 `elicitDeclined` 标志区分,runPrompt empty-turn 检测据此静默推 idle(不报 `harness_empty_turn`)。超时降级虽也返 decline 给 harness,但那是兜底非用户意愿,不置标志 → 仍走 empty-turn 提示。
 - 实现:`internal/acp/elicitation.go` + 前端 `ElicitationCard`。详见 `docs/worklog/2026-08-02-acp-elicitation-support.md`。
 
 ### 3.6 model/provider 注入基本原则（已知坑,先防）

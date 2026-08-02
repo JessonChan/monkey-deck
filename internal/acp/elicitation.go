@@ -82,6 +82,11 @@ func (h *Handler) UnstableCreateElicitation(ctx context.Context, req acp.Unstabl
 	defer timer.Stop()
 	select {
 	case resp := <-p.response:
+		// 用户主动 decline(Skip):标记本次 turn,runPrompt 的 empty-turn 检测据此静默推 idle
+		// (用户有意识地跳过 → 命令零输出不是异常)。accept/cancel 不置位。
+		if resp.Action == "decline" {
+			h.elicitDeclined.Store(true)
+		}
 		slog.Info("elicitation responded", "id", id, "action", resp.Action)
 		return elicitResponseToSDK(resp), nil
 	case <-ctx.Done():

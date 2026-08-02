@@ -35,6 +35,7 @@ type fakeChat struct {
 	configSets []string         // 记录 SetConfigOption 调用("configId=value")
 	promptErr  error            // 非空则 Prompt 立即返回该错(模拟 peer 断连 / 崩溃,触发 emitError 路由)
 	alive      atomic.Bool      // IsAlive 返回值(默认 true;kill 置 false 模拟 harness 死)
+	declined   atomic.Bool      // ElicitDeclined 返回值(模拟用户主动 decline elicitation 后的空 turn)
 }
 
 func newFakeChat() *fakeChat {
@@ -81,6 +82,8 @@ func (f *fakeChat) Close()                                         {}
 func (f *fakeChat) IsAlive() bool                                  { return f.alive.Load() }
 func (f *fakeChat) RespondPermission(_, _ string) bool             { return true }
 func (f *fakeChat) RespondElicitation(_ string, _ acp.ElicitationResponse) bool { return true }
+func (f *fakeChat) ElicitDeclined() bool                                          { return f.declined.Load() }
+func (f *fakeChat) ResetElicitDeclined()                                          { f.declined.Store(false) }
 func (f *fakeChat) SessionTitle(_ context.Context) (string, error) { return f.title, nil }
 func (f *fakeChat) FlatConfigOptions() []acp.ConfigOption          { return nil }
 func (f *fakeChat) SupportsImage() bool                            { return false }
