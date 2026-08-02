@@ -15,7 +15,7 @@ import (
 //
 // 2026-08-02 修正:不再 teardown/重连。end_turn + 零输出是协议合法结果(实测 omp /review 在
 // client 无 elicitation 时命中),连接本身是好的 —— 只提示、保留连接供用户继续操作。
-func TestEmptyTurnDetectedAsError(t *testing.T) {
+func TestEmptyTurnDetectedAsNotice(t *testing.T) {
 	svc, sessionID, fc := newTestService(t)
 
 	// 去掉 emitHook,模拟 harness 返回空 turn(无 SessionUpdate)。

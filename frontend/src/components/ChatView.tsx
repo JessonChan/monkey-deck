@@ -82,6 +82,9 @@ const STATUS_MAP: Record<string, { key: string; cls: string }> = {
   started: { key: "chat.status.ready", cls: "st-idle" },
   readonly: { key: "chat.status.readonly", cls: "st-readonly" },
   error: { key: "chat.status.error", cls: "st-error" },
+  // notice:非异常温和提示(空 turn 等)。复用 idle 样式 —— 连接正常,会话空闲可继续操作;
+  // 具体提示由 notice-bar(蓝色条)承载,头部徽标不额外强调(避免与提示条重复)。
+  notice: { key: "chat.status.idle", cls: "st-idle" },
   closed: { key: "chat.status.closed", cls: "st-closed" },
   empty: { key: "", cls: "" },
 };

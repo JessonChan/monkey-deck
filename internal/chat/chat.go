@@ -52,9 +52,9 @@ const (
 // StatusPayload 会话状态变更。
 type StatusPayload struct {
 	SessionID string `json:"sessionId"`
-	Status    string `json:"status"` // started | prompting | idle | error | closed | readonly
+	Status    string `json:"status"` // started | prompting | idle | error | closed | readonly | notice
 	// Code 是稳定的机器错误码;前端按 code 经 i18n 翻译成人话提示(§4.4)。
-	// 仅 error 状态填(如 ErrCodeHarnessDisconnected),其余状态留空。
+	// error 与 notice 状态填(error:断连等真错误;notice:空 turn 等非异常温和提示,见 chat.notice.*)。
 	Code   string `json:"code,omitempty"`
 	Detail string `json:"detail,omitempty"`
 }

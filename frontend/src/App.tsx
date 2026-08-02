@@ -486,12 +486,13 @@ export default function App() {
       // 有 code 时按 code 经 i18n 翻译(harness 断连等稳定文案);否则用 detail;最后兜底。
       if (s.status === "error" && s.sessionId === selectedSessionIdRef.current && !poppedSessionIdsRef.current.has(s.sessionId)) {
         setError(s.code ? t(`chat.error.${s.code}`) : (s.detail || t("app.errorFallback")));
+        setNotice(null); // 对称清 notice,避免旧 notice(蓝)与新 error(红)叠显
       }
       // notice(温和提示):非异常的零输出等,蓝色提示条。同 error 的 session/popup 门控。
       // code 经 i18n 翻译(chat.notice.*),detail 兜底。
       if (s.status === "notice" && s.sessionId === selectedSessionIdRef.current && !poppedSessionIdsRef.current.has(s.sessionId)) {
         setNotice(s.code ? t(`chat.notice.${s.code}`) : (s.detail || ""));
-        setError(null); // 清掉可能的旧 error,避免两条叠显
+        setError(null); // 对称清 error,避免两条叠显
       }
       // 回合结束:清掉该 session 最后 agent/thought 的 streaming 标志(去光标 + 显复制按钮);
       // 同时把残留的中间态 tool(in_progress/pending)收口到终态 —— Prompt 正常返回(idle)
@@ -554,7 +555,8 @@ export default function App() {
       // 由 status 事件按 sessionId 直接触发(尊重数据源:status 事件是「哪个 session 该续发」的权威
       // 信号),后台 session 的队列也能自动续发。closed = idle reaper 回收,session 已关,不续发。
       // 用户主动停则 drainSession 内部按 per-session 标记跳过(队列保留)。
-      if (s.status === "idle" || s.status === "error") {
+      // notice = 非异常空 turn(end_turn,连接正常),语义等同 idle —— 续发排队消息。
+      if (s.status === "idle" || s.status === "error" || s.status === "notice") {
         void drainSession(s.sessionId);
       }
     });
@@ -947,7 +949,7 @@ export default function App() {
         return;
       }
       // idle 直发(attachments 经 buildAttachments 构造,显式带 Kind,见模块顶部)。
-      setError(null);
+      setError(null); setNotice(null);
       setStatusBySession((prev) => ({ ...prev, [selectedSessionId]: "prompting" }));
       try {
         await ChatService.SendMessage(selectedSessionId, text, buildAttachments(mentions, imgs, aus));
@@ -996,7 +998,7 @@ export default function App() {
     if (!item) return;
     queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: q.filter((x) => x.id !== id) };
     setQueueBySession(queueBySessionRef.current);
-    setError(null);
+    setError(null); setNotice(null);
     userStoppedBySessionRef.current.delete(sid);
     setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
     try {
