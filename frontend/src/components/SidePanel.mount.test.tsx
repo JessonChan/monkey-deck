@@ -158,3 +158,38 @@ describe("SidePanel: tab switch keeps both panels mounted", () => {
     expect(host.textContent).toContain("a.ts");
   });
 });
+
+describe("SidePanel: session switch restores FilePanel state", () => {
+  test("expanded dir + child survive switching to another session and back", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    // session s1: expand "src" -> "a.ts" renders
+    root.render(<SidePanel {...baseProps} sessionId="s1" key="s1" />);
+    await flush();
+    expect(host.textContent).toContain("src");
+    const srcRow = [...host.querySelectorAll(".tree-row")].find((r) =>
+      r.textContent?.includes("src")
+    ) as HTMLElement;
+    expect(srcRow).toBeTruthy();
+    srcRow.dispatchEvent(click());
+    await flush();
+    expect(host.textContent).toContain("a.ts");
+
+    // switch to session s2 (key change -> FilePanel unmounts, snapshot saved to cache).
+    // s2 starts fresh (no expanded dirs), so "a.ts" must be gone.
+    root.render(<SidePanel {...baseProps} sessionId="s2" key="s2" />);
+    await flush();
+    expect(host.textContent).not.toContain("a.ts");
+
+    // switch back to s1 (FilePanel remounts, state restored from the per-session cache).
+    // Regression: without the cache, the remount starts empty and "a.ts" only reappears
+    // after the user manually re-expands "src".
+    root.render(<SidePanel {...baseProps} sessionId="s1" key="s1" />);
+    await flush();
+    expect(host.textContent).toContain("a.ts");
+
+    root.unmount();
+  });
+});
