@@ -10,12 +10,13 @@ import McpChip from "./McpChip";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
 import CollapsibleText from "./CollapsibleText";
-import FilePreviewOverlay, { type PreviewTarget } from "./FilePreviewOverlay";
+import DiffView from "./DiffView";
 import MermaidRenderer from "./MermaidRenderer";
 import PathLinkified from "./PathLinkified";
 import CopyIconButton from "./CopyIconButton";
 import { copyText } from "../lib/clipboard";
-import { countDiffLines, diffLineCls } from "../lib/diff";
+import { countDiffLines } from "../lib/diff";
+import { unifiedToOldNew } from "../lib/unified";
 import { highlightToLines } from "../lib/highlight";
 import "../hljs-theme.css";
 import { buildRows, computeLayout, computeWindow, anchorAt, restoreScroll, isAtBottom, HeightModel, TAIL_PRIOR, HEAD_PRIOR, type VRow, type Layout } from "../lib/virtualList";
@@ -75,6 +76,10 @@ interface Props {
   loadingMore: boolean;
   onLoadMore: () => void;
   activity?: "thinking" | "executing" | "replying";
+  // Open a file in the editor tab strip (middle column row 2). Routed up to
+  // App.tsx which owns per-session file tabs. Replaces the old in-chat modal
+  // preview overlay (FilePreviewOverlay, removed).
+  onOpenFile?: (path: string, line?: number) => void;
 }
 // 状态 → i18n key + 样式。label 在渲染处用 t() 解析(支持语言切换)。
 const STATUS_MAP: Record<string, { key: string; cls: string }> = {
@@ -153,8 +158,6 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   const programmaticScrollRef = useRef(false);
   // Floating scroll-to-bottom button visibility: true = show FAB (user is reading history).
   const [showScrollBtn, setShowScrollBtn] = useState(false);
-  // 文件预览覆盖层(Task #15084):对话/工具卡片里的路径点击 → 弹此覆盖层。
-  const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
   // plan 展开/折叠偏好:按 session 持久化(localStorage)(Task #21298)。
   // 同一 session 内所有 plan(当前 turn 实时 + 历史 turn 静态)共用一个偏好,用户折叠/展开
   // 一次后整 session 遵循,重开会话也能恢复。默认展开(不再按条数折叠)。
@@ -176,9 +179,10 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     });
   }, [props.sessionId]);
   const openFilePreview = useCallback((path: string, line?: number) => {
-    setPreviewTarget({ path, line });
-  }, []);
-  const closeFilePreview = useCallback(() => setPreviewTarget(null), []);
+    // Route up to App.tsx (per-session file tabs) instead of a local modal.
+    // No-op if the host hasn't wired the prop (keeps ChatView usable standalone).
+    props.onOpenFile?.(path, line);
+  }, [props.onOpenFile]);
   // 当前生效的工作目录:优先 session.worktreePath(独立 worktree),降级 project.path(共享目录)。
   // 与 App.tsx 的 termCwdRef 同一套优先级(worktree 优先 → 项目目录)。
   const activePath = props.session?.worktreePath || props.project?.path || "";
@@ -672,7 +676,6 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           <CopyIconButton text={props.mergeResult || ""} />
         </div>
       )}
-      <FilePreviewOverlay sessionId={props.sessionId} target={previewTarget} onClose={closeFilePreview} />
       <footer className="chat-footer">
         <QueuePanel
           queue={props.queue}
@@ -998,7 +1001,7 @@ function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
   const running = item.status === "pending" || item.status === "in_progress";
   const path = extractFilePath(item.rawInput);
   const parts = extractEditParts(item.rawInput);
-  const diffText = parts.diff; // 非 undefined 时按 diff 染色
+  const hasDiff = !!(parts.oldStr && parts.newStr); // 真 diff(old/new 两段)
   const plainText = parts.plain; // 非 diff 的纯内容
   const outputR = item.status === "failed" && item.rawOutput != null ? extractToolText(item.rawOutput) : null;
 
@@ -1022,7 +1025,7 @@ function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
       </>}
     >
       {path && renderTarget(t("chat.targetFile"), path)}
-      {diffText && (
+      {hasDiff && (
         <div className="file-section">
           <div className="file-section-head">
             <span className="file-section-label">{parts.kind === "patch" ? t("chat.changesPatch") : t("chat.changes")}</span>
@@ -1031,19 +1034,17 @@ function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
               <span className="diff-stat diff-stat-del">−{parts.removed}</span>
             </span>
           </div>
-          <CollapsibleText
-            text={diffText}
-            className="diff-ctext"
-            preClassName="diff-pre"
-            previewClassName="diff-preview"
-            lineUnit={t("collapsibleText.lineUnit")}
+          <DiffView
+            oldStr={parts.oldStr!}
+            newStr={parts.newStr!}
+            filename={path}
+            defaultSplit={false}
             testId="edit-diff"
-            lineClassName={diffLineCls}
-            onPath={onOpenFilePreview}
+            maxHeight="320px"
           />
         </div>
       )}
-      {!diffText && plainText && (
+      {!hasDiff && plainText && (
         <div className="file-section">
           <div className="file-section-head"><span className="file-section-label">{t("chat.writeContent")}</span></div>
           <CollapsibleText
@@ -1334,28 +1335,36 @@ function extractSearchPattern(raw: unknown): string {
   return "";
 }
 
-// 从编辑工具 rawInput 抽出改动内容,归一成「带 +/- 染色的 diff 文本」或「纯内容」。
-// 覆盖:edit(old_string/new_string)、write_file(content/newText/text)、apply_patch(patch)。
-// 返回 { diff?, plain?, kind, added, removed }:diff 非空则按行染色;否则 plain 兜底。
-function extractEditParts(raw: unknown): { diff?: string; plain?: string; kind: "diff" | "patch" | "content" | "none"; added: number; removed: number } {
+// Extract change content from an edit tool's rawInput, normalized to either a real
+// diff (old/new pair → DiffView LCS + word-diff) or plain content. Covers edit
+// (old_string/new_string), write_file (content/newText/text), and apply_patch (patch).
+// Returns { oldStr?, newStr?, plain?, kind, added, removed }: oldStr+newStr → real diff;
+// otherwise plain fallback. apply_patch parses the unified patch to reconstruct old/new.
+function extractEditParts(raw: unknown): { oldStr?: string; newStr?: string; plain?: string; kind: "diff" | "patch" | "content" | "none"; added: number; removed: number } {
   const empty = { kind: "none" as const, added: 0, removed: 0 };
   if (!isRecord(raw)) return empty;
   const oldStr = pickStr(raw, ["old_string", "oldString", "old_str", "old_text", "oldText", "search", "find"]);
   const newStr = pickStr(raw, ["new_string", "newString", "new_str", "new_text", "newText", "replace", "replacement"]);
   const patch = pickStr(raw, ["patch"]);
   const content = pickStr(raw, ["content", "newText", "text", "file_text", "fileText"]);
-  // apply_patch:unified diff 原样染色(它自带 +/-/@@ 格式)。
+  // apply_patch: parse the unified patch to reconstruct old/new (parsePatch handles
+  // git dialect). Non-unified patches (e.g. `*** Begin Patch`) reconstruct nothing —
+  // fall back to the raw patch text so the card isn't blank.
   if (patch) {
-    const { added, removed } = countDiffLines(patch);
-    return { diff: patch, kind: "patch", added, removed };
+    const recon = unifiedToOldNew(patch);
+    if (recon.oldStr || recon.newStr) {
+      const { added, removed } = countDiffLines(patch);
+      return { oldStr: recon.oldStr, newStr: recon.newStr, kind: "patch", added, removed };
+    }
+    return { plain: patch, kind: "content", added: 0, removed: 0 };
   }
-  // edit(old→new):自构 -/+ diff(删除行在前、新增行在后,清晰呈现增删)。
+  // edit (old→new): hand both strings to DiffView for a real LCS diff.
   if (oldStr && newStr) {
-    const diff = buildPlusMinusDiff(oldStr, newStr);
-    const { added, removed } = countDiffLines(diff);
-    return { diff, kind: "diff", added, removed };
+    const added = newStr.split("\n").length;
+    const removed = oldStr.split("\n").length;
+    return { oldStr, newStr, kind: "diff", added, removed };
   }
-  // write_file / 新建文件:只有内容 → 纯内容展示,不强加全绿底(大文件视觉过重)。
+  // write_file / new file: content only → plain text (no full-green background).
   if (content) return { plain: content, kind: "content", added: 0, removed: 0 };
   return empty;
 }
@@ -1369,19 +1378,7 @@ function pickStr(raw: Record<string, unknown>, keys: string[]): string {
   return "";
 }
 
-// 由 old/new 两段文本构造简单 -/+ diff:旧文本行前缀「-」、新文本行前缀「+」,各自成段。
-// 不是最小化 diff(不做行对齐),但诚实地呈现「删了什么 / 加了什么」,且与 unified patch 的
-// +/- 前缀约定一致,可复用同一套染色规则。
-function buildPlusMinusDiff(oldStr: string, newStr: string): string {
-  const oldLines = oldStr.split("\n");
-  const newLines = newStr.split("\n");
-  const parts: string[] = [];
-  for (const l of oldLines) parts.push(`-${l}`);
-  for (const l of newLines) parts.push(`+${l}`);
-  return parts.join("\n");
-}
-
-// 统计 diff 增删行数 + 行染色规则已抽到 lib/diff.ts(供 GitPanel diff 阅读器复用)。
+// 统计 diff 增删行数已抽到 lib/diff.ts(供 GitPanel diff 阅读器复用)。
 
 // 把绝对路径截短成「…/<basename>」便于在徽章里展示(避免长路径撑爆头部)。
 function shortPath(p: string): string {

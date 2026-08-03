@@ -417,6 +417,24 @@
     "readFailed": "Read failed: {{error}}",
     "loading": "Loading…"
   },
+  "fileTab": {
+    "chat": "Chat",
+    "chatTip": "Back to conversation",
+    "closeFile": "Close file tab"
+  },
+  "diff": {
+    "split": "Split",
+    "unified": "Unified",
+    "switchToSplit": "Switch to split view",
+    "switchToUnified": "Switch to unified view",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyNew": "Copy new content"
+  },
+  "diffPane": {
+    "staged": "Staged",
+    "unstaged": "Unstaged"
+  },
   "collapsibleText": {
     "lineUnit": "lines",
     "lineCharCount": "{{lines}} {{unit}} · {{chars}} chars",

@@ -417,6 +417,24 @@
     "readFailed": "读取失败:{{error}}",
     "loading": "加载中…"
   },
+  "fileTab": {
+    "chat": "对话",
+    "chatTip": "返回对话",
+    "closeFile": "关闭文件标签页"
+  },
+  "diff": {
+    "split": "并排",
+    "unified": "合并",
+    "switchToSplit": "切换到并排视图",
+    "switchToUnified": "切换到合并视图",
+    "copy": "复制",
+    "copied": "已复制",
+    "copyNew": "复制新内容"
+  },
+  "diffPane": {
+    "staged": "已暂存",
+    "unstaged": "未暂存"
+  },
   "collapsibleText": {
     "lineUnit": "行",
     "lineCharCount": "{{lines}} {{unit}} · {{chars}} 字符",

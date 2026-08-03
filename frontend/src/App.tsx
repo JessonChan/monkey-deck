@@ -11,6 +11,9 @@ import ChatView, { type ChatViewHandle } from "./components/ChatView";
 import { Sparkles } from "lucide-react";
 import SidePanel from "./components/SidePanel";
 import TerminalPanel from "./components/TerminalPanel";
+import FileTabBar, { type FileTab, tabKey } from "./components/FileTabBar";
+import EditorPane from "./components/EditorPane";
+import DiffPane from "./components/DiffPane";
 import type { TerminalTab } from "./lib/terminalTypes";
 import { disposeTerminal } from "./lib/termRegistry";
 import NewSessionModal, { type NewSessionChoice } from "./components/NewSessionModal";
@@ -122,6 +125,11 @@ export default function App() {
   // 历史 turn 的 plan 不在这里 —— 它们作为 role='plan' message 持久化,重开会话时由
   // messagesToItems 转为 type:'plan' ChatItem 内联渲染。null = 当前无实时 plan。
   const [livePlanBySession, setLivePlanBySession] = useState<Record<string, LivePlan | null>>({});
+  // Per-session file tabs (model A: each session owns the tabs it opened) +
+  // active tab key: "chat" = ChatView, `file:<path>` = EditorPane, `diff:s|u:<path>`
+  // = DiffPane. Replaces the old per-source modal overlays (FilePanel.preview / FilePreviewOverlay).
+  const [fileTabsBySession, setFileTabsBySession] = useState<Record<string, FileTab[]>>({});
+  const [activeFileTabBySession, setActiveFileTabBySession] = useState<Record<string, string>>({});
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
   // 任一 harness 有新版 → 设置入口齿轮 + 设置内 harness 菜单亮红点(§设置入口/harness 菜单红点)。
   const harnessUpdateAvailable = useMemo(
@@ -316,6 +324,62 @@ export default function App() {
   const images = (selectedSessionId ? imagesBySession[selectedSessionId] : undefined) ?? [];
   const audios = (selectedSessionId ? audiosBySession[selectedSessionId] : undefined) ?? [];
   const imageSupported = !!(selectedSessionId && imageSupportedBySession[selectedSessionId]);
+
+  // Per-session file tabs (model A: tabs belong to the session that opened them).
+  // activeFileTab is "chat" | a tabKey(): "chat" = ChatView, `file:<path>` = EditorPane,
+  // `diff:s|u:<path>` = DiffPane (ChatView kept mounted, hidden via display:none —
+  // composer draft/scroll/unread preserved). The tab row renders with ≥1 tab open.
+  const fileTabs = (selectedSessionId ? fileTabsBySession[selectedSessionId] : undefined) ?? [];
+  const activeFileTab = (selectedSessionId ? activeFileTabBySession[selectedSessionId] : undefined) ?? "chat";
+
+  // Open a file as a tab in the active session's second row. If the path is
+  // already open, just activate it (don't duplicate); otherwise append + activate.
+  // `line` is stored as a hint — re-opening the same path from a different source
+  // updates the line without reloading content (EditorPane keys off path).
+  const openFileTab = useCallback((sessionId: string, path: string, line?: number) => {
+    if (!sessionId) return;
+    const key = tabKey({ kind: "file", path });
+    setFileTabsBySession((prev) => {
+      const cur = prev[sessionId] ?? [];
+      // Match a FILE tab with this path (diff tabs are separate identities).
+      const idx = cur.findIndex((t) => t.kind === "file" && t.path === path);
+      if (idx >= 0) {
+        // Update line hint in place (immutable copy) — keeps tab order stable.
+        return { ...prev, [sessionId]: cur.map((t, i) => (i === idx ? { ...t, line } : t)) };
+      }
+      return { ...prev, [sessionId]: [...cur, { kind: "file", path, line }] };
+    });
+    setActiveFileTabBySession((prev) => ({ ...prev, [sessionId]: key }));
+  }, []);
+  // Open a file's git diff as a middle-column tab. `staged` selects index vs working
+  // tree, so one path can have up to two distinct diff tabs (staged/unstaged) plus a
+  // content tab — all coexist, keyed by tabKey. Re-opening just re-activates.
+  const openDiffTab = useCallback((sessionId: string, path: string, staged: boolean) => {
+    if (!sessionId) return;
+    setFileTabsBySession((prev) => {
+      const cur = prev[sessionId] ?? [];
+      if (cur.some((t) => t.kind === "diff" && t.staged === staged && t.path === path)) {
+        return prev;
+      }
+      return { ...prev, [sessionId]: [...cur, { kind: "diff", path, staged }] };
+    });
+    setActiveFileTabBySession((prev) => ({ ...prev, [sessionId]: tabKey({ kind: "diff", path, staged }) }));
+  }, []);
+  const selectFileTab = useCallback((sessionId: string, key: string) => {
+    setActiveFileTabBySession((prev) => ({ ...prev, [sessionId]: key }));
+  }, []);
+  const closeFileTab = useCallback((sessionId: string, key: string) => {
+    setFileTabsBySession((prev) => {
+      const cur = prev[sessionId] ?? [];
+      const next = cur.filter((t) => tabKey(t) !== key);
+      return { ...prev, [sessionId]: next };
+    });
+    setActiveFileTabBySession((prev) => {
+      // If the closed tab was active, fall back to chat.
+      if (prev[sessionId] === key) return { ...prev, [sessionId]: "chat" };
+      return prev;
+    });
+  }, []);
   const audioSupported = !!(selectedSessionId && audioSupportedBySession[selectedSessionId]);
   const configOptions = (selectedSessionId ? configOptionsBySession[selectedSessionId] : undefined) ?? [];
   const commands = (selectedSessionId ? commandsBySession[selectedSessionId] : undefined) ?? [];
@@ -1312,11 +1376,6 @@ export default function App() {
     catch (e) { setError(extractErrMsg(e)); throw e; }
   }, [selectedSessionId]);
 
-  // 点击文件查看改动(staged 区分暂存/工作区上下文)。读操作,turn 进行中也允许。
-  const fileDiff = useCallback(async (path: string, staged: boolean) => {
-    if (!selectedSessionId) return "";
-    return await ChatService.SessionFileDiff(selectedSessionId, path, staged);
-  }, [selectedSessionId]);
 
   const addProject = useCallback(async () => {
     try {
@@ -1389,6 +1448,8 @@ export default function App() {
     setAudiosBySession(drop);
     setAudioSupportedBySession(drop);
     setConfigOptionsBySession(drop);
+    setFileTabsBySession(drop);
+    setActiveFileTabBySession(drop);
     queueBySessionRef.current = drop(queueBySessionRef.current);
     userStoppedBySessionRef.current.delete(sessionId);
     drainingBySessionRef.current.delete(sessionId);
@@ -1768,10 +1829,20 @@ export default function App() {
             onPopout={(id) => void popoutSession(id)}
           />
         )}
+        {selectedSessionId && fileTabs.length > 0 && (
+          <FileTabBar
+            tabs={fileTabs}
+            activeKey={activeFileTab}
+            onActivate={(key) => selectFileTab(selectedSessionId, key)}
+            onCloseFile={(key) => closeFileTab(selectedSessionId, key)}
+          />
+        )}
         <main className="main">
           {selectedSessionId && (isPopout || !poppedSessionIds.has(selectedSessionId)) ? (
             <Group orientation="vertical" id="main-vertical" className="main-vertical">
               <Panel id="chat-area" minSize="20%">
+            {/* Hide (not unmount) ChatView when a file tab is active: composer draft / scroll / unread stay. */}
+            <div className={`chatview-wrap ${activeFileTab !== "chat" ? "is-hidden" : ""}`}>
             <ChatView
               ref={chatViewRef}
               project={selectedProject}
@@ -1824,7 +1895,32 @@ export default function App() {
               hasMore={hasMore}
               loadingMore={loadingMore}
               onLoadMore={() => selectedSessionId && loadMoreMessages(selectedSessionId)}
+              onOpenFile={(path, line) => openFileTab(selectedSessionId, path, line)}
             />
+            </div>
+            {/* EditorPane (content) / DiffPane (git changes): shown when a non-chat
+                tab is active; lives in the same chat-area Panel to share column height. */}
+            {(() => {
+              const tab = activeFileTab !== "chat" ? fileTabs.find((t) => tabKey(t) === activeFileTab) : undefined;
+              if (!tab) return null;
+              if (tab.kind === "diff") {
+                return (
+                  <DiffPane
+                    sessionId={selectedSessionId}
+                    path={tab.path}
+                    staged={!!tab.staged}
+                    onClose={() => closeFileTab(selectedSessionId, activeFileTab)}
+                  />
+                );
+              }
+              return (
+                <EditorPane
+                  sessionId={selectedSessionId}
+                  file={{ path: tab.path, line: tab.line }}
+                  onClose={() => closeFileTab(selectedSessionId, activeFileTab)}
+                />
+              );
+            })()}
               </Panel>
               {termOpenBySession[selectedSessionId] && (
                 <>
@@ -1882,8 +1978,9 @@ export default function App() {
             onDiscard={discardFiles}
             onCommit={commitSession}
             onAICommit={aiCommit}
-            onDiff={fileDiff}
+            onOpenDiff={(path, staged) => selectedSessionId && openDiffTab(selectedSessionId, path, staged)}
             busy={status === "prompting"}
+            onOpenFile={(path, line) => selectedSessionId && openFileTab(selectedSessionId, path, line)}
           />
         ) : (
           <div className="side-empty" />

@@ -1397,12 +1397,40 @@ input, textarea { font-family: inherit; }
   background: var(--sel-accent); padding: 4px 10px; border-radius: 6px;
   border: 1px solid rgba(10, 132, 255, 0.3); word-break: break-all;
 }
-/* git diff 阅读器(Task #15088):复用 CollapsibleText —— 逐行 +/- 染色 + 长 diff 折叠。
-   .ctext-pre 提供等宽块 + 横向滚动;git-diff-pre 仅作形态标记(放宽行高上限便于阅读)。 */
+/* git diff reader: renders a real split/unified diff via DiffView (react-diff-viewer-continued).
+   Old CollapsibleText +/- coloring removed; .git-diff-pre kept only as a form marker. */
 .git-diff-pre { max-height: 320px; }
-.git-file-diff-wrap { margin: 2px 6px 4px; }
-.git-file-diff-msg { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); padding: 8px 10px; }
 .git-diff-stat { display: inline-flex; gap: 6px; }
+
+/* DiffView (react-diff-viewer-continued wrapper): toolbar + scrollable diff body.
+   The lib renders its own dark theme; we only frame it with our tokens. */
+.diff-view { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--sep); border-radius: 8px; overflow: hidden; background: var(--bg-panel); }
+.diff-view-bar { display: flex; align-items: center; gap: 6px; padding: 5px 8px; background: var(--bg-panel); border-bottom: 1px solid var(--sep); }
+.diff-view-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--text-2);
+  background: transparent; border: 1px solid var(--sep); border-radius: 5px;
+  padding: 3px 7px; cursor: pointer; transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.diff-view-btn:hover { background: var(--hover); color: var(--text); border-color: var(--sep-strong); }
+.diff-view-body { overflow: auto; }
+/* Tame the lib's default font size to match the app's code density. */
+.diff-view-body pre { font-size: 12px; line-height: 1.5; }
+/* DiffPane: middle-column tab content for a file's git diff. Mirrors .editor-pane
+   (toolbar + fill body) so it shares the column height; scope badge + +N/−N stat
+   sit in the toolbar. */
+.diff-pane { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.diff-pane-scope {
+  font-size: 9.5px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 4px; flex-shrink: 0;
+}
+.diff-pane-scope.staged { color: var(--green); background: rgba(48, 209, 88, 0.12); }
+.diff-pane-scope.unstaged { color: var(--text-3); background: var(--elev-2); }
+.diff-pane-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* DiffView fills the pane body: drop its card chrome (border/bg) and let its scroll
+   region track the flex height (the inline maxHeight is overridden here). */
+.diff-pane-body .diff-view { flex: 1; min-height: 0; border: none; border-radius: 0; background: transparent; }
+.diff-pane-body .diff-view-body { flex: 1; min-height: 0; max-height: none !important; }
 .git-diff-loading { font-size: 11.5px; color: var(--text-3); }
 .git-no-changes { font-size: 11.5px; color: var(--text-3); }
 .git-no-merge { font-size: 11.5px; color: var(--text-3); text-align: center; padding: 8px; }
@@ -1641,29 +1669,44 @@ input, textarea { font-family: inherit; }
 .spin { animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ─── 文件预览(全屏覆盖,居中) ─── */
-.preview-overlay {
-  position: fixed; inset: 0; z-index: 40;
-  background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(2px);
-  display: flex; align-items: center; justify-content: center; padding: 40px; animation: fadeIn 0.15s ease;
+/* ─── EditorPane (middle-column file tab content) ───
+   Replaces the old modal preview overlay (FilePreviewOverlay / FilePanel.preview).
+   Fills the chat-area Panel; ChatView is hidden beside it via .chatview-wrap.is-hidden. */
+.editor-pane {
+  height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--bg);
 }
+.editor-toolbar {
+  display: flex; align-items: center; gap: 7px; flex-shrink: 0;
+  padding: 6px 10px; border-bottom: 1px solid var(--sep); background: var(--elev-2);
+}
+.editor-toolbar > svg { color: var(--text-3); flex-shrink: 0; }
+.editor-path {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
+}
+.editor-toolbar .tool-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 5px; color: var(--text-3);
+  background: transparent; border: none; cursor: default;
+  transition: background 0.1s, color 0.1s;
+}
+.editor-toolbar .tool-btn:hover { background: var(--hover); color: var(--text); }
+/* Wrap ChatView so it can be hidden (not unmounted) when a file tab is active — composer draft /
+   scroll / unread stay intact. Uses height:100% (not flex:1) because the Panel content box is a
+   definite-height block, not a flex container, so flex:1 would collapse to content height and
+   make .chat-view (height:100%) resolve to 0 (matching .chat-view/.terminal-panel pattern). */
+.chatview-wrap { display: flex; height: 100%; min-height: 0; flex-direction: column; }
+.chatview-wrap.is-hidden { display: none; }
+
+/* Shared preview states (text loading/error + image branch) — reused by EditorPane. */
+.preview-error, .preview-loading {
+  padding: 24px; text-align: center; color: var(--text-3); font-size: 12.5px;
+}
+.preview-error { color: var(--red); }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-.preview-card {
-  /* resize:both + min 约束(360×220,正常视口不溢出窗口),并加回 max-height:85vh ——
-     卡片高度上限 85vh < 视口减去 .preview-overlay 的 padding:40px(需求视口 ≥ ~533px 高,
-     桌面环境均满足),既允许用户向上拖大、又保证顶部 .preview-head(含关闭按钮)始终可见,
-     不会被居中布局顶出可视区。宽度仍不限,由 padding 自然兜底。
-     overflow:hidden 满足 resize 的 overflow≠visible 要求;内部 .preview-pre / CodeViewer
-     各自处理滚动。 */
-  width: 100%; background: var(--elev);
-  border: 1px solid var(--sep-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop);
-  display: flex; flex-direction: column; overflow: hidden;
-  resize: both; min-width: 360px; min-height: 220px; max-height: 85vh;
-}
-/* Task #23063:resize 把手可见化 —— WebKit(macOS)/ WebView2(Win)默认把手在深色
-   底上几乎不可见,用 ::-webkit-resizer 画两条对角发丝纹,统一两处卡片外观。 */
-.mermaid-box::-webkit-resizer,
-.preview-card::-webkit-resizer {
+/* Mermaid full-screen modal resizer handle visibility (WebKit/WebView2 default handle
+   is near-invisible on dark bg). Was shared with .preview-card (now removed). */
+.mermaid-box::-webkit-resizer {
   background:
     linear-gradient(135deg,
       transparent 0, transparent 55%,
@@ -1672,39 +1715,6 @@ input, textarea { font-family: inherit; }
       var(--sep-strong) 72%, var(--sep-strong) 79%,
       transparent 79%);
 }
-.preview-head {
-  display: flex; align-items: center; gap: 7px;
-  padding: 8px 10px; border-bottom: 1px solid var(--sep); background: var(--elev-2);
-}
-.preview-head svg { color: var(--text-3); flex-shrink: 0; }
-.preview-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
-.preview-path { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.preview-pre {
-  flex: 1; margin: 0; padding: 11px 13px; overflow: auto;
-  font-family: var(--mono); font-size: 12px; line-height: 1.55; color: var(--text);
-  white-space: pre-wrap; word-break: break-word; user-select: text;
-}
-
-/* 行号化预览(Task #15084):每行一行号 + 内容,行号淡色右对齐。 */
-.preview-pre-lined { padding: 8px 0; white-space: pre; }
-.preview-line {
-  display: flex; align-items: flex-start; padding: 0 13px;
-  white-space: pre; min-width: max-content;
-}
-.preview-line-no {
-  display: inline-block; flex-shrink: 0; min-width: 3.5em; padding-right: 14px;
-  text-align: right; color: var(--text-3); user-select: none;
-  font-variant-numeric: tabular-nums;
-}
-.preview-line-text { flex: 1; user-select: text; }
-.preview-line-target {
-  background: rgba(255, 214, 10, 0.18);
-  box-shadow: inset 3px 0 0 var(--yellow, #ffd60a);
-}
-.preview-error, .preview-loading {
-  padding: 24px; text-align: center; color: var(--text-3); font-size: 12.5px;
-}
-.preview-error { color: var(--red); }
 
 /* ─── 图片预览(Task #23445):<img> 分流容器 ─── */
 /* 与 .preview-pre / .cv-scroll 同级,占据卡片主体(flex:1);大图走自然尺寸 + 居中,
@@ -2318,3 +2328,44 @@ input, textarea { font-family: inherit; }
 .tabbar-tab:hover .tabbar-tab-close,
 .tabbar-tab.active .tabbar-tab-close { opacity: 1; }
 .tabbar-tab-close:hover { background: var(--sep-strong); color: var(--text); }
+
+/* ─── File tab bar (middle column row 2, placement A1) ───
+   Renders only when the active session has ≥1 file open. First slot is a pinned,
+   non-closeable Chat tab (the session's own chat); file tabs follow after a divider.
+   Visual idiom mirrors .terminal-tab (size, radius, hover/active) for consistency. */
+.file-tabbar {
+  display: flex; align-items: stretch; flex-shrink: 0; height: 30px;
+  border-bottom: 1px solid var(--sep); background: var(--bg-panel, var(--bg));
+  padding: 0 4px 0 6px;
+}
+.file-tabbar-scroll { display: flex; align-items: center; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.file-tabbar-scroll::-webkit-scrollbar { height: 0; }
+.file-tab {
+  display: inline-flex; align-items: center; gap: 5px; height: 24px;
+  max-width: 180px; padding: 0 6px; margin-right: 2px;
+  border-radius: 6px; cursor: pointer; color: var(--text-2);
+  white-space: nowrap; transition: background 0.1s, color 0.1s;
+  background: transparent; border: none;
+}
+.file-tab:hover { background: var(--hover); color: var(--text); }
+.file-tab.active { background: var(--sel-accent, rgba(10,132,255,0.22)); color: var(--text); }
+.file-tab-icon { flex-shrink: 0; color: var(--text-3); }
+.file-tab.active .file-tab-icon { color: var(--accent-2); }
+.file-tab-title { overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; min-width: 0; }
+.file-tab-close {
+  display: flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; flex-shrink: 0; margin-left: 2px;
+  border-radius: 4px; color: var(--text-3); opacity: 0; cursor: pointer;
+}
+.file-tab:hover .file-tab-close, .file-tab.active .file-tab-close { opacity: 1; }
+.file-tab-close:hover { background: var(--sep-strong); color: var(--text); }
+/* Pinned Chat tab — heavier weight, accent icon, no close button. */
+.file-tab.chat-tab { font-weight: 600; padding: 0 10px; }
+.file-tab.chat-tab .file-tab-icon { color: var(--accent); }
+.file-tab.chat-tab.active .file-tab-icon { color: var(--accent-2); }
+.file-tabbar-divider { width: 1px; height: 16px; background: var(--sep-strong); margin: 0 6px; flex-shrink: 0; }
+/* Diff tab: GitCompare icon tinted by scope (staged=green, unstaged=muted) so the
+   two diff kinds are distinguishable at a glance in the tab strip. */
+.file-tab.diff-tab .file-tab-icon { color: var(--text-3); }
+.file-tab.diff-tab.staged .file-tab-icon { color: var(--green); }
+.file-tab.diff-tab.active .file-tab-icon { color: var(--accent-2); }

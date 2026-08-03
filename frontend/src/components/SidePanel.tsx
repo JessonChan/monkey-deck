@@ -26,8 +26,12 @@ interface Props {
   onCommit: (message: string) => Promise<void>;
   // AI 提交:转发给 GitPanel。
   onAICommit: () => Promise<void>;
-  onDiff: (path: string, staged: boolean) => Promise<string>;
+  // Open a file's diff as a tab in the middle column (forwarded to GitPanel.onOpenDiff).
+  onOpenDiff: (path: string, staged: boolean) => void;
   busy: boolean;
+  // Open a file in the editor tab strip (middle column row 2). Threaded
+  // through to FilePanel.openFile.
+  onOpenFile: (path: string, line?: number) => void;
 }
 
 type Tab = "files" | "scm";
@@ -68,7 +72,7 @@ export default function SidePanel(props: Props) {
       </div>
       <div className="side-body">
         {tab === "files" ? (
-          <FilePanel sessionId={props.sessionId} rootName={props.rootName} rootPath={props.rootPath} changes={props.changes} status={props.status} />
+          <FilePanel sessionId={props.sessionId} rootName={props.rootName} rootPath={props.rootPath} changes={props.changes} status={props.status} onOpenFile={props.onOpenFile} />
         ) : (
           <GitPanel
             embedded
@@ -84,7 +88,7 @@ export default function SidePanel(props: Props) {
             onDiscard={props.onDiscard}
             onAICommit={props.onAICommit}
             onCommit={props.onCommit}
-            onDiff={props.onDiff}
+            onOpenDiff={props.onOpenDiff}
             busy={props.busy}
           />
         )}

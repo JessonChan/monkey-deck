@@ -12,8 +12,6 @@ import {
   Sparkles,
 } from "lucide-react";
 import type { FileChange } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
-import CollapsibleText from "./CollapsibleText";
-import { countDiffLines, diffLineCls } from "../lib/diff";
 
 interface Props {
   branch: string;
@@ -30,8 +28,8 @@ interface Props {
   // AI 提交:让当前 session 的 agent 自动生成提交信息并提交(复用对话,架构 A)。
   onAICommit: () => Promise<void>;
   onCommit: (message: string) => Promise<void>;
-  // 点击文件查看改动(staged 区分暂存/工作区上下文)。
-  onDiff: (path: string, staged: boolean) => Promise<string>;
+  // Click a file: open a diff tab in the middle column (staged picks index vs working tree).
+  onOpenDiff: (path: string, staged: boolean) => void;
   // 一轮对话进行中:禁用写操作,避免与 opencode 写文件竞争 git index。
   busy: boolean;
   // embedded=true 时隐藏顶部标题行(由 SidePanel 的 tab 接管标题)。
@@ -60,7 +58,7 @@ export default function GitPanel({
   onDiscard,
   onAICommit,
   onCommit,
-  onDiff,
+  onOpenDiff,
   busy,
   embedded,
 }: Props) {
@@ -69,10 +67,6 @@ export default function GitPanel({
   const [err, setErr] = useState<string | null>(null);
   const [openStaged, setOpenStaged] = useState(true);
   const [openChanges, setOpenChanges] = useState(true);
-  // 单文件 diff 展开:key = 组前缀 + path;同一时刻只展开一个。
-  const [diffKey, setDiffKey] = useState<string | null>(null);
-  const [diffText, setDiffText] = useState("");
-  const [diffLoading, setDiffLoading] = useState(false);
 
   const staged = (changes || []).filter((c) => c.staged);
   const unstaged = (changes || []).filter((c) => !c.staged);
@@ -117,70 +111,28 @@ export default function GitPanel({
     }
   };
 
-  // 点击文件名:切换 diff 展开。staged 决定 diff 上下文(暂存 vs 工作区)。
-  const toggleDiff = async (key: string, path: string, staged: boolean) => {
-    if (diffKey === key) {
-      setDiffKey(null);
-      return;
-    }
-    setDiffKey(key);
-    setDiffLoading(true);
-    setDiffText("");
-    try {
-      setDiffText(await onDiff(path, staged));
-    } catch (e) {
-      setDiffText(t("gitPanel.diffFailed", { error: String(e) }));
-    } finally {
-      setDiffLoading(false);
-    }
-  };
 
   const isOk = mergeResult?.startsWith("✅");
   const isFail = mergeResult?.startsWith("❌");
 
-  // 单行文件:状态徽标 + 文件名(可点击查看 diff)+ 目录 + 右侧操作按钮 + 展开的 diff。
-  const row = (f: FileChange, keyPrefix: string, actions: ReactNode) => {
+  // One file row: status badge + name (click → open diff tab in the middle column) + dir + actions.
+  const row = (f: FileChange, actions: ReactNode) => {
     const st = STATUS_STYLE[f.status] || STATUS_STYLE.M;
-    const key = keyPrefix + f.path;
-    const expanded = diffKey === key;
     return (
-      <div key={key} className="git-file-row-wrap">
+      <div key={f.path} className="git-file-row-wrap">
         <div className="git-file-row">
           <span className={`git-status-badge ${st.cls}`}>{st.label}</span>
           <button
             className="git-file-name-btn"
             title={t("gitPanel.viewChanges")}
             data-testid="file-toggle"
-            onClick={() => toggleDiff(key, f.path, f.staged)}
+            onClick={() => onOpenDiff(f.path, f.staged)}
           >
             {fileName(f.path)}
           </button>
           <span className="git-file-dir">{fileDir(f.path)}</span>
           <span className="git-file-actions">{actions}</span>
         </div>
-        {expanded && (
-          <div className="git-file-diff-wrap" data-testid="file-diff">
-            {diffLoading ? (
-              <div className="git-file-diff-msg">{t("gitPanel.diffLoading")}</div>
-            ) : diffText ? (
-              <CollapsibleText
-                text={diffText}
-                lineClassName={diffLineCls}
-                preClassName="git-diff-pre"
-                testId="file-diff"
-                lineUnit={t("collapsibleText.lineUnit")}
-                extra={(() => { const s = countDiffLines(diffText); return (
-                  <span className="git-diff-stat">
-                    {s.added > 0 && <span className="diff-stat diff-stat-add">+{s.added}</span>}
-                    {s.removed > 0 && <span className="diff-stat diff-stat-del">−{s.removed}</span>}
-                  </span>
-                ); })()}
-              />
-            ) : (
-              <div className="git-file-diff-msg">{t("gitPanel.noDiff")}</div>
-            )}
-          </div>
-        )}
       </div>
     );
   };
@@ -250,7 +202,7 @@ export default function GitPanel({
         }
       >
         {staged.map((f) =>
-          row(f, "s", (
+          row(f, (
             <button className="git-row-act" title={t("gitPanel.unstage")} disabled={busy} onClick={() => onUnstage([f.path])}>
               <Minus size={14} />
             </button>
@@ -273,7 +225,7 @@ export default function GitPanel({
         }
       >
         {unstaged.map((f) =>
-          row(f, "u", (
+          row(f, (
             <>
               <button
                 className="git-row-act"
@@ -360,3 +312,4 @@ function Group({
     </div>
   );
 }
+
