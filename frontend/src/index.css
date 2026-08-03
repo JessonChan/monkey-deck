@@ -1524,6 +1524,8 @@ input, textarea { font-family: inherit; }
 .side-tab.active { color: var(--text); border-bottom-color: var(--accent); }
 .side-body { flex: 1; min-height: 0; display: flex; }
 .side-body > * { flex: 1; min-width: 0; }
+.side-view { flex: 1; min-width: 0; }
+.side-view.side-hidden { display: none; }
 .side-empty { width: 100%; height: 100%; }
 
 /* ─── 面板折叠/展开 toggle(固定锚点):图标位置不随面板开合跳动,只换方向 ─── */

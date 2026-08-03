@@ -27,6 +27,7 @@ import { shouldDropOnSwitch } from "./lib/sessionDrop";
 import { isNotifySoundEnabled, playNotifySound } from "./lib/notifySound";
 import { extractErrMsg } from "./lib/errorMsg";
 import { isMemorySaverEnabled } from "./lib/memorySaver";
+import { deleteFilePanelState } from "./lib/filePanelCache";
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
 // parsePopoutHash 从 URL hash 读取 popout session ID(/#popout=<sid>)。
@@ -1367,6 +1368,7 @@ export default function App() {
   const evictSessionCache = useCallback((sessionId: string) => {
     const drop = <T,>(prev: Record<string, T>) => { if (!(sessionId in prev)) return prev; const n = { ...prev }; delete n[sessionId]; return n; };
     void TerminalService.KillSessionTerminals(sessionId);
+    deleteFilePanelState(sessionId);
     setTermTabsBySession(drop);
     setActiveTermBySession(drop);
     setTermOpenBySession(drop);
@@ -1865,6 +1867,7 @@ export default function App() {
       >
         {selectedSessionId && activeSession && (isPopout || !poppedSessionIds.has(selectedSessionId)) ? (
           <SidePanel
+            key={selectedSessionId ?? ""}
             sessionId={selectedSessionId}
             rootName={selectedProject?.name || ""}
             rootPath={activeSession?.worktreePath || selectedProject?.path || ""}
