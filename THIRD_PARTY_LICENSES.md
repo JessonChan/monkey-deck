@@ -94,9 +94,18 @@ SOFTWARE.
 | `github.com/wailsapp/wails/v3` | Wails3 桌面框架(application / events / updater / binding) | MIT | 随 Wails3 再分发 |
 | `github.com/coder/acp-go-sdk` | ACP 协议 SDK(NewClientSideConnection / ClientSideConnection) | Apache-2.0 | 见 `references/agent-client-protocol` 仓库 |
 | `modernc.org/sqlite` | SQLite 纯 Go 驱动(免 CGO) | BSD-3-Clause | builder tag 引入 |
-
 > 以上为直接依赖;完整列表以 `go.mod` 为准。各依赖的完整 LICENSE 文本位于
 > `$GOPATH/pkg/mod/<module>@<version>/LICENSE`(或官方仓库)。
+
+### 3.1 前端关键依赖(npm)
+
+| 包 | 用途 | 协议 | 备注 |
+|---|---|---|---|
+| `react-diff-viewer-continued` | 只读 split/unified diff 渲染(GitPanel 文件 diff、ChatView 编辑卡片 diff) | MIT | 取代旧的手写 +/- 行染色(`lib/diff.ts` 的 `diffLineCls` 已删);内部用 `diff` 包做真 LCS diff,自带虚拟化 + 可选 Web Worker + 懒加载 Prism 语法高亮。原 [praneshr/react-diff-viewer](https://github.com/praneshr/react-diff-viewer) 停维后的活跃 fork。 |
+| `diff` | unified diff 解析(`parsePatch` 还原 old/new 内容喂给 DiffView) | BSD-3-Clause | `react-diff-viewer-continued` 的传递依赖,本仓库直接 import `parsePatch` |
+
+> 以上为关键依赖;完整列表以 `frontend/package.json` 为准。各包的完整 LICENSE 文本
+> 位于 `frontend/node_modules/<pkg>/LICENSE`。
 
 ---
 
