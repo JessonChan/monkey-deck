@@ -4,6 +4,7 @@ import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/i
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import type { FileChange } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import { copyText } from "../lib/clipboard";
+import { getFilePanelState, saveFilePanelState, type ChildrenMap, type FilePanelSnapshot } from "../lib/filePanelCache";
 import {
   ChevronRight,
   ChevronDown,
@@ -29,8 +30,6 @@ interface Props {
   onOpenFile: (path: string, line?: number) => void;
 }
 
-type ChildrenMap = Record<string, FileNode[]>;
-
 type Modal =
   | { kind: "file"; dir: string }
   | { kind: "folder"; dir: string }
@@ -41,17 +40,30 @@ const joinPath = (dir: string, name: string) => (dir === "" ? name : dir + "/" +
 
 export default function FilePanel({ sessionId, rootName, rootPath, changes, status, onOpenFile }: Props) {
   const { t } = useTranslation();
-  const [children, setChildren] = useState<ChildrenMap>({});
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Navigational state is seeded from the per-session cache so switching the session tab
+  // away and back restores the file tree exactly (expanded dirs / listings / selection).
+  // Lazy initializers run only on mount.
+  const [children, setChildren] = useState<ChildrenMap>(() => getFilePanelState(sessionId)?.children ?? {});
+  const [expanded, setExpanded] = useState<Set<string>>(() => getFilePanelState(sessionId)?.expanded ?? new Set());
   const [loading, setLoading] = useState<Set<string>>(new Set());
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(() => getFilePanelState(sessionId)?.selected ?? null);
   const [error, setError] = useState<string | null>(null);
+
   const [modal, setModal] = useState<Modal | null>(null);
   const [modalName, setModalName] = useState("");
   const [tick, setTick] = useState(0);
   // 右键菜单(复用 Sidebar ctx-menu 范式:fixed 定位 + 全局 Esc / outside-mousedown / resize 关闭 + 视口裁剪)。
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; node: FileNode } | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement>(null);
+  // Snapshot navigational state into the per-session cache on unmount so reopening this
+  // session's tab restores the file tree exactly. SidePanel is keyed by sessionId, so this
+  // instance lives for exactly one session — cleanup runs once on unmount, reading the
+  // latest state via snapRef (avoids re-subscribing the effect on every state change).
+  const snapRef = useRef<FilePanelSnapshot>({ expanded, children, selected });
+  snapRef.current = { expanded, children, selected };
+  useEffect(() => {
+    return () => saveFilePanelState(sessionId, snapRef.current);
+  }, [sessionId]);
 
   // rel(相对路径)→ 绝对路径(钉在 rootPath;无 rootPath 时返回空,交给浏览器默认菜单)。
   const absPath = useCallback((rel: string) => {
@@ -125,14 +137,16 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
     [sessionId]
   );
 
-  // session 切换:重置 + 载入根。
+  // On mount: refresh the root and any already-expanded dirs (expanded may come from the
+  // per-session cache when the user switched away and back). We do NOT reset state here —
+  // the initial useState values already come from the cache, and SidePanel is keyed by
+  // sessionId so this instance lives for exactly one session.
   useEffect(() => {
-    setChildren({});
-    setExpanded(new Set());
-    setSelected(null);
-    setModal(null);
+
     void loadChildren("");
-  }, [sessionId, loadChildren]);
+    for (const d of expanded) void loadChildren(d);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
   // Esc closes the active modal (file/folder/rename/delete). File preview is
   // no longer a modal here — it's a tab in the middle column (EditorPane).
