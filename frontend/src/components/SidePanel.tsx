@@ -67,26 +67,33 @@ export default function SidePanel(props: Props) {
         )}
       </div>
       <div className="side-body">
-        {tab === "files" ? (
+        {/* Both panels stay mounted; the tab toggle only switches visibility (CSS).
+            Conditional rendering would unmount the hidden panel and discard its
+            in-component state: expanded dirs / open file preview (FilePanel),
+            commit draft / collapsed groups / expanded diff (GitPanel). */}
+        <div className={`side-view${tab === "files" ? "" : " side-hidden"}`}>
           <FilePanel sessionId={props.sessionId} rootName={props.rootName} rootPath={props.rootPath} changes={props.changes} status={props.status} />
-        ) : (
-          <GitPanel
-            embedded
-            branch={props.branch}
-            baseRef={props.baseRef}
-            changes={props.changes}
-            mergeResult={props.mergeResult}
-            mergeable={props.mergeable}
-            isGuest={props.isGuest}
-            onMerge={props.onMerge}
-            onStage={props.onStage}
-            onUnstage={props.onUnstage}
-            onDiscard={props.onDiscard}
-            onAICommit={props.onAICommit}
-            onCommit={props.onCommit}
-            onDiff={props.onDiff}
-            busy={props.busy}
-          />
+        </div>
+        {hasSCM && (
+          <div className={`side-view${tab === "scm" ? "" : " side-hidden"}`}>
+            <GitPanel
+              embedded
+              branch={props.branch}
+              baseRef={props.baseRef}
+              changes={props.changes}
+              mergeResult={props.mergeResult}
+              mergeable={props.mergeable}
+              isGuest={props.isGuest}
+              onMerge={props.onMerge}
+              onStage={props.onStage}
+              onUnstage={props.onUnstage}
+              onDiscard={props.onDiscard}
+              onAICommit={props.onAICommit}
+              onCommit={props.onCommit}
+              onDiff={props.onDiff}
+              busy={props.busy}
+            />
+          </div>
         )}
       </div>
     </aside>
