@@ -383,7 +383,7 @@ input, textarea { font-family: inherit; }
 
 /* will-change: scroll-position 提示滚动容器把滚动交给合成线程处理(主线程不再每帧跑布局/绘制),
    是滚动顺滑的关键合成层提升。 */
-.chat-body { flex: 1; overflow-y: auto; padding: 0; will-change: scroll-position; position: relative; }
+.chat-body { flex: 1; overflow-y: auto; padding: 0; will-change: scroll-position; position: relative; user-select: text; }
 /* 内容层:虚拟化容器。显式高度由布局 total 内联设定(撑开滚动条),
    行/头/尾绝对定位(top = layout.tops/tailTop,与 scrollTop 同坐标系,含 headPad)。 */
 .chat-content { position: relative; }

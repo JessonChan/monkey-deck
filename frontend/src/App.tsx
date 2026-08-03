@@ -191,6 +191,10 @@ export default function App() {
   // (每次 tab 增减都重建 closeTab 会牵连 TabBar 整树重渲染)。与 selectedSessionIdRef 同理。
   const openTabsRef = useRef<string[]>([]);
   openTabsRef.current = openTabs;
+  // activeFileTabBySession 的 ref:⌘W handler 读它判断「先关 file/diff tab 还是关 session tab」,
+  // 不进 effect 依赖(避免每次切 file tab 都重订阅 keydown)。与 selectedSessionIdRef 同理。
+  const activeFileTabBySessionRef = useRef(activeFileTabBySession);
+  activeFileTabBySessionRef.current = activeFileTabBySession;
   // sessionsByProject 的 ref:status 事件 handler 里查「session 属于哪个 project」用,
   // 不进 effect 依赖(避免每次 sessionsByProject 变化都重订阅事件)。
   const sessionsByProjectRef = useRef(sessionsByProject);
@@ -1555,10 +1559,12 @@ export default function App() {
     }
   }, [pendingCloseTab, stopSessionById, evictSessionCache, openSession, projectIdOf]);
 
-  // ⌘W / Ctrl+W closes the active tab (browser / VS Code convention). Wails3 / macOS would
-  // otherwise close the whole window; we override that to close just the current session tab and
-  // switch to a neighbor. Main-window only (popout windows have no tab bar — ⌘W there keeps its
-  // native "close window" meaning). No-op when nothing is selected.
+  // ⌘W / Ctrl+W closes the active tab (editor convention: inner tab before outer). With a
+  // file/diff tab active it closes that read-only preview (closeFileTab → falls back to chat);
+  // only when the chat view itself is active does it close the session tab (with CloseTabDialog
+  // for still-generating turns). Wails3 / macOS would otherwise close the whole window, so we
+  // override. Main-window only (popout windows have no tab bar — ⌘W there keeps its native
+  // "close window" meaning). No-op when nothing is selected.
   useEffect(() => {
     if (isPopout) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1566,12 +1572,16 @@ export default function App() {
         const sid = selectedSessionIdRef.current;
         if (!sid) return;
         e.preventDefault();
-        closeTab(sid);
+        // Read activeFileTab from a ref so it's fresh at keypress time, not stale from
+        // effect-capture (the effect only re-subscribes on isPopout/closeTab change).
+        const aft = activeFileTabBySessionRef.current[sid];
+        if (aft && aft !== "chat") closeFileTab(sid, aft);  // close file/diff tab → falls back to chat
+        else closeTab(sid);                                 // close session tab (CloseTabDialog if generating)
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isPopout, closeTab]);
+  }, [isPopout, closeTab, closeFileTab]);
 
   // Delete a session. Chat-only for guest/project; owner also removes the worktree; owner WITH
   // guests defers to the 3-option dialog (DeleteWorktreeDialog) since removing the worktree
