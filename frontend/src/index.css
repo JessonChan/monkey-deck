@@ -382,8 +382,10 @@ input, textarea { font-family: inherit; }
 .readonly-continue-btn:hover { background: var(--elev); border-color: var(--accent-2); color: var(--accent-2); }
 
 /* will-change: scroll-position 提示滚动容器把滚动交给合成线程处理(主线程不再每帧跑布局/绘制),
-   是滚动顺滑的关键合成层提升。 */
-.chat-body { flex: 1; overflow-y: auto; padding: 0; will-change: scroll-position; position: relative; user-select: text; }
+   是滚动顺滑的关键合成层提升。overflow-anchor:none 关闭浏览器滚动锚定——行在正常流中时,
+   浏览器会自动补偿「上方内容变高」的 scrollTop,与组件自身的锚点补偿(el.scrollTop += Δh,
+   A 不变量)冲突致双重补偿/抖动。react-virtuoso 同样设 overflowAnchor:none。 */
+.chat-body { flex: 1; overflow-y: auto; padding: 0; will-change: scroll-position; position: relative; user-select: text; overflow-anchor: none; }
 /* Content layer: normal flow (head + top spacer + windowed rows + bottom spacer + tail).
    No explicit height — natural flow already sums to layout.total. Rows are in-flow blocks so
    WebKit text selection works; absolutely-positioned rows corrupted selection geometry. */
