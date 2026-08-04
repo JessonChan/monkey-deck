@@ -36,13 +36,30 @@ const openFilePreview = useCallback((path, line) => {
 
 > 这是经典「内联回调破坏 memo / 内联组件类型导致 remount」反模式。ref-backed 稳定回调是标准解法,与项目里 `selectedSessionIdRef`/`openTabsRef` 等「用 ref 读最新值、不进依赖」的既有套路一致。
 
-## 改了哪些文件
+## 第二个触发点:重新进入 tab(remount,而非 re-render)
+
+用户补充:「只要重新进入 tab 也会触发」。分两种 tab:
+
+- **file/chat tab**(点文件链接切走、再点回 chat tab):ChatView **不卸载**(`.chatview-wrap.is-hidden` = `display:none`,见 App.tsx + index.css)→ 只是 App 重渲染 → **已被上面的稳定回调修复**(ChatRow memo 成立,不 remount)。
+- **session tab**(切到别的会话再切回来):`.chat-body` 带 `key={props.sessionId}`,切 session 时 key 变 → React **整体 remount chat-body** → 每个 MermaidRenderer 从零挂载 → `phase` 走 `idle→loading→success`,即使 SVG 已缓存也会闪一下(loading 态可见)。这是 **key-remount**,与上面的 memo-break 是不同机制。
+
+对后者,根治「不让 key 变」会破坏既有的「切 session 重置滚动/窗口」语义,代价大。改用**缓存直渲**:MermaidRenderer 挂载时若 SVG 已缓存,直接以 `success` 起步(lazy `useState` 初始化器同步查缓存),跳过 `idle→loading` 闪烁。
+
+## 改法 2:MermaidRenderer 缓存直渲(消除 remount 闪烁)
+
+- `lib/mermaidRenderer.ts`:新增同步 `getCachedSvg(code)`(与 `renderMermaid` 共用 `cacheKey`,命中返回缓存 SVG);`renderMermaid` 改用同一 `cacheKey`(去重)。
+- `components/MermaidRenderer.tsx`:
+  - `phase` 用 lazy 初始化器:`!streaming && getCachedSvg(code)` 命中 → 初始即 `success`(挂载首帧就出图,不闪)。
+  - effect 加缓存快车:命中 `getCachedSvg` → 直接 `setPhase(success)` 并 `return`,**不走 `loading`、不调 `renderMermaid`**(bindFunctions 缓存不存,可接受,见 svgCache 注释)。
+  - 缓存未命中(首次见到的图)仍走原 `loading→renderMermaid→success`。
+
+## 改了哪些文件(汇总)
 
 - `frontend/src/components/ChatView.tsx`:`openFilePreview` 由 `useCallback([props.onOpenFile])` 改为 ref-backed 空依赖稳定回调(含英文注释说明根因)。
-- `frontend/src/components/ChatView.virtual.mount.test.tsx`:
-  - 加 mermaid 动态 import mock(计 `render()` 调用次数,检测 remount)。
-  - 加 `__resetMermaidCacheForTest` 导入(remount 后必走 render,缓存命中会掩盖)。
-  - 新增 `ChatView mermaid remount stability` 测试:挂载含 mermaid 的 agent 消息 → 渲染好(count=1)→ 清缓存 → 用**新 `onOpenFile` 身份**重渲染 → 断言 count 仍为 1(未 remount)、图仍显示。
+- `frontend/src/lib/mermaidRenderer.ts`:新增同步 `getCachedSvg(code)` + 抽出共用 `cacheKey`;`renderMermaid` 复用之。
+- `frontend/src/components/MermaidRenderer.tsx`:`phase` 改 lazy 初始化器(缓存命中即 `success` 起步);effect 加缓存快车(命中直接 success,不走 loading、不调 renderMermaid)。
+- `frontend/src/components/ChatView.virtual.mount.test.tsx`:加 mermaid 动态 import mock(计 `render()` 次数)+ `__resetMermaidCacheForTest` 导入 + `ChatView mermaid remount stability` 测试(新 `onOpenFile` 身份重渲染 → 不 remount)。
+- `frontend/src/components/MermaidRenderer.mount.test.tsx`:`getCachedSvg` 契约测试(渲染前 undefined、渲染后返回 SVG)+ remount 缓存直渲测试(同 code 重挂 → 图仍在、`render()` 不再调用)。
 
 ## 验证
 
@@ -50,9 +67,8 @@ const openFilePreview = useCallback((path, line) => {
 - 新测试**不带修复**:`render()` 被调用 2 次(remount 发生)→ 测试 FAIL,复现 bug。
 - 新测试**带修复**:`render()` 仅 1 次(无 remount)→ PASS。
 - `bun test src/components/ChatView.virtual.mount.test.tsx`(隔离):**11 pass / 0 fail**(含新测试)。
-- `bun test src/components/MermaidRenderer.mount.test.tsx`:19 pass,不受 mermaid mock 影响。
 - 全量 `bun test`:新增测试与既有 10 个 ChatView 虚拟化 mount 测试一样,在**全量套件**里因**预存的 McpChip `mock.module` 跨文件污染**(另一文件的 chatservice mock 泄漏,致 McpChip 抛 `GetSessionMcpServers is not a function`)而 FAIL —— 此污染为**预存问题**(stash 本改动后同样 30 fail),非本次引入,隔离运行均通过。
-
+- `bun test src/components/MermaidRenderer.mount.test.tsx`:**21 pass**(原 19 + `getCachedSvg` 契约测试 + remount 缓存直渲测试),不受 mermaid mock 影响。
 ## 下一步
 
 - 桌面 app 实测:让 agent 产一张 mermaid 图,再连续追问,确认历史 mermaid 图不再闪烁、当前流式消息的 mermaid 只在写完后渲染一次。
