@@ -178,11 +178,21 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       return next;
     });
   }, [props.sessionId]);
+  // Hold the latest onOpenFile in a ref so the callback handed to rows stays
+  // referentially stable. App.tsx passes an inline arrow (new identity every
+  // render); if openFilePreview tracked it, ChatRow's memo would break on every
+  // streaming chunk → AgentMarkdown would rebuild its `components` object → the
+  // inline `pre` renderer would get a NEW function identity → react-markdown
+  // would REMOUNT every <pre>/MermaidRenderer → mermaid diagrams would flicker
+  // between source ("streaming" view) and the rendered SVG on every chunk, for
+  // BOTH the streaming message and already-rendered older messages.
+  const onOpenFileRef = useRef(props.onOpenFile);
+  onOpenFileRef.current = props.onOpenFile;
   const openFilePreview = useCallback((path: string, line?: number) => {
     // Route up to App.tsx (per-session file tabs) instead of a local modal.
     // No-op if the host hasn't wired the prop (keeps ChatView usable standalone).
-    props.onOpenFile?.(path, line);
-  }, [props.onOpenFile]);
+    onOpenFileRef.current?.(path, line);
+  }, []);
   // 当前生效的工作目录:优先 session.worktreePath(独立 worktree),降级 project.path(共享目录)。
   // 与 App.tsx 的 termCwdRef 同一套优先级(worktree 优先 → 项目目录)。
   const activePath = props.session?.worktreePath || props.project?.path || "";

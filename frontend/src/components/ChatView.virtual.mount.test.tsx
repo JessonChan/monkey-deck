@@ -133,9 +133,23 @@ mock.module("react-i18next", () => ({
   initReactI18next: { type: "3rd-party" },
   default: { useTranslation: () => ({ t: (k: string) => k }) },
 }));
+// ---- mermaid mock:count render() calls to detect MermaidRenderer remounts ----
+// (dynamic `import("mermaid")` inside lib/mermaidRenderer.ts; must register before
+//  ChatView import so the component graph resolves to the fake.)
+const mermaidRenderCalls: string[] = [];
+mock.module("mermaid", () => ({
+  default: {
+    initialize: () => {},
+    render: async (id: string, text: string) => {
+      mermaidRenderCalls.push(id);
+      return { svg: "<svg class='fake-mermaid'><g>diagram</g></svg>", diagramType: "flowchart-v2", bindFunctions: () => {} };
+    },
+  },
+}));
 
 // 在 mock 注册后再导入组件(确保拿到 mocked 依赖)。
 const { default: ChatView } = await import("./ChatView.tsx");
+const { __resetMermaidCacheForTest } = await import("../lib/mermaidRenderer.ts");
 import type { ChatItem } from "../types";
 
 function makeItems(n: number): ChatItem[] {
@@ -624,6 +638,57 @@ describe("ChatView 虚拟化(W 不变量:DOM 平台期)", () => {
     expect(errPct).toBeLessThan(5);
 
     rowHeights.clear();
+    root.unmount();
+  });
+});
+// Reproduction test for the mermaid remount-flicker bug: App.tsx passes an inline
+// `onOpenFile` arrow (new identity every render). If ChatView forwarded that
+// instability, ChatRow's memo would break on every re-render → AgentMarkdown would
+// rebuild its `components` object → the inline `pre` renderer would get a new function
+// identity → react-markdown would REMOUNT every <pre>/MermaidRenderer → the diagram
+// would flicker between source ("streaming" view) and the rendered SVG, for BOTH the
+// streaming message and already-rendered older messages. The fix: ChatView holds
+// onOpenFile in a ref so the callback handed to rows is referentially stable.
+describe("ChatView mermaid remount stability", () => {
+  test("new onOpenFile identity does NOT remount an already-rendered mermaid diagram", async () => {
+    rowHeights.clear();
+    __resetMermaidCacheForTest();
+    mermaidRenderCalls.length = 0;
+    const items: ChatItem[] = [
+      { type: "user", id: "u0", text: "draw a diagram", ts: 1000 },
+      {
+        type: "agent", id: "a0", ts: 1001,
+        text: "Here you go:\n\n```mermaid\ngraph TD\n  A --> B\n  B --> C\n```\n",
+      },
+    ];
+    const onOpenFileV1 = () => {};
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    root.render(<ChatView {...(baseProps(items) as never)} onOpenFile={onOpenFileV1} />);
+    await flush();
+    await settle();
+
+    // Diagram rendered exactly once.
+    const diagram = host.querySelector('[data-testid="mermaid-diagram"]');
+    expect(diagram).not.toBeNull();
+    expect(mermaidRenderCalls.length).toBe(1);
+
+    // Simulate App.tsx re-rendering with a fresh inline onOpenFile arrow (new identity)
+    // while items stay referentially identical — exactly what happens every streaming chunk.
+    __resetMermaidCacheForTest(); // a remount would now HAVE to call render() again
+    const onOpenFileV2 = () => {};
+    root.render(<ChatView {...(baseProps(items) as never)} onOpenFile={onOpenFileV2} />);
+    await flush();
+    await settle();
+
+    // No remount → effect did not re-run → render() not called again (cache reset proves it).
+    expect(mermaidRenderCalls.length).toBe(1);
+    // Diagram still mounted (never reverted to source/loading).
+    expect(host.querySelector('[data-testid="mermaid-diagram"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="mermaid-source"]')).toBeNull();
+    expect(host.querySelector('[data-testid="mermaid-loading"]')).toBeNull();
+
     root.unmount();
   });
 });
