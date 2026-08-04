@@ -48,7 +48,7 @@ mock.module("react-i18next", () => ({
 
 // Now import the components fresh (after mocks are registered).
 const { default: MermaidRenderer } = await import("./MermaidRenderer.tsx");
-const { renderMermaid, __resetMermaidCacheForTest } = await import("../lib/mermaidRenderer.ts");
+const { renderMermaid, getCachedSvg, __resetMermaidCacheForTest } = await import("../lib/mermaidRenderer.ts");
 
 function mount(jsx) {
   const host = document.createElement("div");
@@ -85,6 +85,20 @@ describe("renderMermaid (lib)", () => {
     await renderMermaid("graph TD\n  A --> B");
     const renders = calls.filter((c) => "render" in c);
     expect(renders.length).toBe(1);
+  });
+
+  test("getCachedSvg: undefined before render, returns SVG after render (same code)", async () => {
+    __resetMermaidCacheForTest();
+    const code = "graph TD\n  A --> B";
+    // Before any render: nothing cached.
+    expect(getCachedSvg(code)).toBeUndefined();
+    const r = await renderMermaid(code);
+    expect(r.ok).toBe(true);
+    // After render: synchronous lookup returns the cached SVG (enables mount-from-cache).
+    const cached = getCachedSvg(code);
+    expect(cached).toBe(r.svg);
+    // Whitespace-only / empty → undefined (never cached).
+    expect(getCachedSvg("   ")).toBeUndefined();
   });
 
   test("empty code → {ok:false}", async () => {
@@ -153,6 +167,36 @@ describe("MermaidRenderer (component)", () => {
     root.render(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
     await flush();
     expect(host.querySelector('[data-testid="mermaid-diagram"]')).not.toBeNull();
+  });
+
+  test("remount with cached SVG → diagram shows, no redundant render (flicker-free remount)", async () => {
+    // Simulates a session-tab switch: key=sessionId remounts the whole chat body,
+    // so MermaidRenderer unmounts and a fresh instance mounts. With the SVG already
+    // cached, the lazy initializer paints success immediately (no idle→loading flicker)
+    // and the effect's cache-hit branch skips renderMermaid entirely.
+    __resetMermaidCacheForTest();
+    calls.length = 0;
+    const code = "graph TD\n  A --> B";
+    const host1 = document.createElement("div");
+    document.body.appendChild(host1);
+    const root1 = createRoot(host1);
+    root1.render(<MermaidRenderer code={code} streaming={false} />);
+    await flush();
+    expect(host1.querySelector('[data-testid="mermaid-diagram"]')).not.toBeNull();
+    expect(calls.filter((c) => "render" in c).length).toBe(1);
+
+    // Fresh instance, same code (cache already populated by the first mount).
+    const host2 = document.createElement("div");
+    document.body.appendChild(host2);
+    const root2 = createRoot(host2);
+    root2.render(<MermaidRenderer code={code} streaming={false} />);
+    await flush();
+    await flush();
+    // Diagram present (mount-from-cache) and mermaid.render NOT called again.
+    expect(host2.querySelector('[data-testid="mermaid-diagram"]')).not.toBeNull();
+    expect(calls.filter((c) => "render" in c).length).toBe(1);
+    root1.unmount();
+    root2.unmount();
   });
 
   // ---- Task #22115: view-source toggle + zoom ----

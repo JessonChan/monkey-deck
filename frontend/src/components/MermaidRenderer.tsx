@@ -17,7 +17,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Code2, Copy, GitGraph as DiagramIcon, Maximize2, RefreshCw, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
 import { copyText } from "../lib/clipboard";
-import { renderMermaid, type MermaidRenderResult } from "../lib/mermaidRenderer";
+import { renderMermaid, getCachedSvg, type MermaidRenderResult } from "../lib/mermaidRenderer";
 
 interface Props {
   /** Mermaid 源码(```mermaid 围栏内的原文)。 */
@@ -173,7 +173,18 @@ function ZoomControls({ z, testIdPrefix }: { z: ZoomApi; testIdPrefix: string })
 
 export default function MermaidRenderer({ code, streaming = false }: Props) {
   const { t } = useTranslation();
-  const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+  // Mount-from-cache: if the SVG for this code is already cached (same theme),
+  // start at success instead of idle. This skips the idle→loading→success flicker
+  // when the component remounts — e.g. a session-tab switch remounts the whole chat
+  // body (key=sessionId) — so an already-rendered diagram reappears instantly.
+  // bindFunctions is unavailable from cache (acceptable; see mermaidRenderer svgCache note).
+  const [phase, setPhase] = useState<Phase>(() => {
+    if (!streaming) {
+      const cached = getCachedSvg(code);
+      if (cached) return { kind: "success", svg: cached };
+    }
+    return { kind: "idle" };
+  });
   const [copied, setCopied] = useState(false);
   // success 状态下的查看源码开关(true = 显示源码而非 SVG)。
   const [viewSource, setViewSource] = useState(false);
@@ -203,6 +214,14 @@ export default function MermaidRenderer({ code, streaming = false }: Props) {
     // 新一轮渲染:重置交互态(查看源码 / 全屏)。zoom 由 useMermaidZoom 的 resetKey(code)重置。
     setViewSource(false);
     setFullscreen(false);
+    // Cache hit: paint success now (no loading flicker on remount / re-entry).
+    // bindFunctions is not obtainable from cache (renderMermaid drops it on hit);
+    // acceptable — see mermaidRenderer svgCache note.
+    const cachedSvg = getCachedSvg(code);
+    if (cachedSvg) {
+      setPhase((prev) => (prev.kind === "success" && prev.svg === cachedSvg ? prev : { kind: "success", svg: cachedSvg }));
+      return;
+    }
     setPhase({ kind: "loading" });
     void renderMermaid(code).then((res: MermaidRenderResult) => {
       if (cancelledRef.current) return;

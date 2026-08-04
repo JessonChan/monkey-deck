@@ -106,13 +106,31 @@ const darkThemeVariables = {
   // sequence / gantt 等用到 mainBsp / nodeBorder 等,留默认即可。
 };
 
+// Cache key for a mermaid source: `${theme}:${hash}`. Shared by renderMermaid
+// (async) and getCachedSvg (sync) so the two paths agree on what "cached" means.
+function cacheKey(code: string): string {
+  return `${currentMermaidTheme()}:${hashString(code.trim())}`;
+}
+
+// Synchronous cache lookup: returns the cached SVG for `code` if already rendered
+// in the current theme, else undefined. Lets MermaidRenderer paint the diagram on
+// first render (lazy useState initializer) when remounting — e.g. after a session
+// tab switch remounts the whole chat body — without an idle→loading→success flicker.
+// bindFunctions is not cached (see svgCache note); callers accept its absence on
+// cache hits, same as renderMermaid's cache-hit branch.
+export function getCachedSvg(code: string): string | undefined {
+  const trimmed = code.trim();
+  if (!trimmed) return undefined;
+  return svgCache.get(cacheKey(trimmed));
+}
+
 // 渲染入口:成功 → { ok, svg };失败 → { ok: false, error }。
 // 命中缓存(按 theme + hash)直接返回 SVG(bindFunctions 缺失可接受,见 svgCache 注释)。
 export async function renderMermaid(code: string): Promise<MermaidRenderResult> {
   const trimmed = code.trim();
   if (!trimmed) return { ok: false, error: "empty" };
+  const key = cacheKey(trimmed);
   const theme = currentMermaidTheme();
-  const key = `${theme}:${hashString(trimmed)}`;
 
   const cached = svgCache.get(key);
   if (cached) return { ok: true, svg: cached };
