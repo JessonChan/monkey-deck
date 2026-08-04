@@ -196,11 +196,12 @@ export default function MermaidRenderer({ code, streaming = false }: Props) {
     bindFunctions: phase.kind === "success" ? phase.bindFunctions : undefined,
     resetKey: code,
   });
-  // 防止 effect 卸载后 setState(异步渲染可能晚于 unmount 完成)。
-  const cancelledRef = useRef(false);
-
+  // Per-invocation cancellation flag: each effect run owns its own `cancelled`,
+  // flipped to true only by THAT run's cleanup. This closes a race where a shared
+  // ref (reset at the top of every run) would let an in-flight renderMermaid from
+  // an older `code` overwrite the current phase after a mid-render code change.
   useEffect(() => {
-    cancelledRef.current = false;
+    let cancelled = false;
     // streaming 期间不渲染:源码还在追加,渲染必失败。
     if (streaming) {
       setPhase({ kind: "idle" });
@@ -224,7 +225,7 @@ export default function MermaidRenderer({ code, streaming = false }: Props) {
     }
     setPhase({ kind: "loading" });
     void renderMermaid(code).then((res: MermaidRenderResult) => {
-      if (cancelledRef.current) return;
+      if (cancelled) return;
       if (res.ok) {
         setPhase({ kind: "success", svg: res.svg, bindFunctions: res.bindFunctions });
       } else {
@@ -232,7 +233,7 @@ export default function MermaidRenderer({ code, streaming = false }: Props) {
       }
     });
     return () => {
-      cancelledRef.current = true;
+      cancelled = true;
     };
   }, [code, streaming]);
 
