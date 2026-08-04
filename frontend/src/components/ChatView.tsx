@@ -531,6 +531,19 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     if ((e.target as HTMLElement).closest("button, input, a")) return;
     void ChatService.ToggleMaximise();
   };
+  // Virtualized window rendered in NORMAL FLOW (not position:absolute). Absolutely-positioned
+  // rows corrupt WebKit's text-selection geometry — selecting one word selects everything above
+  // it — because the browser can't map selection ranges across out-of-flow siblings. Instead we
+  // render only [win.start, win.end) as flowing blocks, flanked by spacers whose heights reproduce
+  // the scroll space of the unrendered rows. Net scroll height = head + spacers + rows + tail =
+  // layout.total, so windowing (W invariant), stick/anchor (S/A) and RO measuring (M) are unchanged.
+  const rowCount = rows.length;
+  const headPad = rowCount > 0 ? layout.tops[0] : 0; // = head region height (offset of first row)
+  const topSpacer = win.start > 0 && rowCount > 0 ? Math.max(0, layout.tops[win.start] - headPad) : 0;
+  const renderedBottom = win.end > win.start && rowCount > 0
+    ? layout.tops[win.end - 1] + layout.heights[win.end - 1]
+    : headPad;
+  const bottomSpacer = rowCount > 0 ? Math.max(0, layout.tailTop - renderedBottom) : 0;
 
   return (
     <div className="chat-view">
@@ -570,10 +583,12 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       )}
 
       <div className="chat-body" key={props.sessionId} ref={scrollRef} onScroll={onScroll} onContextMenu={openCtxMenu} data-testid="chat-body">
-        {/* 内容层:显式高度 = 布局 total(撑开滚动条),行绝对定位(top = layout.tops,与 scrollTop 同系)。 */}
-        <div className="chat-content" ref={contentRef} style={{ height: layout.total }}>
+        {/* Content layer in normal flow (head + top spacer + windowed rows + bottom spacer +
+            tail). No more absolute rows: under WebKit they corrupt text selection. Spacer
+            heights reproduce the scroll space of unrendered rows; total = layout.total. */}
+        <div className="chat-content" ref={contentRef}>
           {/* 头部区:顶部留白 + 加载更多 + 占位。实测高度 headHRef(data-iid=__head__)。 */}
-          <div className="cv-head" data-iid="__head__" style={{ top: 0 }}>
+          <div className="cv-head" data-iid="__head__">
             {items.length === 0 && <div className="chat-placeholder">{t("chat.placeholder")}</div>}
             {props.hasMore && (
               <button ref={loadMoreRef} className="load-more-btn" onClick={props.onLoadMore} disabled={props.loadingMore} data-testid="load-more">
@@ -581,6 +596,8 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
               </button>
             )}
           </div>
+          {/* Top spacer: scroll space of rows [0, win.start). */}
+          {topSpacer > 0 && <div className="cv-spacer" style={{ height: topSpacer }} aria-hidden />}
           {/* 窗口化行:只有 [win.start, win.end) 的行进入 DOM(W 不变量)。 */}
           {rows.slice(win.start, win.end).map((row, wi) => {
             const index = win.start + wi;
@@ -602,13 +619,15 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
               );
             }
             return (
-              <div className="cv-item" data-iid={row.id} key={row.id} style={{ top: layout.tops[index] }}>
+              <div className="cv-item" data-iid={row.id} data-cv-top={layout.tops[index]} key={row.id}>
                 {content}
               </div>
             );
           })}
+          {/* Bottom spacer: scroll space of rows [win.end, n). */}
+          {bottomSpacer > 0 && <div className="cv-spacer" style={{ height: bottomSpacer }} aria-hidden />}
           {/* 尾部区:权限卡 + 实时 plan + 打字指示。实测高度 tailHRef(data-iid=__tail__)。 */}
-          <div className="cv-tail" data-iid="__tail__" style={{ top: layout.tailTop }}>
+          <div className="cv-tail" data-iid="__tail__">
             {props.permission && <PermissionCard prompt={props.permission} onRespond={props.onRespondPermission} />}
             {/* 当前 turn 的实时 plan(进行中,带 spinner)。turn 结束后由 App.tsx 转为持久化
                 type:'plan' ChatItem 内联渲染在 items 里(无 spinner 的静态展示)。 */}

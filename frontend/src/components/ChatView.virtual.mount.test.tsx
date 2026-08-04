@@ -66,7 +66,17 @@ Object.defineProperty(window.HTMLElement.prototype, "scrollHeight", {
   get(this: HTMLElement) {
     if (this.classList?.contains("chat-body")) {
       const content = this.querySelector(".chat-content") as HTMLElement | null;
-      return content ? parseInt(content.style.height, 10) || 0 : 0;
+      if (!content) return 0;
+      // Normal-flow model (.chat-content has no explicit height): content height = sum of flow
+      // children (cv-head + cv-spacer + cv-items + cv-spacer + cv-tail). cv-spacer height lives in
+      // inline style.height; the rest use the mocked offsetHeight getter. Mirrors a real layout engine.
+      let h = 0;
+      for (const child of content.children) {
+        h += child.classList.contains("cv-spacer")
+          ? parseInt((child as HTMLElement).style.height, 10) || 0
+          : (child as HTMLElement).offsetHeight;
+      }
+      return h;
     }
     return 0;
   },
@@ -115,6 +125,7 @@ mock.module("../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chat
   SessionListDir: async () => [],
   SessionFuzzyFind: async () => [],
   PickFiles: async () => [],
+  GetSessionMcpServers: async () => [],
 }));
 mock.module("react-tooltip", () => ({ Tooltip: () => null, default: () => null }));
 mock.module("react-i18next", () => ({
@@ -246,6 +257,31 @@ async function settle() {
 function countItems(host: HTMLElement): number {
   return host.querySelectorAll(".cv-item").length;
 }
+// Normal-flow geometry helpers (replace the old style.height / style.top reads that the
+// absolute-positioning model exposed). cv-spacer height lives in inline style.height; cv-head /
+// cv-item / cv-tail use the mocked offsetHeight getter — summing flow children mirrors a real
+// layout engine and stays in sync with the .chat-body scrollHeight mock above.
+function childH(child: HTMLElement): number {
+  return child.classList.contains("cv-spacer")
+    ? parseInt(child.style.height, 10) || 0
+    : child.offsetHeight;
+}
+function contentHeight(content: HTMLElement): number {
+  let h = 0;
+  for (const child of content.children) h += childH(child as HTMLElement);
+  return h;
+}
+// Flow offset of a .cv-item from the .chat-content top (replaces old style.top).
+function itemOffsetTop(el: HTMLElement): number {
+  const content = el.parentElement;
+  if (!content) return 0;
+  let top = 0;
+  for (const child of content.children) {
+    if (child === el) break;
+    top += childH(child as HTMLElement);
+  }
+  return top;
+}
 
 describe("ChatView 虚拟化(W 不变量:DOM 平台期)", () => {
   test("DOM 中 .cv-item 数量被窗口钉住,不随 items 总数增长", async () => {
@@ -260,10 +296,10 @@ describe("ChatView 虚拟化(W 不变量:DOM 平台期)", () => {
     expect(c300).toBeGreaterThan(0);
     expect(c300).toBeLessThan(40);
 
-    // 内容层显式高度 = 布局 total(撑开滚动条),远大于视口。
-    const content = host.querySelector(".chat-content") as HTMLElement;
-    expect(content).not.toBeNull();
-    const contentH = parseInt(content.style.height, 10);
+  // 内容层总高(head + spacers + 窗口行 + tail)= 布局 total,远大于视口(撑开滚动条)。
+  const content = host.querySelector(".chat-content") as HTMLElement;
+  expect(content).not.toBeNull();
+  const contentH = contentHeight(content);
     expect(contentH).toBeGreaterThan(VIEWPORT * 3);
 
     // 追加到 600 条:DOM 数量保持平台,不翻倍。
@@ -535,19 +571,19 @@ describe("ChatView 虚拟化(W 不变量:DOM 平台期)", () => {
     body.dispatchEvent(new window.Event("scroll"));
     await flush();
 
-    // 找到视口顶部命中的行(锚点行):style.top <= scrollTop < 下一行的 style.top。
-    // 注意:不是 DOM 中的第一个 .cv-item(那是 overscan 区域的起始行,可能在视口上方)。
-    const allItems = [...host.querySelectorAll<HTMLElement>(".cv-item")].sort((a, b) =>
-      parseFloat(a.style.top || "0") - parseFloat(b.style.top || "0")
-    );
+    // 找到视口顶部命中的行(锚点行):model top (data-cv-top) <= scrollTop < 下一行。
+    // 用 model 坐标(组件 anchorAt/restoreScroll 的同一坐标系),而非 flow 实测偏移——
+    // 收敛前 model(先验)与 flow(真实)不一致,组件按 model 锚点补偿,测试须与之一致。
+    const topOf = (el: HTMLElement) => parseFloat(el.dataset.cvTop || "0");
+    const allItems = [...host.querySelectorAll<HTMLElement>(".cv-item")].sort((a, b) => topOf(a) - topOf(b));
     const anchorEl = allItems.find((el, i) => {
-      const top = parseFloat(el.style.top || "0");
-      const nextTop = i + 1 < allItems.length ? parseFloat(allItems[i + 1].style.top || "0") : Infinity;
+      const top = topOf(el);
+      const nextTop = i + 1 < allItems.length ? topOf(allItems[i + 1]) : Infinity;
       return top <= body.scrollTop && body.scrollTop < nextTop;
     }) ?? null;
     expect(anchorEl).not.toBeNull();
     const anchorIid = anchorEl!.dataset.iid ?? "";
-    const relBefore = parseFloat(anchorEl!.style.top || "0") - body.scrollTop;
+    const relBefore = topOf(anchorEl!) - body.scrollTop;
 
     // 触发测量收敛:先验 → 真实高度,锚点上方行变高 → Δh 补偿应下推 scrollTop 保持视觉位置。
     await settle();
@@ -555,7 +591,7 @@ describe("ChatView 虚拟化(W 不变量:DOM 平台期)", () => {
 
     const anchorAfter = host.querySelector(`[data-iid="${anchorIid}"]`) as HTMLElement | null;
     expect(anchorAfter).not.toBeNull();
-    const relAfter = parseFloat(anchorAfter!.style.top || "0") - body.scrollTop;
+    const relAfter = topOf(anchorAfter!) - body.scrollTop;
     // 锚点行视觉位置不漂移(允许 1px 舍入)。
     expect(Math.abs(relAfter - relBefore)).toBeLessThanOrEqual(1);
 
@@ -577,7 +613,7 @@ describe("ChatView 虚拟化(W 不变量:DOM 平台期)", () => {
     await settle();
 
     const content = host.querySelector(".chat-content") as HTMLElement;
-    const estimatedTotal = parseInt(content.style.height, 10);
+    const estimatedTotal = contentHeight(content);
 
     // 真实 total(所有行用真实高度):1 回合 = 120+30+40+300+250 = 740,×30 + head22 + tail22 ≈ 22244
     let trueTotal = 22 + 22; // head + tail

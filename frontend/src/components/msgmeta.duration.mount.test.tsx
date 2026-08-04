@@ -64,6 +64,7 @@ mock.module("../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chat
   SessionListDir: async () => [],
   SessionFuzzyFind: async () => [],
   PickFiles: async () => [],
+  GetSessionMcpServers: async () => [],
 }));
 mock.module("react-tooltip", () => ({ Tooltip: () => null, default: () => null }));
 mock.module("react-i18next", () => ({
