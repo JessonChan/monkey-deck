@@ -48,6 +48,30 @@ CSS:`.cv-item` 由 `position:absolute` 改 `display:flow-root`(建立 BFC 包含
   - 补 `ChatService.GetSessionMcpServers` mock(预存缺失:McpChip 挂载抛错致所有渲染 ChatView 的测试全红)。
 - `frontend/src/components/msgmeta.duration.mount.test.tsx`:补同上 mock(解除该文件 5 个测试的 McpChip 级联阻塞)。
 
+追加(`9af7485`):`.chat-body` 加 `overflow-anchor: none`——见下方调研。
+
+## 调研对比与决策(是否采用成熟库)
+
+用户提问:这是不是通用问题?有没有更成熟的方案值得采用?结论:**是通用问题;本方案与最成熟的库 react-virtuoso 渲染技术一致,无需换库。**
+
+虚拟列表 + 文本选中是两类独立问题:
+- **A 几何**:`position:absolute` / `transform:translateY` 行破坏 WebKit 选区几何(选词选中上方全部)——即本次 bug。
+- **B 卸载**:窗口化卸载 DOM 节点 → 跨窗口选段在滚动时断。所有库都中招。
+
+各库做法(读源码/issue 实证,非网传):
+|库|行定位|选中几何(A)|跨窗口选中(B)|
+|---|---|---|---|
+|react-window|`position:absolute` + 滚动时 `pointer-events:none`|坏(issue #732)|坏|
+|@tanstack/react-virtual|`transform:translateY`(默认)|坏|坏|
+|**react-virtuoso**|**正常流行 + `paddingTop/paddingBottom` spacer + `overflowAnchor:none`**|**好**|坏(同 B,行业未解)|
+|本项目(本次)|正常流行 + `.cv-spacer`(因有 head/tail 区,用 spacer div 而非 padding)+ `overflow-anchor:none`|好|坏(同 B)|
+
+> 勘误:网搜有文章称 react-virtuoso 用 `transform:translateY` 移容器——**错误**。读其 dist(`react-virtuoso@4.18.11`):列表 `style:{paddingTop:offsetTop, paddingBottom:offsetBottom}` + 子项正常流 map(L3316-3320);`overflowAnchor:"none"`(L2459/2779)。即 spacer + 正常流,与本次方案同源。
+
+决策:保留自研。理由:(1) 本方案 == react-virtuoso 的渲染技术(正常流+spacer),对几何问题已是业界最稳解,优于 react-window/tanstack(它们选中坏);(2) 本项目曾试 react-virtuoso 失败(virtualList.ts 顶部:atBottomStateChange 黑盒 + 动态高度无持久模型),自研的 W/S/A/P/M 算术不变量正是为了根治那两点,换库等于丢掉;(3) 从 react-virtuoso 借鉴的关键点 `overflow-anchor:none` 已补上(流式行下浏览器滚动锚定会与组件 `el.scrollTop+=Δh` 补偿双重叠加致抖动)。
+
+B(跨窗口选段)行业无库原生解决,标准稳健解是「自定义选区状态」(选区存数据下标 + 自定义 Copy,解耦 DOM 生命周期)——对聊天场景过重(用户多复制单消息/单代码块,可视范围内已正常)。可选轻量解:`setWinIfChanged` 检测活跃选区时取窗口并集(只增不减)。
+
 ## 验证
 
 - **选区修复**(独立 HTML 复现,非本项目软件):绝对定位行拖选错乱 / 选不中;正常流行拖选精确(15 字符,无「选中上方」)。WebKit 下用户实测症状与绝对定位选区 bug 完全吻合。
