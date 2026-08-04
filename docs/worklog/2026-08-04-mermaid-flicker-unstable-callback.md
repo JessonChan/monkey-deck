@@ -69,6 +69,13 @@ const openFilePreview = useCallback((path, line) => {
 - `bun test src/components/ChatView.virtual.mount.test.tsx`(隔离):**11 pass / 0 fail**(含新测试)。
 - 全量 `bun test`:新增测试与既有 10 个 ChatView 虚拟化 mount 测试一样,在**全量套件**里因**预存的 McpChip `mock.module` 跨文件污染**(另一文件的 chatservice mock 泄漏,致 McpChip 抛 `GetSessionMcpServers is not a function`)而 FAIL —— 此污染为**预存问题**(stash 本改动后同样 30 fail),非本次引入,隔离运行均通过。
 - `bun test src/components/MermaidRenderer.mount.test.tsx`:**21 pass**(原 19 + `getCachedSvg` 契约测试 + remount 缓存直渲测试),不受 mermaid mock 影响。
+
+## Code review(reviewer agent,APPROVE / confidence 0.9)
+
+两层修复均判定正确、无 patch 引入的回归。两个 P3 非阻塞发现,已处理其一:
+
+- **P3-1(已修)**:`MermaidRenderer` 渲染 effect 的 `cancelledRef`(每次开头重置 + 仅 renderMermaid 分支返回 cleanup)在 code 渲染中途变化时有竞态——旧 code 的 in-flight `renderMermaid` 解析后仍覆盖新 phase。缓存快车分支更甚(不再调度竞争性 render → 旧 SVG 必胜)。已改为 effect 内 **per-invocation 局部 `cancelled`**(仅该次 cleanup 翻 true),旧 in-flight 查到自己的 cancelled→return,不再覆盖。严格更正确。
+- **P3-2(保留)**:`currentMermaidTheme()` 在 lazy 初始化器(render 期)走 `getComputedStyle`(`data-theme` 未设、app 固定深色)。读操作、每挂载一次、幂等、无 hydration → 安全;唯一代价是同 commit 挂多个图时 N 次 forced layout。判定可接受(app 固定深色,该路径罕见)。
 ## 下一步
 
 - 桌面 app 实测:让 agent 产一张 mermaid 图,再连续追问,确认历史 mermaid 图不再闪烁、当前流式消息的 mermaid 只在写完后渲染一次。
