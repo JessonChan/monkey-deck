@@ -34,9 +34,9 @@ import (
 // ProbeErr 非空表示探测失败(Initialize/NewSession 报错或 noop Prompt 报错);此时声明位可能
 // 部分填充(Initialize 成功但 NewSession 失败时,声明位已有值)。前端可据此显示「上次检测失败」。
 type CapabilityMatrix struct {
-	HarnessID string    `json:"harnessId"`             // 关联 harness.Harness.ID(omp/opencode/...)
-	ProbedAt  time.Time `json:"probedAt"`              // 探测完成时刻(缓存老化 / 「上次检测」展示用)
-	ProbeErr  string    `json:"probeErr,omitempty"`    // 探测失败的错误串(空 = 成功)
+	HarnessID string    `json:"harnessId"`          // 关联 harness.Harness.ID(omp/opencode/...)
+	ProbedAt  time.Time `json:"probedAt"`           // 探测完成时刻(缓存老化 / 「上次检测」展示用)
+	ProbeErr  string    `json:"probeErr,omitempty"` // 探测失败的错误串(空 = 成功)
 
 	// --- 协议声明位(来自 Initialize.AgentCapabilities)---
 	PromptImage           bool `json:"promptImage"`           // ContentBlock::Image in prompts(promptCapabilities.image)
@@ -49,9 +49,9 @@ type CapabilityMatrix struct {
 	SessionDelete         bool `json:"sessionDelete"`         // session/delete(UNSTABLE)
 	SessionFork           bool `json:"sessionFork"`           // session/fork(UNSTABLE)
 	AdditionalDirectories bool `json:"additionalDirectories"` // additionalDirectories(session lifecycle)
-	McpAcp                bool `json:"mcpAcp"`                 // McpServer::Acp(UNSTABLE)
-	McpHttp               bool `json:"mcpHttp"`                // McpServer::Http
-	McpSse                bool `json:"mcpSse"`                 // McpServer::Sse
+	McpAcp                bool `json:"mcpAcp"`                // McpServer::Acp(UNSTABLE)
+	McpHttp               bool `json:"mcpHttp"`               // McpServer::Http
+	McpSse                bool `json:"mcpSse"`                // McpServer::Sse
 
 	// --- 模型选择位(来自 NewSession/LoadSession 响应的 ConfigOptions)---
 	// 协议声明位只覆盖 Initialize;model/mode/thought_level 这三类「可下拉切换的 session config」
@@ -144,9 +144,9 @@ func matrixFromInit(initResp acp.InitializeResponse) CapabilityMatrix {
 func (r *Runner) ProbeCapabilities(ctx context.Context, harnessID, workDir string, withProbe bool) (CapabilityMatrix, error) {
 	// probeObs 收集 noop Prompt 期间 OnEvent 收到的事件种类(并发安全:handler 回调可并发流入)。
 	var probeObs struct {
-		mu       sync.Mutex
-		usage    bool
-		plan     bool
+		mu    sync.Mutex
+		usage bool
+		plan  bool
 	}
 	onEvent := func(e SessionEvent) {
 		probeObs.mu.Lock()
@@ -202,8 +202,11 @@ func (r *Runner) ProbeCapabilities(ctx context.Context, harnessID, workDir strin
 		}
 	}
 
-	// 清理 probe 创建的 session:harness 可能持久化记录,CloseSession 收尾。失败不致命(忽略)。
-	_, _ = conn.CloseSession(ctx, acp.CloseSessionRequest{SessionId: sess.SessionId})
+	// Best-effort cleanup of the probe session. Capability-gated: only call
+	// session/close when advertised (session-setup.mdx: MUST NOT call when unsupported).
+	if initResp.AgentCapabilities.SessionCapabilities.Close != nil {
+		_, _ = conn.CloseSession(ctx, acp.CloseSessionRequest{SessionId: sess.SessionId})
+	}
 
 	m.ProbedAt = time.Now()
 	return m, nil
