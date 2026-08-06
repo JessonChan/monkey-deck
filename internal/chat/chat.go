@@ -317,7 +317,7 @@ type ChatService struct {
 	emitHook    func(name string, data any)
 	persistHook func()
 
-	// spawnFn 启动一个 liveSession(spawn harness + Init + NewSession/LoadSession)。
+	// spawnFn 启动一个 liveSession(spawn harness + Init + NewSession/Resume)。
 	// 默认 = s.startLive;单测注入 mock 以免启真 harness(§5.1)。ensureLive 经它 spawn,
 	// 使懒 spawn(OpenSession/ContinueSession/SendMessage)的触发路径可被单测断言。
 	spawnFn func(se *store.Session, proj *store.Project, acpSessionID string, resume bool) error
@@ -1342,7 +1342,7 @@ func (s *ChatService) OpenSession(sessionID string) error {
 }
 
 // ContinueSession 显式触发懒 spawn:只读态下用户点「继续会话」时调用,
-// spawn harness(LoadSession resume 历史会话 / NewSession 新会话)并切为可交互态。
+// spawn harness(Resume 恢复历史会话 / NewSession 新会话)并切为可交互态。
 // 已活跃则 no-op。与 SendMessage 共用 ensureLive(spawnMu 串行化,不双 spawn)。
 func (s *ChatService) ContinueSession(sessionID string) error {
 	if s.isActive(sessionID) {
@@ -1352,7 +1352,7 @@ func (s *ChatService) ContinueSession(sessionID string) error {
 }
 
 // ensureLive 确保 session 的 harness 已启动且仍存活:未活跃则 spawn;活跃但进程已死
-// (预热后空闲断连 / 崩溃)则先拆掉再 spawn(用 LoadSession resume),不把 broken pipe 抛给用户。
+// (预热后空闲断连 / 崩溃)则先拆掉再 spawn(用 Resume),不把 broken pipe 抛给用户。
 // 开 session 时冷缓存会预热 spawn 保持连接等首条消息(见 maybeWarmSession)。
 //
 // spawn 段持 spawnMu 串行化:杜绝「预热 goroutine 与首条消息并发各 spawn 一个 harness」
@@ -1409,7 +1409,7 @@ func (s *ChatService) ensureLiveNoReset(sessionID string) error {
 	return s.spawnFn(se, proj, se.ACPSession, resume)
 }
 
-// startLive 启动一个 liveSession(spawn harness + Init + NewSession/LoadSession)。
+// startLive 启动一个 liveSession(spawn harness + Init + NewSession/Resume)。
 func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessionID string, resume bool) error {
 	// 按 session 选择的 harness 解析启动命令(§2.1 harness 适配层)。
 	cmdStr := harness.Command(se.Harness)
@@ -1455,7 +1455,7 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 		err  error
 	)
 	if resume {
-		chat, err = runner.LoadChatSession(s.ctx, cwd, acpSessionID, mcps, onEvent, onPermission, onElicitation)
+		chat, err = runner.ResumeChatSession(s.ctx, cwd, acpSessionID, mcps, onEvent, onPermission, onElicitation)
 	} else {
 		chat, err = runner.NewChatSession(s.ctx, cwd, mcps, onEvent, onPermission, onElicitation)
 	}
@@ -1600,7 +1600,7 @@ func (s *ChatService) closeIdle() {
 
 // teardownLive 拆掉一个活跃 session 的 harness:从 active 移除 + Close(杀进程组+收尸)
 // + 无其它活跃时 reap 逃逸。任何「Prompt 异常返回」(peer 断 / 静默或绝对超时 / 其它错)
-// 都应调它:harness 可能已死或不可信,下条消息 ensureLive 会用 LoadSession(resume)重连(§1.4 / §5.4 #16)。
+// 都应调它:harness 可能已死或不可信,下条消息 ensureLive 会用 Resume 重连(§1.4 / §5.4 #16)。
 // 用户主动取消(StopSession/InterruptAndSend)【不】调 —— 那是干净停止,连接保持可用(§5.4 #13)。
 func (s *ChatService) teardownLive(sessionID string, ls *liveSession) {
 	s.mu.Lock()
@@ -1938,7 +1938,7 @@ func (s *ChatService) InterruptAndSend(sessionID, text string, attachments []acp
 	}
 
 	// 重新拿 sendMu 发新消息:旧 turn 已落定。若旧 turn 失败已 teardown(active 无此
-	// session),重连拿新 ls(§5.4 #16,LoadSession resume)。
+	// session),重连拿新 ls(§5.4 #16,Resume)。
 	ls.sendMu.Lock()
 	defer ls.sendMu.Unlock()
 	if !s.isActive(sessionID) {
@@ -1956,7 +1956,7 @@ func (s *ChatService) InterruptAndSend(sessionID, text string, attachments []acp
 }
 
 // SendAndWaitSync 同步发送并等待回复(供驱动/测试用;GUI 用异步 SendMessage)。
-// 返回 agent 文本与错误。任何失败都拆连接:调用方重试时 ensureLive 会用 LoadSession(resume)重连(§5.4 #16)。
+// 返回 agent 文本与错误。任何失败都拆连接:调用方重试时 ensureLive 会用 Resume 重连(§5.4 #16)。
 func (s *ChatService) SendAndWaitSync(sessionID, text string, attachments []acp.Attachment) (string, error) {
 	if err := s.ensureLive(sessionID); err != nil {
 		return "", err
@@ -2073,7 +2073,7 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 			return
 		}
 		// 非用户取消的失败(peer 断 / 静默或绝对超时 / 其它):harness 可能已死或不可信,
-		// 一律拆连接,下条消息 ensureLive 用 LoadSession(resume) 重连(§5.4 #16)。
+		// 一律拆连接,下条消息 ensureLive 用 Resume 重连(§5.4 #16)。
 		reason := "error"
 		if acp.IsPeerDisconnected(err) {
 			reason = "peer-disconnected"

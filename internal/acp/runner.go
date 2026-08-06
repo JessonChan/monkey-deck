@@ -7,7 +7,7 @@ package acp
 //	→ Prompt(同步返回,期间 SessionUpdate 并发流入)→ 判定 StopReasonEndTurn
 //	→ kill 进程组 + 注销活跃 + reap 逃逸子进程
 //
-// ChatSession:持久 session,跨多轮对话复用 harness 进程 + session(支撑 LoadSession 恢复,§1.4)。
+// ChatSession: persistent session, reuses the harness process + session across turns (supports Resume recovery, §1.4).
 // Prompt 用「静默超时」(从最后一次 SessionUpdate 活动算,非总超时)——agent 还在输出就不算超时(§3.3)。
 
 import (
@@ -146,13 +146,19 @@ func (r *Runner) NewChatSession(ctx context.Context, workDir string, mcps []stor
 	return cs, nil
 }
 
-// LoadChatSession 恢复已有 session:spawn harness → initialize → loadSession(resume)(§1.4)。
-// 用于应用重启后恢复对话上下文(Cwd 必须匹配原 session)。
-func (r *Runner) LoadChatSession(ctx context.Context, workDir, sessionID string, mcps []store.McpServer, onEvent func(SessionEvent), onPermission func(PermissionPrompt), onElicitation func(ElicitationPrompt)) (*ChatSession, error) {
+// ResumeChatSession resumes an existing session: spawn harness → initialize → session/resume (§1.4).
+// Used to restore conversation context after app restart (Cwd must match the original session).
+func (r *Runner) ResumeChatSession(ctx context.Context, workDir, sessionID string, mcps []store.McpServer, onEvent func(SessionEvent), onPermission func(PermissionPrompt), onElicitation func(ElicitationPrompt)) (*ChatSession, error) {
 	handler := NewHandler(workDir, onEvent, onPermission, onElicitation, 0)
 	proc, conn, initResp, err := r.spawnAndInit(ctx, workDir, handler)
 	if err != nil {
 		return nil, err
+	}
+	// Protocol MUST: verify session/resume capability before calling it
+	// (session-setup.mdx — Clients MUST check sessionCapabilities.resume, MUST NOT call otherwise).
+	if initResp.AgentCapabilities.SessionCapabilities.Resume == nil {
+		proc.shutdown()
+		return nil, fmt.Errorf("resume session: harness does not advertise sessionCapabilities.resume")
 	}
 	// 抑制 resume 期间 harness 重放的历史消息/工具/plan 事件:前端已从 DB 加载历史,重放会重复显示。
 	// 但不能 blanket 吞——available_commands 是会话级元数据(不在 load 响应里、也不入库),opencode 在
@@ -257,6 +263,13 @@ func (r *Runner) spawnAndInit(ctx context.Context, workDir string, handler *Hand
 	if err != nil {
 		proc.shutdown()
 		return nil, nil, acp.InitializeResponse{}, fmt.Errorf("initialize: %w", err)
+	}
+	// Protocol version negotiation (initialization.mdx: client SHOULD close if the agent
+	// returns an unsupported version). We only implement v1; bail on mismatch instead of
+	// proceeding against an unknown version and corrupting the session.
+	if initResp.ProtocolVersion != acp.ProtocolVersionNumber {
+		proc.shutdown()
+		return nil, nil, acp.InitializeResponse{}, fmt.Errorf("initialize: protocol version mismatch: client=%d agent=%d", acp.ProtocolVersionNumber, initResp.ProtocolVersion)
 	}
 	return proc, conn, initResp, nil
 }
@@ -520,9 +533,12 @@ func (cs *ChatSession) RefreshConfig(ctx context.Context) ([]ConfigOption, error
 	if err != nil {
 		return nil, fmt.Errorf("refresh config: probe new session: %w", err)
 	}
-	// 清理 probe 创建的 session:harness 可能持久化 session 记录,CloseSession 收尾。
-	// 失败不致命(harness 可能已随 kill 退出),忽略错误。
-	_, _ = conn.CloseSession(ctx, acp.CloseSessionRequest{SessionId: sess.SessionId})
+	// Best-effort cleanup of the probe session (harness may persist session records;
+	// failure is harmless — it may already be dead). Capability-gated: only call
+	// session/close when advertised (session-setup.mdx: MUST NOT call when unsupported).
+	if initResp.AgentCapabilities.SessionCapabilities.Close != nil {
+		_, _ = conn.CloseSession(ctx, acp.CloseSessionRequest{SessionId: sess.SessionId})
+	}
 	// RefreshConfig 只刷新【可选列表】(同步外部新加的 provider/model),不应动当前选择:
 	// probe 是全新 session,CurrentValue 是 harness 默认值;整列覆盖会把用户刚切的模型盖回默认
 	// (打开下拉触发 probe → 几秒后模型回退)。合并:保留活 session 的 CurrentValue(仅当仍在新列表里)。
@@ -622,7 +638,7 @@ func (cs *ChatSession) IsAlive() bool {
 
 // IsPeerDisconnected 判断错误是否为 harness 进程崩溃/断开(§5.4 #2)。
 //
-// 两类等价信号,根因相同(harness 进程已不在,须拆连接、下次 LoadSession 重连):
+// Two equivalent signals, same root cause (harness process gone; must tear down connection and reconnect via Resume next time):
 //   - "peer disconnected":SDK 在 peer 消失时返回(§5.4 #2/#9/#11)。
 //   - "broken pipe":本地写已关闭的 harness stdin 管道失败的 OS 错误;SDK 经 toReqErr
 //     包成 *RequestError{-32603,"Internal error",data:{error:"write |1: broken pipe"}}
