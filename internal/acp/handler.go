@@ -103,9 +103,9 @@ type ConfigOptionEntry struct {
 // Each harness advertises a different, dynamic list (not hardcoded); this is only the
 // flattened wire shape forwarded to the frontend.
 type SlashCommand struct {
-	Name        string `json:"name"`                  // command name WITHOUT leading "/" (e.g. "model")
-	Description string `json:"description"`           // human-readable summary
-	InputHint   string `json:"inputHint,omitempty"`   // argument hint (ACP AvailableCommandInput.hint)
+	Name        string `json:"name"`                // command name WITHOUT leading "/" (e.g. "model")
+	Description string `json:"description"`         // human-readable summary
+	InputHint   string `json:"inputHint,omitempty"` // argument hint (ACP AvailableCommandInput.hint)
 }
 
 // FlattenConfigOptions 把 SDK 的 configOption union(Select/Boolean)拍平为前端友好的 []ConfigOption。
@@ -296,15 +296,15 @@ func NewHandler(workDir string, onEvent func(SessionEvent), onPermission func(Pe
 		permTTL = 5 * time.Minute
 	}
 	return &Handler{
-		Log:            slog.Default(),
-		WorkDir:        workDir,
-		OnEvent:        onEvent,
-		OnPermission:   onPermission,
-		OnElicitation:  onElicitation,
-		pending:        map[string]*pendingPermission{},
-		pendingElicit:  map[string]*pendingElicitation{},
-		permTTL:        permTTL,
-		permRetries:    defaultPermRetries,
+		Log:               slog.Default(),
+		WorkDir:           workDir,
+		OnEvent:           onEvent,
+		OnPermission:      onPermission,
+		OnElicitation:     onElicitation,
+		pending:           map[string]*pendingPermission{},
+		pendingElicit:     map[string]*pendingElicitation{},
+		permTTL:           permTTL,
+		permRetries:       defaultPermRetries,
 		permTimeoutPolicy: defaultPermTimeoutPolicy,
 	}
 }
@@ -459,9 +459,12 @@ func (h *Handler) RequestPermission(ctx context.Context, req acp.RequestPermissi
 			timer.Stop()
 			h.removePending(id)
 			slog.Warn("permission cancelled by context", "id", id, "err", ctx.Err())
+			// Return nil, not ctx.Err(): the SDK turns ctx.Err() into a -32800 error
+			// response that discards the cancelled outcome. prompt-turn.mdx requires the
+			// client to respond with the cancelled outcome on session/cancel.
 			return acp.RequestPermissionResponse{
 				Outcome: acp.RequestPermissionOutcome{Cancelled: &acp.RequestPermissionOutcomeCancelled{}},
-			}, ctx.Err()
+			}, nil
 		case <-timer.C:
 			// 本轮未响应:继续重试,或耗尽后降级
 		}
@@ -805,11 +808,14 @@ func flattenUpdate(sessionID string, u acp.SessionUpdate) (SessionEvent, bool) {
 		e.PlanEntries = flattenPlanEntries(u.Plan.Entries)
 		return e, true
 	case u.PlanUpdate != nil:
-		// UNSTABLE:plan_update 的 Items 变体带结构化 entries(与 Plan 同形);File/Markdown 无结构化项,忽略。
-		e.Kind = "plan"
-		if u.PlanUpdate.Plan.Items != nil {
-			e.PlanEntries = flattenPlanEntries(u.PlanUpdate.Plan.Items.Entries)
+		// UNSTABLE: only the Items variant carries structured entries. File/Markdown
+		// variants have none — skip them rather than emit a plan event with nil entries
+		// (the consumer treats a plan event as a full replace, so nil would clear it).
+		if u.PlanUpdate.Plan.Items == nil {
+			return e, false
 		}
+		e.Kind = "plan"
+		e.PlanEntries = flattenPlanEntries(u.PlanUpdate.Plan.Items.Entries)
 		return e, true
 	case u.ConfigOptionUpdate != nil:
 		e.Kind = "config_option"
@@ -856,6 +862,22 @@ func (h *Handler) ReadTextFile(ctx context.Context, req acp.ReadTextFileRequest)
 	b, err := os.ReadFile(req.Path)
 	if err != nil {
 		return acp.ReadTextFileResponse{}, err
+	}
+	// Honor optional line (1-based start) / limit (max lines) window (ACP file-system spec).
+	if req.Line != nil || req.Limit != nil {
+		lines := strings.Split(string(b), "\n")
+		start := 0
+		if req.Line != nil && *req.Line > 1 {
+			start = *req.Line - 1
+		}
+		if start > len(lines) {
+			start = len(lines)
+		}
+		end := len(lines)
+		if req.Limit != nil && *req.Limit > 0 && *req.Limit < end-start {
+			end = start + *req.Limit
+		}
+		return acp.ReadTextFileResponse{Content: strings.Join(lines[start:end], "\n")}, nil
 	}
 	return acp.ReadTextFileResponse{Content: string(b)}, nil
 }

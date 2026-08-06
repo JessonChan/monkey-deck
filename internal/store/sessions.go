@@ -47,7 +47,7 @@ func (s *Store) CreateSession(ctx context.Context, projectID, title, model, harn
 	return sess, nil
 }
 
-// UpdateSessionACP 记录 opencode 返回的 session id(LoadSession resume 用,§1.4)。
+// UpdateSessionACP 记录 opencode 返回的 session id(Resume 用,§1.4)。
 func (s *Store) UpdateSessionACP(ctx context.Context, id, acpSessionID, title string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE sessions SET acp_session_id=?, title=?, updated_at=? WHERE id=?`,

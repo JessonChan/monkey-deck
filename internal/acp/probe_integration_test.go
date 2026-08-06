@@ -1,0 +1,83 @@
+//go:build integration
+
+package acp
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/jessonchan/monkey-deck/internal/harness"
+	"github.com/jessonchan/monkey-deck/internal/store"
+)
+
+// TestProbeAllHarnesses runs ProbeHarness — including the resume/cancel/set_config
+// conformance probes — against every harness the running app knows: built-ins plus
+// user-added harnesses loaded from the live SQLite store.
+//
+// Token cost is minimal: set_config_option and resume probes send NO prompt; the
+// cancel probe fires a 1-token "hi" and cancels within 200ms (near-zero output);
+// only the main "Reply OK" prompt runs to end_turn. Uninstalled harnesses fail at
+// spawn (zero tokens). Run manually:
+//
+//	go test -tags integration -run TestProbeAllHarnesses -v ./internal/acp/ -timeout 30m
+func TestProbeAllHarnesses(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
+	defer cancel()
+
+	type hc struct{ id, command string }
+	var all []hc
+	// 1. Built-in harnesses.
+	for _, h := range harness.Supported {
+		all = append(all, hc{h.ID, h.Command})
+	}
+	// 2. User-added harnesses from the app's live DB ("Monkey Deck" data dir).
+	if dir, err := os.UserConfigDir(); err == nil {
+		dbPath := filepath.Join(dir, "Monkey Deck", "monkey-deck.db")
+		if st, err := store.New(dbPath); err == nil {
+			if users, err := st.ListUserHarnesses(ctx); err == nil {
+				for _, u := range users {
+					all = append(all, hc{u.Name, u.Command})
+				}
+			} else {
+				t.Logf("ListUserHarnesses: %v", err)
+			}
+			_ = st.Close()
+		} else {
+			t.Logf("open store %s: %v (skipping user harnesses)", dbPath, err)
+		}
+	}
+	t.Logf("probing %d harnesses: %v", len(all), func() []string {
+		out := make([]string, len(all))
+		for i, h := range all {
+			out[i] = h.id
+		}
+		return out
+	}())
+
+	for _, h := range all {
+		h := h
+		t.Run(h.id, func(t *testing.T) {
+			rep := ProbeHarness(ctx, h.command)
+			t.Log("\n" + rep.Summary())
+			t.Logf("behavioral probes: resumeReplays=%v cancelHonored=%v setConfigWorks=%v",
+				rep.ResumeReplays, rep.CancelHonored, rep.SetConfigWorks)
+			if rep.Error != "" {
+				t.Logf("probe self-error: %s", rep.Error)
+				return
+			}
+			// Non-blocking conformance flags (informational warnings, not failures).
+			if rep.ResumeReplays {
+				t.Logf("⚠ %s: session/resume replays history (violates session-resume.mdx MUST NOT replay)", h.id)
+			}
+			if rep.PromptTurn.Pass && !rep.CancelHonored {
+				t.Logf("⚠ %s: session/cancel not honored (expected stopReason=cancelled)", h.id)
+			}
+			if rep.HasModelOption && !rep.SetConfigWorks {
+				t.Logf("⚠ %s: session/set_config_option round-trip failed", h.id)
+			}
+		})
+	}
+}

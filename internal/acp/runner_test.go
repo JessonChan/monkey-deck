@@ -161,7 +161,7 @@ func TestFindSessionTitle(t *testing.T) {
 // data:{error:"write |1: broken pipe"}}(见 acp-go-sdk errors.go)。
 // 旧 IsPeerDisconnected 只查 re.Message(="Internal error"),漏判 → runPrompt 走 error
 // 分支:不拆死 harness(session 卡死,每条消息都 broken pipe)+ 裸 JSON 推前端(§4.4)。
-// 断言:broken pipe 必须被识别为 peer disconnected(走拆连接 + LoadSession 重连路径)。
+// 断言:broken pipe 必须被识别为 peer disconnected(走拆连接 + Resume 重连路径)。
 func TestIsPeerDisconnectedBrokenPipe(t *testing.T) {
 	re := acp.NewInternalError(map[string]any{"error": "write |1: broken pipe"})
 	err := fmt.Errorf("prompt: %w", re) // 与 runner.go Prompt 的 %w 包装一致

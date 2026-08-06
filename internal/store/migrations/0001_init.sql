@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS projects (
     updated_at INTEGER NOT NULL
 );
 
--- session = ACP session,钉在 project 上。acp_session_id 用于 LoadSession 恢复(§1.4)。
+-- session = ACP session,钉在 project 上。acp_session_id 用于 Resume 恢复(§1.4)。
 CREATE TABLE IF NOT EXISTS sessions (
     id             TEXT PRIMARY KEY,
     project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

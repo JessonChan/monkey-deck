@@ -21,6 +21,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/acp-go-sdk"
@@ -65,6 +66,10 @@ type ConformanceReport struct {
 	ReportedUsage    bool `json:"reportedUsage"`    // 发 usage_update 或 Usage 非空(无→不显示 token/成本)
 	StreamedThoughts bool `json:"streamedThoughts"` // 发 agent_thought_chunk(无→看不到 reasoning)
 	UsedTools        bool `json:"usedTools"`        // 发 tool_call(无害 prompt 下未必触发)
+	// Tier 2 behavioral probes (non-blocking; characterize client→agent RPC conformance).
+	ResumeReplays  bool `json:"resumeReplays"`  // session/resume replayed history (violates session-resume.mdx MUST NOT replay)
+	CancelHonored  bool `json:"cancelHonored"`  // harness replied stopReason=cancelled after session/cancel
+	SetConfigWorks bool `json:"setConfigWorks"` // session/set_config_option round-trip returned full state
 
 	// ObservedKinds 本次 Prompt 期间观察到的事件 kind 集合(诊断用)。
 	ObservedKinds []string `json:"observedKinds,omitempty"`
@@ -244,6 +249,38 @@ func ProbeHarness(ctx context.Context, command string) *ConformanceReport {
 			rep.HasModelOption = true
 		}
 	}
+	// Probe session/set_config_option: round-trip the current model value (a no-op);
+	// a conformant harness MUST respond with the complete config state.
+	for _, co := range sess.ConfigOptions {
+		if co.Select != nil && co.Select.Category != nil && string(*co.Select.Category) == "model" {
+			setCtx, cancelSet := context.WithTimeout(ctx, probeSessTimeout)
+			sresp, serr := conn.SetSessionConfigOption(setCtx, acp.SetSessionConfigOptionRequest{
+				ValueId: &acp.SetSessionConfigOptionValueId{
+					SessionId: sess.SessionId,
+					ConfigId:  co.Select.Id,
+					Value:     co.Select.CurrentValue,
+				},
+			})
+			cancelSet()
+			rep.SetConfigWorks = serr == nil && len(sresp.ConfigOptions) > 0
+			break
+		}
+	}
+	// Install the cancel-trigger wrapper once (before any Prompt). The wrapper fires
+	// session/cancel on the first session/update event, but only while cancelArmed is
+	// set by the cancel probe below. Installing once (rather than swapping OnEvent per
+	// probe) avoids a data race with the SDK callback goroutine that reads handler.OnEvent.
+	var cancelArmed atomic.Bool
+	var cancelOnce sync.Once
+	probeOnEvent := handler.OnEvent
+	handler.OnEvent = func(e SessionEvent) {
+		if cancelArmed.Load() {
+			cancelOnce.Do(func() {
+				_ = conn.Cancel(context.Background(), acp.CancelNotification{SessionId: sess.SessionId})
+			})
+		}
+		probeOnEvent(e)
+	}
 
 	// 3. Prompt(无害消息,带超时)。期间 SessionUpdate 并发流入 onEvent。
 	turnCtx, cancelTurn := context.WithTimeout(ctx, probeTurnTimeout)
@@ -275,6 +312,49 @@ func ProbeHarness(ctx context.Context, command string) *ConformanceReport {
 		rep.PromptTurn = CheckResult{Pass: false, Note: fmt.Sprintf("stopReason=%s", presp.StopReason)}
 	}
 	rep.ReportedUsage = sawUsage || presp.Usage != nil
+	// Probe session/cancel: arm the wrapper so the first session/update event fires
+	// session/cancel (the turn is genuinely in-flight — no fixed-delay race). A
+	// conformant harness MUST respond with stopReason=cancelled.
+	cancelPromptCtx, cancelPromptFn := context.WithTimeout(ctx, probeTurnTimeout)
+	defer cancelPromptFn()
+	cancelArmed.Store(true)
+	cpresp, cperr := conn.Prompt(cancelPromptCtx, acp.PromptRequest{
+		SessionId: sess.SessionId,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("hi")},
+	})
+	cancelArmed.Store(false)
+	rep.CancelHonored = cperr == nil && cpresp.StopReason == acp.StopReasonCancelled
+
+	// Probe session/resume: if advertised, resume the same session and verify it does
+	// NOT replay history (session-resume.mdx: MUST NOT replay before responding).
+	if sc.Resume != nil {
+		mu.Lock()
+		kinds = make(map[string]struct{}) // reset to capture only resume-window events
+		mu.Unlock()
+		resumeCtx, cancelResume := context.WithTimeout(ctx, probeSessTimeout)
+		_, rerr := conn.ResumeSession(resumeCtx, acp.ResumeSessionRequest{
+			SessionId:  sess.SessionId,
+			Cwd:        workDir,
+			McpServers: []acp.McpServer{},
+		})
+		cancelResume()
+		// Drain: some harnesses replay history AFTER the resume response (async, not
+		// within the response window). Wait briefly so a replay — if any — lands in
+		// the collected kinds before we inspect them.
+		time.Sleep(3 * time.Second)
+		replayed := false
+		if rerr == nil {
+			mu.Lock()
+			for k := range kinds {
+				if k == "agent_message_chunk" || k == "agent_thought_chunk" || k == "user_message_chunk" ||
+					k == "tool_call" || k == "tool_call_update" || k == "plan" || k == "plan_update" {
+					replayed = true
+				}
+			}
+			mu.Unlock()
+		}
+		rep.ResumeReplays = replayed
+	}
 
 	// 4. 干净 teardown:尽力 close,再回收进程组。
 	closeCtx, cancelClose := context.WithTimeout(ctx, 5*time.Second)
