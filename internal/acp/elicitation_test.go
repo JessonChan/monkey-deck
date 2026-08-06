@@ -105,8 +105,8 @@ func TestElicitResponseToSDK(t *testing.T) {
 // 端到端:form 请求 → dispatch prompt → 前端 RespondElicitation(accept) → SDK accept 响应。
 // 钉死 dispatch/respond 闭环 + 字段名 "value" 约定。
 func TestUnstableCreateElicitationFormDispatchAndRespond(t *testing.T) {
-	var got ElicitationPrompt
-	h := NewHandler("/tmp/proj", func(SessionEvent) {}, func(PermissionPrompt) {}, func(e ElicitationPrompt) { got = e }, 0)
+	promptCh := make(chan ElicitationPrompt, 1)
+	h := NewHandler("/tmp/proj", func(SessionEvent) {}, func(PermissionPrompt) {}, func(e ElicitationPrompt) { promptCh <- e }, 0)
 	h.permTTL = 200 * time.Millisecond // 缩短,本测试不会超时(会 respond)
 
 	// 模拟 harness 发 elicitation/create(omp select 形态)。
@@ -133,12 +133,12 @@ func TestUnstableCreateElicitationFormDispatchAndRespond(t *testing.T) {
 		done <- result{resp, err}
 	}()
 
-	// 等 dispatch 把 prompt 投递到 OnElicitation。
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) && got.ID == "" {
-		time.Sleep(2 * time.Millisecond)
-	}
-	if got.ID == "" {
+	// Wait for dispatch to deliver the prompt via OnElicitation. Use a channel (not a busy-wait on
+	// a shared var) to avoid a data race with the callback goroutine.
+	var got ElicitationPrompt
+	select {
+	case got = <-promptCh:
+	case <-time.After(500 * time.Millisecond):
 		t.Fatal("OnElicitation not dispatched")
 	}
 	if len(got.Fields) != 1 || got.Fields[0].Name != "value" {

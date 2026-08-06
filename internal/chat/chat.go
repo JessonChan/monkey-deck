@@ -1469,10 +1469,13 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 	// 加载分级权限规则快照到 handler(§3.4:allow/ask/deny 路由)。规则是全局的(全应用一份),
 	// 每个 session 启动时拿当前快照;规则变更时由 applyPermissionRulesToAll 刷新全部活跃 session。
 	chat.SetPermissionRules(s.snapshotPermissionRules())
-	// 注册「全局允许」回调:用户在某 session 选 onRespond("global") 时,handler 把当前请求
-	// 固化成的准确匹配 allow 规则交回 service 持久化进 DB + 刷新全部活跃 session(跨 session/project 全局生效,§3.4)。
-	chat.Handler.OnGlobalRule = s.persistGlobalPermissionRule
-	chat.Handler.OnElicitationResolved = onElicitationResolved
+	// Register the "allow-global" callback: when the user picks onRespond("global") in a session,
+	// the handler hands the exact-match allow rule frozen from that request back to service for DB
+	// persistence + refreshing all live sessions (global across session/project, §3.4).
+	// Setters (not bare field writes): the ACP reader goroutine is already live at this point, so
+	// mu-guarded assignment is race-free with the handler's read-side snapshots.
+	chat.Handler.SetGlobalRule(s.persistGlobalPermissionRule)
+	chat.Handler.SetElicitationResolved(onElicitationResolved)
 
 	s.mu.Lock()
 	s.active[se.ID] = ls

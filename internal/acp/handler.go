@@ -565,14 +565,41 @@ func (h *Handler) applyDecision(level string, opts []acp.PermissionOption) acp.P
 	return pickAllowOption(opts)
 }
 
-// emitGlobalRule 把当前请求固化成「准确匹配」allow 规则(permissions.ExactMatchRule),
-// 经 OnGlobalRule 回调交 service 持久化进 DB + 刷新全部活跃 session 的规则快照(§3.4)。
-// OnGlobalRule 为 nil(handler 单测默认)时只本 session 内存记忆(applyDecision 已设置),不持久化。
+// emitGlobalRule freezes the current request into an exact-match allow rule
+// (permissions.ExactMatchRule) and hands it to service via OnGlobalRule for DB persistence +
+// refreshing all live sessions' rule snapshots (§3.4). When OnGlobalRule is nil (handler
+// unit-test default), only the in-memory session memory is set (applyDecision already did so).
+//
+// Concurrency: OnGlobalRule is assigned by service during session setup (chat.go), by which point
+// the ACP reader goroutine is already live (NewChatSession started it) — a bare field read would
+// race that write. Snapshot the callback pointer under mu, then invoke outside the lock so a
+// re-entrant callback cannot deadlock on mu.
+//
+// Panic safety: recover, matching dispatchPrompt/dispatchElicitation/notifyElicitationResolved —
+// the callback (persistGlobalPermissionRule) runs on the ACP reader goroutine, and a panic there
+// must not bubble up and tear down the connection.
 func (h *Handler) emitGlobalRule(req acp.RequestPermissionRequest) {
-	if h.OnGlobalRule == nil {
+	h.mu.Lock()
+	cb := h.OnGlobalRule
+	h.mu.Unlock()
+	if cb == nil {
 		return
 	}
-	h.OnGlobalRule(permissions.ExactMatchRule(toMatchRequest(req)))
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("global rule emit panic recovered", "panic", r)
+		}
+	}()
+	cb(permissions.ExactMatchRule(toMatchRequest(req)))
+}
+
+// SetGlobalRule sets the "allow-global" rule-persistence callback (§3.4). Service assigns it
+// during session setup, after the ACP reader goroutine has started; the mu-guarded write stays
+// race-free with emitGlobalRule's read.
+func (h *Handler) SetGlobalRule(cb func(permissions.Rule)) {
+	h.mu.Lock()
+	h.OnGlobalRule = cb
+	h.mu.Unlock()
 }
 
 // SetProjectAllowExternal 由 service 在 session 启动时调用,把项目级记忆(DB)加载进 handler,
