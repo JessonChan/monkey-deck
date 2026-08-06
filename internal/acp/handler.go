@@ -874,7 +874,7 @@ func (h *Handler) ReadTextFile(ctx context.Context, req acp.ReadTextFileRequest)
 			start = len(lines)
 		}
 		end := len(lines)
-		if req.Limit != nil && *req.Limit > 0 && start+*req.Limit < end {
+		if req.Limit != nil && *req.Limit > 0 && *req.Limit < end-start {
 			end = start + *req.Limit
 		}
 		return acp.ReadTextFileResponse{Content: strings.Join(lines[start:end], "\n")}, nil

@@ -21,6 +21,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/acp-go-sdk"
@@ -265,6 +266,21 @@ func ProbeHarness(ctx context.Context, command string) *ConformanceReport {
 			break
 		}
 	}
+	// Install the cancel-trigger wrapper once (before any Prompt). The wrapper fires
+	// session/cancel on the first session/update event, but only while cancelArmed is
+	// set by the cancel probe below. Installing once (rather than swapping OnEvent per
+	// probe) avoids a data race with the SDK callback goroutine that reads handler.OnEvent.
+	var cancelArmed atomic.Bool
+	var cancelOnce sync.Once
+	probeOnEvent := handler.OnEvent
+	handler.OnEvent = func(e SessionEvent) {
+		if cancelArmed.Load() {
+			cancelOnce.Do(func() {
+				_ = conn.Cancel(context.Background(), acp.CancelNotification{SessionId: sess.SessionId})
+			})
+		}
+		probeOnEvent(e)
+	}
 
 	// 3. Prompt(无害消息,带超时)。期间 SessionUpdate 并发流入 onEvent。
 	turnCtx, cancelTurn := context.WithTimeout(ctx, probeTurnTimeout)
@@ -296,25 +312,17 @@ func ProbeHarness(ctx context.Context, command string) *ConformanceReport {
 		rep.PromptTurn = CheckResult{Pass: false, Note: fmt.Sprintf("stopReason=%s", presp.StopReason)}
 	}
 	rep.ReportedUsage = sawUsage || presp.Usage != nil
-	// Probe session/cancel: cancel as soon as the harness starts producing output
-	// (first session/update event), proving the turn is genuinely in-flight. This
-	// avoids the fixed-delay race where a fast harness finishes "hi" before the
-	// cancel lands. A conformant harness MUST respond with stopReason=cancelled.
+	// Probe session/cancel: arm the wrapper so the first session/update event fires
+	// session/cancel (the turn is genuinely in-flight — no fixed-delay race). A
+	// conformant harness MUST respond with stopReason=cancelled.
 	cancelPromptCtx, cancelPromptFn := context.WithTimeout(ctx, probeTurnTimeout)
 	defer cancelPromptFn()
-	var cancelOnce sync.Once
-	realOnEvent := handler.OnEvent
-	handler.OnEvent = func(e SessionEvent) {
-		cancelOnce.Do(func() {
-			_ = conn.Cancel(context.Background(), acp.CancelNotification{SessionId: sess.SessionId})
-		})
-		realOnEvent(e)
-	}
+	cancelArmed.Store(true)
 	cpresp, cperr := conn.Prompt(cancelPromptCtx, acp.PromptRequest{
 		SessionId: sess.SessionId,
 		Prompt:    []acp.ContentBlock{acp.TextBlock("hi")},
 	})
-	handler.OnEvent = realOnEvent
+	cancelArmed.Store(false)
 	rep.CancelHonored = cperr == nil && cpresp.StopReason == acp.StopReasonCancelled
 
 	// Probe session/resume: if advertised, resume the same session and verify it does
