@@ -91,6 +91,8 @@ mock.module("react-i18next", () => ({
 const chatServiceMock = {
   PickFiles: mock(async () => []),
   SessionFuzzyFind: mock(async () => []),
+  // McpChip (now rendered inside compose-tools, issue #115) queries selected MCP servers.
+  GetSessionMcpServers: mock(async () => []),
 };
 mock.module("../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice", () => chatServiceMock);
 

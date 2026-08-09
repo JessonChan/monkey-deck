@@ -1306,6 +1306,16 @@ input, textarea { font-family: inherit; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
+/* ─── Composer MCP status chip (read-only) ─── */
+/* Relocated from ChatView header (issue #115). Visual sibling of compose-branch / history-chip
+   (mono + elev-2 + sep border + height 20), but read-only (no pointer/hover) — status, not action. */
+.compose-mcp {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
+  background: var(--elev-2); border: 1px solid var(--sep);
+  padding: 2px 7px; border-radius: 5px; height: 20px; margin-left: 4px;
+}
+
 /* ─── Composer 长文本折叠(TUI 风格紧凑块)─── */
 .composer-meta-row {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;

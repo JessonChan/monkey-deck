@@ -7,6 +7,7 @@ import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/i
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
 import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, ListPlus, GitBranch, CornerUpLeft, ListChecks, ClipboardPaste } from "lucide-react";
+import McpChip from "./McpChip";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -1034,6 +1035,9 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                 <span className="compose-branch-name">{branch}</span>
               </button>
             )}
+            {/* MCP status chip: read-only indicator of which MCP servers the session selected
+                 (relocated from ChatView header, issue #115). 0 selected → chip not rendered. */}
+            <McpChip sessionId={sessionId} />
           </div>
           <div className="compose-right">
             <ModelSelect configOptions={configOptions} disabled={disabled} onSetConfig={onSetConfig} onRefreshConfig={onRefreshConfig} contextTokens={usage.used} />

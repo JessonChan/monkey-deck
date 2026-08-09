@@ -6,7 +6,6 @@ import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/i
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { ChatItem, ConfigOption, PermissionPrompt, ElicitationPrompt, StatusPayload, QueueItem, Mention, ImageAttachment, AudioAttachment, PlanEntry, LivePlan, Usage, SlashCommand } from "../types";
 import Composer from "./Composer";
-import McpChip from "./McpChip";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
 import CollapsibleText from "./CollapsibleText";
@@ -652,7 +651,6 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           <span className="chat-sep">/</span>
           <span className="chat-session-title">{props.session?.customTitle || props.session?.title || t("chat.newSessionTitle")}</span>
           {props.session?.model && <span className="chat-model">{props.session.model}</span>}
-          <McpChip sessionId={props.sessionId} />
         </div>
         <div className="chat-header-actions">
           {s.key && <span className={`status-badge ${s.cls}`}>{t(s.key)}</span>}

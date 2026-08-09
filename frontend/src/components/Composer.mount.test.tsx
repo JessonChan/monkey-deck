@@ -98,6 +98,8 @@ let fuzzyFindResult: { path: string; name: string; isDir: boolean }[] = [];
 const chatServiceMock = {
   PickFiles: mock(async () => []),
   SessionFuzzyFind: mock(async (sessionID: string, scope: string, query: string, limit: number) => fuzzyFindResult),
+  // McpChip (now rendered inside compose-tools, issue #115) queries selected MCP servers.
+  GetSessionMcpServers: mock(async () => []),
 };
 mock.module("../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice", () => chatServiceMock);
 
