@@ -305,6 +305,8 @@
     "longLineTruncated": "{{count}} chars · long line truncated",
     "pasteSnippet": "Pasted · {{lines}} lines",
     "pasteSnippetTip": "Pasted snippet ({{lines}} lines) · click to preview, full text is included when sent",
+    "pasteSnippetCloseTip": "Click to close preview",
+    "pasteSnippetFoldNote": "⋯ {{count}} lines folded (click to expand) ⋯",
     "expandFull": "Expand full editor",
     "collapseToPreview": "Collapse to preview",
     "collapsePreviewHint": "Click to expand full editor",

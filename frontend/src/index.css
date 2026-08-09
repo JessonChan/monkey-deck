@@ -1101,7 +1101,8 @@ input, textarea { font-family: inherit; }
   width: 18px; height: 18px; object-fit: cover; border-radius: 3px;
   border: 1px solid var(--sep); flex-shrink: 0;
 }
-/* 大段粘贴 chip:复用 att-chip 视觉,chip 体点击展开预览(折叠块),× 移除。 */
+/* Large-paste chip: reuses the att-chip visual; clicking the chip body opens the fold
+   preview; × removes it. */
 .paste-chip { padding-left: 4px; border-color: color-mix(in srgb, var(--accent-2) 30%, var(--sep)); }
 .paste-chip-toggle {
   display: inline-flex; align-items: center; gap: 5px; min-width: 0;

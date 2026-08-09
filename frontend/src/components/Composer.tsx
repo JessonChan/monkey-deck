@@ -58,7 +58,7 @@ const COLLAPSE_TAIL_LINES = 2;     // 折叠时展示后 M 行
 // Large paste fold threshold: a paste whose line count exceeds this is captured
 // out-of-band as a "paste snippet" chip (reusing the att-chip / fold visual)
 // instead of filling up the textarea. The full text is restored into the outgoing
-// message on submit (见 submit). Keeps the composer editable for big log/error dumps.
+// message on submit (see submit). Keeps the composer editable for big log/error dumps.
 const PASTE_FOLD_THRESHOLD = 20;
 
 // A paste captured as a chip rather than inlined into the textarea. text holds the
@@ -205,16 +205,22 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   };
   const collapseInput = () => setCollapsed(true);
 
-  // --- 大段粘贴折叠成 chip(PASTE_FOLD_THRESHOLD)---
-  // pasteSnippets:超过阈值行数的粘贴被捕获为 chip(复用 att-chip / 折叠视觉),不灌进 textarea。
-  // 提交时把每条 snippet 的完整原文拼回消息(submit),textarea 仅保留用户手打的小段上下文。
-  // expandedSnippet:当前展开预览的 snippet id(null = 全部折叠态);一次只展开一条。
+  // --- Large paste folded into a chip (PASTE_FOLD_THRESHOLD) ---
+  // pasteSnippets: pastes exceeding the threshold line count are captured as chips
+  // (reusing the att-chip / fold visual) instead of flooding the textarea. On submit each
+  // snippet's full original text is stitched back into the message (submit); the textarea
+  // only keeps the user's hand-typed context.
+  // expandedSnippet: the id of the snippet whose preview is open (null = all folded); one at a time.
   const snippetIdRef = useRef(0);
   const [pasteSnippets, setPasteSnippets] = useState<PasteSnippet[]>([]);
   const [expandedSnippet, setExpandedSnippet] = useState<string | null>(null);
-  // Composer 不随 session 切换重挂载(无 per-session key),本地 state 会跨 session 残留 ——
-  // 切 session 时清空 pasteSnippets/展开态,与 attachments 等 per-session 隔离行为对齐。
-  useEffect(() => { setPasteSnippets([]); setExpandedSnippet(null); snippetIdRef.current = 0; }, [sessionId]);
+  // snippetFullyExpanded: within an open preview, whether the folded middle lines have been
+  // revealed (divider click). false = head/tail + fold note; true = all lines shown.
+  const [snippetFullyExpanded, setSnippetFullyExpanded] = useState(false);
+  // Composer does not remount on session switch (no per-session key), so local state would
+  // leak across sessions — clear pasteSnippets / expanded state on session change to match
+  // the per-session isolation of attachments and friends.
+  useEffect(() => { setPasteSnippets([]); setExpandedSnippet(null); setSnippetFullyExpanded(false); snippetIdRef.current = 0; }, [sessionId]);
   const addPasteSnippet = (text: string) => {
     const lines = text.split("\n").length;
     setPasteSnippets((prev) => [...prev, { id: `ps-${++snippetIdRef.current}`, text, lines, chars: text.length }]);
@@ -223,7 +229,8 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     setPasteSnippets((prev) => prev.filter((s) => s.id !== id));
     setExpandedSnippet((cur) => (cur === id ? null : cur));
   };
-  // 展开预览的折叠块(复用 composer-collapse 的首尾行 + 中间省略视觉):仅对当前展开的 snippet 计算。
+  // Folded preview block for the open snippet (reusing composer-collapse's head/tail + middle
+  // ellipsis visual): computed only for the currently expanded snippet.
   const snippetPreview = useMemo(() => {
     if (!expandedSnippet) return null;
     const sn = pasteSnippets.find((s) => s.id === expandedSnippet);
@@ -231,13 +238,14 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     const all = sn.text.split("\n");
     if (all.length > COLLAPSE_HEAD_LINES + COLLAPSE_TAIL_LINES) {
       return {
+        all,
         head: all.slice(0, COLLAPSE_HEAD_LINES),
         tail: all.slice(all.length - COLLAPSE_TAIL_LINES),
-        note: t("composer.linesFolded", { count: all.length - COLLAPSE_HEAD_LINES - COLLAPSE_TAIL_LINES }),
+        foldCount: all.length - COLLAPSE_HEAD_LINES - COLLAPSE_TAIL_LINES,
       };
     }
-    return { head: all, tail: [], note: t("composer.longLineTruncated", { count: sn.chars }) };
-  }, [expandedSnippet, pasteSnippets, t]);
+    return { all, head: all, tail: [], foldCount: 0 };
+  }, [expandedSnippet, pasteSnippets]);
 
   // --- 上下键翻历史 ---
   // navIdx = -1:未翻历史(显示当前草稿);否则指向 history 数组的下标(当前展示的那条)。
@@ -322,8 +330,9 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   const submit = (finalText?: string, mode: "send" | "enqueue" = "send", forcePlain = false) => {
     if (disabled) return;
     const raw = finalText ?? value;
-    // 还原完整文本:大段粘贴被 chip 化(不进 textarea),提交时把每条 snippet 的完整原文
-    // 以空行分隔拼到手打文本之后,保证 agent 收到的是完整内容(只是 composer 里没被撑爆)。
+    // Restore the full text: large pastes are chip-ified (kept out of the textarea), so on
+    // submit each snippet's full original text is appended to the hand-typed text, separated
+    // by blank lines — the agent receives the complete content (the composer just didn't bloat).
     const combined = pasteSnippets.length > 0
       ? [raw, ...pasteSnippets.map((s) => s.text)].filter((s) => s.trim() !== "").join("\n\n")
       : raw;
@@ -360,6 +369,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     onAudiosChange([]);
     setPasteSnippets([]);
     setExpandedSnippet(null);
+    setSnippetFullyExpanded(false);
     navRef.current = -1;
     setNavDisplay(-1);
     setMentionOpen(false);
@@ -775,8 +785,10 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                 <button className="att-chip-x" onClick={() => onAudiosChange(audios.filter((_, j) => j !== i))}><X size={11} /></button>
               </span>
             ))}
-            {/* 大段粘贴 chip:复用 att-chip 视觉 + 折叠视觉。chip 体点击展开预览(首尾行 + 中间省略),
-                × 移除该 snippet;提交时完整原文拼回消息(submit),chip 仅为展示态。 */}
+            {/* Large-paste chip: reuses the att-chip + fold visuals. Clicking the chip body
+                 opens the fold preview (head/tail + middle ellipsis); × removes the snippet.
+                 On submit the full original text is stitched back into the message (submit);
+                 the chip is display-only. */}
             {pasteSnippets.map((sn) => (
               <span
                 key={sn.id}
@@ -787,7 +799,15 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                   type="button"
                   className="paste-chip-toggle"
                   data-testid="paste-chip"
-                  onClick={() => setExpandedSnippet((cur) => cur === sn.id ? null : sn.id)}
+                  onClick={() => {
+                    if (expandedSnippet === sn.id) {
+                      setExpandedSnippet(null);
+                      setSnippetFullyExpanded(false);
+                    } else {
+                      setSnippetFullyExpanded(false);
+                      setExpandedSnippet(sn.id);
+                    }
+                  }}
                 >
                   <ClipboardPaste size={11} />
                   <span className="att-chip-name">{t("composer.pasteSnippet", { lines: sn.lines })}</span>
@@ -803,28 +823,39 @@ export default function Composer({ value, onChange, disabled, prompting, configO
           </div>
         )}
 
-        {/* 展开的 paste-snippet 预览:复用 composer-collapse 的首尾行 + 中间省略视觉(§4.4 不裸抛原文对象)。 */}
+        {/* Open paste-snippet preview: reuses composer-collapse's head/tail + middle-ellipsis
+            visual (§4.4: no raw object dumped). Click the divider to expand the folded middle
+            lines; click the outer area (or the chip again) to close the preview. */}
         {snippetPreview && (
           <div
             className="composer-collapse paste-snippet-preview"
             data-testid="paste-snippet-preview"
-            onClick={() => setExpandedSnippet(null)}
-            title={t("composer.collapsePreviewHint")}
+            onClick={() => { setExpandedSnippet(null); setSnippetFullyExpanded(false); }}
+            title={t("composer.pasteSnippetCloseTip")}
           >
-            <pre className="composer-collapse-pre">
-              {snippetPreview.head.map((l, i) => <div key={i} className="composer-collapse-line">{l || " "}</div>)}
-            </pre>
-            <button
-              className="composer-collapse-divider"
-              onClick={(e) => { e.stopPropagation(); setExpandedSnippet(null); }}
-              onMouseDown={(e) => e.preventDefault()}
-            >
-              {t("composer.collapsePreviewDivider", { note: snippetPreview.note })}
-            </button>
-            {snippetPreview.tail.length > 0 && (
+            {snippetFullyExpanded ? (
               <pre className="composer-collapse-pre">
-                {snippetPreview.tail.map((l, i) => <div key={i} className="composer-collapse-line">{l || " "}</div>)}
+                {snippetPreview.all.map((l, i) => <div key={i} className="composer-collapse-line">{l || " "}</div>)}
               </pre>
+            ) : (
+              <>
+                <pre className="composer-collapse-pre">
+                  {snippetPreview.head.map((l, i) => <div key={i} className="composer-collapse-line">{l || " "}</div>)}
+                </pre>
+                <button
+                  className="composer-collapse-divider"
+                  data-testid="paste-snippet-expand"
+                  onClick={(e) => { e.stopPropagation(); setSnippetFullyExpanded(true); }}
+                  onMouseDown={(e) => e.preventDefault()}
+                >
+                  {t("composer.pasteSnippetFoldNote", { count: snippetPreview.foldCount })}
+                </button>
+                {snippetPreview.tail.length > 0 && (
+                  <pre className="composer-collapse-pre">
+                    {snippetPreview.tail.map((l, i) => <div key={i} className="composer-collapse-line">{l || " "}</div>)}
+                  </pre>
+                )}
+              </>
             )}
           </div>
         )}
@@ -898,9 +929,12 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                   return;
                 }
               }
-              // 大段文本粘贴(> PASTE_FOLD_THRESHOLD 行):不灌进 textarea,捕获成 paste-snippet chip。
-              // preventDefault 阻止默认插入 → value 不变,textarea 保持可编辑;提交时再把完整原文拼回(submit)。
-              // 放在图片处理之后(图片优先)、短→长折叠判断之前(阈值更高,互斥:超 20 行直接 chip 化,不进 textarea 就谈不上折叠)。
+              // Large text paste (> PASTE_FOLD_THRESHOLD lines): don't flood the textarea,
+              // capture it as a paste-snippet chip. preventDefault stops the default insert ->
+              // value is unchanged and the textarea stays editable; the full original text is
+              // stitched back on submit (submit). Runs after image handling (images first) and
+              // before the short->long fold check (higher threshold, mutually exclusive: > 20
+              // lines is chip-ified outright, never reaching the textarea so the fold is moot).
               const pasted = e.clipboardData?.getData("text") ?? "";
               if (pasted.split("\n").length > PASTE_FOLD_THRESHOLD) {
                 e.preventDefault();

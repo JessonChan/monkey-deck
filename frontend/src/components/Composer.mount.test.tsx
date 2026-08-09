@@ -875,7 +875,7 @@ describe("Composer large-paste fold-to-chip (Task #24240)", () => {
     expect(preview).not.toBeNull();
     // The fold preview shows the head line and the fold divider (not raw JSON).
     expect(preview.querySelector(".composer-collapse-line")!.textContent).toContain("log line 1");
-    expect(preview.querySelector(".composer-collapse-divider")!.textContent).toContain("collapsePreviewDivider");
+    expect(preview.querySelector(".composer-collapse-divider")!.textContent).toContain("pasteSnippetFoldNote");
 
     // Click the chip again -> preview collapses.
     const chip2 = host.querySelector('[data-testid="paste-chip"]') as HTMLElement;
@@ -889,6 +889,46 @@ describe("Composer large-paste fold-to-chip (Task #24240)", () => {
     remove.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
     await flush();
     expect(host.querySelector('[data-testid="paste-chip"]')).toBeNull();
+  });
+
+  // Review #24241 #2: the fold divider said "click to expand" but clicking it collapsed the
+  // whole preview (action opposite to copy, §4.4/§4.5). Now the divider EXPANDS the folded
+  // middle lines, and the outer area (or chip) closes. Pins both directions.
+  test("fold divider expands the middle lines (not collapse); outer area closes the preview", async () => {
+    const { host } = mount(<Composer value={"check this log"} {...STUB_PROPS} />);
+    await flush();
+
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    pasteText(ta, BIG_PASTE);
+    await flush();
+
+    const chip = host.querySelector('[data-testid="paste-chip"]') as HTMLElement;
+    chip.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    const preview = host.querySelector('[data-testid="paste-snippet-preview"]') as HTMLElement;
+    expect(preview).not.toBeNull();
+    // Folded state: head + tail shown, the middle is hidden.
+    expect(preview.textContent).toContain("log line 1");
+    expect(preview.textContent).toContain("log line 25");
+    expect(preview.textContent).not.toContain("log line 13");
+    const divider = preview.querySelector('[data-testid="paste-snippet-expand"]') as HTMLElement;
+    expect(divider).not.toBeNull();
+
+    // Click the divider -> EXPANDS the folded middle. BUG REPRO: old code collapsed here
+    // (preview vanished). The preview must stay open and reveal the middle line.
+    divider.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    const preview2 = host.querySelector('[data-testid="paste-snippet-preview"]') as HTMLElement;
+    expect(preview2).not.toBeNull();
+    expect(preview2.textContent).toContain("log line 13");
+    // Once fully expanded the divider is gone (nothing left to unfold).
+    expect(preview2.querySelector('[data-testid="paste-snippet-expand"]')).toBeNull();
+
+    // Click a line in the outer area -> closes the preview (pasteSnippetCloseTip semantics).
+    preview2.querySelector(".composer-collapse-line")!.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(host.querySelector('[data-testid="paste-snippet-preview"]')).toBeNull();
   });
 
   test("submit restores the full snippet text into the outgoing message and clears chips", async () => {
