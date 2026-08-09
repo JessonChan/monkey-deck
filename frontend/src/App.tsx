@@ -972,6 +972,29 @@ export default function App() {
     void createSession(undefined, branch);
   }, [createSession]);
 
+  // Quote-to-composer (from the chat / editor selection toolbar): formats the
+  // selected text as a markdown blockquote, appends it to the active session's
+  // draft, switches the middle column back to the chat tab (so the composer is
+  // visible — quoting from EditorPane leaves chat hidden), and bumps a focus
+  // signal so the caret lands at the end of the textarea ready to type.
+  const [composerFocusSignal, setComposerFocusSignal] = useState(0);
+  const quoteToComposer = useCallback((text: string) => {
+    const sid = selectedSessionIdRef.current;
+    const quote = text.trim();
+    if (!sid || !quote) return;
+    setDraftBySession((prev) => {
+      const cur = prev[sid] || "";
+      // Markdown blockquote: prefix each line with "> ". Empty draft → just the
+      // quote; otherwise separate with a blank line so it reads as its own block.
+      const block = quote.split("\n").map((l) => `> ${l}`).join("\n");
+      const next = cur.trim() ? `${cur}\n\n${block}` : block;
+      return { ...prev, [sid]: next };
+    });
+    // Reveal the composer (chat tab) in case a file/diff tab is active.
+    setActiveFileTabBySession((prev) => ({ ...prev, [sid]: "chat" }));
+    setComposerFocusSignal((n) => n + 1);
+  }, []);
+
   // 用户在弹窗确认后真正创建 session。按 mode 分发到三条后端路径:
   //   project → CreateSession(useWorktree=false);new → CreateSession(useWorktree=true, baseRef);
   //   enter → CreateGuestSession(enterPath) 钉到已有 worktree(guest)。
@@ -1920,6 +1943,8 @@ export default function App() {
               loadingMore={loadingMore}
               onLoadMore={() => selectedSessionId && loadMoreMessages(selectedSessionId)}
               onOpenFile={(path, line) => openFileTab(selectedSessionId, path, line)}
+              onQuoteToComposer={quoteToComposer}
+              focusSignal={composerFocusSignal}
             />
             </div>
             {/* EditorPane (content) / DiffPane (git changes): shown when a non-chat
@@ -1942,6 +1967,7 @@ export default function App() {
                   sessionId={selectedSessionId}
                   file={{ path: tab.path, line: tab.line }}
                   onClose={() => closeFileTab(selectedSessionId, activeFileTab)}
+                  onQuoteToComposer={quoteToComposer}
                 />
               );
             })()}

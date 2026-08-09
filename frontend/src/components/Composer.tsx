@@ -42,6 +42,10 @@ interface Props {
   // user, so it stays pinned to the input they act on, not buried in the scroll stream.
   elicitation: ElicitationPrompt | null;
   onRespondElicitation: (action: "accept" | "decline" | "cancel", content: Record<string, unknown>) => void;
+  // Bump this number to imperatively focus the composer and place the caret at
+  // the end (used by "quote to composer" so the user lands ready to type after
+  // the quoted block). 0 = no-op on mount; only changes drive the effect.
+  focusSignal?: number;
 }
 
 // 长文本折叠阈值:超过则折叠成 TUI 风格紧凑块(首尾若干行 + 中间省略),避免撑爆输入区。
@@ -110,7 +114,7 @@ const AUDIO_MIME_ALLOWED = ["audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3
 // 单音频大小上限(base64 前,字节):25MB。音频比图片体积更大,但仍需控量以不爆上下文。
 const AUDIO_MAX_BYTES = 25 * 1024 * 1024;
 
-export default function Composer({ value, onChange, disabled, prompting, configOptions, commands, elicitation, onRespondElicitation, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, audios, onAudiosChange, audioSupported, usage, branch, onNewSessionOnBranch, onSend, onEnqueue, onStop }: Props) {
+export default function Composer({ value, onChange, disabled, prompting, configOptions, commands, elicitation, onRespondElicitation, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, audios, onAudiosChange, audioSupported, usage, branch, onNewSessionOnBranch, onSend, onEnqueue, onStop, focusSignal = 0 }: Props) {
   const { t } = useTranslation();
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
@@ -197,6 +201,24 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     el.style.height = Math.min(el.scrollHeight, 220) + "px";
   };
   useEffect(() => { if (ref.current) autoGrow(ref.current); }, [value, collapsed]);
+
+  // Imperative focus via focusSignal (quote-to-composer). Expand the long-text
+  // preview first (the textarea isn't mounted while collapsed → ref is null),
+  // then rAF into the next frame so a tab switch (editor → chat) that flips the
+  // wrapper display:none→visible in the same render cycle has committed —
+  // focusing a hidden textarea is a no-op.
+  useEffect(() => {
+    if (!focusSignal) return;
+    setCollapsed(false);
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (!el) return;
+      el.focus();
+      el.selectionStart = el.selectionEnd = el.value.length;
+      cursorRef.current = el.value.length;
+      autoGrow(el);
+    });
+  }, [focusSignal]);
 
   // @ 触发:据光标位置判定是否在 @ 提及中,调后端 SessionFuzzyFind 在 session 工作目录
   // 按 (scope, term) 检索:term 非空 → scope 子树内模糊匹配(文件 + 目录);term 空 →

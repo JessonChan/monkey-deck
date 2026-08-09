@@ -323,6 +323,26 @@ input, textarea { font-family: inherit; }
 .ctx-item:disabled { opacity: 0.4; cursor: default; }
 .ctx-item:disabled:hover { background: none; color: var(--text-2); }
 
+/* ─── Text-selection floating toolbar (Copy / Quote) ─── */
+/* Positioned via JS in viewport coords (position: fixed, set inline after the
+   first layout pass). Above the selection by default; flips below if no room.
+   Inherits the ctx-menu visual language (elev-2 card + hairline + soft shadow). */
+.selection-toolbar {
+  z-index: 60; display: flex; gap: 1px; padding: 3px;
+  background: var(--elev-2); border: 1px solid var(--sep-strong);
+  border-radius: var(--r-md); box-shadow: var(--shadow-pop);
+  animation: fadeIn 0.1s ease;
+}
+.selection-toolbar-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 9px; border-radius: var(--r-sm); border: none; background: transparent;
+  font-size: 12px; color: var(--text-2); font-family: var(--sans);
+  cursor: pointer; white-space: nowrap;
+  transition: background 0.1s, color 0.1s;
+}
+.selection-toolbar-btn:hover { background: var(--hover); color: var(--text); }
+.selection-toolbar-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* ─── Main / Chat ─── */
 .main { width: 100%; height: 100%; min-width: 0; display: flex; background: var(--bg); }
 .chat-view { height: 100%; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -1707,6 +1727,12 @@ input, textarea { font-family: inherit; }
    Fills the chat-area Panel; ChatView is hidden beside it via .chatview-wrap.is-hidden. */
 .editor-pane {
   height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--bg);
+}
+/* Content area (below toolbar / search overlay): flex-fills so CodeViewer's
+   .cv (flex:1) resolves correctly, and scopes the selection toolbar so toolbar /
+   search-input selections don't trigger it. */
+.editor-pane-content {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
 }
 .editor-toolbar {
   display: flex; align-items: center; gap: 7px; flex-shrink: 0;

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { File as FileIcon, Copy, X, Search, ChevronUp, ChevronDown } from "lucide-react";
+import { File as FileIcon, Copy, X, Search, ChevronUp, ChevronDown, Quote } from "lucide-react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import CodeViewer from "./CodeViewer";
+import SelectionToolbar, { type SelectionAction } from "./SelectionToolbar";
 import { isImageFile } from "../utils";
 import { copyText } from "../lib/clipboard";
 
@@ -35,10 +36,14 @@ export default function EditorPane({
   sessionId,
   file,
   onClose,
+  onQuoteToComposer,
 }: {
   sessionId: string;
   file: EditorFile;
   onClose: () => void;
+  // Quote selected text (from the editor selection toolbar) into the composer
+  // as a markdown blockquote. Routed up to App.tsx which owns the composer draft.
+  onQuoteToComposer?: (text: string) => void;
 }) {
   const [content, setContent] = useState<string>("");
   const [imgUrl, setImgUrl] = useState<string>("");
@@ -46,6 +51,26 @@ export default function EditorPane({
   const [loading, setLoading] = useState(true);
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+  // Scope ref for the selection toolbar: the content area below the toolbar /
+  // search overlay. Excludes the toolbar inputs so selecting in them doesn't
+  // pop the quote toolbar.
+  const contentRef = useRef<HTMLDivElement>(null);
+  const onQuoteRef = useRef(onQuoteToComposer);
+  onQuoteRef.current = onQuoteToComposer;
+  const selectionActions = useMemo<SelectionAction[]>(
+    () => [
+      {
+        key: "quote",
+        labelKey: "selectionToolbar.quoteToChat",
+        tipKey: "selectionToolbar.quoteToChatTip",
+        Icon: Quote,
+        testId: "editor-selection-quote",
+        run: (text) => { onQuoteRef.current?.(text); },
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t],
+  );
 
   // ⌘F search overlay state (Task #24197). `query` is the live input value;
   // `debouncedQuery` is the snapshot actually used for matching, updated on a
@@ -287,32 +312,37 @@ export default function EditorPane({
           </button>
         </div>
       )}
-      {error ? (
-        <div className="preview-error">{t("filePreview.readFailed", { error })}</div>
-      ) : loading ? (
-        <div className="preview-loading">{t("filePreview.loading")}</div>
-      ) : image ? (
-        <div className="preview-img-scroll" data-testid="editor-pane-img-scroll">
-          {imgUrl && (
-            <img
-              className="preview-img"
-              src={imgUrl}
-              alt={name}
-              data-testid="editor-pane-img"
-            />
-          )}
-        </div>
-      ) : (
-        <CodeViewer
-          content={content}
-          filename={file.path}
-          scrollKey={`${sessionId}/${file.path}`}
-          highlightLine={lineNum}
-          searchMatches={searchOpen ? searchMatchLines : undefined}
-          activeMatchLine={searchOpen ? activeMatchLine : null}
-          testId="editor-pane-viewer"
-        />
-      )}
+      <div ref={contentRef} className="editor-pane-content">
+        {error ? (
+          <div className="preview-error">{t("filePreview.readFailed", { error })}</div>
+        ) : loading ? (
+          <div className="preview-loading">{t("filePreview.loading")}</div>
+        ) : image ? (
+          <div className="preview-img-scroll" data-testid="editor-pane-img-scroll">
+            {imgUrl && (
+              <img
+                className="preview-img"
+                src={imgUrl}
+                alt={name}
+                data-testid="editor-pane-img"
+              />
+            )}
+          </div>
+        ) : (
+          <CodeViewer
+            content={content}
+            filename={file.path}
+            scrollKey={`${sessionId}/${file.path}`}
+            highlightLine={lineNum}
+            searchMatches={searchOpen ? searchMatchLines : undefined}
+            activeMatchLine={searchOpen ? activeMatchLine : null}
+            testId="editor-pane-viewer"
+          />
+        )}
+      </div>
+      {/* Selection toolbar (Quote → composer): scoped to the content area below
+          the toolbar / search overlay. See SelectionToolbar. */}
+      <SelectionToolbar scope={contentRef} actions={selectionActions} />
     </div>
   );
 }
