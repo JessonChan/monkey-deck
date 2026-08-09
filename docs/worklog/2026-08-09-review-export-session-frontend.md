@@ -114,6 +114,37 @@ quota,属瞬时)。本轮在新分支上重跑核验 + 重新落地微修与 wor
 - `cd frontend && npm run build`(= `tsc && vite build`):clean,零 TS 错误。
 - `cd frontend && bun test src/i18n/locales.test.ts`:pass(zh/en leaf-key 同步)。
 
+## #24213 复核(independent re-run)
+
+Task #24213 再次对 #24206 前端部分派发 fe-reviewer 复审(同分支 `agent/fe-reviewer/e33a048e`,
+本审为新会话独立重跑核验,不沿用上轮结论)。重新独立核验六项验收点 + 反模式排查,结论与上轮
+一致:**PASS(APPROVE)**,无 NEEDS CHANGES。关键复核点:
+
+- **binding 对齐**:`wails3 generate bindings` 重生成,`ExportSession(sessionID, format)` 出现在
+  `chatservice.js:230`;Go 端 `func (s *ChatService) ExportSession(...) (string, error)`(`export.go:24`)
+  是 `*ChatService` 导出方法,`main.go:51` 已 `application.NewService(chatSvc)` 注册。签名 / 服务 /
+  Promise reject 三件对齐。
+- **菜单形态**(子菜单交互):无 submenu(项目无 submenu 模式,KISS,§5.3)。导出组 = `ctx-sep` +
+  `ctx-label` + 两个 `ctx-item`(`<FileText>` / `<Braces>`)+ `ctx-sep`(Sidebar.tsx:488-496),与
+  同菜单 Pin/Copy/Reveal 兄弟项形态一致。真 `<button>` 原生 focusable;菜单 Esc/外部 click/resize
+  关闭既有(`Sidebar.tsx:237-248`)。
+- **downloadText + sanitize**:`download.ts` 标准 Blob+objectURL+`<a download>` 模式,`setTimeout(revoke,0)`
+  下 tick 回收;`sanitizeFileName`(utils.ts:33,注释已英文化)覆盖 Windows `<>:"/\|?*` + Unix `/` +
+  控制字符 + 折叠空白,空 title → `"session"` 兜底不崩;`sessionId.slice(0,8)`(UUID,无 §5.4 #3 风险)。
+- **i18n 同步**:en/zh sidebar 各 38 leaf key,4 个新增 key 完全一致(脚本复核)。
+- **`data-testid`**:`export-txt-<sid>` / `export-jsonl-<sid>` 锚定 session id(§4.2)。
+- **反模式**:无新字段无人消费;无易变全串锚定测试。
+
+### 验证复跑(#24213)
+
+- `wails3 generate bindings`:293 packages / 2 services / 105 methods,ExportSession 在列。
+- `go build ./...`(含 frontend/dist stub):exit 0(仅链接器 macOS 版本告警,既有无关)。
+- `cd frontend && bun run build`(= `tsc && vite build`):clean,零 TS 错误(仅 chunk-size 提示既有)。
+- `cd frontend && bun test src/i18n/locales.test.ts`:2 pass(0 fail)。
+
+无新改动需提交;上轮 §3.7 微修(`4ea7d77`)与本 worklog(`3e94cb2`)已在本分支,本次仅追加本节
+#24213 复核记录。
+
 ## 下一步
 
 - 桌面 app 实测:右键 session → 导出 txt / jsonl,验证下载内容、文件名清洗、空 title 降级。
