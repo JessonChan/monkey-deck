@@ -37,6 +37,11 @@ const LINE_HEIGHT = 19;
 const VIRT_THRESHOLD = 2000;
 // 虚拟化上下额外渲染的行数(减少快速滚动时的空白闪烁)。
 const OVERSCAN = 12;
+// Per-file scroll positions (Task #24182): module-level so the Map outlives any
+// single CodeViewer instance. EditorPane unmounts/remounts CodeViewer on every
+// file-tab switch (its loading gate hides the viewer while fetching), so without
+// this a file always snaps back to the top when revisited. Keyed by filename.
+const scrollPositions = new Map<string, number>();
 
 export default function CodeViewer({
   content,
@@ -97,6 +102,29 @@ export default function CodeViewer({
       return () => cancelAnimationFrame(id);
     }
   }, [highlightLine, total, virtual, lines]);
+
+  // Per-file scrollTop restore/dump (Task #24182). Coordinated with the
+  // highlightLine effect above: that one is defined earlier, so on each commit
+  // it runs first and wins when a valid target line is requested — here we skip
+  // the restore whenever highlightLine is active. Dump lives in the cleanup,
+  // which for a filename change runs before the next setup (and runs on unmount),
+  // so the live scrollTop is captured before the restore could overwrite it.
+  // useLayoutEffect keeps dump→restore ordered within one commit and before
+  // paint (no flicker). Deps are intentionally [filename] only: restore fires on
+  // mount and on file switch, not on every highlight/resize change.
+  useLayoutEffect(() => {
+    const hlActive = !!highlightLine && highlightLine >= 1 && highlightLine <= total;
+    const el = scrollRef.current;
+    if (el && filename && !hlActive) {
+      const saved = scrollPositions.get(filename);
+      if (saved != null) el.scrollTop = saved;
+    }
+    return () => {
+      if (!filename) return;
+      const e = scrollRef.current;
+      if (e) scrollPositions.set(filename, e.scrollTop);
+    };
+  }, [filename]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rowEl = (i: number) => {
     const ln = i + 1;
