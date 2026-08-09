@@ -281,6 +281,14 @@
       "harness_empty_turn": "This command produced no further output. Connection is fine — keep going."
     }
   },
+  "selectionToolbar": {
+    "label": "Selection actions",
+    "copyTip": "Copy selected text",
+    "quote": "Quote",
+    "quoteTip": "Insert the selected text as a quote into the composer",
+    "quoteToChat": "Quote to chat",
+    "quoteToChatTip": "Insert the selected text as a quote into the chat composer"
+  },
   "composer": {
     "placeholderNormal": "Message monkey-deck…",
     "placeholderQueued": "Queue next message… (Enter to enqueue · auto-sent after this turn)",

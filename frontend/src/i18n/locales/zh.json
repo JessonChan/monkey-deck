@@ -281,6 +281,14 @@
       "harness_empty_turn": "该命令本轮没有更多回复。连接正常,可继续操作。"
     }
   },
+  "selectionToolbar": {
+    "label": "选中操作",
+    "copyTip": "复制选中文字",
+    "quote": "引用",
+    "quoteTip": "把选中文字作为引用插入输入框",
+    "quoteToChat": "引用到对话",
+    "quoteToChatTip": "把选中文字作为引用插入对话输入框"
+  },
   "composer": {
     "placeholderNormal": "给 monkey-deck 发消息…",
     "placeholderQueued": "排队下一条…(Enter 入队 · 本轮结束后自动发)",

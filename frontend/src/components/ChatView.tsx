@@ -20,7 +20,8 @@ import { unifiedToOldNew } from "../lib/unified";
 import { highlightToLines } from "../lib/highlight";
 import "../hljs-theme.css";
 import { buildRows, computeLayout, computeWindow, anchorAt, restoreScroll, isAtBottom, HeightModel, TAIL_PRIOR, HEAD_PRIOR, type VRow, type Layout } from "../lib/virtualList";
-import { SquareTerminal, Sparkles, Brain, Check, Copy, FolderOpen, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus } from "lucide-react";
+import SelectionToolbar, { type SelectionAction } from "./SelectionToolbar";
+import { SquareTerminal, Sparkles, Brain, Check, Copy, FolderOpen, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus, Quote } from "lucide-react";
 
 interface Props {
   project: Project | null;
@@ -82,6 +83,12 @@ interface Props {
   // App.tsx which owns per-session file tabs. Replaces the old in-chat modal
   // preview overlay (FilePreviewOverlay, removed).
   onOpenFile?: (path: string, line?: number) => void;
+  // Quote the selected text (from the chat selection toolbar) into the composer
+  // as a markdown blockquote. Routed up to App.tsx which owns the composer draft.
+  onQuoteToComposer?: (text: string) => void;
+  // Bump to imperatively focus the composer (passed through to Composer). Used by
+  // quote-to-composer so the caret lands ready to type after the quoted block.
+  focusSignal?: number;
 }
 // 状态 → i18n key + 样式。label 在渲染处用 t() 解析(支持语言切换)。
 const STATUS_MAP: Record<string, { key: string; cls: string }> = {
@@ -195,6 +202,36 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     // No-op if the host hasn't wired the prop (keeps ChatView usable standalone).
     onOpenFileRef.current?.(path, line);
   }, []);
+  // Selection toolbar (Copy / Quote) lives in .chat-body (scrollRef). Keep the
+  // quote callback in a ref so the actions array is stable across renders — the
+  // toolbar re-renders on every selectionchange-driven position update and a new
+  // actions identity each time is wasteful (and would re-bind every button).
+  const onQuoteRef = useRef(props.onQuoteToComposer);
+  onQuoteRef.current = props.onQuoteToComposer;
+  const selectionActions = useMemo<SelectionAction[]>(
+    () => [
+      {
+        key: "copy",
+        labelKey: "common.copy",
+        tipKey: "selectionToolbar.copyTip",
+        Icon: Copy,
+        testId: "selection-copy",
+        run: (text) => { void copyText(text); },
+      },
+      {
+        key: "quote",
+        labelKey: "selectionToolbar.quote",
+        tipKey: "selectionToolbar.quoteTip",
+        Icon: Quote,
+        testId: "selection-quote",
+        run: (text) => { onQuoteRef.current?.(text); },
+      },
+    ],
+    // t is stable (i18next); copyText/Quote/Copy are module-level. onQuoteRef is
+    // a stable ref. The array is built once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t],
+  );
   // 当前生效的工作目录:优先 session.worktreePath(独立 worktree),降级 project.path(共享目录)。
   // 与 App.tsx 的 termCwdRef 同一套优先级(worktree 优先 → 项目目录)。
   const activePath = props.session?.worktreePath || props.project?.path || "";
@@ -690,6 +727,9 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           </button>
         </div>
       )}
+      {/* Text-selection toolbar (Copy / Quote): scoped to .chat-body (scrollRef)
+          so composer / header selections don't trigger it. See SelectionToolbar. */}
+      <SelectionToolbar scope={scrollRef} actions={selectionActions} />
       {props.error && (
         <div className="error-bar">
           <span className="error-bar-msg">⚠ {props.error}</span>
@@ -745,6 +785,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           onStop={props.onStop}
           history={props.history}
           sessionId={props.sessionId}
+          focusSignal={props.focusSignal}
         />
       </footer>
     </div>
