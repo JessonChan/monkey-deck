@@ -26,8 +26,10 @@ export function formatDateTime(ts: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-// 把任意字符串清成安全的文件名片段:去路径/控制字符,把非法字符替换为空格再 trim。
-// 空结果返回空串(由调用方兜底默认名)。跨平台覆盖 Windows <>:"/\|?* 与 Unix /。
+// Sanitize an arbitrary string into a safe filename segment: strip path/control
+// chars, replace illegal chars with a space, collapse whitespace and trim.
+// Returns "" for an empty result (caller falls back to a default name).
+// Cross-platform: covers Windows <>:"/\|?* and Unix /.
 export function sanitizeFileName(name: string): string {
   return name
     .replace(/[\\/:*?"<>|\x00-\x1f]/g, " ")
