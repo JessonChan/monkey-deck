@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jessonchan/monkey-deck/internal/chat"
 	"github.com/jessonchan/monkey-deck/internal/config"
 	"github.com/jessonchan/monkey-deck/internal/ui"
 	"github.com/jessonchan/monkey-deck/internal/update"
@@ -102,6 +103,11 @@ func createMainWindow(app *application.App, cfg *config.Config) {
 		},
 		BackgroundColour: application.NewRGB(35, 35, 35),
 		URL:              "/",
+		// Enable OS file drag-and-drop onto [data-file-drop-target] elements (the chat
+		// area). Dropped absolute paths are forwarded to the frontend via
+		// chat:files-dropped (RegisterFilesDroppedEmitter) which routes them —
+		// worktree-internal → @mention / inline image, external → paperclip attachment.
+		EnableFileDrop: true,
 	}
 	// 有记录且非最大化:恢复到上次位置;首次启动(无记录)由系统居中。
 	// 校验位置仍在某块屏幕内,否则跳过恢复(防止外接显示器拔除后窗口落到屏幕外)。
@@ -122,6 +128,10 @@ func createMainWindow(app *application.App, cfg *config.Config) {
 	}
 
 	win := app.Window.NewWithOptions(opts)
+
+	// Forward OS file drops (chat area) to the frontend as chat:files-dropped.
+	// See internal/chat/drop.go for the routing bridge rationale.
+	chat.RegisterFilesDroppedEmitter(win)
 
 	// 窗口状态跟踪 + 防抖落盘。
 	// 关键:不能只靠「关闭时存盘」——macOS Cmd+Q 终止不触发 windowShouldClose

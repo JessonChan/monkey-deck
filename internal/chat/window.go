@@ -81,7 +81,13 @@ func (s *ChatService) OpenSessionWindow(sessionID string) error {
 			TitleBar:                application.MacTitleBarHiddenInset,
 		},
 		BackgroundColour: application.NewRGB(35, 35, 35),
+		// Enable OS file drag-and-drop on the popout too (parity with the main window,
+		// see internal/chat/drop.go). The frontend scopes so only this popout handles
+		// its own session's drops.
+		EnableFileDrop: true,
 	})
+	// Forward OS file drops (chat area) to the frontend as chat:files-dropped.
+	RegisterFilesDroppedEmitter(win)
 	// 关闭 → 从 WindowManager 移除(框架已做)+ 通知前端该 session 不再 popout。
 	win.OnWindowEvent(events.Mac.WindowWillClose, func(event *application.WindowEvent) {
 		s.emitPopoutChanged(sessionID, false)
