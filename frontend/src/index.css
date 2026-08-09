@@ -319,6 +319,7 @@ input, textarea { font-family: inherit; }
 .ctx-item.danger { color: var(--red); }
 .ctx-item.danger:hover { background: rgba(255, 69, 58, 0.14); }
 .ctx-sep { height: 1px; background: var(--sep); margin: 4px 2px; }
+.ctx-label { padding: 5px 9px 2px; font-size: 10.5px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.04em; }
 .ctx-item:disabled { opacity: 0.4; cursor: default; }
 .ctx-item:disabled:hover { background: none; color: var(--text-2); }
 

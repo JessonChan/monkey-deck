@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Search, X, Pin, PinOff, Settings, SquareTerminal, ExternalLink, Pencil } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Search, X, Pin, PinOff, Settings, SquareTerminal, ExternalLink, Pencil, FileText, Braces } from "lucide-react";
 import {
   DndContext,
   PointerSensor,
@@ -14,8 +14,9 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { timeAgo, formatDateTime } from "../utils";
+import { timeAgo, formatDateTime, sanitizeFileName } from "../utils";
 import { copyText } from "../lib/clipboard";
+import { downloadText } from "../lib/download";
 import HarnessIcon from "./HarnessIcon";
 
 interface Props {
@@ -195,6 +196,21 @@ export default function Sidebar(props: Props) {
     try { await props.onRemoveSession(id); setConfirm(null); }
     catch (e) { setDeleteErr(String(e)); }
     finally { setDeleting(false); }
+  };
+
+  // Export the full session conversation as text/jsonl and trigger a Blob download.
+  // File name: <title or "session">-<idPrefix>.<ext>; failures surface as a brief alert.
+  const onExportSession = async (sessionId: string, title: string, format: "txt" | "jsonl") => {
+    const idPref = sessionId.slice(0, 8);
+    const base = sanitizeFileName(title) || "session";
+    const ext = format === "jsonl" ? "jsonl" : "txt";
+    const mime = format === "jsonl" ? "application/x-ndjson;charset=utf-8" : "text/plain;charset=utf-8";
+    try {
+      const content = await ChatService.ExportSession(sessionId, format);
+      downloadText(content, `${base}-${idPref}.${ext}`, mime);
+    } catch (e) {
+      alert(`${t("sidebar.exportFailed")}: ${e}`);
+    }
   };
 
   // 点项目行搜索按钮切换:开则展开项目并聚焦输入框,关则清空(只允许一个项目同时搜索)。
@@ -469,6 +485,14 @@ export default function Sidebar(props: Props) {
               <FolderOpen size={13} /> {t("sidebar.revealWorktree")}
             </button>
           )}
+          <div className="ctx-sep" />
+          <div className="ctx-label">{t("sidebar.exportChat")}</div>
+          <button className="ctx-item" data-testid={`export-txt-${ctx.session.id}`} onClick={() => { void onExportSession(ctx.session.id, ctx.session.title, "txt"); closeCtx(); }}>
+            <FileText size={13} /> {t("sidebar.exportAsText")}
+          </button>
+          <button className="ctx-item" data-testid={`export-jsonl-${ctx.session.id}`} onClick={() => { void onExportSession(ctx.session.id, ctx.session.title, "jsonl"); closeCtx(); }}>
+            <Braces size={13} /> {t("sidebar.exportAsJSON")}
+          </button>
           <div className="ctx-sep" />
           <button className="ctx-item danger" onClick={() => { setConfirm({ kind: "session", session: ctx.session }); setCtx(null); setDeleteErr(null); }}>
             <Trash2 size={13} /> {t("sidebar.deleteSession")}

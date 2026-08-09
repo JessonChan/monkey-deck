@@ -26,6 +26,15 @@ export function formatDateTime(ts: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+// 把任意字符串清成安全的文件名片段:去路径/控制字符,把非法字符替换为空格再 trim。
+// 空结果返回空串(由调用方兜底默认名)。跨平台覆盖 Windows <>:"/\|?* 与 Unix /。
+export function sanitizeFileName(name: string): string {
+  return name
+    .replace(/[\\/:*?"<>|\x00-\x1f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 // 文件名是否走图片预览(<img>)分支。扩展名白名单与后端 fsview.ReadImage 对齐
 // (internal/fsview/fsview.go 的 extToImageMime):大小写不敏感、无扩展名返回 false。
 // 图片预览由 SessionReadImage 提供 dataURL,绕过 CodeViewer 的文本渲染路径。
