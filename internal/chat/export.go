@@ -45,7 +45,7 @@ func (s *ChatService) ExportSession(sessionID, format string) (string, error) {
 
 // exportSessionMeta 是 jsonl 首行的 session 元信息。
 type exportSessionMeta struct {
-	Type    string `json:"type"`    // 恒 "session"
+	Type    string `json:"type"` // 恒 "session"
 	ID      string `json:"id"`
 	Title   string `json:"title"`
 	Harness string `json:"harness"`
@@ -55,13 +55,13 @@ type exportSessionMeta struct {
 
 // exportMessageRecord 是 jsonl 每条消息对应的行。
 type exportMessageRecord struct {
-	Type      string `json:"type"` // 恒 "message"
-	Seq       int64  `json:"seq"`
-	Role      string `json:"role"`            // user/agent/thought/tool/plan
-	Kind      string `json:"kind,omitempty"`  // agent_message_chunk/agent_thought_chunk/tool_call/plan/...
-	Content   string `json:"content"`         // 原始内容(tool/plan 是 JSON 文本)
+	Type       string `json:"type"` // 恒 "message"
+	Seq        int64  `json:"seq"`
+	Role       string `json:"role"`           // user/agent/thought/tool/plan
+	Kind       string `json:"kind,omitempty"` // agent_message_chunk/agent_thought_chunk/tool_call/plan/...
+	Content    string `json:"content"`        // 原始内容(tool/plan 是 JSON 文本)
 	ToolCallID string `json:"toolCallId,omitempty"`
-	CreatedAt int64  `json:"createdAt"`
+	CreatedAt  int64  `json:"createdAt"`
 }
 
 func exportJSONL(se *store.Session, msgs []store.Message) string {
