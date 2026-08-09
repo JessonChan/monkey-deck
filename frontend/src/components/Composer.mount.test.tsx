@@ -311,6 +311,26 @@ describe("Composer @ mention cross-dir fuzzy find (Task #23072 / #23449)", () =>
   });
 });
 
+// Review #24199:chip 显示不变量 —— chip 显 m.name(basename),不显 m.path(全路径);
+// 全路径只进 title(tooltip)与插入文本。锚定值(非字段存在):name 在 chip 内、path 不在。
+describe("Composer @ mention chip shows name, not path (Review #24199)", () => {
+  test("a deeply-nested mention chip renders basename only; full path lives in title", async () => {
+    const mentions = [{ path: "src/deep/nested/foo.ts", name: "foo.ts" }];
+    const { host } = mount(<Composer value={"@src/deep/nested/foo.ts "} {...STUB_PROPS} mentions={mentions} />);
+    await flush();
+
+    const chip = host.querySelector(".att-chip-mention") as HTMLElement | null;
+    expect(chip).not.toBeNull();
+    // chip body shows @ + basename, NOT the full path.
+    const nameEl = chip!.querySelector(".att-chip-name") as HTMLElement | null;
+    expect(nameEl).not.toBeNull();
+    expect(nameEl!.textContent).toBe("@foo.ts");
+    expect(nameEl!.textContent).not.toContain("src/deep/nested/");
+    // full path is the tooltip source so users can still see the whole reference on hover.
+    expect(chip!.getAttribute("title")).toBe("@src/deep/nested/foo.ts");
+  });
+});
+
 // Task #23449:选中目录下钻 + scope 透传 + 返回上一级。文本是唯一事实源:@ token 的尾随 /
 // 标记 drill 态,scope 从 splitScopeTerm 推导,刷新/恢复都能复现(§5.3 找不变量)。
 describe("Composer @ mention drill-down + scope + go-up (Task #23449)", () => {
