@@ -24,6 +24,19 @@
   --red: #ff453a;
   --amber: #ffd60a;
   --violet: #bf5af2;
+  --yellow: var(--amber);
+  --warn-bg: rgba(204, 102, 0, 0.12);
+  --warn-bd: rgba(204, 102, 0, 0.35);
+  --accent-soft: rgba(10, 132, 255, 0.12);
+  /* Foreground aliases (consumed by forms / elicitation): keep in sync with the
+     primary text scale so every var() ref resolves without stray fallbacks. */
+  --text-1: var(--text);
+  --text-4: #54545a;
+  --fg: var(--text);
+  --fg-muted: var(--text-2);
+  /* Control surface aliases */
+  --border: rgba(255, 255, 255, 0.1);
+  --elev-hover: var(--elev-2);
   /* 几何 */
   --r-sm: 6px;
   --r-md: 9px;
@@ -1972,6 +1985,44 @@ input, textarea { font-family: inherit; }
 }
 .settings-switch.on .settings-switch-thumb { transform: translateX(16px); }
 .settings-empty { font-size: 12px; color: var(--text-3); padding: 24px 8px; text-align: center; line-height: 1.6; }
+
+/* ─── Settings-pane form primitives(.btn / .field / .settings-list / .settings-inline-toggle) ───
+    Shared by McpSettings / settings forms. .btn echoes .icon-btn's inline-flex + rounded +
+    smooth-transition shape, but carries text (+ optional leading icon). */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  font-size: 12.5px; font-weight: 500; padding: 6px 12px;
+  border-radius: var(--r-sm); border: 1px solid transparent;
+  background: var(--elev); color: var(--text-2);
+  transition: background 0.12s, color 0.12s, filter 0.12s, opacity 0.12s;
+}
+.btn:hover { background: var(--hover); color: var(--text); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn svg { flex-shrink: 0; }
+/* Primary accent emphasis (confirm / submit CTAs). */
+.btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+.btn.primary:hover { filter: brightness(1.1); color: #fff; }
+.btn.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Vertical stack of settings rows / form entries. */
+.settings-list { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+
+/* Inline checkbox + caption row: <label class="settings-inline-toggle"><input type=checkbox><span>...</span></label> */
+.settings-inline-toggle {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer; flex-shrink: 0;
+}
+.settings-inline-toggle input { width: 14px; height: 14px; accent-color: var(--accent); }
+
+/* Field wrapper: <label class="field"><span class="settings-row-title">…</span><input|select|textarea/></label> */
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field input, .field select, .field textarea {
+  width: 100%; background: var(--bg); border: 1px solid var(--sep); border-radius: 6px;
+  padding: 7px 9px; color: var(--text); font-size: 13px; outline: none; user-select: text;
+  font-family: var(--mono);
+}
+.field select { font-family: var(--sans); }
+.field textarea { resize: vertical; line-height: 1.45; }
+.field input:focus, .field select:focus, .field textarea:focus { border-color: rgba(10, 132, 255, 0.5); }
 
 /* ─── 分级权限规则 pane(§3.4,承载于设置中心) ─── */
 .perm-rule-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 80px; padding: 2px; }
