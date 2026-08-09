@@ -19,6 +19,16 @@ export interface CodeViewerProps {
   content: string;
   /** 文件名或路径,用于按扩展名选语言;留空则走 highlightAuto。 */
   filename?: string;
+  /**
+   * Per-file scrollTop persistence key (Task #24182). When provided, the saved
+   * scroll position is stored/restored under this key; otherwise falls back to
+   * `filename`. Callers that share the same `filename` across distinct contexts
+   * (e.g. the same relative path open in different sessions) MUST pass a key
+   * unique to that context — otherwise scroll positions leak across contexts.
+   * EditorPane passes `${sessionId}/${file.path}` because file.path is a relative
+   * path pinned to each session's worktree, NOT globally unique.
+   */
+  scrollKey?: string;
   /** 显式语言名,优先于 filename 推断。 */
   language?: string;
   /** 1-based 目标行号:高亮该行并滚入视野(由路径点击的行号定位触发)。 */
@@ -40,12 +50,15 @@ const OVERSCAN = 12;
 // Per-file scroll positions (Task #24182): module-level so the Map outlives any
 // single CodeViewer instance. EditorPane unmounts/remounts CodeViewer on every
 // file-tab switch (its loading gate hides the viewer while fetching), so without
-// this a file always snaps back to the top when revisited. Keyed by filename.
+// this a file always snaps back to the top when revisited. Keyed by `scrollKey`
+// (or `filename` fallback) — callers must ensure the key is unique across all
+// live contexts, since the Map is process-global.
 const scrollPositions = new Map<string, number>();
 
 export default function CodeViewer({
   content,
   filename,
+  scrollKey,
   language,
   highlightLine,
   maxHeight,
@@ -107,24 +120,25 @@ export default function CodeViewer({
   // highlightLine effect above: that one is defined earlier, so on each commit
   // it runs first and wins when a valid target line is requested — here we skip
   // the restore whenever highlightLine is active. Dump lives in the cleanup,
-  // which for a filename change runs before the next setup (and runs on unmount),
+  // which for a key change runs before the next setup (and runs on unmount),
   // so the live scrollTop is captured before the restore could overwrite it.
   // useLayoutEffect keeps dump→restore ordered within one commit and before
-  // paint (no flicker). Deps are intentionally [filename] only: restore fires on
+  // paint (no flicker). Deps are intentionally [posKey] only: restore fires on
   // mount and on file switch, not on every highlight/resize change.
+  const posKey = scrollKey ?? filename;
   useLayoutEffect(() => {
     const hlActive = !!highlightLine && highlightLine >= 1 && highlightLine <= total;
     const el = scrollRef.current;
-    if (el && filename && !hlActive) {
-      const saved = scrollPositions.get(filename);
+    if (el && posKey && !hlActive) {
+      const saved = scrollPositions.get(posKey);
       if (saved != null) el.scrollTop = saved;
     }
     return () => {
-      if (!filename) return;
+      if (!posKey) return;
       const e = scrollRef.current;
-      if (e) scrollPositions.set(filename, e.scrollTop);
+      if (e) scrollPositions.set(posKey, e.scrollTop);
     };
-  }, [filename]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [posKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rowEl = (i: number) => {
     const ln = i + 1;

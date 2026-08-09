@@ -126,6 +126,7 @@ export default function EditorPane({
         <CodeViewer
           content={content}
           filename={file.path}
+          scrollKey={`${sessionId}/${file.path}`}
           highlightLine={lineNum}
           testId="editor-pane-viewer"
         />
