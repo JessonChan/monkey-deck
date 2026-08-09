@@ -1,12 +1,14 @@
 package chat
 
-// export.go:ExportSession 把一个 session 的完整对话导出为文本。
+// export.go: ExportSession renders a session's full conversation to text.
 //
-// 支持两种格式:
-//   - jsonl: 每行一个 JSON 对象。第一行是 session 元信息(type="session"),
-//     之后每行是一条消息(type="message"),按 seq 升序。机器可读,便于二次处理/导入。
-//   - txt: 人话可读的纯文本(§4.4:不裸露结构化格式),user/thought/agent/tool/plan
-//     各自分节,tool 抽取主文本而非吐 JSON。
+// Two formats are supported:
+//   - jsonl: one JSON object per line. The first line is session meta
+//     (type="session"); every subsequent line is a message (type="message")
+//     in ascending seq order. Machine-readable, easy to post-process / re-import.
+//   - txt: human-readable plain text (AGENTS.md §4.4: never dumps raw structured
+//     formats). user/thought/agent/tool/plan each get their own section; tool
+//     extracts the main text instead of emitting the toolAccum JSON.
 
 import (
 	"encoding/json"
@@ -18,9 +20,10 @@ import (
 	"github.com/jessonchan/monkey-deck/internal/store"
 )
 
-// ExportSession 把 sessionID 的完整对话导出为文本。
-// format: "jsonl"(每行一个 JSON)/ "txt"(人话可读)。空串按 "txt" 处理。
-// 返回的字符串由前端用 Blob 下载落盘(文件名由前端拼)。
+// ExportSession renders sessionID's full conversation to text.
+// format: "jsonl" (one JSON per line) / "txt" (human-readable). Empty string is
+// treated as "txt". The returned string is downloaded client-side via a Blob
+// (the frontend composes the file name).
 func (s *ChatService) ExportSession(sessionID, format string) (string, error) {
 	se, err := s.st.GetSession(s.ctx, sessionID)
 	if err != nil {
@@ -43,9 +46,9 @@ func (s *ChatService) ExportSession(sessionID, format string) (string, error) {
 	}
 }
 
-// exportSessionMeta 是 jsonl 首行的 session 元信息。
+// exportSessionMeta is the session meta carried on the first jsonl line.
 type exportSessionMeta struct {
-	Type    string `json:"type"` // 恒 "session"
+	Type    string `json:"type"` // always "session"
 	ID      string `json:"id"`
 	Title   string `json:"title"`
 	Harness string `json:"harness"`
@@ -53,20 +56,20 @@ type exportSessionMeta struct {
 	Created int64  `json:"createdAt"`
 }
 
-// exportMessageRecord 是 jsonl 每条消息对应的行。
+// exportMessageRecord is the jsonl record for a single message.
 type exportMessageRecord struct {
-	Type       string `json:"type"` // 恒 "message"
+	Type       string `json:"type"` // always "message"
 	Seq        int64  `json:"seq"`
 	Role       string `json:"role"`           // user/agent/thought/tool/plan
 	Kind       string `json:"kind,omitempty"` // agent_message_chunk/agent_thought_chunk/tool_call/plan/...
-	Content    string `json:"content"`        // 原始内容(tool/plan 是 JSON 文本)
+	Content    string `json:"content"`        // raw content (tool/plan hold JSON text)
 	ToolCallID string `json:"toolCallId,omitempty"`
 	CreatedAt  int64  `json:"createdAt"`
 }
 
 func exportJSONL(se *store.Session, msgs []store.Message) string {
 	var b strings.Builder
-	// 首行:session 元信息。
+	// First line: session meta.
 	meta, _ := json.Marshal(exportSessionMeta{
 		Type: "session", ID: se.ID, Title: se.Title, Harness: se.Harness, Model: se.Model, Created: se.CreatedAt,
 	})
@@ -88,7 +91,7 @@ func exportJSONL(se *store.Session, msgs []store.Message) string {
 	return b.String()
 }
 
-// exportTxt 把对话渲染为人话可读的纯文本。
+// exportTxt renders the conversation as human-readable plain text.
 func exportTxt(se *store.Session, msgs []store.Message) string {
 	var b strings.Builder
 	title := se.Title
@@ -116,7 +119,8 @@ func exportTxt(se *store.Session, msgs []store.Message) string {
 	return b.String()
 }
 
-// writeTxtMessage 渲染一条消息为人话文本。tool/plan 的 content 是 JSON,这里抽主文本(§4.4)。
+// writeTxtMessage renders a single message as human-readable text. For tool/plan
+// the content is JSON; we extract the main text here (AGENTS.md §4.4).
 func writeTxtMessage(b *strings.Builder, m store.Message) {
 	switch m.Role {
 	case "user":
@@ -138,13 +142,14 @@ func writeTxtMessage(b *strings.Builder, m store.Message) {
 	}
 }
 
-// writeSection 写一个 `─── Title ───` 分节头。
+// writeSection writes a `─── Title ───` section header.
 func writeSection(b *strings.Builder, title string) {
 	fmt.Fprintf(b, "─── %s ────────────\n", title)
 }
 
-// writeToolSection 渲染 tool call:解析 toolAccum JSON,抽 title/status/input/output 主文本。
-// 解析失败时降级展示原始内容(best-effort,不丢数据)。
+// writeToolSection renders a tool call: parses the toolAccum JSON and extracts
+// the title/status/input/output main text. On parse failure it degrades to the
+// raw content (best-effort, never drops data).
 func writeToolSection(b *strings.Builder, content string) {
 	var ta toolAccum
 	if err := json.Unmarshal([]byte(content), &ta); err != nil {
@@ -176,7 +181,7 @@ func writeToolSection(b *strings.Builder, content string) {
 	}
 }
 
-// writePlanSection 渲染 plan:解析 PlanEntry 列表为 checklist。
+// writePlanSection renders a plan: parses the []PlanEntry list into a checklist.
 func writePlanSection(b *strings.Builder, content string) {
 	var entries []acp.PlanEntry
 	if err := json.Unmarshal([]byte(content), &entries); err != nil || len(entries) == 0 {
@@ -197,8 +202,9 @@ func writePlanSection(b *strings.Builder, content string) {
 	}
 }
 
-// extractMainText 从 tool 的 rawInput/rawOutput 抽「主文本」(§4.4)。
-// string → 原样;对象/其它 → 转 JSON 文本(可读缩进)。不丢弃任何信息。
+// extractMainText pulls the "main text" out of a tool's rawInput/rawOutput
+// (AGENTS.md §4.4). A string is returned as-is; objects / anything else become
+// pretty-printed JSON text. No information is dropped.
 func extractMainText(v any) string {
 	if v == nil {
 		return ""
@@ -213,7 +219,7 @@ func extractMainText(v any) string {
 	return string(body)
 }
 
-// indent 给每行加两个空格缩进(用于 input/output 体)。
+// indent prepends two spaces to every line (used for input/output bodies).
 func indent(s string) string {
 	if s == "" {
 		return ""
@@ -242,7 +248,8 @@ func titleCase(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
-// formatMillis 把 Unix 毫秒渲染成本地时间的 RFC3339(含时区,跨机器可读)。
+// formatMillis renders Unix milliseconds as local-time RFC3339 (with timezone,
+// readable across machines).
 func formatMillis(ms int64) string {
 	if ms <= 0 {
 		return "-"

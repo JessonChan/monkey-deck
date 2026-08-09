@@ -1,11 +1,14 @@
 package chat
 
-// export_test.go:ExportSession 单测(AGENTS.md §5.1:用临时 store,不启真 harness)。
+// export_test.go: ExportSession unit tests (AGENTS.md §5.1: temp store, no real harness).
 //
-// 覆盖:
-//   - jsonl: 首行 session 元信息 + 每条消息一行,字段完整、按 seq 升序。
-//   - txt: 人话分节(user/thought/agent/tool/plan),tool 抽主文本不吐 JSON、plan 渲染为 checklist。
-//   - 空 session(无消息)、不存在的 session、不支持格式 各自的错误/降级路径。
+// Coverage:
+//   - jsonl: first-line session meta + one line per message, fields complete and
+//     in ascending seq order.
+//   - txt: human-readable sections (user/thought/agent/tool/plan); tool extracts
+//     the main text instead of dumping JSON; plan renders as a checklist.
+//   - Empty session (no messages), missing session, unsupported format: each
+//     exercises its own error / degradation path.
 
 import (
 	"context"
@@ -19,7 +22,8 @@ import (
 	"github.com/jessonchan/monkey-deck/internal/store"
 )
 
-// newExportTestService 建一个带临时 store 的 svc(不 spawn harness,纯读库测试)。
+// newExportTestService builds a svc backed by a temp store (no harness spawn;
+// pure read-path testing).
 func newExportTestService(t *testing.T) (svc *ChatService, sessionID string) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
