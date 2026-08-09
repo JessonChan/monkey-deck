@@ -1400,6 +1400,7 @@ input, textarea { font-family: inherit; }
   color: var(--amber); display: inline-flex; align-items: center; gap: 3px;
   font-weight: 600;
 }
+.queue-countdown { color: var(--text-3); font-weight: 400; }
 .queue-schedule-input {
   font-size: 13px; color: var(--text); background: transparent;
   border: 1px solid var(--sep-strong); border-radius: var(--r-sm); padding: 4px 8px;

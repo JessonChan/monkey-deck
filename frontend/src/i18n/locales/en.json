@@ -361,6 +361,10 @@
     "clearScheduleTip": "Clear schedule: send as soon as possible (next drain)",
     "scheduledSend": "⏰ {{time}}",
     "scheduledSendTip": "Scheduled send — will be sent after this time",
+    "inRemaining": "(in {{remaining}})",
+    "countdownS": "{{s}}s",
+    "countdownMs": "{{m}}m {{s}}s",
+    "countdownHms": "{{h}}h {{m}}m {{s}}s",
     "scheduleExpired": "The picked time has already passed. Please pick a future time.",
     "reorderTip": "Drag to reorder send order",
     "hasScheduled": "Some messages are scheduled to send later"

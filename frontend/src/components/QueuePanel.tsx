@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { QueueItem } from "../types";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Zap, Pencil, Trash2, Check, X, Clock, GripVertical } from "lucide-react";
 
 interface Props {
@@ -35,6 +36,18 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   // IME 合成追踪:compositionStart/End 手动记录,配合 isComposing + keyCode===229 三重保险,
   // 彻底防中文输入法选词确认的 Enter 被误判为保存(部分 macOS IME 下 isComposing 不可靠)。仿 Composer。
   const composingRef = useRef(false);
+
+  // Live countdown for scheduled (future) items (Task #24245 / issue #97): re-render once per
+  // second so the "time remaining" badge ticks down. Armed only while at least one pending item
+  // exists — idle panels with no scheduled items pay zero timer cost (§5.3 Less is More). The
+  // interval drives `now`; all pending checks below read `now` so the whole panel stays coherent.
+  const [now, setNow] = useState(() => Date.now());
+  const hasPending = queue.some((q) => q.scheduledAt > now);
+  useEffect(() => {
+    if (!hasPending) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [hasPending]);
 
   if (queue.length === 0) return null;
 
@@ -96,7 +109,7 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
       <div className="queue-header">
         <span className="queue-title">{t("queue.title", { count: queue.length })}</span>
         <span className="queue-hint">{t("queue.hint")}</span>
-        {queue.some((q) => q.scheduledAt > Date.now()) && (
+        {hasPending && (
           <span
             className="queue-header-clock"
             data-testid="queue-header-clock"
@@ -108,7 +121,8 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
         )}
       </div>
       {queue.map((item, idx) => {
-        const pending = item.scheduledAt > Date.now();
+        const pending = item.scheduledAt > now;
+        const remaining = pending ? item.scheduledAt - now : 0;
         return (
         <div
           className={`queue-item${overId === item.id ? " drag-over" : ""}`}
@@ -240,6 +254,11 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
               {pending ? (
                 <span className="queue-scheduled future" data-testid="queue-scheduled-send" title={t("queue.scheduledSendTip")}>
                   <Clock size={11} /> {t("queue.scheduledSend", { time: formatClock(item.scheduledAt) })}
+                  {remaining > 0 && (
+                    <span className="queue-countdown" data-testid="queue-countdown">
+                      {" "}{t("queue.inRemaining", { remaining: formatRemaining(remaining, t) })}
+                    </span>
+                  )}
                 </span>
               ) : item.scheduledAt > 0 ? (
                 <span className="queue-scheduled" data-testid="queue-scheduled">
@@ -294,6 +313,20 @@ function formatClock(ts: number): string {
   const d = new Date(ts);
   const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// Format milliseconds remaining into a localized compact countdown for the live badge
+// (Task #24245 / issue #97). Picks the coarsest non-zero bucket: h/m/s, m/s, or s only.
+// e.g. 3905_000ms → "1h 5m 5s" / "1时5分5秒"; 305_000ms → "5m 5s"; 45_000ms → "45s".
+function formatRemaining(ms: number, t: TFunction): string {
+  if (ms <= 0) return "";
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return t("queue.countdownHms", { h, m, s });
+  if (m > 0) return t("queue.countdownMs", { m, s });
+  return t("queue.countdownS", { s });
 }
 
 // datetime-local 用本地时区 "YYYY-MM-DDTHH:mm"(无时区后缀)。

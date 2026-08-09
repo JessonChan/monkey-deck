@@ -361,6 +361,10 @@
     "clearScheduleTip": "清除定时:尽快发送(下一轮 drain 即发)",
     "scheduledSend": "⏰ {{time}}",
     "scheduledSendTip": "定时发送 —— 到点后才发送",
+    "inRemaining": "({{remaining}}后)",
+    "countdownS": "{{s}}秒",
+    "countdownMs": "{{m}}分{{s}}秒",
+    "countdownHms": "{{h}}时{{m}}分{{s}}秒",
     "scheduleExpired": "所选时刻已过期,请选一个未来时间",
     "reorderTip": "拖拽以调整发送顺序",
     "hasScheduled": "队列中存在定时发送的消息"
