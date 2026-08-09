@@ -298,11 +298,11 @@ input, textarea { font-family: inherit; }
 .session-dot.thinking { background: #ffd60a; }
 .session-dot.executing { background: var(--accent-2); }
 .session-dot.replying { background: var(--green); }
-/* Draft indicator: shown on idle sessions with unsent composer text. Sized for clear
-   visibility on hi-DPI screens (matches the visual weight of perm-dot/unread-dot, with a
-   Pencil glyph instead of a plain dot). */
-.draft-indicator { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex-shrink: 0; border-radius: 50%; color: var(--accent-2); background: rgba(100, 210, 255, 0.16); }
-.draft-indicator svg { width: 9px; height: 9px; display: block; }
+/* Draft indicator: shown on idle sessions with unsent composer text. Sized down to 12px so
+   it never inflates the row beyond the session-time line height (10px / line-height 1) — rows
+   with and without a draft render at identical height. Soft accent chip + Pencil glyph. */
+.draft-indicator { display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; flex-shrink: 0; border-radius: 50%; color: var(--accent-2); background: rgba(100, 210, 255, 0.16); }
+.draft-indicator svg { width: 8px; height: 8px; display: block; }
 .session-dot.error { background: var(--red); }
 /* ─── 右键菜单 ─── */
 .ctx-menu {
