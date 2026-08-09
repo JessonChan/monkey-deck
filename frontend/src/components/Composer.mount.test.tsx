@@ -632,3 +632,37 @@ describe("Composer unknown slash-command guard", () => {
     expect(onEnqueue.mock.calls[0][0]).toBe(" /unknown");
   });
 });
+
+// Task #24202: branch chip click forks a new chat off that branch (was: copy branch name).
+// Pin the new behavior — clicking composer-branch must call onNewSessionOnBranch with the
+// branch name, not do anything clipboard-related. Empty branch must not render the chip.
+describe("Composer branch chip fork (Task #24202)", () => {
+  test("clicking the branch chip calls onNewSessionOnBranch(branch)", async () => {
+    const onNewSessionOnBranch = mock(() => {});
+    const { host } = mount(
+      <Composer value={"hi"} {...STUB_PROPS} branch={"feat/branch-x"} onNewSessionOnBranch={onNewSessionOnBranch} />
+    );
+    await flush();
+
+    const chip = host.querySelector('[data-testid="composer-branch"]') as HTMLElement;
+    expect(chip).not.toBeNull();
+    // The chip renders the branch name (not a copy/copy-state affordance).
+    expect(chip.textContent).toContain("feat/branch-x");
+
+    chip.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    expect(onNewSessionOnBranch).toHaveBeenCalledTimes(1);
+    // Assert the exact branch value is forwarded (anchored on value, not just call count).
+    expect(onNewSessionOnBranch.mock.calls[0][0]).toBe("feat/branch-x");
+  });
+
+  test("empty branch renders no chip (non-git / untracked)", async () => {
+    const onNewSessionOnBranch = mock(() => {});
+    const { host } = mount(
+      <Composer value={"hi"} {...STUB_PROPS} branch={""} onNewSessionOnBranch={onNewSessionOnBranch} />
+    );
+    await flush();
+    expect(host.querySelector('[data-testid="composer-branch"]')).toBeNull();
+  });
+});
