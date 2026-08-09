@@ -12,14 +12,17 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import i18n, { setLanguage as setI18nLanguage, type AppLanguage } from "../i18n";
 import { isMemorySaverEnabled, setMemorySaverEnabled } from "./memorySaver";
 import { isNotifySoundEnabled, setNotifySoundEnabled } from "./notifySound";
+import { applyFontScale, readFontScale, writeFontScale } from "./fontScale";
 
 export interface FrontendSettings {
   language: AppLanguage;
   notifySound: boolean;
   memorySaver: boolean;
+  fontScale: number;
   setLanguage: (lang: AppLanguage) => void;
   setNotifySound: (on: boolean) => void;
   setMemorySaver: (on: boolean) => void;
+  setFontScale: (v: number) => void;
 }
 
 const Ctx = createContext<FrontendSettings | null>(null);
@@ -30,6 +33,11 @@ export function FrontendSettingsProvider({ children }: { children: ReactNode }) 
   const [language, setLang] = useState<AppLanguage>((i18n.language === "en" ? "en" : "zh"));
   const [notifySound, setNotify] = useState<boolean>(isNotifySoundEnabled);
   const [memorySaver, setMemorySaverState] = useState<boolean>(isMemorySaverEnabled);
+  const [fontScale, setFontScaleState] = useState<number>(readFontScale);
+
+  // Apply persisted font scale on mount so the very first paint uses the saved
+  // value (no flash of default scale). Slider changes go through setFontScale.
+  useEffect(() => { applyFontScale(fontScale); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const handler = (lng: string) => setLang(lng === "en" ? "en" : "zh");
@@ -46,10 +54,15 @@ export function FrontendSettingsProvider({ children }: { children: ReactNode }) 
     setMemorySaverEnabled(on);
     setMemorySaverState(on);
   }, []);
+  const setFontScale = useCallback((v: number) => {
+    writeFontScale(v);
+    setFontScaleState(v);
+    applyFontScale(v);
+  }, []);
 
   const value = useMemo<FrontendSettings>(
-    () => ({ language, notifySound, memorySaver, setLanguage, setNotifySound, setMemorySaver }),
-    [language, notifySound, memorySaver, setLanguage, setNotifySound, setMemorySaver],
+    () => ({ language, notifySound, memorySaver, fontScale, setLanguage, setNotifySound, setMemorySaver, setFontScale }),
+    [language, notifySound, memorySaver, fontScale, setLanguage, setNotifySound, setMemorySaver, setFontScale],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

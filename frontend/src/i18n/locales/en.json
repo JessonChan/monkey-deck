@@ -500,6 +500,12 @@
       "language": {
         "desc": "Switch the UI language, takes effect immediately."
       },
+      "appearance": {
+        "desc": "Adjust interface display.",
+        "fontScaleTitle": "Font size",
+        "fontScaleDesc": "Scales the font size of primary reading areas (conversations, composer, titles). Auxiliary elements (badges, timestamps) stay fixed to preserve information density.",
+        "fontScaleReset": "Reset"
+      },
       "sound": {
         "desc": "Audible alerts.",
         "notifyTitle": "Turn-end sound",

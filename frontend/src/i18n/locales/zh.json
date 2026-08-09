@@ -500,6 +500,12 @@
       "language": {
         "desc": "切换界面语言,即时生效。"
       },
+      "appearance": {
+        "desc": "调整界面显示。",
+        "fontScaleTitle": "字号",
+        "fontScaleDesc": "统一缩放主要阅读区域(对话、输入框、标题)的字号。辅助元素(徽章、时间戳)保持固定以维持信息密度。",
+        "fontScaleReset": "重置"
+      },
       "sound": {
         "desc": "听觉提醒。",
         "notifyTitle": "对话结束提示音",

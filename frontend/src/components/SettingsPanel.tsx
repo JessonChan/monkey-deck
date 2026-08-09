@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { X, Settings, Globe, Palette, SlidersHorizontal, ShieldCheck, Boxes, Bell, MessageSquare, Plug } from "lucide-react";
 import type { AppLanguage } from "../i18n";
 import { useFrontendSettings } from "../lib/settingsStore";
+import { FONT_SCALE_DEFAULT, FONT_SCALE_MAX, FONT_SCALE_MIN } from "../lib/fontScale";
 import PermissionRulesPane from "./PermissionSettings";
 import HarnessPane from "./HarnessSettings";
 import McpPane from "./McpSettings";
@@ -96,7 +97,7 @@ export default function SettingsPanel({ onClose, initialCategory = "general", ha
           <div className="settings-content">
             {/* 懒挂载:仅渲染当前分类的 pane,避免一次性拉取所有分类数据。 */}
             {active === "general" && <GeneralPane />}
-            {active === "appearance" && <EmptyPane hintKey="settings.center.empty.appearance" />}
+            {active === "appearance" && <AppearancePane />}
             {active === "language" && <LanguagePane />}
             {active === "conversation" && <ConversationPane />}
             {active === "permissions" && <PermissionRulesPane />}
@@ -199,11 +200,39 @@ function ConversationPane() {
   );
 }
 
-function EmptyPane({ hintKey }: { hintKey: string }) {
+function AppearancePane() {
   const { t } = useTranslation();
+  const { fontScale, setFontScale } = useFrontendSettings();
+  const pctLabel = `${Math.round(fontScale * 100)}%`;
   return (
-    <div className="settings-pane" data-testid="empty-pane">
-      <div className="settings-empty">{t(hintKey)}</div>
+    <div className="settings-pane" data-testid="appearance-pane">
+      <div className="pane-desc">{t("settings.center.appearance.desc")}</div>
+      <div className="settings-row">
+        <div className="settings-row-text">
+          <div className="settings-row-title">{t("settings.center.appearance.fontScaleTitle")}</div>
+          <div className="settings-row-sub">{t("settings.center.appearance.fontScaleDesc")}</div>
+        </div>
+        <code className="settings-version" data-testid="font-scale-value">{pctLabel}</code>
+      </div>
+      <div className="settings-slider-row">
+        <input
+          type="range"
+          className="settings-slider"
+          min={FONT_SCALE_MIN}
+          max={FONT_SCALE_MAX}
+          step={0.05}
+          value={fontScale}
+          onChange={(e) => setFontScale(parseFloat(e.target.value))}
+          data-testid="font-scale-slider"
+        />
+        <button
+          className="settings-reset-btn"
+          onClick={() => setFontScale(FONT_SCALE_DEFAULT)}
+          data-testid="font-scale-reset"
+        >
+          {t("settings.center.appearance.fontScaleReset")}
+        </button>
+      </div>
     </div>
   );
 }

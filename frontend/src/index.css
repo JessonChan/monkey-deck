@@ -50,6 +50,10 @@
   --rt-color-dark: #333336;
   --rt-color-white: #f5f5f7;
   --rt-opacity: 1;
+  /* Global font scale (#102): slider in 设置 → 外观 multiplies the "key" font
+     sizes below via calc(... * var(--font-scale)). Auxiliary chrome (badges, tiny
+     meta) stays fixed to keep information density stable. Default 1 = no scaling. */
+  --font-scale: 1;
 }
 
 .react-tooltip { border-radius: 6px; box-shadow: var(--shadow-pop); border: 1px solid var(--sep-strong); font-size: 11.5px; z-index: 70; white-space: pre-line; max-width: 320px; }
@@ -61,7 +65,7 @@ body {
   font-family: var(--sans);
   background: var(--bg-window);
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -136,7 +140,7 @@ input, textarea { font-family: inherit; }
   --wails-draggable: drag;
 }
 .sidebar-title {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--text-2);
@@ -376,9 +380,9 @@ input, textarea { font-family: inherit; }
 }
 .chat-header-info { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .chat-header-actions { display: flex; align-items: center; gap: 6px; --wails-draggable: no-drag; }
-.chat-project { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-project { font-weight: 600; font-size: calc(13px * var(--font-scale)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-sep { color: var(--text-3); }
-.chat-session-title { color: var(--text-2); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-session-title { color: var(--text-2); font-size: calc(13px * var(--font-scale)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-model {
   font-size: 11px; font-family: var(--mono); color: var(--text-3);
   background: var(--elev); padding: 2px 7px; border-radius: 5px; margin-left: 4px;
@@ -509,7 +513,7 @@ input, textarea { font-family: inherit; }
 }
 .bubble-user-body { line-height: 1.5; user-select: text; }
 /* markdown 正文(含 ``` 围栏):复用 agent 气泡的基础段落/代码块样式 */
-.bubble-user-markdown { white-space: normal; word-break: break-word; font-size: 13.5px; color: var(--text); }
+.bubble-user-markdown { white-space: normal; word-break: break-word; font-size: calc(13.5px * var(--font-scale)); color: var(--text); }
 .bubble-user-markdown p { margin: 0 0 8px; }
 .bubble-user-markdown p:last-child { margin-bottom: 0; }
 .bubble-user-markdown .code-box { margin: 6px 0; }
@@ -530,7 +534,7 @@ input, textarea { font-family: inherit; }
   color: #fff; margin-top: 1px;
 }
 .bubble-agent-wrap { flex: 1; min-width: 0; }
-.bubble-agent { line-height: 1.6; word-break: break-word; font-size: 13.5px; color: var(--text); user-select: text; }
+.bubble-agent { line-height: 1.6; word-break: break-word; font-size: calc(13.5px * var(--font-scale)); color: var(--text); user-select: text; }
 .bubble-agent * { user-select: text; }
 .bubble-agent p { margin: 0 0 9px; }
 .bubble-agent p:last-child { margin-bottom: 0; }
@@ -1222,7 +1226,7 @@ input, textarea { font-family: inherit; }
 .composer-row { display: flex; gap: 8px; align-items: flex-end; }
 .composer-input {
   width: 100%; background: transparent; border: none; outline: none; resize: none;
-  color: var(--text); font-size: 14.5px; line-height: 1.55;
+  color: var(--text); font-size: calc(14.5px * var(--font-scale)); line-height: 1.55;
   padding: 6px 6px 8px; min-height: 52px; max-height: 220px;
   user-select: text; display: block;
 }
@@ -2106,6 +2110,35 @@ input, textarea { font-family: inherit; }
 }
 .settings-switch.on .settings-switch-thumb { transform: translateX(16px); }
 .settings-empty { font-size: 12px; color: var(--text-3); padding: 24px 8px; text-align: center; line-height: 1.6; }
+
+/* Slider row (font scale #102): a range input + a small "reset" button.
+   Native range input is themed to match the accent color across WebKit/WebView2
+   (per AGENTS.md §4.6: prefer CSS-driven, low-overhead, cross-platform primitives). */
+.settings-slider-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 4px 12px 8px;
+}
+.settings-slider {
+  flex: 1; min-width: 0; height: 4px; -webkit-appearance: none; appearance: none;
+  background: var(--sep-strong); border-radius: 2px; outline: none; cursor: pointer;
+}
+.settings-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 15px; height: 15px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--elev-2);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3); cursor: pointer; transition: transform 0.1s;
+}
+.settings-slider::-webkit-slider-thumb:hover { transform: scale(1.12); }
+.settings-slider::-moz-range-thumb {
+  width: 15px; height: 15px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--elev-2); cursor: pointer;
+}
+.settings-reset-btn {
+  flex-shrink: 0; padding: 4px 10px; border-radius: 5px;
+  font-size: 11.5px; color: var(--text-2); background: var(--bg);
+  border: 1px solid var(--sep); transition: background 0.1s, color 0.1s;
+}
+.settings-reset-btn:hover { background: var(--hover); color: var(--text); }
 
 /* ─── Settings-pane form primitives(.btn / .field / .settings-list / .settings-inline-toggle) ───
     Shared by McpSettings / settings forms. .btn echoes .icon-btn's inline-flex + rounded +
