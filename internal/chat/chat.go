@@ -35,15 +35,15 @@ import (
 
 // 事件名(前端 Events.On 监听这些)。
 const (
-	EventUpdate      = "chat:event"        // SessionEvent(流式 chunk / tool / usage)
-	EventPermission  = "chat:permission"   // PermissionPrompt(需用户裁决)
-	EventElicitation = "chat:elicitation"  // ElicitationPrompt(需用户填表单/选择,ACP v1 标准协议)
+	EventUpdate      = "chat:event"       // SessionEvent(流式 chunk / tool / usage)
+	EventPermission  = "chat:permission"  // PermissionPrompt(需用户裁决)
+	EventElicitation = "chat:elicitation" // ElicitationPrompt(需用户填表单/选择,ACP v1 标准协议)
 	// EventElicitationResolved:一次 elicitation 在「无用户操作」下被终结(超时降级 decline /
 	// ctx 取消)。前端据此清残留卡片 —— 否则卡片最多残留 permTTL,期间点击后端报 no pending。
 	EventElicitationResolved = "chat:elicitation-resolved"
-	EventStatus      = "chat:status"       // StatusPayload(会话状态:started/prompting/idle/error/closed)
-	EventSessionMeta = "chat:session-meta" // SessionMetaPayload(标题等元信息更新)
-	EventHarnesses   = "chat:harnesses"    // harness 发现/版本变更(前端据此重拉 ListHarnesses)
+	EventStatus              = "chat:status"       // StatusPayload(会话状态:started/prompting/idle/error/closed)
+	EventSessionMeta         = "chat:session-meta" // SessionMetaPayload(标题等元信息更新)
+	EventHarnesses           = "chat:harnesses"    // harness 发现/版本变更(前端据此重拉 ListHarnesses)
 	// EventHarnessCapabilities:harness 能力探测完成(ProbeCapabilities 后),前端据此重拉
 	// ListHarnessCapabilities。异步触发(Discover 之后),独立于 EventHarnesses。
 	EventHarnessCapabilities = "chat:harness-capabilities"
@@ -2511,6 +2511,7 @@ func (s *ChatService) isBusy(sessionID string) bool {
 
 // errSCMBusy turn 进行中操作源代码管理时返回。
 var errSCMBusy = errors.New("对话进行中,请等回合结束再操作源代码管理")
+
 // errBaseRefRequired useWorktree=true 但探测不到默认基线分支(Route A strict:不回退 HEAD)。
 // 前端 NewSessionModal 预选失败时本已拦住;这是后端兜底,防止前端透传空 baseRef 绕过校验。
 var errBaseRefRequired = errors.New("未选择基线分支,且仓库未探测到默认分支(main/master),请手动选择")
@@ -3052,10 +3053,28 @@ func (s *ChatService) UpgradeHarness(id string) ([]harness.Harness, error) {
 	return list, upgradeErr
 }
 
-// IsGitProject 报告某项目目录是否为 git 仓库(前端据此决定「新建分支」开关是否可用,§1.4)。
-// proj.Path 本身是 repo 即 true;否则放宽:proj.Path 下任一(限深剪枝)子目录是 repo 也算 true
-// (对齐 scmDir 的 fallback 语义,见 FindSubRepo)。
+// IsGitProject reports whether the project directory itself is a git repo.
+// This is the STRICT gate for worktree creation (§1.4): `git worktree add` operates on
+// proj.Path as the repo, so a subdirectory being a repo does NOT qualify — the wrapper
+// dir is not a repo and cannot spawn a worktree. Do not fold in FindSubRepo here.
 func (s *ChatService) IsGitProject(projectID string) (bool, error) {
+	proj, err := s.st.GetProject(s.ctx, projectID)
+	if err != nil {
+		return false, err
+	}
+	if proj == nil {
+		return false, fmt.Errorf("project not found: %s", projectID)
+	}
+	return worktree.IsRepo(proj.Path), nil
+}
+
+// HasGitContext reports whether the project has any usable git context for the SCM panel.
+// This is the RELAXED counterpart to IsGitProject: true when proj.Path itself is a repo,
+// OR when a (depth-limited, pruned) subdirectory is a repo (FindSubRepo fallback). The SCM
+// panel routes through scmDir which already does this fallback, so its visibility flag must
+// match that relaxed semantics — otherwise a wrapper project hides SCM even though changes
+// can be surfaced from the sub-repo. Worktree gating must use IsGitProject (strict), not this.
+func (s *ChatService) HasGitContext(projectID string) (bool, error) {
 	proj, err := s.st.GetProject(s.ctx, projectID)
 	if err != nil {
 		return false, err

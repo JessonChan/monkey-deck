@@ -208,11 +208,13 @@ export default function App() {
   const refreshProjects = useCallback(async () => {
     const list = await ChatService.ListProjects();
     setProjects(list || []);
-    // 加载项目级 isGit 信息供 SCM 可见性判定(对齐 orca / VS Code repo-kind 判定,
-    // 跟 session 是否有独立 worktree 解耦).每个项目探测一次,缓存到 gitByProject。
+    // 加载项目级 hasGitContext 信息供 SCM 可见性判定(对齐 orca / VS Code repo-kind 判定,
+    // 跟 session 是否有独立 worktree 解耦).RELAXED:wrapper 目录非 git 但子目录是 repo 也算,
+    // 与 scmDir 的 FindSubRepo fallback 语义一致。每个项目探测一次,缓存到 gitByProject。
+    // 注:worktree 门控(createSession)用 STRICT 的 IsGitProject,不是这个。
     if (list && list.length > 0) {
       const entries = await Promise.all(list.map(async (p) => {
-        try { return [p.id, await ChatService.IsGitProject(p.id)] as [string, boolean]; }
+        try { return [p.id, await ChatService.HasGitContext(p.id)] as [string, boolean]; }
         catch { return [p.id, false] as [string, boolean]; }
       }));
       setGitByProject(Object.fromEntries(entries));
@@ -930,8 +932,10 @@ export default function App() {
     const pid = projectId ?? selectedProjectId;
     if (!pid) return;
     try {
-      // 预取:isGit(决定 worktree 选项是否显示)+ lastHarness(预选 harness)
+      // 预取:isGit(STRICT,决定 worktree 选项是否显示;非 git 项目不能建 worktree,§1.4)
+      // + lastHarness(预选 harness)
       // + 默认基线 + 分支列表(仅 git 项目需要,worktree=true 时的基线选择器用)。
+      // 注:SCM 面板可见性用放宽的 HasGitContext,这里 worktree 门控必须严格。
       const [isGit, lastHarness] = await Promise.all([
         ChatService.IsGitProject(pid),
         ChatService.GetLastHarness(),

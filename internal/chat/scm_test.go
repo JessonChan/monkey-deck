@@ -150,6 +150,7 @@ func TestSCMNoWorktree(t *testing.T) {
 		}
 	}
 }
+
 // TestSCMNonWorktreeGitSession:无 worktree 但项目目录本身是 git 仓库时,
 // SCM 操作应 fallback 到 proj.Path 而非报错(对齐 orca / VS Code repo-kind 判定)。
 func TestSCMNonWorktreeGitSession(t *testing.T) {
@@ -166,7 +167,9 @@ func TestSCMNonWorktreeGitSession(t *testing.T) {
 	// 2. store + session,不建 worktree → session.WorktreePath="", cwd fallback 到 proj.Path
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	st, err := store.New(dbPath)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = st.Close() })
 	svc := NewChatService(config.TestConfig(t.TempDir()))
 	svc.ctx = context.Background()
@@ -197,8 +200,8 @@ func TestSCMNonWorktreeGitSession(t *testing.T) {
 	// HEAD 提交消息应是刚写的
 	// HEAD 提交消息应是刚写(TrimSpace 去掉 git 输出尾部换行)
 	if out, _ := exec.Command("git", "-C", root, "log", "-1", "--pretty=%s").Output(); strings.TrimSpace(string(out)) != "fix: 非 worktree git session 提交" {
- 		t.Fatalf("unexpected HEAD commit: %q", out)
- 	}
+		t.Fatalf("unexpected HEAD commit: %q", out)
+	}
 }
 
 // TestSessionCurrentBranch:源代码管理面板的分支展示在非 worktree 模式下必须读真实 HEAD,
@@ -220,7 +223,9 @@ func TestSessionCurrentBranch(t *testing.T) {
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	st, err := store.New(dbPath)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = st.Close() })
 	svc := NewChatService(config.TestConfig(t.TempDir()))
 	svc.ctx = context.Background()
@@ -257,7 +262,6 @@ func TestSessionCurrentBranch(t *testing.T) {
 		t.Fatalf("non-git project: got %q err=%v, want empty", gotNG, err)
 	}
 }
-
 
 // A:MergeSession 不再 auto-commit —— 已提交的内容被合并,未提交的改动不进主仓库且结果给出提示。
 func TestMergeSessionNoAutoCommit(t *testing.T) {
@@ -415,9 +419,10 @@ func TestAICommitPrompt(t *testing.T) {
 	}
 }
 
-// TestIsGitProject_SubRepoFallback:项目目录本身非 git,但子目录是 git 仓库时,
-// IsGitProject 应回 true(放宽:对齐 scmDir 的 sub-repo fallback)。
-func TestIsGitProject_SubRepoFallback(t *testing.T) {
+// TestIsGitProject_StrictNoSubRepoFallback:项目目录本身非 git,但子目录是 git 仓库时,
+// IsGitProject(STRICT worktree 门控)必须返回 false —— worktree 创建以 proj.Path 为 repo,
+// wrapper 目录非 repo 无法 `git worktree add`。放宽语义走 HasGitContext。
+func TestIsGitProject_StrictNoSubRepoFallback(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
@@ -446,15 +451,25 @@ func TestIsGitProject_SubRepoFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// IsGitProject 严格:wrapper 非自身 repo → false(不能用子 repo 建 worktree)
 	got, err := svc.IsGitProject(proj.ID)
 	if err != nil {
 		t.Fatalf("IsGitProject: %v", err)
 	}
-	if !got {
-		t.Fatal("IsGitProject=false, want true (sub-repo fallback)")
+	if got {
+		t.Fatal("IsGitProject=true, want false (strict: sub-repo must NOT gate worktree)")
 	}
 
-	// 对照:纯非 git 项目 → false
+	// HasGitContext 放宽:wrapper 子目录是 repo → true(SCM 面板可见)
+	have, err := svc.HasGitContext(proj.ID)
+	if err != nil {
+		t.Fatalf("HasGitContext: %v", err)
+	}
+	if !have {
+		t.Fatal("HasGitContext=false, want true (relaxed: sub-repo fallback for SCM)")
+	}
+
+	// 对照:纯非 git 项目 → 两者都 false
 	nongit := t.TempDir()
 	proj2, err := st.CreateProject(svc.ctx, "nongit", nongit, "")
 	if err != nil {
@@ -463,6 +478,10 @@ func TestIsGitProject_SubRepoFallback(t *testing.T) {
 	got2, err := svc.IsGitProject(proj2.ID)
 	if err != nil || got2 {
 		t.Fatalf("IsGitProject on non-git: got=%v err=%v, want false", got2, err)
+	}
+	have2, err := svc.HasGitContext(proj2.ID)
+	if err != nil || have2 {
+		t.Fatalf("HasGitContext on non-git: got=%v err=%v, want false", have2, err)
 	}
 }
 
