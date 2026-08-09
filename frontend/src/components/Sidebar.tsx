@@ -129,6 +129,14 @@ export default function Sidebar(props: Props) {
   // 开始时记录并全折叠,结束/取消时恢复原展开态,不打断用户原本在看的项目。
   const expandedBeforeDrag = useRef<Set<string>>(new Set());
 
+  // Sidebar session keyboard navigation (#101): kbdSelectIdx is the keyboard cursor index into
+  // the SELECTED project's rendered session list (same `list` the user sees). Scoped to the
+  // selected project because clicking a session selects its project, so focus is in practice
+  // always within the selected project's list — matches the ⌘1-9 "selected project's sessions"
+  // model. null = no keyboard cursor (mouse-only / idle).
+  const [kbdSelectIdx, setKbdSelectIdx] = useState<number | null>(null);
+  const kbdActiveRef = useRef<HTMLDivElement>(null);
+
   // harness ID → 显示名 查表(供 session 行 harness 图标 tooltip 用);缺省回退到 ID 本身。
   const harnessNameById = (id: string): string =>
     props.harnesses?.find((h) => h.id === id)?.name || id;
@@ -312,8 +320,82 @@ export default function Sidebar(props: Props) {
     return () => clearTimeout(h);
   }, [searchProj, searchQ]);
 
+  // Keyboard-nav scope: the rendered session list of the currently-selected project, computed
+  // identically to the per-project `list` in the render loop (visible slice, or search-filtered).
+  // kbdSelectIdx indexes into this array.
+  const selProjId = props.selectedProjectId;
+  const selProjExpanded = selProjId ? expanded.has(selProjId) : false;
+  const kbdList: Session[] = (() => {
+    if (!selProjId || !selProjExpanded) return [];
+    const projSessions = props.sessionsByProject[selProjId] ?? [];
+    const sessLimit = sessionLimit[selProjId] ?? SESSION_PAGE;
+    const visibleSessions = projSessions.slice(0, sessLimit);
+    const searching = searchProj === selProjId && searchQ.trim() !== "";
+    return searching ? projSessions.filter(matchSession) : visibleSessions;
+  })();
+
+  // Reset the keyboard cursor when it can no longer be valid: switching the selected project
+  // (kbdSelectIdx is meaningful only within the selected project's list) or when the list
+  // shrinks below the index. State is discarded on Sidebar unmount, so the cursor never leaks
+  // across mounts (popout mode hides the Sidebar) — the "clear on teardown" requirement.
+  useEffect(() => { setKbdSelectIdx(null); }, [selProjId]);
+  useEffect(() => {
+    if (kbdSelectIdx != null && kbdSelectIdx >= kbdList.length) setKbdSelectIdx(null);
+  }, [kbdList.length]);
+
+  // Keep the keyboard-cursor row visible (e.g. when arrowing past the viewport edge / past the
+  // paginated slice boundary). `block: "nearest"` avoids unnecessary scrolling.
+  useEffect(() => {
+    if (kbdSelectIdx == null) return;
+    kbdActiveRef.current?.scrollIntoView({ block: "nearest" });
+  }, [kbdSelectIdx]);
+
+  // ↑/↓ + Tab drive the keyboard cursor; Enter activates the cursor row. Attached to <aside> so
+  // it only fires while focus is within the sidebar (no global hijack of Arrow/Tab/Enter while
+  // the user is in the composer). Tab/Enter are intercepted ONLY once navigation is active
+  // (kbdSelectIdx != null) so we never trap focus or steal native Enter before the user starts
+  // keyboard navigation; Arrow keys may start it. Inputs (search/rename), modifier combos and
+  // open ctx/confirm overlays are skipped so their own key handling is untouched.
+  const onSidebarKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+    const tgt = e.target as HTMLElement | null;
+    if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.isContentEditable)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (ctx || confirm) return;
+    const list = kbdList;
+    if (list.length === 0) return;
+
+    const key = e.key;
+    const isDown = key === "ArrowDown" || (key === "Tab" && !e.shiftKey);
+    const isUp = key === "ArrowUp" || (key === "Tab" && e.shiftKey);
+    if (!isDown && !isUp && key !== "Enter") return;
+    if ((key === "Tab" || key === "Enter") && kbdSelectIdx == null) return;
+
+    e.preventDefault();
+    const len = list.length;
+
+    if (key === "Enter") {
+      const idx = kbdSelectIdx;
+      if (idx == null || idx >= len) return;
+      const s = list[idx];
+      if (props.poppedSessionIds?.has(s.id) && props.onFocusPopout) props.onFocusPopout(s.id);
+      else props.onSelectSession(s.id, selProjId!);
+      return;
+    }
+
+    setKbdSelectIdx((prev) => {
+      if (prev == null) {
+        // Start from the active session when possible, so ↑/↓ step from the current position
+        // instead of jumping to the list edge.
+        const cur = props.selectedSessionId ? list.findIndex((s) => s.id === props.selectedSessionId) : -1;
+        if (isDown) return cur >= 0 ? Math.min(cur + 1, len - 1) : 0;
+        return cur >= 0 ? Math.max(cur - 1, 0) : len - 1;
+      }
+      return isDown ? Math.min(prev + 1, len - 1) : Math.max(prev - 1, 0);
+    });
+  };
+
   return (
-    <aside className="sidebar" data-testid="sidebar">
+    <aside className="sidebar" data-testid="sidebar" onKeyDown={onSidebarKeyDown}>
       <div className="sidebar-header" onDoubleClick={onTitleDoubleClick}>
         <span className="sidebar-title">{t("app.brand")}</span>
         <span className="sidebar-header-acts">
@@ -387,7 +469,7 @@ export default function Sidebar(props: Props) {
                       )}
                     </div>
                   )}
-                  {list.map((s) => {
+                  {list.map((s, i) => {
                     const st = props.statusBySession[s.id];
                     const active = st === "prompting";
                     const act = props.activityBySession[s.id];
@@ -398,13 +480,17 @@ export default function Sidebar(props: Props) {
                     const unread = !active && props.unreadBySession[s.id];
                     // 显示标题:custom_title 优先(用户重命名),回退 auto title,再回退兜底文案(0016)。
                     const displayTitle = s.customTitle || s.title || t("sidebar.sessionDraftFallback");
+                    // Keyboard cursor lands only on the selected project's rows (kbdSelectIdx indexes
+                    // that project's list). Visualised as an inset accent ring layered over the row.
+                    const kbdActive = p.id === selProjId && i === kbdSelectIdx;
                     // 重命名态:整行换成输入框(Enter 提交 / Esc 取消 / blur 提交)。mousedown 阻止冒泡到
                     // 全局 ctx 关闭监听(虽此处 ctx 已关,但防其它 window mousedown 副作用)。
                     if (renamingId === s.id) {
                       return (
                         <div
                           key={s.id}
-                          className={`session-item-row ${props.selectedSessionId === s.id ? "active" : ""}`}
+                          ref={kbdActive ? kbdActiveRef : undefined}
+                          className={`session-item-row ${props.selectedSessionId === s.id ? "active" : ""}${kbdActive ? " kbd-active" : ""}`}
                           data-testid={`session-${s.id}`}
                         >
                           <input
@@ -437,7 +523,8 @@ export default function Sidebar(props: Props) {
                     return (
                       <div
                         key={s.id}
-                        className={`session-item-row ${props.selectedSessionId === s.id ? "active" : ""}`}
+                        ref={kbdActive ? kbdActiveRef : undefined}
+                        className={`session-item-row ${props.selectedSessionId === s.id ? "active" : ""}${kbdActive ? " kbd-active" : ""}`}
                         data-testid={`session-${s.id}`}
                         onContextMenu={(e) => openSessionMenu(e, s)}
                       >

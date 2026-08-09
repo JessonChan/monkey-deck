@@ -234,6 +234,9 @@ input, textarea { font-family: inherit; }
 }
 .session-item-row:hover { background: var(--hover); color: var(--text); }
 .session-item-row.active { background: var(--sel); color: var(--text); }
+/* Keyboard-nav cursor (#101): inset accent ring layered over the row (coexists with .active
+   background and :hover). Accent-2 matches the rename-input border / project-active name accent. */
+.session-item-row.kbd-active { box-shadow: inset 0 0 0 1.5px var(--accent-2); }
 .session-item-main {
   flex: 1; min-width: 0;
   display: flex; align-items: center; gap: 7px;
