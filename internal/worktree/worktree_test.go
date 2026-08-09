@@ -139,6 +139,155 @@ func TestIsRepoNegative(t *testing.T) {
 	}
 }
 
+// TestFindSubRepo_FindsImmediateChild:project 目录本身非 repo,但直接子目录是 repo → 返回该子目录。
+func TestFindSubRepo_FindsImmediateChild(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir() // 非 git 的 project 目录
+	sub := filepath.Join(root, "actual-repo")
+	must(t, os.MkdirAll(sub, 0o755))
+	must(t, runGit(sub, "init", "-q", sub))
+	must(t, os.WriteFile(filepath.Join(sub, "a.txt"), []byte("a"), 0o644))
+	must(t, runGit(sub, "add", "."))
+	must(t, runGit(sub, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init"))
+
+	got := FindSubRepo(root)
+	if normalizePath(got) != normalizePath(sub) {
+		t.Fatalf("FindSubRepo = %q, want %q", got, sub)
+	}
+	// 反向:子目录自己调,root 自身不是候选 → 返回空。
+	if FindSubRepo(sub) != "" {
+		t.Fatalf("FindSubRepo on a leaf repo should return empty, got %q", FindSubRepo(sub))
+	}
+}
+
+// TestFindSubRepo_FindsNestedChild:子 repo 在第二层(root/x/nested/.git)→ 仍能找到(默认 depth=2)。
+func TestFindSubRepo_FindsNestedChild(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	nested := filepath.Join(root, "wrapper", "inner-repo")
+	must(t, os.MkdirAll(nested, 0o755))
+	must(t, runGit(nested, "init", "-q", nested))
+	must(t, os.WriteFile(filepath.Join(nested, "a.txt"), []byte("a"), 0o644))
+	must(t, runGit(nested, "add", "."))
+	must(t, runGit(nested, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init"))
+
+	got := FindSubRepo(root)
+	if normalizePath(got) != normalizePath(nested) {
+		t.Fatalf("FindSubRepo = %q, want %q", got, nested)
+	}
+}
+
+// TestFindSubRepo_DepthLimitExceeded:子 repo 在第三层(超过默认 depth=2)→ 找不到,返回空。
+func TestFindSubRepo_DepthLimitExceeded(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	deep := filepath.Join(root, "a", "b", "deep-repo") // 第 3 层
+	must(t, os.MkdirAll(deep, 0o755))
+	must(t, runGit(deep, "init", "-q", deep))
+	must(t, os.WriteFile(filepath.Join(deep, "a.txt"), []byte("a"), 0o644))
+	must(t, runGit(deep, "add", "."))
+	must(t, runGit(deep, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init"))
+
+	if got := FindSubRepo(root); got != "" {
+		t.Fatalf("FindSubRepo should not find depth-3 repo (max depth=2), got %q", got)
+	}
+}
+
+// TestFindSubRepo_PrunesDependencyDirs:node_modules / vendor 等依赖目录里的 .git 应被跳过。
+// 当唯一含 .git 的是 node_modules 下的 vendored repo 时,FindSubRepo 应返回空(避免假阳性)。
+func TestFindSubRepo_PrunesDependencyDirs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	// 一个 vendored repo 在 node_modules 下(应被剪枝跳过)
+	vendored := filepath.Join(root, "node_modules", "some-pkg")
+	must(t, os.MkdirAll(vendored, 0o755))
+	must(t, runGit(vendored, "init", "-q", vendored))
+	must(t, os.WriteFile(filepath.Join(vendored, "a.txt"), []byte("a"), 0o644))
+	must(t, runGit(vendored, "add", "."))
+	must(t, runGit(vendored, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "v"))
+
+	if got := FindSubRepo(root); got != "" {
+		t.Fatalf("FindSubRepo should skip node_modules vendored repo, got %q", got)
+	}
+	// 同理验证 vendor(Go vendoring 常含上游 .git)
+	vendored2 := filepath.Join(root, "vendor", "github.com", "x", "y")
+	must(t, os.MkdirAll(vendored2, 0o755))
+	must(t, runGit(vendored2, "init", "-q", vendored2))
+	must(t, os.WriteFile(filepath.Join(vendored2, "a.txt"), []byte("a"), 0o644))
+	must(t, runGit(vendored2, "add", "."))
+	must(t, runGit(vendored2, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "v"))
+	if got := FindSubRepo(root); got != "" {
+		t.Fatalf("FindSubRepo should skip vendor dir, got %q", got)
+	}
+}
+
+// TestFindSubRepo_PrefersNonDependencyRepo:同时存在 node_modules 假 repo 与真实子 repo,
+// 应跳过依赖目录返回真实子 repo。
+func TestFindSubRepo_PrefersNonDependencyRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	// 依赖目录下的假阳性
+	vendored := filepath.Join(root, "node_modules", "z-pkg") // 名字排序靠后,确保不是因为排序跳过
+	must(t, os.MkdirAll(vendored, 0o755))
+	must(t, runGit(vendored, "init", "-q", vendored))
+	must(t, os.WriteFile(filepath.Join(vendored, "a.txt"), []byte("a"), 0o644))
+	must(t, runGit(vendored, "add", "."))
+	must(t, runGit(vendored, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "v"))
+	// 真实子 repo
+	real := filepath.Join(root, "src-repo")
+	must(t, os.MkdirAll(real, 0o755))
+	must(t, runGit(real, "init", "-q", real))
+	must(t, os.WriteFile(filepath.Join(real, "a.txt"), []byte("a"), 0o644))
+	must(t, runGit(real, "add", "."))
+	must(t, runGit(real, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "r"))
+
+	got := FindSubRepo(root)
+	if normalizePath(got) != normalizePath(real) {
+		t.Fatalf("FindSubRepo = %q, want real repo %q", got, real)
+	}
+}
+
+// TestFindSubRepo_EmptyOrMissingDir:空目录 / 不存在的目录 → 返回空,不 panic。
+func TestFindSubRepo_EmptyOrMissingDir(t *testing.T) {
+	if got := FindSubRepo(t.TempDir()); got != "" {
+		t.Fatalf("FindSubRepo on empty dir should return empty, got %q", got)
+	}
+	if got := FindSubRepo(filepath.Join(t.TempDir(), "does-not-exist")); got != "" {
+		t.Fatalf("FindSubRepo on missing dir should return empty, got %q", got)
+	}
+}
+
+// TestFindSubRepo_FirstBySortedOrder:多个子 repo 时返回名字排序最前者(结果稳定可复现)。
+func TestFindSubRepo_FirstBySortedOrder(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	for _, name := range []string{"zebra", "alpha", "mango"} {
+		sub := filepath.Join(root, name)
+		must(t, os.MkdirAll(sub, 0o755))
+		must(t, runGit(sub, "init", "-q", sub))
+		must(t, os.WriteFile(filepath.Join(sub, "a.txt"), []byte("a"), 0o644))
+		must(t, runGit(sub, "add", "."))
+		must(t, runGit(sub, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init"))
+	}
+	got := FindSubRepo(root)
+	want := filepath.Join(root, "alpha")
+	if normalizePath(got) != normalizePath(want) {
+		t.Fatalf("FindSubRepo = %q, want %q (sorted first)", got, want)
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

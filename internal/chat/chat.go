@@ -1178,7 +1178,8 @@ func (s *ChatService) cwdOf(sessionID string) (string, error) {
 
 // scmDir 返回 session 的 git 操作目录(跟 VS Code 对齐:SCM 可见性 = 该目录是否为 git repo)。
 // 有 worktree → worktree 路径;无 worktree + proj.Path 是 git repo → proj.Path;
-// 两者都不是 → 报错(调用方应先用 hasSCM 判定再调)。
+// 两者都不是但 proj.Path 下有子目录是 git repo(FindSubRepo)→ 子目录 root;
+// 都没有 → 报错(调用方应先用 hasSCM 判定再调)。
 func (s *ChatService) scmDir(sessionID string) (string, error) {
 	se, err := s.st.GetSession(s.ctx, sessionID)
 	if err != nil {
@@ -1199,6 +1200,11 @@ func (s *ChatService) scmDir(sessionID string) (string, error) {
 	}
 	if worktree.IsRepo(proj.Path) {
 		return proj.Path, nil
+	}
+	// Fallback: project dir itself isn't a repo, but a subdirectory might be
+	// (e.g. a wrapper/monorepo dir). Use FindSubRepo to surface it.
+	if sub := worktree.FindSubRepo(proj.Path); sub != "" {
+		return sub, nil
 	}
 	return "", fmt.Errorf("session 无 git 上下文(非 git 项目)")
 }
@@ -3047,6 +3053,8 @@ func (s *ChatService) UpgradeHarness(id string) ([]harness.Harness, error) {
 }
 
 // IsGitProject 报告某项目目录是否为 git 仓库(前端据此决定「新建分支」开关是否可用,§1.4)。
+// proj.Path 本身是 repo 即 true;否则放宽:proj.Path 下任一(限深剪枝)子目录是 repo 也算 true
+// (对齐 scmDir 的 fallback 语义,见 FindSubRepo)。
 func (s *ChatService) IsGitProject(projectID string) (bool, error) {
 	proj, err := s.st.GetProject(s.ctx, projectID)
 	if err != nil {
@@ -3055,7 +3063,10 @@ func (s *ChatService) IsGitProject(projectID string) (bool, error) {
 	if proj == nil {
 		return false, fmt.Errorf("project not found: %s", projectID)
 	}
-	return worktree.IsRepo(proj.Path), nil
+	if worktree.IsRepo(proj.Path) {
+		return true, nil
+	}
+	return worktree.FindSubRepo(proj.Path) != "", nil
 }
 
 // ResolveBaseRefDefault returns the repo's detected default branch (origin/HEAD →

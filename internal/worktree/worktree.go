@@ -91,6 +91,71 @@ func IsRepo(path string) bool {
 	return err == nil
 }
 
+// subRepoSkipDirs 是搜索子目录 .git 时永不下钻的目录名:它们是依赖 / 构建 /
+// 工具缓存目录,常含 vendored 上游仓库的 .git(假阳性源头)。.git 自身也不下钻。
+var subRepoSkipDirs = map[string]bool{
+	"node_modules": true,
+	".venv":        true,
+	"venv":         true,
+	"__pycache__":  true,
+	".mypy_cache":  true,
+	"dist":         true,
+	"build":        true,
+	"target":       true,
+	".next":        true,
+	".nuxt":        true,
+	".cache":       true,
+	".gradle":      true,
+	"vendor":       true,
+	".idea":        true,
+	".git":         true,
+}
+
+// subRepoMaxDepth 是 FindSubRepo 的默认递归深度(1 = 仅直接子目录,2 = 含孙目录)。
+// 选 2:覆盖「项目目录不是 repo,但子目录或孙目录是」的常见 monorepo wrapper 场景,
+// 同时避免对大型项目目录做全量深扫(性能 + 假阳性)。
+const subRepoMaxDepth = 2
+
+// FindSubRepo 在 root 下(限深 + 剪枝)搜索第一个本身是 git 仓库的子目录,返回其绝对路径;
+// 没找到(root 无 git 子仓库)返回 ""。root 自身不是候选(调用方应先用 IsRepo(root))。
+//
+// 搜索是 best-effort:浅层(默认 2 级)+ 跳过依赖 / 构建目录(那些常含 vendored .git,假阳性)。
+// 每个候选先用 os.Stat 探 .git(快),再用 IsRepo 确认是有效工作树,避免坏 .git / 子模块 gitdir
+// 指针失效等边界误报。命中即返回(ReadDir 已按名字排序,结果稳定可复现)。
+func FindSubRepo(root string) string {
+	return findSubRepo(root, 0)
+}
+
+func findSubRepo(root string, depth int) string {
+	if depth >= subRepoMaxDepth {
+		return ""
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if subRepoSkipDirs[name] {
+			continue
+		}
+		full := filepath.Join(root, name)
+		if _, statErr := os.Stat(filepath.Join(full, ".git")); statErr == nil {
+			// 探到 .git,再用 git 复核是有效工作树(防坏 .git / 失效 gitdir 指针)。
+			if IsRepo(full) {
+				return full
+			}
+		}
+		if found := findSubRepo(full, depth+1); found != "" {
+			return found
+		}
+	}
+	return ""
+}
+
 // HeadShort 返回当前 HEAD 的短引用(分支名或 commit 前 7 位)。
 func HeadShort(repoPath string) (string, error) {
 	out, err := git(repoPath, "rev-parse", "--abbrev-ref", "HEAD")

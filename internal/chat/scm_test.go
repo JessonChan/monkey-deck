@@ -414,3 +414,116 @@ func TestAICommitPrompt(t *testing.T) {
 		}
 	}
 }
+
+// TestIsGitProject_SubRepoFallback:项目目录本身非 git,但子目录是 git 仓库时,
+// IsGitProject 应回 true(放宽:对齐 scmDir 的 sub-repo fallback)。
+func TestIsGitProject_SubRepoFallback(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	// project 目录非 git;子目录 actual-repo 是 git 仓库
+	root := t.TempDir()
+	sub := filepath.Join(root, "actual-repo")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustRunGit(t, sub, "init", "-q", sub)
+	mustWrite(t, filepath.Join(sub, "a.txt"), "a")
+	mustRunGit(t, sub, "add", ".")
+	mustRunGit(t, sub, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init")
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.New(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	svc := NewChatService(config.TestConfig(t.TempDir()))
+	svc.ctx = context.Background()
+	svc.st = st
+	proj, err := st.CreateProject(svc.ctx, "wrapper", root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.IsGitProject(proj.ID)
+	if err != nil {
+		t.Fatalf("IsGitProject: %v", err)
+	}
+	if !got {
+		t.Fatal("IsGitProject=false, want true (sub-repo fallback)")
+	}
+
+	// 对照:纯非 git 项目 → false
+	nongit := t.TempDir()
+	proj2, err := st.CreateProject(svc.ctx, "nongit", nongit, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got2, err := svc.IsGitProject(proj2.ID)
+	if err != nil || got2 {
+		t.Fatalf("IsGitProject on non-git: got=%v err=%v, want false", got2, err)
+	}
+}
+
+// TestSCM_SubRepoFallback:无 worktree 的 session,proj.Path 非 git 但子目录是 git 仓库,
+// scmDir 应 fallback 到子目录 root,SCM 读 / 写操作在子目录上生效。
+func TestSCM_SubRepoFallback(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	sub := filepath.Join(root, "inner-repo")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustRunGit(t, sub, "init", "-q", sub)
+	mustWrite(t, filepath.Join(sub, "a.txt"), "init")
+	mustRunGit(t, sub, "add", ".")
+	mustRunGit(t, sub, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "init")
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.New(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	svc := NewChatService(config.TestConfig(t.TempDir()))
+	svc.ctx = context.Background()
+	svc.st = st
+	proj, err := st.CreateProject(svc.ctx, "wrapper", root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	se, err := st.CreateSession(svc.ctx, proj.ID, "title", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// hasSCM 应为 true(scmDir fallback 到子 repo)
+	if !svc.hasSCM(se.ID) {
+		t.Fatal("hasSCM=false, want true (sub-repo fallback)")
+	}
+
+	// 在子 repo 里制造改动 → SessionChanges 应看到(经 scmDir fallback)
+	mustWrite(t, filepath.Join(sub, "a.txt"), "edited")
+	mustWrite(t, filepath.Join(sub, "new.txt"), "n")
+	got, err := svc.SessionChanges(se.ID)
+	if err != nil || !hasFile(got, "a.txt", false) || !hasFile(got, "new.txt", false) {
+		t.Fatalf("SessionChanges via sub-repo fallback: got=%+v err=%v", got, err)
+	}
+
+	// Stage + Commit 在子 repo 上生效
+	if err := svc.SessionStage(se.ID, nil); err != nil {
+		t.Fatalf("Stage via sub-repo fallback: %v", err)
+	}
+	if err := svc.SessionCommit(se.ID, "fix: sub-repo fallback commit"); err != nil {
+		t.Fatalf("Commit via sub-repo fallback: %v", err)
+	}
+	if after, _ := svc.SessionChanges(se.ID); len(after) != 0 {
+		t.Fatalf("expected clean after commit via sub-repo fallback, got %+v", after)
+	}
+	if out, _ := exec.Command("git", "-C", sub, "log", "-1", "--pretty=%s").Output(); strings.TrimSpace(string(out)) != "fix: sub-repo fallback commit" {
+		t.Fatalf("sub-repo HEAD message wrong: %q", out)
+	}
+}
