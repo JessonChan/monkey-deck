@@ -244,6 +244,7 @@ export default function EditorPane({
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onSearchKey}
             placeholder={t("filePreview.searchPlaceholder")}
+            aria-label={t("filePreview.searchPlaceholder")}
             spellCheck={false}
             autoComplete="off"
             data-testid="editor-search-input"

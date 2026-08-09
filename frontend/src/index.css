@@ -1824,9 +1824,13 @@ input, textarea { font-family: inherit; }
 .cv-target .cv-no { color: var(--yellow, #ffd60a); opacity: 1; }
 /* Search match lines (Task #24197): subtle tint on every line that contains a
    match, with a stronger tint + left bar on the active match. Kept deliberately
-   faint so the active one reads clearly against the rest. Sits below .cv-target
-   in source order so a line that is BOTH the file-open target and a search hit
-   still keeps the target (yellow) treatment dominant. */
+   faint so the active one reads clearly against the rest.
+   NOTE: these rules are defined AFTER .cv-target, so on the rare line that is
+   BOTH the file-open target AND a search hit, the search tint wins (equal
+   specificity → later rule wins). The box-shadow left bar uses the same
+   `inset 3px 0 0` side as .cv-target, so it fully replaces (not stacks with)
+   the target bar. That collision is uncommon (target is set on file open,
+   search opens later) and the line stays clearly highlighted, so accepted. */
 .cv-search-match { background: rgba(100, 210, 255, 0.10); }
 .cv-search-active {
   background: rgba(10, 132, 255, 0.22);
