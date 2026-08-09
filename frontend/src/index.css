@@ -1057,7 +1057,7 @@ input, textarea { font-family: inherit; }
   padding: 3px 4px 3px 8px; font-size: 11.5px; color: var(--text-2); max-width: 220px;
 }
 .att-chip svg { color: var(--accent-2); }
-.att-chip-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: inline-flex; align-items: center; gap: 4px; }
+.att-chip-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .att-chip-x { color: var(--text-3); font-size: 14px; line-height: 1; padding: 0 4px; border-radius: 4px; }
 .att-chip-x:hover { color: var(--red); background: rgba(255, 69, 58, 0.14); }
 /* @提及 chip:用 @ 标记代替文件图标,更紧凑、语义更明确(引用的是路径)。 */
