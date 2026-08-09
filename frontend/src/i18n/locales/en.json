@@ -348,6 +348,8 @@
     "scheduled": "queued {{time}}",
     "schedule": "Schedule",
     "scheduleTip": "Schedule: pick a time to auto-send this message (skipped until then)",
+    "schedulePreset": "+{{mins}}m",
+    "schedulePresetTip": "Schedule: auto-send {{mins}} minutes from now",
     "clearSchedule": "Now",
     "clearScheduleTip": "Clear schedule: send as soon as possible (next drain)",
     "scheduledSend": "⏰ {{time}}",

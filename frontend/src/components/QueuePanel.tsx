@@ -82,6 +82,14 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
     setSchedulingId(null);
     setScheduleError(null);
   };
+  // Preset: schedule N minutes from now, then close the schedule row.
+  const presetSchedule = (mins: number) => {
+    if (!schedulingId) return;
+    onSchedule(schedulingId, Date.now() + mins * 60_000);
+    setSchedulingId(null);
+    setScheduleError(null);
+  };
+  const SCHEDULE_PRESETS = [5, 10, 30] as const;
 
   return (
     <div className="queue-panel" data-testid="queue-panel">
@@ -165,6 +173,17 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                 autoFocus
               />
               <div className="queue-item-actions">
+                {SCHEDULE_PRESETS.map((mins) => (
+                  <button
+                    key={mins}
+                    className="queue-btn preset"
+                    data-testid={`queue-schedule-preset-${mins}`}
+                    onClick={() => presetSchedule(mins)}
+                    title={t("queue.schedulePresetTip", { mins })}
+                  >
+                    {t("queue.schedulePreset", { mins })}
+                  </button>
+                ))}
                 <button
                   className="queue-btn save"
                   data-testid="queue-schedule-save"

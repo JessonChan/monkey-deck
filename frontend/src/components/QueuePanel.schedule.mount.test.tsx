@@ -183,4 +183,32 @@ describe("QueuePanel schedule picker (Task #22134)", () => {
     expect(host.querySelector('[data-testid="queue-schedule-error"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="queue-schedule-input"]')).not.toBeNull();
   });
+
+  test("+5/+10/+30min preset buttons call onSchedule with now+Nmin and close the row (Task #24226)", async () => {
+    for (const mins of [5, 10, 30] as const) {
+      const calls: Array<{ id: string; scheduledAt: number }> = [];
+      const { host } = mount(
+        <QueuePanel queue={[item("q1", "hi", Date.now())]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(id, scheduledAt) => calls.push({ id, scheduledAt })} onReorder={() => {}} />
+      );
+      await flush();
+
+      (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+        .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+      await flush();
+
+      const before = Date.now();
+      (host.querySelector(`[data-testid="queue-schedule-preset-${mins}"]`) as HTMLElement)
+        .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+      await flush();
+      const after = Date.now();
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].id).toBe("q1");
+      // scheduledAt must be ~now + mins (tolerate event-loop latency).
+      expect(calls[0].scheduledAt).toBeGreaterThanOrEqual(before + mins * 60_000);
+      expect(calls[0].scheduledAt).toBeLessThanOrEqual(after + mins * 60_000);
+      // Schedule row closed after preset click.
+      expect(host.querySelector('[data-testid="queue-schedule-input"]')).toBeNull();
+    }
+  });
 });

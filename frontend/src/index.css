@@ -1373,6 +1373,8 @@ input, textarea { font-family: inherit; }
 .queue-btn.cancel:hover { color: var(--text-2); }
 .queue-btn.clear { color: var(--text-3); }
 .queue-btn.clear:hover { color: var(--text); }
+.queue-btn.preset { color: var(--text-3); }
+.queue-btn.preset:hover { color: var(--accent-2); border-color: rgba(100, 210, 255, 0.3); }
 .queue-scheduled {
   font-family: var(--mono); font-size: 10px; color: var(--text-3); flex-shrink: 0;
   white-space: nowrap;
