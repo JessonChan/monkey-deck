@@ -9,12 +9,12 @@ import (
 )
 
 // sessionColumns / scanSession:统一 session 的列与扫描,避免多处 SELECT/Scan 漂移(§1.5)。
-const sessionColumns = `id,project_id,acp_session_id,title,model,harness,worktree_path,branch,base_ref,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,config_options_cache`
+const sessionColumns = `id,project_id,acp_session_id,title,custom_title,model,harness,worktree_path,branch,base_ref,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,config_options_cache`
 
 func scanSession(r interface{
 	Scan(dest ...any) error
 }, se *Session) error {
-	return r.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.Model, &se.Harness,
+	return r.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.CustomTitle, &se.Model, &se.Harness,
 		&se.WorktreePath, &se.Branch, &se.BaseRef,
 		&se.UsedTokens, &se.SizeTokens, &se.Cost,
 		&se.CachedReadTokens, &se.CachedWriteTokens, &se.InputTokens, &se.OutputTokens, &se.ThoughtTokens, &se.TotalTokens,
@@ -58,6 +58,14 @@ func (s *Store) UpdateSessionACP(ctx context.Context, id, acpSessionID, title st
 // UpdateSessionTitle 更新 session 标题。
 func (s *Store) UpdateSessionTitle(ctx context.Context, id, title string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET title=?, updated_at=? WHERE id=?`, title, now(), id)
+	return err
+}
+
+// UpdateSessionCustomTitle sets the user-defined rename (0016). Empty clears it so the
+// sidebar falls back to the auto-generated Title. Rename is not content activity, so it
+// does not touch updated_at (keeps time display + secondary sort stable, like pinned).
+func (s *Store) UpdateSessionCustomTitle(ctx context.Context, id, customTitle string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET custom_title=? WHERE id=?`, customTitle, id)
 	return err
 }
 

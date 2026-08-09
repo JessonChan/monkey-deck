@@ -49,7 +49,11 @@ type Session struct {
 	ProjectID  string `json:"projectId"`
 	ACPSession string `json:"acpSession"`
 	Title      string `json:"title"`
-	Model      string `json:"model"`
+	// CustomTitle is a user-defined rename, kept separate from the harness/auto-generated
+	// Title so renaming never clobbers the original. Sidebar shows CustomTitle when set,
+	// falling back to Title. Empty = no custom title (use Title).
+	CustomTitle string `json:"customTitle"`
+	Model       string `json:"model"`
 	Harness    string `json:"harness"` // 使用的 harness(omp/opencode),新建会话时选择
 	// session 的 git worktree(并行隔离用,§1.4)。空 = 非 git 项目或未建,直接用项目目录。
 	WorktreePath string `json:"worktreePath"`

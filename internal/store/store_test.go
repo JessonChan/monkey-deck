@@ -391,6 +391,64 @@ func TestSessionPinnedSort(t *testing.T) {
 	}
 }
 
+// TestUpdateSessionCustomTitle 校验用户自定义标题(0016):设置/覆盖/清除,且不动 updated_at
+// (rename 不是内容活动),原 title 字段不受影响(不被 custom_title 覆盖)。
+func TestUpdateSessionCustomTitle(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	p, err := s.CreateProject(ctx, "demo", "/tmp/custom-title", "m/m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	se, err := s.CreateSession(ctx, p.ID, "Auto Title", "m/m", "opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := s.GetSession(ctx, se.ID)
+	if before.CustomTitle != "" {
+		t.Fatalf("new session custom_title should be empty, got %q", before.CustomTitle)
+	}
+
+	// 设置自定义标题:custom_title 写入,title 不变,updated_at 不动。
+	if err := s.UpdateSessionCustomTitle(ctx, se.ID, "My Rename"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetSession(ctx, se.ID)
+	if got.CustomTitle != "My Rename" {
+		t.Fatalf("custom_title = %q, want %q", got.CustomTitle, "My Rename")
+	}
+	if got.Title != "Auto Title" {
+		t.Fatalf("title should be untouched, got %q", got.Title)
+	}
+	if got.UpdatedAt != before.UpdatedAt {
+		t.Fatalf("updated_at should not move on rename: before=%d after=%d", before.UpdatedAt, got.UpdatedAt)
+	}
+
+	// 覆盖:再改一次,值更新,updated_at 仍不动。
+	if err := s.UpdateSessionCustomTitle(ctx, se.ID, "Second Name"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetSession(ctx, se.ID)
+	if got.CustomTitle != "Second Name" {
+		t.Fatalf("custom_title = %q, want %q", got.CustomTitle, "Second Name")
+	}
+	if got.UpdatedAt != before.UpdatedAt {
+		t.Fatalf("updated_at should not move on rename (overwrite): before=%d after=%d", before.UpdatedAt, got.UpdatedAt)
+	}
+
+	// 清除:空串 = 回退到 auto title。
+	if err := s.UpdateSessionCustomTitle(ctx, se.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetSession(ctx, se.ID)
+	if got.CustomTitle != "" {
+		t.Fatalf("custom_title should be cleared, got %q", got.CustomTitle)
+	}
+	if got.Title != "Auto Title" {
+		t.Fatalf("title should still be the auto one after clear, got %q", got.Title)
+	}
+}
+
 // TestSearchSessionIDsByContent 校验会话内容搜索:大小写不敏感、按项目隔离、去重、空结果。
 func TestSearchSessionIDsByContent(t *testing.T) {
 	s := newTestStore(t)
