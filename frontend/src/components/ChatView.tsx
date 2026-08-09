@@ -30,6 +30,8 @@ interface Props {
   statusDetail: string;
   usage: Usage;
   branch: string;  // 透传给 Composer(空则不显示)
+  // Branch chip click → open new-session modal prefilled to fork off this branch (routed to App).
+  onNewSessionOnBranch: (branch: string) => void;
   error: string | null;
   // notice:非异常温和提示(蓝色条,如 empty-turn:本轮无输出)。与 error(红色)分开渲染。
   notice: string | null;
@@ -729,6 +731,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           audioSupported={props.audioSupported}
           usage={props.usage}
           branch={props.branch}
+          onNewSessionOnBranch={props.onNewSessionOnBranch}
           disabled={!props.session}
           prompting={props.status === "prompting"}
           configOptions={props.configOptions}

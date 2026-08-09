@@ -137,7 +137,7 @@ export default function App() {
     () => harnesses.some((h) => h.upgradeAvailable),
     [harnesses],
   );
-  const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean; lastHarness: string; defaultBaseRef: string; recentRefs: string[]; branches: BranchInfo[]; worktrees: WorktreeInfo[] } | null>(null);  // new-chat modal
+  const [newSession, setNewSession] = useState<{ projectId: string; isGit: boolean; lastHarness: string; defaultBaseRef: string; recentRefs: string[]; branches: BranchInfo[]; worktrees: WorktreeInfo[]; initialBaseRef: string } | null>(null);  // new-chat modal
   // Owner-with-guests delete flow: when deleting an owner session whose worktree still has
   // guest chats, defer to a 3-option dialog (delete worktree + all/keep others). null = closed.
   const [deleteWt, setDeleteWt] = useState<{ sessionId: string; projectId: string; guests: Session[] } | null>(null);
@@ -928,7 +928,7 @@ export default function App() {
   // 新建 session:先弹窗让用户选 harness + 是否建 worktree;projectId 为空时用当前选中项目。
   // harness 默认选中上次新建对话用的(后端 lastHarness setting,§5.3 本地是真相来源),照抄 worktree 的
   // 「弹窗打开时预取依赖值放进 newSession 状态、作为 prop 传给 modal」范式。
-  const createSession = useCallback(async (projectId?: string) => {
+  const createSession = useCallback(async (projectId?: string, initialBaseRef?: string) => {
     const pid = projectId ?? selectedProjectId;
     if (!pid) return;
     try {
@@ -959,11 +959,18 @@ export default function App() {
         recentRefs = recent || [];
         worktrees = wts || [];
       }
-      setNewSession({ projectId: pid, isGit, lastHarness, defaultBaseRef, recentRefs, branches, worktrees });
+      setNewSession({ projectId: pid, isGit, lastHarness, defaultBaseRef, recentRefs, branches, worktrees, initialBaseRef: initialBaseRef ?? "" });
     } catch (e) {
       setError(extractErrMsg(e));
     }
   }, [selectedProjectId]);
+
+  // Composer branch chip → open the new-session modal straight in "new worktree" mode
+  // with this branch prefilled as the base (fork a fresh md/<id> off it). Bound to the
+  // currently selected project (the Composer only renders for the active session's project).
+  const onNewSessionOnBranch = useCallback((branch: string) => {
+    void createSession(undefined, branch);
+  }, [createSession]);
 
   // 用户在弹窗确认后真正创建 session。按 mode 分发到三条后端路径:
   //   project → CreateSession(useWorktree=false);new → CreateSession(useWorktree=true, baseRef);
@@ -1868,6 +1875,7 @@ export default function App() {
               statusDetail={statusDetail}
               usage={usage}
               branch={branchBySession[selectedSessionId] || activeSession?.branch || ""}
+              onNewSessionOnBranch={onNewSessionOnBranch}
               error={error}
               notice={notice}
               permission={permission}
@@ -2059,6 +2067,7 @@ export default function App() {
         recentRefs={newSession.recentRefs}
         branches={newSession.branches}
         worktrees={newSession.worktrees}
+        initialBaseRef={newSession.initialBaseRef}
         onConfirm={confirmNewSession}
         onCancel={() => setNewSession(null)}
       />

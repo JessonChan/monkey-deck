@@ -31,6 +31,10 @@ interface Props {
   recentRefs: string[];
   branches: BranchInfo[];     // one-shot local+remote branch list (mode="new" selector)
   worktrees: WorktreeInfo[];  // git worktree list (mode="existing" selector): main + linked
+  // Optional preselected base branch (e.g. Composer branch chip → "fork from this
+  // branch"). When set, the modal opens straight in mode="new" with this baseRef
+  // filled, skipping the mode pick. Empty = no preselect (default flow).
+  initialBaseRef?: string;
   onConfirm: (choice: NewSessionChoice) => void;
   onCancel: () => void;
 }
@@ -45,7 +49,7 @@ type DecoratedBranch = BranchInfo & { dateStr: string };
 // harness + workdir mode both require an explicit choice (null = unselected); each mode then
 // requires its own explicit pick (a directory / a base branch) — nothing is pre-selected
 // (pre-selection caused wrong-base mistakes). Non-git projects hide the workdir choice.
-export default function NewSessionModal({ harnesses, isGit, lastHarness, defaultBaseRef, recentRefs, branches, worktrees, onConfirm, onCancel }: Props) {
+export default function NewSessionModal({ harnesses, isGit, lastHarness, defaultBaseRef, recentRefs, branches, worktrees, initialBaseRef, onConfirm, onCancel }: Props) {
   const { t } = useTranslation();
   // harness 必须显式选择:null = 未选。lastHarness 仍可选时默认选它;单 harness 无歧义自动选;否则 null。
   const [harness, setHarness] = useState<string | null>(() => {
@@ -54,11 +58,12 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
     return null;
   });
   // workdir mode: null = unselected, "existing" = use an existing worktree, "new" = fork a new one.
-  const [mode, setMode] = useState<"existing" | "new" | null>(null);
+  // initialBaseRef (Composer branch chip) jumps straight into "new" with the base prefilled.
+  const [mode, setMode] = useState<"existing" | "new" | null>(initialBaseRef ? "new" : null);
   // Existing-worktree pick (mode="existing"): null = not picked yet. IsMain → project; else → guest.
   const [existingDir, setExistingDir] = useState<WorktreeInfo | null>(null);
-  // Base branch (mode="new"): required, not pre-selected.
-  const [baseRef, setBaseRef] = useState<string>("");
+  // Base branch (mode="new"): required, not pre-selected — unless initialBaseRef is passed.
+  const [baseRef, setBaseRef] = useState<string>(initialBaseRef ?? "");
   // base-ref selector dropdown state.
   const [refOpen, setRefOpen] = useState(false);
   const [refQuery, setRefQuery] = useState("");
