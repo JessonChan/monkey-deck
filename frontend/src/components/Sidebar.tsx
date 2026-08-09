@@ -105,11 +105,14 @@ export default function Sidebar(props: Props) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
-  // Enter 提交后 input 卸载会触发 blur 二次执行 commitRename;committedRef 守卫幂等
-  // (后端虽幂等,但避免冗余请求 + 防 onRenameSession 未来引入副作用时的 footgun)。
+  // Enter commit unmounts the input, which fires blur and re-runs commitRename;
+  // committedRef guards idempotency (backend is already idempotent, but this avoids
+  // redundant requests + future footguns if onRenameSession gains side effects).
   const committedRef = useRef(false);
-  // IME 合成追踪:compositionStart/End 手动记录,配合 isComposing + keyCode===229 三重保险,
-  // 彻底防中文输入法选词确认的 Enter 被误判为提交(部分 macOS IME 下 isComposing 不可靠)。仿 Composer/QueuePanel。
+  // IME composition tracking: manually record compositionStart/End, combined with
+  // isComposing + keyCode===229 triple guard, to stop IME candidate-confirm Enter
+  // from being misread as submit (isComposing is unreliable on some macOS IMEs).
+  // Mirrors Composer/QueuePanel.
   const composingRef = useRef(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
@@ -198,7 +201,7 @@ export default function Sidebar(props: Props) {
   // 提交重命名:trim 后写库(空串=清除 custom_title,回退 auto title)。renamingId 清掉退出编辑态。
   const commitRename = () => {
     if (renamingId == null) return;
-    if (committedRef.current) return; // Enter 已提交,blur 二次触发直接跳过(守卫幂等)
+    if (committedRef.current) return; // Enter already committed; blur re-trigger is a no-op (idempotent guard)
     committedRef.current = true;
     props.onRenameSession(renamingId, renameValue.trim());
     setRenamingId(null);
@@ -412,7 +415,7 @@ export default function Sidebar(props: Props) {
                             value={renameValue}
                             onChange={(e) => setRenameValue(e.target.value)}
                             onKeyDown={(e) => {
-                              // IME composing 中 Enter 用于选词,不提交(仿 Composer/QueuePanel 三重保险)。
+                              // During IME composition Enter selects a candidate — do not submit (triple guard per Composer/QueuePanel).
                               if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return;
                               if (e.key === "Enter") { e.preventDefault(); commitRename(); }
                               else if (e.key === "Escape") { e.preventDefault(); cancelRename(); }
@@ -426,8 +429,9 @@ export default function Sidebar(props: Props) {
                       );
                     }
                     // 设了 custom_title 且原 title 非空:tooltip 揭示原标题,避免重命名后丢失出处。
-                    // tooltip 属性条件展开:仅 labelTip 有值时挂 data-tooltip-id,否则 react-tooltip 会对
-                    // content 为空/缺的 anchor 仍渲染一个空 tooltip 框(影响所有未 rename 的 session)。
+                    // tooltip props spread conditionally: only attach data-tooltip-id when labelTip is set,
+                    // otherwise react-tooltip renders an empty frame for an anchor with empty/missing content
+                    // (affects every non-renamed session).
                     const labelTip = s.customTitle && s.title ? t("sidebar.originalTitleTip", { title: s.title }) : undefined;
                     const labelTipProps = labelTip ? { "data-tooltip-id": "md-tip", "data-tooltip-content": labelTip } : {};
                     return (
@@ -540,7 +544,7 @@ export default function Sidebar(props: Props) {
             className="ctx-item"
             data-testid={`rename-session-${ctx.session.id}`}
             onClick={() => {
-              committedRef.current = false; // 进入编辑态,重置提交守卫
+              committedRef.current = false; // entering edit mode — reset commit guard
               setRenamingId(ctx.session.id);
               setRenameValue(ctx.session.customTitle || ctx.session.title);
               setCtx(null);
