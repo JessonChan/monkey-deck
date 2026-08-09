@@ -33,6 +33,18 @@ export interface CodeViewerProps {
   language?: string;
   /** 1-based 目标行号:高亮该行并滚入视野(由路径点击的行号定位触发)。 */
   highlightLine?: number;
+  /**
+   * Search match line numbers (1-based) to highlight (Task #24197). Driven by
+   * the EditorPane ⌘F overlay scanning `content`. Distinct from highlightLine
+   * (which is the file-open target line) — both can be active at once.
+   */
+  searchMatches?: number[];
+  /**
+   * The currently-active search match's line (1-based). Gets a stronger
+   * highlight than other match lines and is scrolled into view as the user
+   * steps through prev/next. null/undefined when search is inactive or empty.
+   */
+  activeMatchLine?: number | null;
   /** 滚动容器最大高度(如 "80vh" / "420px");默认撑满父级给定高度。 */
   maxHeight?: string;
   /** 根节点附加 className。 */
@@ -61,6 +73,8 @@ export default function CodeViewer({
   scrollKey,
   language,
   highlightLine,
+  searchMatches,
+  activeMatchLine,
   maxHeight,
   className = "",
   testId = "code-viewer",
@@ -74,8 +88,17 @@ export default function CodeViewer({
   const virtual = total > VIRT_THRESHOLD;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const targetRef = useRef<HTMLDivElement | null>(null);
+  const activeMatchRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportH, setViewportH] = useState(0);
+
+  // Search match line lookup (Task #24197). searchMatches may contain
+  // duplicates or be undefined; normalise into a Set once per render-pass of
+  // the prop so the per-line className check stays O(1) inside rowEl.
+  const searchMatchSet = useMemo(() => {
+    if (!searchMatches || searchMatches.length === 0) return null;
+    return new Set(searchMatches);
+  }, [searchMatches]);
 
   // 滚动 / 尺寸 → 计算可视窗口(rAF 节流,避免高频 setState 卡顿)。
   useEffect(() => {
@@ -116,6 +139,25 @@ export default function CodeViewer({
     }
   }, [highlightLine, total, virtual, lines]);
 
+  // Active search match: scroll into view as the user steps prev/next
+  // (Task #24197). Mirrors the highlightLine effect above but keyed on
+  // activeMatchLine so navigating between matches re-centers each time.
+  // Defined after the highlightLine effect so a file-open target line wins
+  // when both happen to land on the same commit; in practice search is opened
+  // well after load, so the two rarely compete.
+  useLayoutEffect(() => {
+    if (!activeMatchLine || activeMatchLine < 1 || activeMatchLine > total) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    if (virtual) {
+      const top = (activeMatchLine - 1) * LINE_HEIGHT - Math.max(0, (el.clientHeight - LINE_HEIGHT) / 2);
+      el.scrollTop = Math.max(0, top);
+    } else {
+      const id = requestAnimationFrame(() => activeMatchRef.current?.scrollIntoView({ block: "center", behavior: "smooth" }));
+      return () => cancelAnimationFrame(id);
+    }
+  }, [activeMatchLine, total, virtual]);
+
   // Per-file scrollTop restore/dump (Task #24182). Coordinated with the
   // highlightLine effect above: that one is defined earlier, so on each commit
   // it runs first and wins when a valid target line is requested — here we skip
@@ -143,11 +185,13 @@ export default function CodeViewer({
   const rowEl = (i: number) => {
     const ln = i + 1;
     const isTarget = highlightLine === ln;
+    const isMatch = !!searchMatchSet?.has(ln);
+    const isActiveMatch = activeMatchLine === ln;
     return (
       <div
         key={i}
-        ref={isTarget && !virtual ? targetRef : undefined}
-        className={`cv-line${isTarget ? " cv-target" : ""}`}
+        ref={isTarget && !virtual ? targetRef : isActiveMatch && !virtual ? activeMatchRef : undefined}
+        className={`cv-line${isTarget ? " cv-target" : ""}${isMatch ? " cv-search-match" : ""}${isActiveMatch ? " cv-search-active" : ""}`}
         data-line={ln}
       >
         <span className="cv-no">{ln}</span>

@@ -416,7 +416,14 @@
     "copyTip": "复制内容",
     "closeTip": "关闭 (Esc)",
     "readFailed": "读取失败:{{error}}",
-    "loading": "加载中…"
+    "loading": "加载中…",
+    "searchTip": "查找 (⌘F)",
+    "searchPlaceholder": "查找",
+    "searchCount": "第 {{n}} / {{total}} 个",
+    "searchNoMatch": "无匹配",
+    "searchPrev": "上一个匹配 (Shift+Enter)",
+    "searchNext": "下一个匹配 (Enter)",
+    "searchClose": "关闭查找 (Esc)"
   },
   "fileTab": {
     "chat": "对话",

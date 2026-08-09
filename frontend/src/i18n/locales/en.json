@@ -416,7 +416,14 @@
     "copyTip": "Copy content",
     "closeTip": "Close (Esc)",
     "readFailed": "Read failed: {{error}}",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "searchTip": "Find (⌘F)",
+    "searchPlaceholder": "Find",
+    "searchCount": "{{n}} of {{total}}",
+    "searchNoMatch": "No results",
+    "searchPrev": "Previous match (Shift+Enter)",
+    "searchNext": "Next match (Enter)",
+    "searchClose": "Close search (Esc)"
   },
   "fileTab": {
     "chat": "Chat",

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { File as FileIcon, Copy, X } from "lucide-react";
+import { File as FileIcon, Copy, X, Search, ChevronUp, ChevronDown } from "lucide-react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import CodeViewer from "./CodeViewer";
 import { isImageFile } from "../utils";
@@ -19,6 +19,13 @@ import { copyText } from "../lib/clipboard";
 // reloading content: EditorPane stays mounted across tab re-activations, and its
 // fetch effect keys on `file.path`, so a pure line-hint change doesn't refetch.
 // The line hint is passed straight through to CodeViewer.
+//
+// ⌘F search overlay (Task #24197): intercepts Cmd/Ctrl+F while a text file is
+// open, shows a small find bar at the top-right of the pane, debounces the
+// query, scans `content` for case-insensitive matches, and drives CodeViewer's
+// per-line highlight (searchMatches) + active-match scroll-into-view
+// (activeMatchLine). Esc closes the overlay; Enter / Shift+Enter step next /
+// prev. Images don't get search (no text to scan).
 export interface EditorFile {
   path: string;
   line?: number;
@@ -39,6 +46,17 @@ export default function EditorPane({
   const [loading, setLoading] = useState(true);
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+
+  // ⌘F search overlay state (Task #24197). `query` is the live input value;
+  // `debouncedQuery` is the snapshot actually used for matching, updated on a
+  // timer so typing doesn't re-scan + re-render the whole file per keystroke.
+  // `activeIdx` is the index into `matches` the user is currently on (Enter /
+  // prev-next buttons step it, wrapping modulo length).
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const image = isImageFile(file.path);
 
@@ -76,6 +94,104 @@ export default function EditorPane({
     setTimeout(() => setCopied(false), 1200);
   }, [content]);
 
+  // ⌘F / Ctrl+F opens the search overlay (text files only). Attached at window
+  // scope so it fires regardless of focus within the pane; preventDefault keeps
+  // the webview's native find (if any) out of the way. EditorPane only mounts
+  // when a file tab is active, so the listener's lifetime matches the pane.
+  useEffect(() => {
+    if (image) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [image]);
+
+  // Debounce the query so rapid typing doesn't re-scan a large file + re-render
+  // every CodeViewer line on each keystroke. Reset activeIdx to 0 so the user
+  // always lands on the first match of the new result set.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setDebouncedQuery(query);
+      setActiveIdx(0);
+    }, 200);
+    return () => clearTimeout(id);
+  }, [query]);
+
+  // Reset search state on file switch — matches from the previous file are
+  // meaningless against new content and the overlay shouldn't carry over.
+  useEffect(() => {
+    setSearchOpen(false);
+    setQuery("");
+    setDebouncedQuery("");
+    setActiveIdx(0);
+  }, [file.path]);
+
+  // Focus the input when the overlay opens (both via ⌘F and the toolbar button).
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus();
+  }, [searchOpen]);
+
+  // Scan content for case-insensitive matches. Each match records its 1-based
+  // line so CodeViewer can highlight per-line; occurrences on the same line
+  // collapse to one highlight but remain distinct for next/prev stepping.
+  // Per §5.3 (find the invariant): the invariant is the (line, col) occurrence
+  // list; the per-line Set and the active line are derived, never stored as
+  // independent state that could drift out of sync.
+  const matches = useMemo(() => {
+    const q = debouncedQuery.trim().toLowerCase();
+    if (!q) return [] as { line: number; col: number }[];
+    const out: { line: number; col: number }[] = [];
+    const ls = content.split("\n");
+    for (let i = 0; i < ls.length; i++) {
+      const l = ls[i].toLowerCase();
+      let from = 0;
+      while (true) {
+        const idx = l.indexOf(q, from);
+        if (idx < 0) break;
+        out.push({ line: i + 1, col: idx });
+        from = idx + q.length;
+      }
+    }
+    return out;
+  }, [debouncedQuery, content]);
+
+  const searchMatchLines = useMemo(() => {
+    if (matches.length === 0) return undefined;
+    const s = new Set<number>();
+    for (const m of matches) s.add(m.line);
+    return Array.from(s);
+  }, [matches]);
+
+  const safeIdx = matches.length === 0 ? 0 : Math.min(activeIdx, matches.length - 1);
+  const activeMatchLine = matches.length > 0 ? matches[safeIdx].line : null;
+
+  const stepMatch = useCallback(
+    (dir: 1 | -1) => {
+      if (matches.length === 0) return;
+      setActiveIdx((i) => (i + dir + matches.length) % matches.length);
+    },
+    [matches.length],
+  );
+
+  const onSearchKey = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSearchOpen(false);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        stepMatch(e.shiftKey ? -1 : 1);
+      }
+    },
+    [stepMatch],
+  );
+
+  const closeSearch = useCallback(() => setSearchOpen(false), []);
+
   const name = file.path.split("/").pop() || file.path;
   const lineNum = file.line;
 
@@ -97,6 +213,17 @@ export default function EditorPane({
             {copied ? <span style={{ fontSize: 11 }}>✓</span> : <Copy size={14} />}
           </button>
         )}
+        {!image && (
+          <button
+            className="tool-btn"
+            onClick={() => setSearchOpen(true)}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("filePreview.searchTip")}
+            aria-label={t("filePreview.searchTip")}
+          >
+            <Search size={14} />
+          </button>
+        )}
         <button
           className="tool-btn"
           onClick={onClose}
@@ -107,6 +234,58 @@ export default function EditorPane({
           <X size={16} />
         </button>
       </div>
+      {searchOpen && !image && (
+        <div className="editor-search-overlay" data-testid="editor-search-overlay">
+          <Search size={13} className="editor-search-icon" />
+          <input
+            ref={searchInputRef}
+            className="editor-search-input"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={onSearchKey}
+            placeholder={t("filePreview.searchPlaceholder")}
+            spellCheck={false}
+            autoComplete="off"
+            data-testid="editor-search-input"
+          />
+          <span className="editor-search-count" data-testid="editor-search-count">
+            {matches.length > 0
+              ? t("filePreview.searchCount", { n: safeIdx + 1, total: matches.length })
+              : debouncedQuery
+                ? t("filePreview.searchNoMatch")
+                : ""}
+          </span>
+          <button
+            className="tool-btn editor-search-step"
+            onClick={() => stepMatch(-1)}
+            disabled={matches.length === 0}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("filePreview.searchPrev")}
+            aria-label={t("filePreview.searchPrev")}
+          >
+            <ChevronUp size={15} />
+          </button>
+          <button
+            className="tool-btn editor-search-step"
+            onClick={() => stepMatch(1)}
+            disabled={matches.length === 0}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("filePreview.searchNext")}
+            aria-label={t("filePreview.searchNext")}
+          >
+            <ChevronDown size={15} />
+          </button>
+          <button
+            className="tool-btn"
+            onClick={closeSearch}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("filePreview.searchClose")}
+            aria-label={t("common.close")}
+          >
+            <X size={15} />
+          </button>
+        </div>
+      )}
       {error ? (
         <div className="preview-error">{t("filePreview.readFailed", { error })}</div>
       ) : loading ? (
@@ -128,6 +307,8 @@ export default function EditorPane({
           filename={file.path}
           scrollKey={`${sessionId}/${file.path}`}
           highlightLine={lineNum}
+          searchMatches={searchOpen ? searchMatchLines : undefined}
+          activeMatchLine={searchOpen ? activeMatchLine : null}
           testId="editor-pane-viewer"
         />
       )}
