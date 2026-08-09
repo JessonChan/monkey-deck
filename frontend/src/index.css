@@ -1101,6 +1101,15 @@ input, textarea { font-family: inherit; }
   width: 18px; height: 18px; object-fit: cover; border-radius: 3px;
   border: 1px solid var(--sep); flex-shrink: 0;
 }
+/* 大段粘贴 chip:复用 att-chip 视觉,chip 体点击展开预览(折叠块),× 移除。 */
+.paste-chip { padding-left: 4px; border-color: color-mix(in srgb, var(--accent-2) 30%, var(--sep)); }
+.paste-chip-toggle {
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0;
+  background: none; border: none; padding: 0; color: inherit; cursor: pointer;
+  font: inherit;
+}
+.paste-chip-toggle svg { color: var(--accent-2); flex-shrink: 0; }
+.paste-chip-expanded { border-color: var(--accent); }
 
 /* composer 紧凑用量(草稿预估 + 上下文已用/上限 + 累计 $cost)。色阶随上下文占比加重(绿 → 琥珀 → 红),
    与原顶部 usage-bar 一致;明细走 hover tooltip(react-tooltip,见 ComposerUsage)。 */

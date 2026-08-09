@@ -818,3 +818,126 @@ describe("Composer Tab path autocomplete (Task #24219)", () => {
     expect(last).toBe("/model ");
   });
 });
+
+// Task #24240: large paste (> PASTE_FOLD_THRESHOLD = 20 lines) is chip-ified instead of
+// filling the textarea. The pasted text is captured as a paste-snippet chip (reusing the
+// att-chip / fold visual); the textarea value is untouched; clicking the chip toggles a
+// head/tail fold preview; × removes it; submit restores the full snippet text into the
+// outgoing message. Keeps the composer editable for big log/error dumps.
+describe("Composer large-paste fold-to-chip (Task #24240)", () => {
+  // > PASTE_FOLD_THRESHOLD (20) lines.
+  const BIG_PASTE = Array.from({ length: 25 }, (_, i) => `log line ${i + 1}`).join("\n");
+  // Just under the threshold: still inlined into the textarea (no chip).
+  const SMALL_PASTE = Array.from({ length: 15 }, (_, i) => `line ${i + 1}`).join("\n");
+
+  test("pasting > 20 lines is chip-ified (textarea untouched, paste-chip rendered)", async () => {
+    const onChange = mock(() => {});
+    const { host } = mount(<Composer value={"check this log"} {...STUB_PROPS} onChange={onChange} />);
+    await flush();
+
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    pasteText(ta, BIG_PASTE);
+    await flush();
+
+    // textarea value is NOT modified (preventDefault + captured as snippet, not inlined).
+    expect(onChange).not.toHaveBeenCalled();
+    // paste-chip rendered in the att-chips row (t mock returns the key verbatim).
+    const chip = host.querySelector('[data-testid="paste-chip"]') as HTMLElement;
+    expect(chip).not.toBeNull();
+    expect(chip.textContent).toContain("pasteSnippet");
+    // preview is hidden until the user expands.
+    expect(host.querySelector('[data-testid="paste-snippet-preview"]')).toBeNull();
+  });
+
+  test("pasting <= 20 lines is NOT chip-ified (no paste-chip; inlined as before)", async () => {
+    const { host } = mount(<Composer value={"see this"} {...STUB_PROPS} />);
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    pasteText(ta, SMALL_PASTE);
+    await flush();
+    expect(host.querySelector('[data-testid="paste-chip"]')).toBeNull();
+  });
+
+  test("clicking the paste-chip toggles the fold preview; × removes the chip", async () => {
+    const { host } = mount(<Composer value={"check this log"} {...STUB_PROPS} />);
+    await flush();
+
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    pasteText(ta, BIG_PASTE);
+    await flush();
+
+    const chip = host.querySelector('[data-testid="paste-chip"]') as HTMLElement;
+    expect(chip).not.toBeNull();
+    // Click the chip body -> expanded fold preview appears.
+    chip.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    const preview = host.querySelector('[data-testid="paste-snippet-preview"]') as HTMLElement;
+    expect(preview).not.toBeNull();
+    // The fold preview shows the head line and the fold divider (not raw JSON).
+    expect(preview.querySelector(".composer-collapse-line")!.textContent).toContain("log line 1");
+    expect(preview.querySelector(".composer-collapse-divider")!.textContent).toContain("collapsePreviewDivider");
+
+    // Click the chip again -> preview collapses.
+    const chip2 = host.querySelector('[data-testid="paste-chip"]') as HTMLElement;
+    chip2.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(host.querySelector('[data-testid="paste-snippet-preview"]')).toBeNull();
+
+    // × removes the chip entirely.
+    const remove = host.querySelector('[data-testid="paste-chip-remove"]') as HTMLElement;
+    expect(remove).not.toBeNull();
+    remove.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(host.querySelector('[data-testid="paste-chip"]')).toBeNull();
+  });
+
+  test("submit restores the full snippet text into the outgoing message and clears chips", async () => {
+    const onSend = mock(() => {});
+    const onChange = mock(() => {});
+    const { host } = mount(
+      <Composer value={"here is the log"} {...STUB_PROPS} onSend={onSend} onChange={onChange} />
+    );
+    await flush();
+
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    pasteText(ta, BIG_PASTE);
+    await flush();
+
+    const btn = host.querySelector('[data-testid="send-btn"]') as HTMLElement;
+    btn.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    // onSend is called once with the typed text + the full snippet text appended.
+    expect(onSend).toHaveBeenCalledTimes(1);
+    const sent = onSend.mock.calls[0][0] as string;
+    expect(sent).toContain("here is the log");
+    expect(sent).toContain("log line 1");
+    expect(sent).toContain("log line 25");
+    // input cleared and chip removed after send.
+    expect(onChange).toHaveBeenCalledWith("");
+    expect(host.querySelector('[data-testid="paste-chip"]')).toBeNull();
+  });
+
+  test("only a chip (no typed text) enables send and ships the snippet", async () => {
+    const onSend = mock(() => {});
+    const { host } = mount(<Composer value={""} {...STUB_PROPS} onSend={onSend} />);
+    await flush();
+
+    // Initially empty: send button disabled.
+    const sendBtn = host.querySelector('[data-testid="send-btn"]') as HTMLButtonElement;
+    expect(sendBtn.disabled).toBe(true);
+
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    pasteText(ta, BIG_PASTE);
+    await flush();
+
+    // After chip-ifying, send is enabled (snippet counts as non-empty).
+    const sendBtn2 = host.querySelector('[data-testid="send-btn"]') as HTMLButtonElement;
+    expect(sendBtn2.disabled).toBe(false);
+
+    sendBtn2.dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    const sent = onSend.mock.calls[0][0] as string;
+    expect(sent).toContain("log line 25");
+  });
+});

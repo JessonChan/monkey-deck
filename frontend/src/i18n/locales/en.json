@@ -18,7 +18,8 @@
     "refresh": "Refresh",
     "expand": "Expand",
     "collapse": "Collapse",
-    "dismiss": "Dismiss"
+    "dismiss": "Dismiss",
+    "remove": "Remove"
   },
   "app": {
     "brand": "Monkey Deck",
@@ -302,6 +303,8 @@
     "lineCharCount": "{{lines}} lines · {{chars}} chars",
     "linesFolded": "{{count}} lines folded",
     "longLineTruncated": "{{count}} chars · long line truncated",
+    "pasteSnippet": "Pasted · {{lines}} lines",
+    "pasteSnippetTip": "Pasted snippet ({{lines}} lines) · click to preview, full text is included when sent",
     "expandFull": "Expand full editor",
     "collapseToPreview": "Collapse to preview",
     "collapsePreviewHint": "Click to expand full editor",

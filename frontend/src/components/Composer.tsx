@@ -6,7 +6,7 @@ import type { ConfigOption, Mention, ImageAttachment, AudioAttachment, Usage, Sl
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
-import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, ListPlus, GitBranch, CornerUpLeft, ListChecks } from "lucide-react";
+import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, ListPlus, GitBranch, CornerUpLeft, ListChecks, ClipboardPaste } from "lucide-react";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -54,6 +54,21 @@ const LONG_LINE_THRESHOLD = 8;     // 行数阈值
 const LONG_CHAR_THRESHOLD = 480;   // 字符数阈值(单/双行长文本兜底)
 const COLLAPSE_HEAD_LINES = 4;     // 折叠时展示前 N 行
 const COLLAPSE_TAIL_LINES = 2;     // 折叠时展示后 M 行
+
+// Large paste fold threshold: a paste whose line count exceeds this is captured
+// out-of-band as a "paste snippet" chip (reusing the att-chip / fold visual)
+// instead of filling up the textarea. The full text is restored into the outgoing
+// message on submit (见 submit). Keeps the composer editable for big log/error dumps.
+const PASTE_FOLD_THRESHOLD = 20;
+
+// A paste captured as a chip rather than inlined into the textarea. text holds the
+// full original paste so submit can restore it verbatim; lines/chars drive the chip label.
+interface PasteSnippet {
+  id: string;
+  text: string;
+  lines: number;
+  chars: number;
+}
 
 // 从光标位置向前找当前 token:若以 @ 开头,返回 @ 的起点 + @ 之后的查询文本。
 function detectMention(text: string, pos: number): { start: number; query: string } | null {
@@ -190,6 +205,40 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   };
   const collapseInput = () => setCollapsed(true);
 
+  // --- 大段粘贴折叠成 chip(PASTE_FOLD_THRESHOLD)---
+  // pasteSnippets:超过阈值行数的粘贴被捕获为 chip(复用 att-chip / 折叠视觉),不灌进 textarea。
+  // 提交时把每条 snippet 的完整原文拼回消息(submit),textarea 仅保留用户手打的小段上下文。
+  // expandedSnippet:当前展开预览的 snippet id(null = 全部折叠态);一次只展开一条。
+  const snippetIdRef = useRef(0);
+  const [pasteSnippets, setPasteSnippets] = useState<PasteSnippet[]>([]);
+  const [expandedSnippet, setExpandedSnippet] = useState<string | null>(null);
+  // Composer 不随 session 切换重挂载(无 per-session key),本地 state 会跨 session 残留 ——
+  // 切 session 时清空 pasteSnippets/展开态,与 attachments 等 per-session 隔离行为对齐。
+  useEffect(() => { setPasteSnippets([]); setExpandedSnippet(null); snippetIdRef.current = 0; }, [sessionId]);
+  const addPasteSnippet = (text: string) => {
+    const lines = text.split("\n").length;
+    setPasteSnippets((prev) => [...prev, { id: `ps-${++snippetIdRef.current}`, text, lines, chars: text.length }]);
+  };
+  const removePasteSnippet = (id: string) => {
+    setPasteSnippets((prev) => prev.filter((s) => s.id !== id));
+    setExpandedSnippet((cur) => (cur === id ? null : cur));
+  };
+  // 展开预览的折叠块(复用 composer-collapse 的首尾行 + 中间省略视觉):仅对当前展开的 snippet 计算。
+  const snippetPreview = useMemo(() => {
+    if (!expandedSnippet) return null;
+    const sn = pasteSnippets.find((s) => s.id === expandedSnippet);
+    if (!sn) return null;
+    const all = sn.text.split("\n");
+    if (all.length > COLLAPSE_HEAD_LINES + COLLAPSE_TAIL_LINES) {
+      return {
+        head: all.slice(0, COLLAPSE_HEAD_LINES),
+        tail: all.slice(all.length - COLLAPSE_TAIL_LINES),
+        note: t("composer.linesFolded", { count: all.length - COLLAPSE_HEAD_LINES - COLLAPSE_TAIL_LINES }),
+      };
+    }
+    return { head: all, tail: [], note: t("composer.longLineTruncated", { count: sn.chars }) };
+  }, [expandedSnippet, pasteSnippets, t]);
+
   // --- 上下键翻历史 ---
   // navIdx = -1:未翻历史(显示当前草稿);否则指向 history 数组的下标(当前展示的那条)。
   // history 按时间升序(末尾=最新)。↑ 向旧、↓ 向新,翻过最新恢复草稿。
@@ -266,14 +315,19 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   }, [mentionInfo, sessionId, slashOpen]);
 
   const baseName = (p: string) => p.split(/[/\\]/).pop() || p;
-  const empty = !value.trim() && attachments.length === 0 && mentions.length === 0 && images.length === 0 && audios.length === 0;
+  const empty = !value.trim() && attachments.length === 0 && mentions.length === 0 && images.length === 0 && audios.length === 0 && pasteSnippets.length === 0;
   // mode: "send" = 默认发送(idle 直发 / prompting 入队由 App 决定);
   //       "enqueue" = 主动入队列(始终压入前端队列,与发送按钮并列的显式入口)。
   // forcePlain=true:已转义(前导空格),跳过未知命令校验、不 trim 前导空格 —— 供「作为普通文本发送」复用。
   const submit = (finalText?: string, mode: "send" | "enqueue" = "send", forcePlain = false) => {
     if (disabled) return;
     const raw = finalText ?? value;
-    const t = forcePlain ? raw : raw.trim();
+    // 还原完整文本:大段粘贴被 chip 化(不进 textarea),提交时把每条 snippet 的完整原文
+    // 以空行分隔拼到手打文本之后,保证 agent 收到的是完整内容(只是 composer 里没被撑爆)。
+    const combined = pasteSnippets.length > 0
+      ? [raw, ...pasteSnippets.map((s) => s.text)].filter((s) => s.trim() !== "").join("\n\n")
+      : raw;
+    const t = forcePlain ? combined : combined.trim();
     // 收集有效提及:@autocomplete 选中的需仍在文本里(用户可能已删掉);用词边界防 @src/foo 误命中 @src/foobar。
     const inline = mentions.filter((m) => {
       const token = "@" + m.path;
@@ -304,6 +358,8 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     onMentionsChange([]);
     onImagesChange([]);
     onAudiosChange([]);
+    setPasteSnippets([]);
+    setExpandedSnippet(null);
     navRef.current = -1;
     setNavDisplay(-1);
     setMentionOpen(false);
@@ -681,7 +737,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
 
       <div className="compose-card">
         {elicitation && <ElicitationCard prompt={elicitation} onRespond={onRespondElicitation} />}
-        {(attachments.length > 0 || mentions.length > 0 || images.length > 0 || audios.length > 0) && (
+        {(attachments.length > 0 || mentions.length > 0 || images.length > 0 || audios.length > 0 || pasteSnippets.length > 0) && (
           <div className="att-chips" data-testid="att-chips">
             {attachments.map((p) => (
               <span key={p} className="att-chip" title={p}>
@@ -719,6 +775,57 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                 <button className="att-chip-x" onClick={() => onAudiosChange(audios.filter((_, j) => j !== i))}><X size={11} /></button>
               </span>
             ))}
+            {/* 大段粘贴 chip:复用 att-chip 视觉 + 折叠视觉。chip 体点击展开预览(首尾行 + 中间省略),
+                × 移除该 snippet;提交时完整原文拼回消息(submit),chip 仅为展示态。 */}
+            {pasteSnippets.map((sn) => (
+              <span
+                key={sn.id}
+                className={`att-chip paste-chip ${expandedSnippet === sn.id ? "paste-chip-expanded" : ""}`}
+                title={t("composer.pasteSnippetTip", { lines: sn.lines })}
+              >
+                <button
+                  type="button"
+                  className="paste-chip-toggle"
+                  data-testid="paste-chip"
+                  onClick={() => setExpandedSnippet((cur) => cur === sn.id ? null : sn.id)}
+                >
+                  <ClipboardPaste size={11} />
+                  <span className="att-chip-name">{t("composer.pasteSnippet", { lines: sn.lines })}</span>
+                </button>
+                <button
+                  className="att-chip-x"
+                  data-testid="paste-chip-remove"
+                  onClick={() => removePasteSnippet(sn.id)}
+                  title={t("common.remove")}
+                ><X size={11} /></button>
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* 展开的 paste-snippet 预览:复用 composer-collapse 的首尾行 + 中间省略视觉(§4.4 不裸抛原文对象)。 */}
+        {snippetPreview && (
+          <div
+            className="composer-collapse paste-snippet-preview"
+            data-testid="paste-snippet-preview"
+            onClick={() => setExpandedSnippet(null)}
+            title={t("composer.collapsePreviewHint")}
+          >
+            <pre className="composer-collapse-pre">
+              {snippetPreview.head.map((l, i) => <div key={i} className="composer-collapse-line">{l || " "}</div>)}
+            </pre>
+            <button
+              className="composer-collapse-divider"
+              onClick={(e) => { e.stopPropagation(); setExpandedSnippet(null); }}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              {t("composer.collapsePreviewDivider", { note: snippetPreview.note })}
+            </button>
+            {snippetPreview.tail.length > 0 && (
+              <pre className="composer-collapse-pre">
+                {snippetPreview.tail.map((l, i) => <div key={i} className="composer-collapse-line">{l || " "}</div>)}
+              </pre>
+            )}
           </div>
         )}
 
@@ -791,10 +898,18 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                   return;
                 }
               }
+              // 大段文本粘贴(> PASTE_FOLD_THRESHOLD 行):不灌进 textarea,捕获成 paste-snippet chip。
+              // preventDefault 阻止默认插入 → value 不变,textarea 保持可编辑;提交时再把完整原文拼回(submit)。
+              // 放在图片处理之后(图片优先)、短→长折叠判断之前(阈值更高,互斥:超 20 行直接 chip 化,不进 textarea 就谈不上折叠)。
+              const pasted = e.clipboardData?.getData("text") ?? "";
+              if (pasted.split("\n").length > PASTE_FOLD_THRESHOLD) {
+                e.preventDefault();
+                addPasteSnippet(pasted);
+                return;
+              }
               // 粘贴使文本从「非长」跨入「长」→ 折叠成预览(聚焦态下 auto-collapse effect 不会折,这里显式补)。
               // 仅当粘贴前不是长文本(!isLong)才折:粘贴前已是长文本(用户多半已手动展开在编辑)时,粘贴不应把
               // textarea 折没 —— 否则键入丢失,即「复制后无法输入」。与 effect 的聚焦守卫一致:聚焦编辑中不打断。
-              const pasted = e.clipboardData?.getData("text") ?? "";
               const el = e.currentTarget;
               const future = value.slice(0, el.selectionStart ?? 0) + pasted + value.slice(el.selectionEnd ?? 0);
               if (!isLong && (future.split("\n").length > LONG_LINE_THRESHOLD || future.length > LONG_CHAR_THRESHOLD)) {

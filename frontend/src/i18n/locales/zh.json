@@ -18,7 +18,8 @@
     "refresh": "刷新",
     "expand": "展开",
     "collapse": "收起",
-    "dismiss": "忽略"
+    "dismiss": "忽略",
+    "remove": "移除"
   },
   "app": {
     "brand": "Monkey Deck",
@@ -302,6 +303,8 @@
     "lineCharCount": "{{lines}} 行 · {{chars}} 字符",
     "linesFolded": "{{count}} 行已折叠",
     "longLineTruncated": "{{count}} 字符 · 长行已截断",
+    "pasteSnippet": "粘贴 · {{lines}} 行",
+    "pasteSnippetTip": "粘贴片段({{lines}} 行)· 点击预览,发送时包含完整文本",
     "expandFull": "展开全文编辑",
     "collapseToPreview": "收起为预览",
     "collapsePreviewHint": "点击展开全文编辑",
