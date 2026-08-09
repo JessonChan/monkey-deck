@@ -27,6 +27,12 @@ export default function Collapsible({ open, onToggle, summary, children, classNa
     onToggle?.();
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // Never handle key events that originated on a nested interactive element (e.g. the copy
+    // button in a tool summary). Without this guard, activating that inner button with
+    // Enter/Space would bubble here and (a) toggle the collapse and (b) preventDefault() would
+    // suppress the button's own activation — so the copy wouldn't fire on Enter. Only the
+    // summary surface itself toggles.
+    if (e.target !== e.currentTarget) return;
     // Mirror native <button>: Enter / Space activates, Space's default page-scroll suppressed.
     if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
       e.preventDefault();
