@@ -169,6 +169,8 @@
   },
   "chat": {
     "newSessionTitle": "New chat",
+    "dropTitle": "Drop files to attach",
+    "dropHint": "Project files become @mentions (or inline images); files outside the project are attached by path",
     "toggleTerminalTip": "Terminal (⌘J)",
     "mcpChipTip": "MCP servers in this session: {{names}}",
     "toggleTerminal": "Toggle terminal",

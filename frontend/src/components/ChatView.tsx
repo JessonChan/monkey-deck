@@ -21,7 +21,7 @@ import { highlightToLines } from "../lib/highlight";
 import "../hljs-theme.css";
 import { buildRows, computeLayout, computeWindow, anchorAt, restoreScroll, isAtBottom, HeightModel, TAIL_PRIOR, HEAD_PRIOR, type VRow, type Layout } from "../lib/virtualList";
 import SelectionToolbar, { type SelectionAction } from "./SelectionToolbar";
-import { SquareTerminal, Sparkles, Brain, Check, Copy, FolderOpen, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus, Quote } from "lucide-react";
+import { SquareTerminal, Sparkles, Brain, Check, Copy, FolderOpen, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus, Quote, Paperclip } from "lucide-react";
 
 interface Props {
   project: Project | null;
@@ -128,6 +128,10 @@ export interface ChatViewHandle {
 export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props, ref) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
+  // .chat-view root ref: used to mirror the Wails-managed file-drop-target-active
+  // class (added/removed by the native drag overlay) into React state so we can
+  // render a drop-zone highlight overlay. See the dropActive effect below.
+  const viewRef = useRef<HTMLDivElement>(null);
   // 内容层:绝对定位行 + 尾部区的容器。高度 = 布局 total(显式撑开滚动条),行位置由模型单方面设定。
   const contentRef = useRef<HTMLDivElement>(null);
   const { items } = props;
@@ -559,6 +563,30 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   // 卸载时取消未派发的 scroll rAF,避免回调在组件已卸载后操作失效 ref。
   useEffect(() => () => { if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current); }, []);
 
+  // ─── File drag-and-drop highlight (Task #24255 / #83) ───
+  // The chat area is a Wails native drop target (data-file-drop-target on .chat-view;
+  // the window has EnableFileDrop). Wails's runtime adds/removes the
+  // `file-drop-target-active` class to the drop target element directly from the
+  // native drag overlay (macOS NSView / Windows WebView2) — HTML5 dragenter/over/leave
+  // are NOT reliably forwarded to the webview on macOS, so we cannot drive the
+  // highlight from React's own drag handlers. Instead a MutationObserver mirrors
+  // that class into React state to render an overlay.
+  // React doesn't overwrite the class (className="chat-view" is a constant prop, so
+  // the reconciler never re-sets it), keeping Wails's class intact across re-renders.
+  const [dropActive, setDropActive] = useState(false);
+  useEffect(() => {
+    const el = viewRef.current;
+    if (!el) return;
+    const sync = () => setDropActive(el.classList.contains("file-drop-target-active"));
+    sync();
+    // Guard for non-browser test environments (happy-dom has no MutationObserver);
+    // in that case the overlay simply never shows — fine, tests don't exercise drops.
+    if (typeof MutationObserver === "undefined") return;
+    const mo = new MutationObserver(() => sync());
+    mo.observe(el, { attributes: true, attributeFilter: ["class"] });
+    return () => mo.disconnect();
+  }, []);
+
   // IntersectionObserver:「加载更多」按钮进入容器视口时自动触发(原生 API,零依赖)。
   // 与 prepend-scroll 补偿/useLayoutEffect 独立协作,后者负责保持视觉位置。
   useEffect(() => {
@@ -595,7 +623,29 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   const bottomSpacer = rowCount > 0 ? Math.max(0, layout.tailTop - renderedBottom) : 0;
 
   return (
-    <div className="chat-view">
+    <div
+      className="chat-view"
+      ref={viewRef}
+      // Wails native file drop target: EnableFileDrop is set on the window, so any
+      // element tagged data-file-drop-target receives OS file drops. data-md-session
+      // is read by the backend (internal/chat/drop.go) and echoed back in the
+      // chat:files-dropped payload so the frontend routes to the right session.
+      data-file-drop-target=""
+      data-md-session={props.sessionId}
+    >
+      {/* Drop-zone highlight overlay: shown while the native drag is over the chat
+          area (Wails toggles file-drop-target-active on .chat-view; mirrored into
+          dropActive via MutationObserver above). pointer-events:none so it never
+          interferes with the drag or the underlying UI. */}
+      {dropActive && (
+        <div className="chat-drop-overlay" data-testid="chat-drop-overlay">
+          <div className="chat-drop-card">
+            <Paperclip size={20} />
+            <span className="chat-drop-title">{t("chat.dropTitle")}</span>
+            <span className="chat-drop-hint">{t("chat.dropHint")}</span>
+          </div>
+        </div>
+      )}
       <header className="chat-header" onDoubleClick={onTitleDoubleClick}>
         <div className="chat-header-info">
           <span className="chat-project" title={props.project?.path || ""}>{props.project?.name || ""}</span>

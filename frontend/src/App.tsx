@@ -31,7 +31,19 @@ import { isNotifySoundEnabled, playNotifySound } from "./lib/notifySound";
 import { extractErrMsg } from "./lib/errorMsg";
 import { isMemorySaverEnabled } from "./lib/memorySaver";
 import { deleteFilePanelState } from "./lib/filePanelCache";
+import { routeDroppedFiles, type ReadImageFn } from "./lib/dropFiles";
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+
+// readImageForDrop adapts ChatService.SessionReadImage to the ReadImageFn shape used
+// by routeDroppedFiles (worktree-relative image → {dataUrl}). Injected so the pure
+// router stays free of bindings and unit-testable.
+const readImageForDrop: ReadImageFn = async (sessionId, rel) => {
+  try {
+    return await ChatService.SessionReadImage(sessionId, rel);
+  } catch {
+    return null;
+  }
+};
 
 // parsePopoutHash 从 URL hash 读取 popout session ID(/#popout=<sid>)。
 // 主窗口加载时 hash 为空(返回 null);popout 窗口由后端 OpenSessionWindow 创建时带上
@@ -208,6 +220,12 @@ export default function App() {
   // 套 setItemsBySession」的嵌套 setState(StrictMode 下 updater 可能多次执行致重复 append)。
   const livePlanBySessionRef = useRef(livePlanBySession);
   livePlanBySessionRef.current = livePlanBySession;
+  // projects / imageSupportedBySession 的 ref:chat:files-dropped handler 里查
+  // 「被拖入的 session 的 cwd / 是否支持图片」用,不进 effect 依赖(避免每次变化都重订阅)。
+  const projectsRef = useRef<Project[]>(projects);
+  projectsRef.current = projects;
+  const imageSupportedBySessionRef = useRef(imageSupportedBySession);
+  imageSupportedBySessionRef.current = imageSupportedBySession;
 
   const refreshProjects = useCallback(async () => {
     const list = await ChatService.ListProjects();
@@ -647,6 +665,49 @@ export default function App() {
         return next;
       });
     });
+    // OS file drag-and-drop onto the chat area (Task #24255 / #83): the backend
+    // (internal/chat/drop.go) forwards native drop paths + the target session id
+    // (data-md-session on .chat-view). Route each path: worktree-internal non-image
+    // → @mention, internal ACP-image → inline image, external → paperclip attachment.
+    // Window scoping: popout windows only handle their own session; the main window
+    // skips sessions that are currently popped out (the popout owns them then), so a
+    // drop is handled by exactly the window showing that session.
+    const offDrop = Events.On("chat:files-dropped", (e: { data: { files: string[]; sessionId: string } }) => {
+      const sid = e.data?.sessionId;
+      const files = e.data?.files;
+      if (!sid || !Array.isArray(files) || files.length === 0) return;
+      if (isPopout) {
+        if (sid !== popoutMode) return; // popout only handles its own session
+      } else if (poppedSessionIdsRef.current.has(sid)) {
+        return; // main window defers to the popout that owns this session
+      }
+      // Resolve the session + its project to find the cwd (= worktreePath || path),
+      // mirroring the backend cwdOf so internal @mentions / SessionReadImage line up.
+      let sess: Session | undefined;
+      for (const list of Object.values(sessionsByProjectRef.current)) {
+        const f = list.find((x) => x.id === sid);
+        if (f) { sess = f; break; }
+      }
+      if (!sess) return;
+      const proj = projectsRef.current.find((p) => p.id === sess!.projectId);
+      const root = sess.worktreePath || proj?.path || "";
+      if (!root) return;
+      const imageSupported = !!imageSupportedBySessionRef.current[sid];
+      void routeDroppedFiles(files, { root, imageSupported, sessionId: sid }, readImageForDrop).then((r) => {
+        if (r.mentions.length > 0) {
+          setMentionsBySession((prev) => ({ ...prev, [sid]: [...(prev[sid] ?? []), ...r.mentions] }));
+          // Append the "@<path> " tokens so submit's inline-filter keeps the mentions
+          // (Composer keeps a mention only while its @token is still in the draft).
+          setDraftBySession((prev) => ({ ...prev, [sid]: (prev[sid] ?? "") + r.mentionText }));
+        }
+        if (r.attachments.length > 0) {
+          setAttachmentsBySession((prev) => ({ ...prev, [sid]: [...(prev[sid] ?? []), ...r.attachments] }));
+        }
+        if (r.images.length > 0) {
+          setImagesBySession((prev) => ({ ...prev, [sid]: [...(prev[sid] ?? []), ...r.images] }));
+        }
+      }).catch(() => { /* routing/image-read failure: silent (best-effort, like paste) */ });
+    });
     return () => {
       offUpdate();
       offPerm();
@@ -655,8 +716,9 @@ export default function App() {
       offStatus();
       offMeta();
       offHarnesses();
+      offDrop();
     };
-  }, [refreshProjects, applyEvent, refreshSessions, drainSession]);
+  }, [refreshProjects, applyEvent, refreshSessions, drainSession, isPopout, popoutMode]);
 
   // popout 启动标记:目标 session 在本 popout 窗口 open 成功后置 true(快照 effect 据此触发)。
   // 用 state 而非 ref:快照还原 effect 依赖它——openSession 异步完成后 state 变化触发 effect 重跑。
