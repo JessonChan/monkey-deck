@@ -979,6 +979,35 @@ function MessageActions({ text, className = "", testId = "copy-msg" }: { text: s
   );
 }
 
+// Summary copy button: lives inside a tool card's collapsed summary (which is a div[role=button]
+// in Collapsible, so a nested <button> is valid HTML). Copies the tool's output text and
+// stopPropagation so clicking it never toggles the collapse. §4.5 tooltip via react-tooltip.
+// Render only when `text` is non-empty (caller decides what to copy — usually extractToolText(rawOutput)).
+function SummaryCopyBtn({ text, testId }: { text: string; testId?: string }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const onCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await copyText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+  const stop = (e: React.MouseEvent) => { e.stopPropagation(); };
+  return (
+    <button
+      type="button"
+      className="icon-btn tool-summary-copy"
+      onClick={onCopy}
+      onMouseDown={stop}
+      data-tooltip-id="md-tip"
+      data-tooltip-content={copied ? t("common.copied") : t("chat.copyOutputTip")}
+      {...(testId ? { "data-testid": testId } : {})}
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+    </button>
+  );
+}
+
 // 连续工具调用折叠组:2 个以上连续 tool 包进一个 Collapsible,summary 显示数量 + 执行状态。
 // 展开后内部各 tool 仍是独立 ToolCard(各自可再展开看 I/O)。
 function ToolGroup({ tools, onOpenFilePreview }: { tools: Extract<ChatItem, { type: "tool" }>[]; onOpenFilePreview: (path: string, line?: number) => void }) {
@@ -1033,6 +1062,8 @@ function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
   const hasDiff = !!(parts.oldStr && parts.newStr); // 真 diff(old/new 两段)
   const plainText = parts.plain; // 非 diff 的纯内容
   const outputR = item.status === "failed" && item.rawOutput != null ? extractToolText(item.rawOutput) : null;
+  // 折叠态复制:失败时复制 output,否则复制写入内容 / diff 新文本。
+  const summaryCopyText = outputR?.text || plainText || parts.newStr || "";
 
   const renderTarget = (label: string, p: string) => (
     <div className="file-target" data-testid="edit-target">
@@ -1051,6 +1082,7 @@ function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
         <span className="tool-title">{item.title || t("chat.toolTitle.edit")}</span>
         {path && <span className="tool-badge" title={path}>{shortPath(path)}</span>}
         <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
+        {!running && summaryCopyText.trim() && <SummaryCopyBtn text={summaryCopyText} testId="edit-summary-copy" />}
       </>}
     >
       {path && renderTarget(t("chat.targetFile"), path)}
@@ -1116,6 +1148,7 @@ function ReadToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
         <span className="tool-title">{item.title || t("chat.toolTitle.read")}</span>
         {path && <span className="tool-badge" title={path}>{shortPath(path)}</span>}
         <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
+        {!running && outputR?.text && <SummaryCopyBtn text={outputR.text} testId="read-summary-copy" />}
       </>}
     >
       {path && (
@@ -1170,6 +1203,7 @@ function SearchToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, {
         {pattern && <span className="tool-badge tool-badge-pattern" title={pattern}>{pattern}</span>}
         {!running && matchCount > 0 && <span className="tool-badge tool-badge-count">{t("chat.resultsCount", { count: matchCount })}</span>}
         <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
+        {!running && outputR?.text && <SummaryCopyBtn text={outputR.text} testId="search-summary-copy" />}
       </>}
     >
       {pattern && (
@@ -1210,6 +1244,7 @@ function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, 
   const { t } = useTranslation();
   const stInfo = TOOL_STATUS_MAP[item.status] || { key: null, cls: "tc-unknown" };
   const stLabel = stInfo.key ? t(stInfo.key) : (item.status || t("chat.toolStatus.unknown"));
+  const running = item.status === "pending" || item.status === "in_progress";
   const [copiedIn, setCopiedIn] = useState(false);
   const [copiedOut, setCopiedOut] = useState(false);
   const inputR = item.rawInput != null ? extractToolText(item.rawInput) : null;
@@ -1226,6 +1261,7 @@ function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, 
         <span className="tool-title">{item.title || t("chat.toolTitle.generic")}</span>
         {item.kind && <span className="tool-kind">{item.kind}</span>}
         <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
+        {!running && outputR?.text && <SummaryCopyBtn text={outputR.text} testId="generic-summary-copy" />}
       </>}
     >
       {inputR && (
@@ -1280,6 +1316,7 @@ function BashToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
         <span className="tool-title">{item.title || t("chat.toolTitle.bash")}</span>
         {outputR?.exit != null && <span className={`bash-exit ${exitCls(outputR.exit)}`}>exit {outputR.exit}</span>}
         <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
+        {!running && outputR?.text && <SummaryCopyBtn text={outputR.text} testId="bash-summary-copy" />}
       </>}
     >
       {command && (

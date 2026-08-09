@@ -252,6 +252,7 @@
     "truncatedSuffix": " · 截断",
     "command": "命令",
     "copyCommandTip": "复制命令",
+    "copyOutputTip": "复制输出",
     "mermaidDiagram": "图表",
     "mermaidWriting": "图表(生成中)",
     "mermaidLoading": "正在渲染图表…",

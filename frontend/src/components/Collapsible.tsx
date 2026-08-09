@@ -1,6 +1,11 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
-// 丝滑折叠:用 grid-template-rows 0fr→1fr 做高度无关的展开动画(替代原生 <details> 的生硬跳变)。
+// Smooth collapse: grid-template-rows 0fr→1fr animates height independently (replaces the
+// jarring jump of native <details>).
+// The summary is rendered as a div[role=button] (not a real <button>) so that the summary
+// CAN contain nested interactive controls (e.g. a copy button on tool cards). A real <button>
+// cannot legally wrap another <button> (button-in-button is invalid HTML and browsers drop
+// the inner button's semantics). Keyboard a11y is preserved via onKeyDown(Enter/Space).
 interface Props {
   open: boolean;
   onToggle?: () => void;
@@ -12,8 +17,8 @@ interface Props {
 
 export default function Collapsible({ open, onToggle, summary, children, className, summaryClassName }: Props) {
   const [manual, setManual] = useState<boolean | null>(null);
-  // 懒渲染:折叠时不渲染 children(省 DOM + 省 ReactMarkdown 解析)。展开过一次后保留,
-  // 这样收起再展开不会闪(content 已在 DOM 里,仅 CSS 收起)。
+  // Lazy render: skip children while collapsed (less DOM + no ReactMarkdown parse). Once opened
+  // we keep them so collapsing/expanding again won't flash (content stays in DOM, only CSS hides it).
   const everOpenedRef = useRef(false);
   const isOpen = manual === null ? open : manual;
   if (isOpen) everOpenedRef.current = true;
@@ -21,11 +26,24 @@ export default function Collapsible({ open, onToggle, summary, children, classNa
     setManual(!isOpen);
     onToggle?.();
   };
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // Mirror native <button>: Enter / Space activates, Space's default page-scroll suppressed.
+    if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+      e.preventDefault();
+      toggle();
+    }
+  };
   return (
     <div className={className}>
-      <button className={`collapse-summary ${summaryClassName || ""}`} onClick={toggle} type="button">
+      <div
+        className={`collapse-summary ${summaryClassName || ""}`}
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={onKeyDown}
+      >
         {summary}
-      </button>
+      </div>
       <div className={`collapse-body ${isOpen ? "open" : ""}`}>
         <div className="collapse-body-inner">{everOpenedRef.current ? children : null}</div>
       </div>

@@ -252,6 +252,7 @@
     "truncatedSuffix": " · truncated",
     "command": "Command",
     "copyCommandTip": "Copy command",
+    "copyOutputTip": "Copy output",
     "mermaidDiagram": "Diagram",
     "mermaidWriting": "Diagram (streaming)",
     "mermaidLoading": "Rendering diagram…",

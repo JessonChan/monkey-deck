@@ -789,6 +789,16 @@ input, textarea { font-family: inherit; }
 .file-tool-summary .tool-title { flex: 0 1 auto; min-width: 0; }
 .file-tool-summary { gap: 7px; }
 
+/* 折叠态 summary 上的复制按钮(复制 output):基于 .icon-btn,推到行尾、低存在感、hover 显形。 */
+/* click 会 stopPropagation,不会触发展开/收起(见 ChatView 的 SummaryCopyBtn)。 */
+.tool-summary-copy {
+  margin-left: auto;
+  width: 20px; height: 20px;
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+.tool-summary-copy:hover { opacity: 1; }
+
 /* 目标文件 / 检索范围行:label + 路径,mono、可选中、长路径省略。 */
 .file-target {
   display: flex; align-items: center; gap: 8px; margin: 9px 0 0;
@@ -1398,7 +1408,9 @@ input, textarea { font-family: inherit; }
 .collapse-summary {
   cursor: pointer; user-select: none;
   list-style: none; width: 100%; text-align: left;
+  outline: none;
 }
+.collapse-summary:focus-visible { box-shadow: 0 0 0 2px var(--accent-2, #0a84ff) inset; border-radius: var(--r-sm); }
 .collapse-summary::-webkit-details-marker { display: none; }
 
 /* ─── 右侧 Git 面板 ─── */
