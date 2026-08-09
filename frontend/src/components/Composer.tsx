@@ -5,9 +5,8 @@ import { Command } from "cmdk";
 import type { ConfigOption, Mention, ImageAttachment, AudioAttachment, Usage, SlashCommand, ElicitationPrompt } from "../types";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
-import { copyText } from "../lib/clipboard";
 import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
-import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, ListPlus, GitBranch, Check, CornerUpLeft, ListChecks } from "lucide-react";
+import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, ListPlus, GitBranch, CornerUpLeft, ListChecks } from "lucide-react";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -31,6 +30,8 @@ interface Props {
   audioSupported: boolean;    // agent 是否声明 audio prompt 能力(门控音频输入入口)
   usage: Usage;  // 上下文用量(展示已用/上限 + 明细)
   branch: string;  // 当前 session 工作目录所在的 git 分支(空 = 非 git / 未取到 → 不显示)
+  // Branch chip click → open the new-session modal prefilled to fork off this branch.
+  onNewSessionOnBranch: (branch: string) => void;
   onSend: (text: string, mentions: Mention[], images?: ImageAttachment[], audios?: AudioAttachment[]) => void;
   onEnqueue: (text: string, mentions: Mention[], images?: ImageAttachment[], audios?: AudioAttachment[]) => void;  // 主动入队列(并列发送):无论 idle/prompting 都入队
   onStop: () => void;
@@ -109,7 +110,7 @@ const AUDIO_MIME_ALLOWED = ["audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3
 // 单音频大小上限(base64 前,字节):25MB。音频比图片体积更大,但仍需控量以不爆上下文。
 const AUDIO_MAX_BYTES = 25 * 1024 * 1024;
 
-export default function Composer({ value, onChange, disabled, prompting, configOptions, commands, elicitation, onRespondElicitation, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, audios, onAudiosChange, audioSupported, usage, branch, onSend, onEnqueue, onStop }: Props) {
+export default function Composer({ value, onChange, disabled, prompting, configOptions, commands, elicitation, onRespondElicitation, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, audios, onAudiosChange, audioSupported, usage, branch, onNewSessionOnBranch, onSend, onEnqueue, onStop }: Props) {
   const { t } = useTranslation();
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
@@ -122,11 +123,6 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   // IME 合成追踪:compositionStart/End 手动记录,配合 isComposing + keyCode===229 三重保险,
   // 彻底防中文输入法选词确认的 Enter 被误判为发送(部分 macOS IME 下 isComposing 不可靠)。
   const composingRef = useRef(false);
-  // 分支 chip 点击复制分支名(与项目内 copy 范式一致:1200ms copied 反馈)。
-  const [branchCopied, setBranchCopied] = useState(false);
-  const copyBranch = async () => {
-    await copyText(branch); setBranchCopied(true); setTimeout(() => setBranchCopied(false), 1200);
-  };
 
   // --- 长文本折叠(展示态)---
   // isLong:超过行/字符阈值即为长文本;collapsed:是否折叠成紧凑预览块。
@@ -791,19 +787,19 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                 </button>
               )
             )}
-            {/* 当前分支:与右上用量/历史并列的指示,点击复制分支名。空(非 git / 未取到)不渲染。
-                §4.5 用 react-tooltip(md-tip),禁原生 title;§4.4 不裸露字段名。 */}
+            {/* 当前分支:与右上用量/历史并列的指示,点击从此分支新建对话(fork 一个新 worktree)。
+                 空(非 git / 未取到)不渲染。§4.5 用 react-tooltip(md-tip),禁原生 title;§4.4 不裸露字段名。 */}
             {branch && (
               <button
                 type="button"
-                className={`compose-branch${branchCopied ? " copied" : ""}`}
+                className="compose-branch"
                 data-testid="composer-branch"
-                onClick={copyBranch}
+                onClick={() => onNewSessionOnBranch(branch)}
                 data-tooltip-id="md-tip"
-                data-tooltip-content={branchCopied ? t("composer.branchCopied") : t("composer.branchTip")}
+                data-tooltip-content={t("composer.branchTip")}
                 data-tooltip-place="top"
               >
-                {branchCopied ? <Check size={11} /> : <GitBranch size={11} />}
+                <GitBranch size={11} />
                 <span className="compose-branch-name">{branch}</span>
               </button>
             )}
