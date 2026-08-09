@@ -1223,9 +1223,9 @@ input, textarea { font-family: inherit; }
 }
 @keyframes compose-history-badge-in { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
 
-/* ─── Composer 当前分支指示(点击复制 chip)─── */
+/* ─── Composer 当前分支指示(点击从此分支新建对话)─── */
 /* compose-tools 里的分支指示;空(非 git / 未取到)不渲染,故不占位。
-   视觉与 history-chip 同族(mono + elev-2 底 + sep 边),可点击复制分支名 → pointer + hover + copied 反馈。 */
+   视觉与 history-chip 同族(mono + elev-2 底 + sep 边),点击 fork 一个新 worktree → pointer + hover。 */
 .compose-branch {
   display: inline-flex; align-items: center; gap: 4px;
   font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
@@ -1235,7 +1235,6 @@ input, textarea { font-family: inherit; }
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
 .compose-branch:hover { color: var(--text-2); border-color: var(--text-4); background: var(--hover); }
-.compose-branch.copied { color: var(--green); border-color: var(--green); }
 .compose-branch-name {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
