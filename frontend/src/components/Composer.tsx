@@ -77,6 +77,25 @@ function splitScopeTerm(q: string): { scope: string; term: string } {
   return { scope: q.slice(0, i), term: q.slice(i + 1) };
 }
 
+// Detect a path-like token immediately before the cursor for Tab completion.
+// The token is the maximal run of non-whitespace chars ending at `pos`. It is
+// treated as a path candidate only when it is non-empty, does NOT start with
+// '@' (mention territory) or '/' (slash command / absolute path), and looks
+// path-like (contains '/' or '.') — plain prose words are left alone so Tab on
+// "fix this" doesn't spuriously complete "this". This is plain-text inline
+// completion (no @ reference chip): a single unambiguous SessionFuzzyFind match
+// replaces the token in place.
+function detectPathToken(text: string, pos: number): { start: number; token: string } | null {
+  let i = pos - 1;
+  while (i >= 0 && !/\s/.test(text[i])) i--;
+  const start = i + 1;
+  const token = text.slice(start, pos);
+  if (!token) return null;
+  if (token[0] === "@" || token[0] === "/") return null;
+  if (!token.includes("/") && !token.includes(".")) return null;
+  return { start, token };
+}
+
 // 草稿文本 token 预估:无后端精确分词器,用「字符数/4」近似(GPT 系经验比值,CJK 偏高、英文偏低,
 // 取中间值做占位提示,非计费依据)。展示在输入区附近给用户「这条大概多少 token」的直觉。
 function estimateTokens(text: string): number {
@@ -127,6 +146,9 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   // IME 合成追踪:compositionStart/End 手动记录,配合 isComposing + keyCode===229 三重保险,
   // 彻底防中文输入法选词确认的 Enter 被误判为发送(部分 macOS IME 下 isComposing 不可靠)。
   const composingRef = useRef(false);
+  // Tab path completion race guard: monotonic id; each Tab press bumps it and
+  // only the latest resolution may apply (§5.3 invariant over identity, not order).
+  const completeReqId = useRef(0);
 
   // --- 长文本折叠(展示态)---
   // isLong:超过行/字符阈值即为长文本;collapsed:是否折叠成紧凑预览块。
@@ -414,6 +436,44 @@ export default function Composer({ value, onChange, disabled, prompting, configO
       if (e.key === "Backspace") {
         const info = detectMention(value, cursorRef.current);
         if (info && info.query.endsWith("/")) { e.preventDefault(); goUpMention(); return; }
+      }
+    }
+
+    // Tab path completion: when no menu (slash / mention) is open, the cursor sits
+    // right after a path-like token, and there is no active selection, Tab fires
+    // SessionFuzzyFind. A single unambiguous match replaces the token inline
+    // (directories append '/' for further drilling, files append nothing); zero or
+    // multiple matches do nothing (focus kept so the user can keep typing). With no
+    // path token (whitespace / plain word) Tab falls through to default (move focus).
+    // shift/ctrl/cmd/alt+Tab are left to the browser (window/OS shortcuts).
+    if (
+      e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey &&
+      !slashOpen && !mentionOpen && sessionId && !disabled
+    ) {
+      const el = ref.current;
+      const hasSelection = !!el && el.selectionStart !== el.selectionEnd;
+      const tok = hasSelection ? null : detectPathToken(value, cursorRef.current);
+      if (tok) {
+        e.preventDefault();
+        const { scope, term } = splitScopeTerm(tok.token);
+        const reqId = ++completeReqId.current;
+        ChatService.SessionFuzzyFind(sessionId, scope, term, 12).then((nodes) => {
+          if (reqId !== completeReqId.current) return; // stale: a newer Tab superseded this
+          const list = (nodes || []).slice(0, 12);
+          if (list.length !== 1) return; // single match only; multi/zero -> no completion
+          const node = list[0];
+          const replacement = node.path + (node.isDir ? "/" : "");
+          if (replacement === tok.token) return; // already complete
+          const pos = cursorRef.current;
+          const next = value.slice(0, tok.start) + replacement + value.slice(pos);
+          cursorRef.current = tok.start + replacement.length;
+          onChange(next);
+          requestAnimationFrame(() => {
+            const e2 = ref.current;
+            if (e2) { e2.focus(); e2.selectionStart = e2.selectionEnd = cursorRef.current; }
+          });
+        }).catch(() => { /* fuzzy find failed: Tab just no-ops, focus kept */ });
+        return;
       }
     }
 

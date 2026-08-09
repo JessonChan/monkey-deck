@@ -666,3 +666,155 @@ describe("Composer branch chip fork (Task #24202)", () => {
     expect(host.querySelector('[data-testid="composer-branch"]')).toBeNull();
   });
 });
+
+// Task #24219: Tab path autocomplete. Plain-text inline completion of a path-like
+// token before the cursor (no @ reference chip). Tab (no menu open, not composing,
+// no selection) fires SessionFuzzyFind; a single unambiguous match replaces the
+// token inline, multiple / zero matches do nothing, and plain words / whitespace
+// fall through to default Tab. Must not disturb slash / mention menu Tab, IME
+// Enter, or history navigation.
+describe("Composer Tab path autocomplete (Task #24219)", () => {
+  beforeEach(() => {
+    chatServiceMock.SessionFuzzyFind.mockClear();
+    fuzzyFindResult = [];
+  });
+
+  // Tab keydown on the textarea with the caret right after the path token.
+  function pressTab(ta: HTMLTextAreaElement) {
+    ta.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+  }
+
+  test("single match completes the token inline (scope/term split, no @ chip)", async () => {
+    fuzzyFindResult = [{ path: "src/components/Foo.tsx", name: "Foo.tsx", isDir: false }];
+    const onChange = mock(() => {});
+    const onMentionsChange = mock(() => {});
+    const { host } = mount(
+      <Composer value={"edit src/compo"} {...STUB_PROPS} sessionId={"sid"} onChange={onChange} onMentionsChange={onMentionsChange} />
+    );
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, "edit src/compo".length);
+    await flush();
+
+    pressTab(ta);
+    await flush();
+
+    // splitScopeTerm("src/compo") -> scope="src", term="compo".
+    expect(chatServiceMock.SessionFuzzyFind).toHaveBeenCalledWith("sid", "src", "compo", 12);
+    const last = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as string | undefined;
+    expect(last).toBe("edit src/components/Foo.tsx");
+    // No @ mention chip is created (plain-text completion).
+    expect(onMentionsChange).not.toHaveBeenCalled();
+  });
+
+  test("single directory match appends '/' for further drilling", async () => {
+    fuzzyFindResult = [{ path: "src/components", name: "components", isDir: true }];
+    const onChange = mock(() => {});
+    const { host } = mount(
+      <Composer value={"see src/comp"} {...STUB_PROPS} sessionId={"sid"} onChange={onChange} />
+    );
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, "see src/comp".length);
+    await flush();
+
+    pressTab(ta);
+    await flush();
+
+    const last = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as string | undefined;
+    expect(last).toBe("see src/components/");
+  });
+
+  test("multiple matches do NOT complete (value unchanged)", async () => {
+    fuzzyFindResult = [
+      { path: "src/components", name: "components", isDir: true },
+      { path: "src/config.ts", name: "config.ts", isDir: false },
+    ];
+    const onChange = mock(() => {});
+    const { host } = mount(
+      <Composer value={"fix src/co"} {...STUB_PROPS} sessionId={"sid"} onChange={onChange} />
+    );
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, "fix src/co".length);
+    await flush();
+
+    pressTab(ta);
+    await flush();
+
+    expect(chatServiceMock.SessionFuzzyFind).toHaveBeenCalledTimes(1);
+    // onChange never received a completion (no extra call beyond controlled renders).
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  test("plain word (no '/' or '.') does not call SessionFuzzyFind", async () => {
+    const { host } = mount(<Composer value={"hello world"} {...STUB_PROPS} sessionId={"sid"} />);
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, "hello world".length);
+    await flush();
+
+    pressTab(ta);
+    await flush();
+
+    expect(chatServiceMock.SessionFuzzyFind).not.toHaveBeenCalled();
+  });
+
+  test("token starting with '@' is not Tab-completed (mention territory)", async () => {
+    // @foo with the mention menu closed (no results). Tab must not treat "@foo"
+    // as a path token — that would conflict with mention semantics.
+    fuzzyFindResult = [];
+    const { host } = mount(<Composer value={"@foo"} {...STUB_PROPS} sessionId={"sid"} />);
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, 4);
+    await flush();
+    // Tab path-completion calls SessionFuzzyFind synchronously inside the keydown
+    // handler, so check the call count immediately after dispatching Tab — before
+    // the @ mention effect's 150ms debounce can fire (a separate, legitimate call).
+    const callsBefore = chatServiceMock.SessionFuzzyFind.mock.calls.length;
+    pressTab(ta);
+    expect(chatServiceMock.SessionFuzzyFind.mock.calls.length).toBe(callsBefore);
+    // Let the @ mention debounce settle so its call doesn't leak into the next test
+    // (each mount() creates a new root without unmounting the previous Composer).
+    await new Promise((r) => setTimeout(r, 200));
+    await flush();
+  });
+
+  test("no session -> Tab does not fire SessionFuzzyFind (guarded)", async () => {
+    const { host } = mount(<Composer value={"src/co"} {...STUB_PROPS} sessionId={""} />);
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, "src/co".length);
+    await flush();
+
+    pressTab(ta);
+    await flush();
+
+    expect(chatServiceMock.SessionFuzzyFind).not.toHaveBeenCalled();
+  });
+
+  test("Tab with a slash-command menu open commits the command (not path completion)", async () => {
+    // "/mode" prefix + a command named "model" -> slash menu open. Tab must pick
+    // the command, NOT path-complete "/mode" (which would also be excluded as a
+    // '/' token anyway, but pin that menus take priority).
+    const CMDS = [{ name: "model", description: "Show model", inputHint: "" }];
+    const onChange = mock(() => {});
+    const { host } = mount(
+      <Composer value={"/mode"} {...STUB_PROPS} sessionId={"sid"} commands={CMDS} onChange={onChange} />
+    );
+    await flush();
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(ta, 5);
+    await flush();
+    expect(host.querySelector('[data-testid="slash-popover"]')).not.toBeNull();
+
+    pressTab(ta);
+    await flush();
+
+    // pickSlash rewrites to "/model " (trailing space); no fuzzy find fired.
+    expect(chatServiceMock.SessionFuzzyFind).not.toHaveBeenCalled();
+    const last = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as string | undefined;
+    expect(last).toBe("/model ");
+  });
+});
