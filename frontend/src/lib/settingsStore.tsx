@@ -35,10 +35,6 @@ export function FrontendSettingsProvider({ children }: { children: ReactNode }) 
   const [memorySaver, setMemorySaverState] = useState<boolean>(isMemorySaverEnabled);
   const [fontScale, setFontScaleState] = useState<number>(readFontScale);
 
-  // Apply persisted font scale on mount so the very first paint uses the saved
-  // value (no flash of default scale). Slider changes go through setFontScale.
-  useEffect(() => { applyFontScale(fontScale); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
   useEffect(() => {
     const handler = (lng: string) => setLang(lng === "en" ? "en" : "zh");
     i18n.on("languageChanged", handler);

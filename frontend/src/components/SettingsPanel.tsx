@@ -223,6 +223,7 @@ function AppearancePane() {
           step={0.05}
           value={fontScale}
           onChange={(e) => setFontScale(parseFloat(e.target.value))}
+          aria-label={t("settings.center.appearance.fontScaleTitle")}
           data-testid="font-scale-slider"
         />
         <button
