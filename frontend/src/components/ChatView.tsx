@@ -600,7 +600,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         <div className="chat-header-info">
           <span className="chat-project" title={props.project?.path || ""}>{props.project?.name || ""}</span>
           <span className="chat-sep">/</span>
-          <span className="chat-session-title">{props.session?.title || t("chat.newSessionTitle")}</span>
+          <span className="chat-session-title">{props.session?.customTitle || props.session?.title || t("chat.newSessionTitle")}</span>
           {props.session?.model && <span className="chat-model">{props.session.model}</span>}
           <McpChip sessionId={props.sessionId} />
         </div>

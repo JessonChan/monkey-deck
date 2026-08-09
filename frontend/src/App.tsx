@@ -1563,7 +1563,7 @@ export default function App() {
   const closeTab = useCallback((sessionId: string) => {
     if (statusBySession[sessionId] === "prompting") {
       const se = sessionById(sessionId);
-      setPendingCloseTab({ sessionId, title: se?.title || t("sidebar.sessionDraftFallback") });
+      setPendingCloseTab({ sessionId, title: se?.customTitle || se?.title || t("sidebar.sessionDraftFallback") });
       return;
     }
     evictSessionCache(sessionId);  // also removes from openTabs (choke point)
@@ -1767,6 +1767,27 @@ export default function App() {
   );
 
 
+  // 重命名会话(0016):写 custom_title(空串=清除,回退 auto title)。后端落库后乐观更新本地。
+  // 重命名不改排序键(prompted/updated/pinned 都不动),只就地替换字段,无需重排。
+  const renameSession = useCallback(
+    async (sessionId: string, customTitle: string) => {
+      await ChatService.UpdateSessionCustomTitle(sessionId, customTitle);
+      setSessionsByProject((prev) => {
+        const next: Record<string, Session[]> = {};
+        for (const [pid, list] of Object.entries(prev)) {
+          const idx = list.findIndex((s) => s.id === sessionId);
+          if (idx < 0) { next[pid] = list; continue; }
+          const arr = [...list];
+          arr[idx] = { ...arr[idx], customTitle };
+          next[pid] = arr;
+        }
+        return next;
+      });
+    },
+    []
+  );
+
+
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) || null,
     [projects, selectedProjectId]
@@ -1858,6 +1879,7 @@ export default function App() {
           onRemoveProject={removeProject}
           onRemoveSession={removeSession}
           onTogglePin={toggleSessionPin}
+          onRenameSession={renameSession}
           statusBySession={statusBySession}
           activityBySession={activityBySession}
           unreadBySession={unreadBySession}
@@ -1886,7 +1908,7 @@ export default function App() {
                 const se = sessionById(id)!;
                 return {
                   id,
-                  title: se.title || t("sidebar.sessionDraftFallback"),
+                  title: se.customTitle || se.title || t("sidebar.sessionDraftFallback"),
                   projectName: projectNameById(se.projectId),
                   status: statusBySession[id],
                   activity: activityBySession[id],

@@ -31,6 +31,8 @@ interface Props {
   onRemoveProject: (id: string) => void;
   onRemoveSession: (sessionId: string) => void;
   onTogglePin: (sessionId: string, pinned: boolean) => void;
+  // 用户右键重命名(0016):写 custom_title(空串=清除,回退到 auto title)。后端落库后乐观更新本地。
+  onRenameSession: (sessionId: string, customTitle: string) => void;
   statusBySession: Record<string, string>;
   activityBySession: Record<string, "thinking" | "executing" | "replying">;
   unreadBySession: Record<string, boolean>;
@@ -98,6 +100,11 @@ export default function Sidebar(props: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [confirm, setConfirm] = useState<ConfirmTarget | null>(null);
+  // inline 重命名(0016):renamingId 标记哪个 session 进入编辑态;renameValue 是输入框值。
+  // 进入时用 customTitle || title 初始化;Enter 提交(空串=清除 custom_title 回退 auto),Esc 取消。
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
   // session 列表分片渲染:每个项目默认 SESSION_PAGE 个,「加载更多」每次 +SESSION_PAGE。
@@ -182,6 +189,14 @@ export default function Sidebar(props: Props) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   const closeCtx = () => { setCtx(null); setConfirm(null); setDeleteErr(null); };
+  // 提交重命名:trim 后写库(空串=清除 custom_title,回退 auto title)。renamingId 清掉退出编辑态。
+  const commitRename = () => {
+    if (renamingId == null) return;
+    props.onRenameSession(renamingId, renameValue.trim());
+    setRenamingId(null);
+    setRenameValue("");
+  };
+  const cancelRename = () => { setRenamingId(null); setRenameValue(""); };
   // 确认删除:调 onRemove*(async),失败时弹窗内联报错、不关弹窗;成功才关。
   // 关键:全局 window mousedown 监听会把 mousedown 冒泡当「外部点击」关掉弹窗,
   // 故弹窗容器必须 onMouseDown stopPropagation,否则按钮 click 永远拿不到。
@@ -260,6 +275,15 @@ export default function Sidebar(props: Props) {
     el.style.left = `${left}px`;
     el.style.top = `${top}px`;
   }, [ctx]);
+
+  // 进入重命名态时聚焦输入框并全选(便于整体覆盖编辑)。
+  useEffect(() => {
+    if (renamingId == null) return;
+    const el = renameInputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, [renamingId]);
 
   // 内容搜索:query≥2 字符时去抖 200ms 调后端 LIKE(桌面 SQLite 毫秒级),回填命中 session id。
   // 标题命中是本地即时过滤,不在此 effect 内;切项目/清空立即重置。
@@ -361,6 +385,35 @@ export default function Sidebar(props: Props) {
                       : active ? ({ thinking: t("sidebar.status.thinking"), executing: t("sidebar.status.executing"), replying: t("sidebar.status.replying") } as Record<string, string>)[act ?? ""] ?? t("sidebar.status.generating")
                       : t("sidebar.status.idle");
                     const unread = !active && props.unreadBySession[s.id];
+                    // 显示标题:custom_title 优先(用户重命名),回退 auto title,再回退兜底文案(0016)。
+                    const displayTitle = s.customTitle || s.title || t("sidebar.sessionDraftFallback");
+                    // 重命名态:整行换成输入框(Enter 提交 / Esc 取消 / blur 提交)。mousedown 阻止冒泡到
+                    // 全局 ctx 关闭监听(虽此处 ctx 已关,但防其它 window mousedown 副作用)。
+                    if (renamingId === s.id) {
+                      return (
+                        <div
+                          key={s.id}
+                          className={`session-item-row ${props.selectedSessionId === s.id ? "active" : ""}`}
+                          data-testid={`session-${s.id}`}
+                        >
+                          <input
+                            ref={renameInputRef}
+                            className="session-rename-input"
+                            data-testid={`rename-input-${s.id}`}
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+                              else if (e.key === "Escape") { e.preventDefault(); cancelRename(); }
+                            }}
+                            onBlur={commitRename}
+                            onMouseDown={(e) => e.stopPropagation()}
+                          />
+                        </div>
+                      );
+                    }
+                    // 设了 custom_title 且原 title 非空:tooltip 揭示原标题,避免重命名后丢失出处。
+                    const labelTip = s.customTitle && s.title ? t("sidebar.originalTitleTip", { title: s.title }) : undefined;
                     return (
                       <div
                         key={s.id}
@@ -376,7 +429,7 @@ export default function Sidebar(props: Props) {
                           }}
                         >
                           <span className={`session-dot ${cls}`} data-tooltip-id="md-tip" data-tooltip-content={dotTip} />
-                          <span className="session-label">{s.title || t("sidebar.sessionDraftFallback")}</span>
+                          <span className="session-label" data-tooltip-id="md-tip" data-tooltip-content={labelTip}>{displayTitle}</span>
                           {props.poppedSessionIds?.has(s.id) && (
                             <span className="session-popout-mark" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.popoutTip")} data-testid={`popout-${s.id}`}>
                               <ExternalLink size={11} />
@@ -466,6 +519,17 @@ export default function Sidebar(props: Props) {
           <div className="ctx-sep" />
           <button className="ctx-item" onClick={() => { void props.onTogglePin(ctx.session.id, !ctx.session.pinned); closeCtx(); }}>
             {ctx.session.pinned ? <><PinOff size={13} /> {t("sidebar.unpin")}</> : <><Pin size={13} /> {t("sidebar.pin")}</>}
+          </button>
+          <button
+            className="ctx-item"
+            data-testid={`rename-session-${ctx.session.id}`}
+            onClick={() => {
+              setRenamingId(ctx.session.id);
+              setRenameValue(ctx.session.customTitle || ctx.session.title);
+              setCtx(null);
+            }}
+          >
+            <Pencil size={13} /> {t("sidebar.rename")}
           </button>
           <button className="ctx-item" onClick={() => { void copyText(ctx.session.id); closeCtx(); }}>
             <Copy size={13} /> {t("sidebar.copySessionId")}

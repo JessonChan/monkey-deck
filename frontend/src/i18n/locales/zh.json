@@ -75,6 +75,8 @@
     "popoutTip": "在独立窗口打开 · 点击聚焦",
     "unpin": "取消置顶",
     "pin": "置顶对话",
+    "rename": "重命名",
+    "originalTitleTip": "原标题:{{title}}",
     "copySessionId": "复制会话 ID",
     "deleteSession": "删除会话",
     "exportChat": "导出会话",

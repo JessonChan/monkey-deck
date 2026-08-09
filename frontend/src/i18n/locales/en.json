@@ -75,6 +75,8 @@
     "popoutTip": "Open in separate window · click to focus",
     "unpin": "Unpin",
     "pin": "Pin chat",
+    "rename": "Rename",
+    "originalTitleTip": "Original title: {{title}}",
     "copySessionId": "Copy session ID",
     "deleteSession": "Delete chat",
     "exportChat": "Export chat",
