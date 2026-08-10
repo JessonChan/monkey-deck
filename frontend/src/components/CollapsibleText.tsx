@@ -240,7 +240,7 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
                     ) : (
                       <span
                         key={pi}
-                        className="path-link"
+                        className={p.isMention ? "path-link path-mention" : "path-link"}
                         role="button"
                         tabIndex={0}
                         title={t("collapsibleText.openPathTip", { raw: p.raw })}
@@ -249,7 +249,7 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
                         onClick={(e) => { e.preventDefault(); e.stopPropagation(); onPath(p.path, p.line); expand(); }}
                         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onPath(p.path, p.line); expand(); } }}
                       >
-                        {p.raw}
+                        {pathPartLabel(p)}
                       </span>
                     )
                   )}
@@ -280,7 +280,7 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
                       ) : (
                         <span
                           key={pi}
-                          className="path-link"
+                          className={p.isMention ? "path-link path-mention" : "path-link"}
                           role="button"
                           tabIndex={0}
                           title={t("collapsibleText.openPathTip", { raw: p.raw })}
@@ -289,7 +289,7 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
                           onClick={(e) => { e.preventDefault(); e.stopPropagation(); onPath(p.path, p.line); expand(); }}
                           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onPath(p.path, p.line); expand(); } }}
                         >
-                          {p.raw}
+                          {pathPartLabel(p)}
                         </span>
                       )
                     )}
