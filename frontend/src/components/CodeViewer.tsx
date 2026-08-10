@@ -67,6 +67,16 @@ const OVERSCAN = 12;
 // live contexts, since the Map is process-global.
 const scrollPositions = new Map<string, number>();
 
+// Evict a saved scrollTop so the module-level Map doesn't grow unbounded as
+// files are opened then closed (Task #24267). `posKey` MUST match the key
+// CodeViewer computes internally (`scrollKey ?? filename`); EditorPane passes
+// `scrollKey = ${sessionId}/${file.path}`, so callers clearing on tab-close
+// must build the identical `${sessionId}/${path}` string (see App.closeFileTab).
+// Idempotent: deleting a missing key is a no-op.
+export function clearScrollPosition(posKey: string): void {
+  scrollPositions.delete(posKey);
+}
+
 export default function CodeViewer({
   content,
   filename,

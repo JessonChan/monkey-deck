@@ -14,6 +14,7 @@ import TerminalPanel from "./components/TerminalPanel";
 import FileTabBar, { type FileTab, tabKey } from "./components/FileTabBar";
 import EditorPane from "./components/EditorPane";
 import DiffPane from "./components/DiffPane";
+import { clearScrollPosition } from "./components/CodeViewer";
 import type { TerminalTab } from "./lib/terminalTypes";
 import { disposeTerminal } from "./lib/termRegistry";
 import NewSessionModal, { type NewSessionChoice } from "./components/NewSessionModal";
@@ -400,6 +401,17 @@ export default function App() {
   const closeFileTab = useCallback((sessionId: string, key: string) => {
     setFileTabsBySession((prev) => {
       const cur = prev[sessionId] ?? [];
+      // Evict the saved CodeViewer scrollTop for this file so the module-level
+      // Map doesn't leak (Task #24267). Only file tabs render CodeViewer (diff
+      // tabs render DiffPane, which has no entry here). posKey MUST match the
+      // key EditorPane passes as scrollKey = `${sessionId}/${file.path}`.
+      // Lookup happens inside the updater to read the freshest tab list (the
+      // callback closes over no state, deps are intentionally []); the delete
+      // is idempotent so a StrictMode double-invoke of the updater is harmless.
+      const closing = cur.find((t) => tabKey(t) === key);
+      if (closing?.kind === "file") {
+        clearScrollPosition(`${sessionId}/${closing.path}`);
+      }
       const next = cur.filter((t) => tabKey(t) !== key);
       return { ...prev, [sessionId]: next };
     });
