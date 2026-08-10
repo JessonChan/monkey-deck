@@ -1,10 +1,10 @@
 // filePath.test.ts:回归文件路径识别(Task #15084)。bun test 运行。
 
 import { test, expect } from "bun:test";
-import { findPathSpans, splitByPaths } from "./filePath";
+import { findPathSpans, pathPartLabel, splitByPaths } from "./filePath";
 
 const paths = (text: string) =>
-  findPathSpans(text).map((s) => ({ raw: s.raw, path: s.path, line: s.line }));
+  findPathSpans(text).map((s) => ({ raw: s.raw, path: s.path, line: s.line, isMention: s.isMention }));
 
 test("识别相对路径 + 扩展名", () => {
   expect(paths("看 src/foo.ts 这个文件")).toEqual([
@@ -78,6 +78,53 @@ test("splitByPaths:无路径时单个文本段", () => {
 
 test("扩展名边界:src/foo.tsx 不被截成 .ts", () => {
   expect(paths("src/foo.tsx")).toEqual([
-    { raw: "src/foo.tsx", path: "src/foo.tsx", line: undefined },
+    { raw: "src/foo.tsx", path: "src/foo.tsx", line: undefined, isMention: undefined },
   ]);
+});
+
+// ─── @mention 检测(Task #118b):前导 @ → isMention,span 吞掉 @ ───
+
+test("前导 @ 标记为 mention(span 吞 @、raw 含 @、path 干净)", () => {
+  expect(paths("改 @src/foo.ts 这个")).toEqual([
+    { raw: "@src/foo.ts", path: "src/foo.ts", line: undefined, isMention: true },
+  ]);
+});
+
+test("mention 带 :line 仍识别(line 透传)", () => {
+  expect(paths("看 @src/foo.ts:42")).toEqual([
+    { raw: "@src/foo.ts:42", path: "src/foo.ts", line: 42, isMention: true },
+  ]);
+});
+
+test("文本开头的 @mention(at===0 边界)", () => {
+  expect(paths("@a/b.go")).toEqual([
+    { raw: "@a/b.go", path: "a/b.go", line: undefined, isMention: true },
+  ]);
+});
+
+test("无前导 @ 的普通路径不标记 isMention", () => {
+  expect(paths("改 src/foo.ts")).toEqual([
+    { raw: "src/foo.ts", path: "src/foo.ts", line: undefined, isMention: undefined },
+  ]);
+});
+
+test("word@path 不当 mention(@ 必须在 token 边界,排除类 email)", () => {
+  // a@b/c.ts 里 @ 紧跟 word 字母 → 不算 mention,按普通路径识别。
+  expect(paths("a@b/c.ts")).toEqual([
+    { raw: "b/c.ts", path: "b/c.ts", line: undefined, isMention: undefined },
+  ]);
+});
+
+test("splitByPaths:@mention 段 isMention=true、@ 不落入文本段", () => {
+  expect(splitByPaths("see @src/foo.ts")).toEqual([
+    { type: "text", text: "see " },
+    { type: "path", raw: "@src/foo.ts", path: "src/foo.ts", line: undefined, isMention: true },
+  ]);
+});
+
+test("pathPartLabel:mention 显 @basename、普通路径显 raw", () => {
+  expect(pathPartLabel({ path: "src/foo.ts", raw: "@src/foo.ts", isMention: true })).toBe("@foo.ts");
+  expect(pathPartLabel({ path: "src/foo.ts", raw: "@src/foo.ts:42", line: 42, isMention: true })).toBe("@foo.ts:42");
+  expect(pathPartLabel({ path: "src/foo.ts", raw: "src/foo.ts" })).toBe("src/foo.ts");
+  expect(pathPartLabel({ path: "a/b.go", raw: "a/b.go:3", line: 3 })).toBe("a/b.go:3");
 });

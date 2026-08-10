@@ -2,7 +2,7 @@ import { Fragment, useCallback, useMemo, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next";
 import { Check, ChevronDown, ChevronUp, Copy } from "lucide-react";
 import { copyText } from "../lib/clipboard";
-import { splitByPaths } from "../lib/filePath";
+import { pathPartLabel, splitByPaths } from "../lib/filePath";
 
 // 可复用的「长文本折叠」块(AGENTS.md §5.3:references 优先参考——形态沿用本项目
 // Composer / 用户气泡的长文本折叠先例,docs/worklog/2026-07-14-composer-long-text-collapse.md)。
@@ -108,7 +108,7 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
             ) : (
               <span
                 key={pi}
-                className="path-link"
+                className={p.isMention ? "path-link path-mention" : "path-link"}
                 role="button"
                 tabIndex={0}
                 title={t("collapsibleText.openPathTip", { raw: p.raw })}
@@ -127,7 +127,7 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
                   }
                 }}
               >
-                {p.raw}
+                {pathPartLabel(p)}
               </span>
             )
           )}

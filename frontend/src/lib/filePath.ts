@@ -13,16 +13,17 @@
 // 纯逻辑(无 React 依赖),便于 bun test 单测。
 
 export interface PathSpan {
-  start: number; // 原文起始下标
+  start: number; // 原文起始下标(含前导 @ when isMention)
   end: number; // 终止下标(不含)
-  raw: string; // 原文整段(含 :line)
-  path: string; // 纯路径(不含 :line)
+  raw: string; // 原文整段(含前导 @ + :line when present)
+  path: string; // 纯路径(不含前导 @、不含 :line)
   line?: number; // 可选行号
+  isMention?: boolean; // 前导 @ 触发的 mention(Task #118b):渲染走 @basename 分支
 }
 
 export type TextPart =
   | { type: "text"; text: string }
-  | { type: "path"; raw: string; path: string; line?: number };
+  | { type: "path"; raw: string; path: string; line?: number; isMention?: boolean };
 
 // 路径主体:可选前缀(./ ../ / ~/)+ 段(至少一段)+ 末段扩展名,后接可选 :line[:col]。
 // group1 = path,group2 = line。
@@ -38,12 +39,23 @@ export function findPathSpans(text: string): PathSpan[] {
     // 必须含 '/',排除裸单词(如 foo.ts、e.g.)。
     if (!path.includes("/")) continue;
     const line = m[2] ? parseInt(m[2], 10) : undefined;
+    const matchStart = m.index;
+    // @mention detection (Task #118b): a '@' immediately precedes the path and sits at a
+    // token boundary (start-of-text or after a non-word, non-'@' char). The composer inserts
+    // @<path> tokens; we consume the '@' into the span so the whole @basename renders as one
+    // clickable unit (full path stays in tooltip + click target).
+    const at = matchStart - 1;
+    const isMention =
+      at >= 0 && text[at] === "@" && (at === 0 || !/[\w@]/.test(text[at - 1]));
     spans.push({
-      start: m.index,
-      end: m.index + m[0].length,
-      raw: m[0],
+      start: isMention ? at : matchStart,
+      end: matchStart + m[0].length,
+      raw: isMention ? "@" + m[0] : m[0],
       path,
       line,
+      // Only carry the flag when true so non-mention spans stay shape-stable
+      // (legacy callers / toEqual against {start,end,raw,path,line} still pass).
+      ...(isMention ? { isMention: true } : {}),
     });
   }
   return spans;
@@ -56,9 +68,34 @@ export function splitByPaths(text: string): TextPart[] {
   let last = 0;
   for (const s of spans) {
     if (s.start > last) parts.push({ type: "text", text: text.slice(last, s.start) });
-    parts.push({ type: "path", raw: s.raw, path: s.path, line: s.line });
+    parts.push({
+      type: "path",
+      raw: s.raw,
+      path: s.path,
+      line: s.line,
+      // Only carry the flag when true so non-mention parts stay shape-stable
+      // (toEqual against the legacy {type,raw,path,line} form still passes).
+      ...(s.isMention ? { isMention: true } : {}),
+    });
     last = s.end;
   }
   if (last < text.length) parts.push({ type: "text", text: text.slice(last) });
   return parts;
+}
+
+// Inline display label for a path part (Task #118b). @mentions collapse to @basename
+// (full path lives in tooltip + click target, mirroring the composer mention chip);
+// regular paths show raw as before. Pure, tested — shared by PathLinkified & CollapsibleText.
+export function pathPartLabel(part: {
+  isMention?: boolean;
+  path: string;
+  line?: number;
+  raw: string;
+}): string {
+  if (part.isMention) {
+    const i = part.path.lastIndexOf("/");
+    const base = i === -1 ? part.path : part.path.slice(i + 1);
+    return "@" + base + (part.line ? `:${part.line}` : "");
+  }
+  return part.raw;
 }

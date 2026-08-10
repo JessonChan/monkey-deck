@@ -1985,6 +1985,15 @@ input, textarea { font-family: inherit; }
   outline: 1px solid var(--accent);
   border-radius: 3px;
 }
+/* @mention inline link (Task #118b): shows @basename (full path in tooltip + click),
+   mirroring the composer mention chip. Slightly chip-like so it reads as a reference
+   rather than a mere detected path; stays inline & lightweight (§4.6). */
+.path-link.path-mention {
+  background: color-mix(in srgb, var(--accent-2) 12%, transparent);
+  border-bottom-style: solid;
+  border-radius: 3px;
+  padding: 0 2px;
+}
 /* diff 行内的路径链接:微调对比(避免被 +/- 染色淹没)。 */
 .diff-line .path-link, .ctext-preview-line .path-link {
   background: rgba(10, 132, 255, 0.10);

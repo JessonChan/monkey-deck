@@ -1,10 +1,13 @@
 import { Fragment, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { splitByPaths } from "../lib/filePath";
+import { pathPartLabel, splitByPaths } from "../lib/filePath";
 
 // 把一段纯文本里的文件路径识别成可点击的内联链接(Task #15084)。
 // 用于:ReactMarkdown 文本(段落 / 列表 / 行内代码)、工具 I/O 输出的每一行。
 // 点击 onOpen(path, line?) —— 由上层路由到 FilePreviewOverlay(等价于 FilePanel.openFile)。
+//
+// Task #118b:前导 @ 触发的 mention 走 @basename 渲染分支(完整路径在 tooltip + click target),
+// 与 composer 的 mention chip 保持一致 —— 发送的 @<长路径> 在气泡里显 @<文件名>。
 //
 // 仅处理字符串;调用方负责把它套进 <p> / <li> / <code> / <div> 等容器。
 export default function PathLinkified({
@@ -26,7 +29,7 @@ export default function PathLinkified({
         ) : (
           <span
             key={i}
-            className="path-link"
+            className={p.isMention ? "path-link path-mention" : "path-link"}
             role="button"
             tabIndex={0}
             title={t("collapsibleText.openPathTip", { raw: p.raw })}
@@ -44,7 +47,7 @@ export default function PathLinkified({
               }
             }}
           >
-            {p.raw}
+            {pathPartLabel(p)}
           </span>
         )
       )}
