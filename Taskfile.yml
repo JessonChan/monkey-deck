@@ -22,6 +22,7 @@ tasks:
 
   package:
     summary: Packages a production build of the application
+    deps: [bindings]
     cmds:
       - task: "{{OS}}:package"
 
