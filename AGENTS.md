@@ -134,6 +134,16 @@ spawn harness 子进程（独立进程组,见 §3.2）
 - **理由**:(1) 后端直接掌握 SQLite → 数据,无需经 binding 序列化/反序列化往返;(2) Go 单测更快更稳,无 webview 沙箱限制;(3) 逻辑集中在后端,减少前后端职责模糊导致的维护成本。
 - **不意味前端变"哑"**:流式渲染、对话 UI 状态、tool 卡片/权限弹窗等纯 UI 逻辑仍在前端。判断标准——**处理数据/协议/编排 → 后端;UI 呈现/交互反馈 → 前端**。
 
+### 1.8 远程访问（浏览器/移动端直连,硬约束）
+
+- **定位**:桌面进程内嵌一个**可选的** HTTP 服务（`internal/remote`）,让浏览器/移动端/原生客户端直连同一进程——桌面 GUI 与远程客户端并存,数据真相源仍是单一进程单一 SQLite（§2.2/§1.5 不破）。远程客户端只是同一进程的「第二张脸」,不是另一个实例。
+- **只暴露 Wails3 既有协议面,不自建第二套 API**（§5.3 KISS）:binding 走 `/wails/runtime`（复用注入的 `application.NewHTTPTransport` 的 `Handler()` 中间件,与 webview 通道同一实例同一格式）,事件走 `/wails/events`（自建 WebSocket hub,`app.Event.On` 桥接前端订阅的闭集事件）。原生客户端可用 `methodName` 按名调用,无需数字 ID。
+- **鉴权强制**:远程服务必须 token 鉴权——cookie（浏览器 fetch/WS 同源自动携带）或 `Authorization: Bearer`（原生客户端）二选一,中间件统一校验;仅 `/health`、`/auth`（token 换 cookie）豁免。**禁止无鉴权暴露**（binding 面等于 agent 完整控制权,含执行 bash）。
+- **默认关闭,显式开启**:设置页开关 + 端口 + token（SQLite `app_config` KV 表持久化）,运行时可启停。dev/CI 逃生口:`MD_REMOTE_ENABLED`/`MD_REMOTE_PORT`/`MD_REMOTE_TOKEN` 环境变量覆盖。
+- **只在桌面构建启动内嵌远程**（`attachEmbeddedRemote` 的 build-tag 拆分,同 §5.5 的 runDesktop 模式）;server 二进制（`-tags server`）自带的 HTTP 服务与内嵌远程互斥,**桌面 app 与 server 二进制也绝不允许同时跑**（双进程抢 harness 所有权/ACP 连接/session live 状态）。
+- **WS 断线只重连不补发**:custom.js 在重连成功后派发 `remote:resync`,前端据此重拉快照对账;不搞服务端事件回放。
+- **relay/推送显式推迟**（M4+,见 §7）:局域网/VPN（Tailscale）直连先行;跨网无 VPN 或 APNs/FCM 推送成为刚需时再评估 relay,当前不为它做任何设计。
+
 ---
 
 ## 2. 代码组织约束
@@ -175,6 +185,8 @@ monkey-deck/
 ## 3. 实现纪律（写代码时）
 
 ### 3.1 阶段化推进,禁止提前实现
+
+
 本项目「不急着一下做完」,按阶段推进,**当前阶段没做完不偷跑下阶段**:
 
 | 阶段 | 目标 | 状态 |
@@ -183,6 +195,16 @@ monkey-deck/
 | **阶段 1** | 多项目/目录管理 + session 列表/恢复（LoadSession）+ 用量统计 + 重启后状态恢复 | — |
 | **阶段 2** | model/provider 路由 + 多 harness 适配层 + 设置 UI | — |
 | **阶段 3+** | wesight 形态扩展（运行时监控、菜单栏 HUD、IM/agent-team 等）——**显式推迟,见 §7** | — |
+
+**Mobile/Remote 支线(M 系列,2026-08-20 立)**:
+
+| 阶段 | 目标 | 状态 |
+|---|---|---|
+| **M0** | 零代码验证:server 模式二进制 + 局域网浏览器/手机直连摸底(传输层实证:binding curl 往返 + WS 事件流 + 0.0.0.0 绑定) | ✅ 完成(2026-08-20,见 worklog) |
+| **M1** | 桌面进程内嵌远程 HTTP 服务(§1.8):GUI 与远程客户端并存 + token 鉴权 + 设置页开关 | 进行中 |
+| **M2** | 移动端可用性:响应式布局(≤768px 抽屉侧栏)、tooltip 触屏等价物、对话框降级 | — |
+| **M3** | 远程访问通路文档化(Tailscale/VPN)+ 可选 TLS/PWA | — |
+| **M4** | relay/推送(显式推迟,见 §7) | — |
 
 **遇到非当前阶段的需求,记成 TODO/OPEN,不写代码。**
 
@@ -304,6 +326,7 @@ monkey-deck/
 ### 5.5 浏览器驱动集成测试:Wails3 server 模式(真后端 + 真数据,无 GUI)
 
 > 场景:单测(mock)覆盖不了「真实 React UI × 真实 SQLite 数据 × 真实 binding/event 流」的集成行为(session 切换的内存累积、流式渲染、权限弹窗交互等)。Wails3 的 **server 模式** 专门解这个问题。
+> ⚠ 区分:**本节的 server 二进制**(整体替换 GUI 的测试/无头形态,零鉴权,仅限本机/可信 LAN)与 **§1.8 的内嵌远程服务**(桌面进程内可选的 token 鉴权 HTTP 服务,产品形态)是两个东西。远程访问产品能力一律走 §1.8,不要往 server 二进制上加鉴权/功能。
 
 **关键架构事实(先搞清楚,否则白费劲)**:
 - `@wailsio/runtime` 的 binding 调用走 `fetch(origin + "/wails/runtime")`(`node_modules/@wailsio/runtime/dist/runtime.js`)。
@@ -364,6 +387,7 @@ WAILS_SERVER_PORT=9246 ./bin/monkey-deck-server      # 或 wails3 task run:serve
 | IM / agent-team / 多 agent 协作流 | 阶段 3+ | wesight 有,我们晚做 |
 | 云端同步 / 账号系统 | 视情况 | 本地优先 |
 | 运行时监控仪表盘 / 菜单栏 HUD | 阶段 3+ | wesight 有,我们晚做 |
+| 远程 relay 服务 / 移动端推送(APNs/FCM) | M4+ | 局域网/VPN 直连先行(§1.8);跨网无 VPN 或推送成刚需再评估,当前零设计 |
 | 导入 opencode/OMP 历史聊天记录 | **不做** | ACP `session/list`+`session/load` 技术上可批量重放导入,但太重(每个 session 都要 spawn harness 重放)+ 协议字段贫瘠(`SessionInfo` 无 usage/cost/model,load 重放只带协议标准字段)。用户判定永不。详见 `docs/worklog/2026-07-01-decline-import-historical-chats.md` |
 
 ---
