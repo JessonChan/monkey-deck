@@ -118,7 +118,7 @@ func TestRemoteAttachStartsWhenEnabled(t *testing.T) {
 	assets := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("<html>x</html>"))
 	})
-	svc.AttachEmbeddedRemote(tr, assets, []string{EventStatus})
+	AttachEmbeddedRemote(svc, tr, assets, []string{EventStatus})
 
 	// Port 0 = ephemeral; Start reports the real port but our config stores
 	// what we pass, so use a fixed free port instead.
@@ -152,4 +152,3 @@ func freePort(t *testing.T) int {
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port
 }
-

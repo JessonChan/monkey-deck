@@ -68,13 +68,13 @@ func (s *ChatService) OpenSessionWindow(sessionID string) error {
 	}
 	// 新建:URL hash 传参,告诉新窗口自己是 popout、显示哪个 session。
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:   name,
-		Title:  "monkey-deck",
-		Width:    popoutWindowWidthCollapsed,
-		Height:   760,
+		Name:      name,
+		Title:     "monkey-deck",
+		Width:     popoutWindowWidthCollapsed,
+		Height:    760,
 		MinWidth:  500, // 最小宽度:chat 区有 520px minSize 保底,窗口不能更窄
 		MinHeight: 400,
-		URL:   fmt.Sprintf("/#popout=%s", sessionID),
+		URL:       fmt.Sprintf("/#popout=%s", sessionID),
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
 			Backdrop:                application.MacBackdropNormal,
@@ -159,7 +159,6 @@ func (s *ChatService) SetSessionWindowOnTop(sessionID string, onTop bool) error 
 	return nil
 }
 
-
 // IsSessionWindowPopped 报告某 session 是否已弹出到独立窗口。供前端 boot 时对账。
 func (s *ChatService) IsSessionWindowPopped(sessionID string) bool {
 	app := application.Get()
@@ -189,8 +188,8 @@ func (s *ChatService) GetSessionProjectID(sessionID string) (string, error) {
 // snapshots 存「主窗口 → popout」传递的 React state 快照。
 // 一次性:popout 取走即删,避免主窗口下次弹出读到陈旧快照。
 var (
-	snapMu       sync.Mutex
-	snapshots    = map[string]json.RawMessage{} // sessionID → 快照
+	snapMu    sync.Mutex
+	snapshots = map[string]json.RawMessage{} // sessionID → 快照
 )
 
 // SaveSessionSnapshot 主窗口在 OpenSessionWindow 前调用,打包当前 React state。

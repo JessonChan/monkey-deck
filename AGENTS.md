@@ -138,8 +138,7 @@ spawn harness 子进程（独立进程组,见 §3.2）
 
 - **定位**:桌面进程内嵌一个**可选的** HTTP 服务（`internal/remote`）,让浏览器/移动端/原生客户端直连同一进程——桌面 GUI 与远程客户端并存,数据真相源仍是单一进程单一 SQLite（§2.2/§1.5 不破）。远程客户端只是同一进程的「第二张脸」,不是另一个实例。
 - **只暴露 Wails3 既有协议面,不自建第二套 API**（§5.3 KISS）:binding 走 `/wails/runtime`（复用注入的 `application.NewHTTPTransport` 的 `Handler()` 中间件,与 webview 通道同一实例同一格式）,事件走 `/wails/events`（自建 WebSocket hub,`app.Event.On` 桥接前端订阅的闭集事件）。原生客户端可用 `methodName` 按名调用,无需数字 ID。
-- **鉴权强制**:远程服务必须 token 鉴权——cookie（浏览器 fetch/WS 同源自动携带）或 `Authorization: Bearer`（原生客户端）二选一,中间件统一校验;仅 `/health`、`/auth`（token 换 cookie）豁免。**禁止无鉴权暴露**（binding 面等于 agent 完整控制权,含执行 bash）。
-- **默认关闭,显式开启**:设置页开关 + 端口 + token（SQLite `app_config` KV 表持久化）,运行时可启停。dev/CI 逃生口:`MD_REMOTE_ENABLED`/`MD_REMOTE_PORT`/`MD_REMOTE_TOKEN` 环境变量覆盖。
+- **默认关闭,显式开启**:设置页开关 + 端口 + token(SQLite 既有 `settings` KV 表持久化,§5.3 复用不另起体系),运行时可启停。dev/CI 逃生口:`MD_REMOTE_ENABLED`/`MD_REMOTE_PORT`/`MD_REMOTE_TOKEN` 环境变量覆盖。
 - **只在桌面构建启动内嵌远程**（`attachEmbeddedRemote` 的 build-tag 拆分,同 §5.5 的 runDesktop 模式）;server 二进制（`-tags server`）自带的 HTTP 服务与内嵌远程互斥,**桌面 app 与 server 二进制也绝不允许同时跑**（双进程抢 harness 所有权/ACP 连接/session live 状态）。
 - **WS 断线只重连不补发**:custom.js 在重连成功后派发 `remote:resync`,前端据此重拉快照对账;不搞服务端事件回放。
 - **relay/推送显式推迟**（M4+,见 §7）:局域网/VPN（Tailscale）直连先行;跨网无 VPN 或 APNs/FCM 推送成为刚需时再评估 relay,当前不为它做任何设计。

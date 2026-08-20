@@ -27,8 +27,8 @@ const (
 
 // RemoteInfo is the settings-UI view of the embedded remote server.
 type RemoteInfo struct {
-	Enabled  bool     // persisted preference
-	Running  bool     // listener currently up
+	Enabled  bool // persisted preference
+	Running  bool // listener currently up
 	Port     int
 	Token    string
 	URLs     []string // ready-to-open auth URLs, one per LAN IPv4 address
@@ -39,7 +39,9 @@ type RemoteInfo struct {
 // webview into an embedded remote server. Desktop builds call this before
 // app.Run(); the server-tag build does not (build-tag split, same pattern as
 // runDesktop). EventNames is the closed set of events bridged to clients.
-func (s *ChatService) AttachEmbeddedRemote(tr *application.HTTPTransport, assets http.Handler, eventNames []string) {
+// Package-level on purpose: a ChatService method would be picked up by the
+// wails binding generator, which has no per-method exclusion.
+func AttachEmbeddedRemote(s *ChatService, tr *application.HTTPTransport, assets http.Handler, eventNames []string) {
 	s.remoteSrv = remote.New(remote.Options{
 		Transport:  tr,
 		Assets:     assets,

@@ -17,7 +17,7 @@ import (
 // webview into the chat service's embedded remote server. Must run after
 // application.New and before app.Run (ServiceStartup starts the listener).
 func attachEmbeddedRemote(chatSvc *chat.ChatService, tr *application.HTTPTransport, assets http.Handler) {
-	chatSvc.AttachEmbeddedRemote(tr, assets, remoteEventNames())
+	chat.AttachEmbeddedRemote(chatSvc, tr, assets, remoteEventNames())
 }
 
 // remoteEventNames is the closed set of app-emitted events bridged to remote

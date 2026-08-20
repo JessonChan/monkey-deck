@@ -269,7 +269,6 @@ type ChatService struct {
 	remotePort    int
 	remoteToken   string
 
-
 	mu      sync.RWMutex
 	active  map[string]*liveSession // db sessionID → live
 	spawnMu sync.Mutex              // 串行化 ensureLive 的 spawn 段,杜绝 warm 与首条消息并发双 spawn
