@@ -40,7 +40,12 @@ func main() {
 		slog.Warn("open log file failed; logs go to stderr", "err", logErr)
 	}
 
-	// 单一 Go 进程:webview 宿主 + harness 子进程父 + ACP 连接持有 + SQLite 读写(§2.2)。
+	// Single Go process: webview host + harness subprocess parent + ACP connection
+	// holder + SQLite reader/writer (§2.2). The HTTPTransport instance is created
+	// here and passed via Options so BOTH the webview scheme chain and the embedded
+	// remote server (§1.8) share one binding dispatch chain.
+	tr := application.NewHTTPTransport()
+	assetHandler := application.AssetFileServerFS(assets)
 	chatSvc := chat.NewChatService(cfg)
 	termSvc := terminal.NewTerminalService()
 
@@ -52,8 +57,9 @@ func main() {
 			application.NewService(termSvc),
 		},
 		Assets: application.AssetOptions{
-			Handler: application.AssetFileServerFS(assets),
+			Handler: assetHandler,
 		},
+		Transport: tr,
 		Mac: application.MacOptions{
 			// popout 独立窗口:关主窗口但 popout 还开着时,app 不应退出。
 			// 改为 false 后,所有窗口关闭 app 仍驻留,由 ApplicationShouldHandleReopen
@@ -61,6 +67,11 @@ func main() {
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
 	})
+
+	// Embedded remote server (§1.8): desktop builds wire it here; server-tag
+	// builds no-op (they serve HTTP themselves). Must precede app.Run so that
+	// ServiceStartup can start the listener when enabled.
+	attachEmbeddedRemote(chatSvc, tr, assetHandler)
 
 	// 桌面 GUI 装配(应用更新 / 菜单 / 主窗口 + 状态记忆):desktop 构建里见 desktop.go,
 	// server 模式(-tags server)下走 server.go 的 no-op —— 后者 app.Run() 直接起 HTTP 服务

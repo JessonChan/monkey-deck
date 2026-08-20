@@ -26,6 +26,7 @@ import (
 	"github.com/jessonchan/monkey-deck/internal/harness"
 	"github.com/jessonchan/monkey-deck/internal/mcp"
 	"github.com/jessonchan/monkey-deck/internal/permissions"
+	"github.com/jessonchan/monkey-deck/internal/remote"
 	"github.com/jessonchan/monkey-deck/internal/shellenv"
 	"github.com/jessonchan/monkey-deck/internal/store"
 	"github.com/jessonchan/monkey-deck/internal/titlegen"
@@ -262,6 +263,13 @@ type ChatService struct {
 	st  *store.Store
 	ctx context.Context
 
+	// Embedded remote server state (§1.8, remote.go): guarded by mu.
+	remoteSrv     *remote.Server // constructed by AttachEmbeddedRemote; nil until attached
+	remoteEnabled bool
+	remotePort    int
+	remoteToken   string
+
+
 	mu      sync.RWMutex
 	active  map[string]*liveSession // db sessionID → live
 	spawnMu sync.Mutex              // 串行化 ensureLive 的 spawn 段,杜绝 warm 与首条消息并发双 spawn
@@ -351,6 +359,8 @@ func (s *ChatService) ServiceStartup(ctx context.Context, options application.Se
 	}
 	s.st = st
 	s.loadPersistedConfig()
+	s.loadRemoteConfig()
+	s.maybeStartRemote()
 	s.spawnFn = s.startLive                                               // 默认 spawn 实现;单测可注入 mock(§5.1)
 	acp.SetPgidFile(filepath.Join(s.cfg.CachesDir, "harness-pgids.json")) // §3.2:限定回收范围到本应用派生的 harness
 	acp.SetHarnessCommands(harness.Commands())                            // 注入受支持 harness 命令,回收层据此识别 omp/opencode/...(不再写死 opencode)
@@ -372,6 +382,10 @@ func (s *ChatService) ServiceStartup(ctx context.Context, options application.Se
 
 // ServiceShutdown Wails3 关闭钩子:停 idle reaper + 关所有活跃 session + store。
 func (s *ChatService) ServiceShutdown() error {
+	// Stop the remote listener first: close remote clients before tearing
+	// sessions/store underneath them. stopRemote takes mu internally, so it
+	// must run before the s.mu.Lock() below.
+	s.stopRemote()
 	// 先停 idle reaper,避免它与关 session 竞争。
 	if s.reaperStop != nil {
 		close(s.reaperStop)
