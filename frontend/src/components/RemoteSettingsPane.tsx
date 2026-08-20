@@ -9,6 +9,12 @@ import { Copy, KeyRound, RefreshCw } from "lucide-react";
 // HTTP 服务开关 + 端口 + token + 连接地址。浏览器/移动端经 /auth?token= 直连
 // 同一进程,看历史/发消息/批权限与桌面端并存。SQLite settings 为真相源。
 
+// Set by /wails/custom.js — true only in remote-browser contexts (the desktop
+// webview gets a 404 for that file and the runtime skips it).
+declare global {
+  interface Window { __mdRemote?: boolean; }
+}
+
 export default function RemoteSettingsPane() {
   const { t } = useTranslation();
   const [info, setInfo] = useState<RemoteInfo | null>(null);
@@ -16,13 +22,16 @@ export default function RemoteSettingsPane() {
   const [portDraft, setPortDraft] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Silent on fetch failure: when the listener is turned off, this pane's own
+  // transport goes down with it — keep the last/optimistic state instead of
+  // showing a fetch error. Real operation errors surface via run().
   const reload = useCallback(() => {
     ChatService.GetRemoteInfo()
       .then((r) => {
         setInfo(r);
-        setPortDraft(String(r?.port ?? ""));
+        setPortDraft(String(r?.Port ?? ""));
       })
-      .catch((e) => setError(String(e)));
+      .catch(() => {});
   }, []);
 
   useEffect(() => { reload(); }, [reload]);
@@ -31,6 +40,32 @@ export default function RemoteSettingsPane() {
     setBusy(true); setError("");
     try { await fn(); reload(); } catch (e) { setError(String(e)); } finally { setBusy(false); }
   }, [reload]);
+
+  const toggleRemote = useCallback(async () => {
+    // NOTE: deps use optional chaining — this hook is declared before the
+    // `if (!info)` early return below, so info is null on first render.
+    const next = !(info?.Enabled ?? false);
+    setBusy(true); setError("");
+    // Patch state IMMEDIATELY: stopping the server kills this pane's own
+    // transport mid-response, so the awaited call below may never resolve —
+    // UI state must not depend on it. Reconcile via reload when it does.
+    setInfo((p) => p ? { ...p, Enabled: next, Running: next && p.Attached, URLs: next ? p.URLs : [] } : p);
+    try {
+      await ChatService.SetRemoteEnabled(next);
+      reload();
+    } catch (e) {
+      // Turning OFF: transport going down mid-response is the expected end
+      // state, not an error. Turning ON must surface failures — and from a
+      // REMOTE client (our own transport is the server being started, which
+      // may be unreachable) it is simply impossible: revert + explain (§4.4).
+      if (next) {
+        setInfo((p) => p ? { ...p, Enabled: false, Running: false, URLs: [] } : p);
+        setError(window.__mdRemote
+          ? t("settings.center.remote.turnOnFromDesktop")
+          : String(e));
+      }
+    } finally { setBusy(false); }
+  }, [info?.Enabled, reload, t]);
 
   if (!info) {
     return (
@@ -49,22 +84,22 @@ export default function RemoteSettingsPane() {
         <div className="settings-row-text">
           <div className="settings-row-title">{t("settings.center.remote.title")}</div>
           <div className="settings-row-sub">
-            {info.running
-              ? t("settings.center.remote.statusRunning", { port: info.port })
-              : info.enabled
+            {info.Running
+              ? t("settings.center.remote.statusRunning", { port: info.Port })
+              : info.Enabled
                 ? t("settings.center.remote.statusEnabledNotRunning")
                 : t("settings.center.remote.statusStopped")}
           </div>
         </div>
         <button
-          className={`settings-switch ${info.enabled ? "on" : ""}`}
+          className={`settings-switch ${info.Enabled ? "on" : ""}`}
           role="switch"
-          aria-checked={info.enabled}
-          disabled={busy || !info.attached}
+          aria-checked={info.Enabled}
+          disabled={busy || !info.Attached}
           data-testid="settings-remote-toggle"
           data-tooltip-id="md-tip"
           data-tooltip-content={t("settings.center.remote.toggleTip")}
-          onClick={() => run(() => ChatService.SetRemoteEnabled(!info.enabled))}
+          onClick={toggleRemote}
         >
           <span className="settings-switch-thumb" />
         </button>
@@ -91,7 +126,7 @@ export default function RemoteSettingsPane() {
           />
           <button
             className="btn"
-            disabled={busy || !portDraft || Number(portDraft) === info.port}
+            disabled={busy || !portDraft || Number(portDraft) === info.Port}
             data-testid="settings-remote-port-apply"
             data-tooltip-id="md-tip"
             data-tooltip-content={t("settings.center.remote.portApply")}
@@ -106,7 +141,7 @@ export default function RemoteSettingsPane() {
         <div className="settings-row-text">
           <div className="settings-row-title">{t("settings.center.remote.tokenTitle")}</div>
           <div className="settings-row-sub settings-token">{t("settings.center.remote.tokenDesc")}</div>
-          <code className="settings-version settings-token-value">{maskToken(info.token)}</code>
+          <code className="settings-version settings-token-value">{maskToken(info.Token)}</code>
         </div>
         <div className="pane-actions">
           <button
@@ -115,7 +150,7 @@ export default function RemoteSettingsPane() {
             data-testid="settings-remote-token-copy"
             data-tooltip-id="md-tip"
             data-tooltip-content={t("common.copy")}
-            onClick={() => copyText(info.token)}
+            onClick={() => copyText(info.Token)}
           >
             <Copy size={13} />
           </button>
@@ -132,7 +167,7 @@ export default function RemoteSettingsPane() {
         </div>
       </div>
 
-      {info.running && info.urls && info.urls.length > 0 && (
+      {info.Running && info.URLs && info.URLs.length > 0 && (
         <div className="settings-row">
           <div className="settings-row-text">
             <div className="settings-row-title">
@@ -140,7 +175,7 @@ export default function RemoteSettingsPane() {
               {t("settings.center.remote.urlsTitle")}
             </div>
             <div className="settings-row-sub">{t("settings.center.remote.urlsDesc")}</div>
-            {info.urls.map((u) => (
+            {info.URLs.map((u) => (
               <div key={u} className="remote-url-row">
                 <code className="remote-url" data-testid="settings-remote-url">{u}</code>
                 <button
@@ -158,7 +193,7 @@ export default function RemoteSettingsPane() {
         </div>
       )}
 
-      {!info.attached && (
+      {!info.Attached && (
         <div className="settings-row">
           <div className="settings-row-sub">{t("settings.center.remote.notAttached")}</div>
         </div>

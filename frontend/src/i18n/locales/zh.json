@@ -538,7 +538,8 @@
         "regen": "重新生成 token",
         "urlsTitle": "连接地址",
         "urlsDesc": "在手机/其他设备的浏览器打开任一地址即可(一次性换取凭据,之后免输)。",
-        "notAttached": "当前构建不支持内嵌远程(server 模式)。"
+        "notAttached": "当前构建不支持内嵌远程(server 模式)。",
+        "turnOnFromDesktop": "远程服务已关闭:远程客户端无法自行恢复连接,请在桌面端重新开启。"
       }
     },
     "language": "语言",

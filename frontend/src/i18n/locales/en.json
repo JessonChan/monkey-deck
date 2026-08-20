@@ -538,7 +538,8 @@
         "regen": "Regenerate token",
         "urlsTitle": "Connect URLs",
         "urlsDesc": "Open any of these in a browser on your phone / another device (one-time exchange, no re-entry afterwards).",
-        "notAttached": "Embedded remote is unavailable in this build (server mode)."
+        "notAttached": "Embedded remote is unavailable in this build (server mode).",
+        "turnOnFromDesktop": "The remote server is off: a remote client cannot restore its own connection — re-enable it from the desktop app."
       }
     },
     "language": "Language",
