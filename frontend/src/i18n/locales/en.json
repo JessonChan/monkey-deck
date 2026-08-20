@@ -492,7 +492,8 @@
         "permissions": "Permissions",
         "models": "Models & harness",
         "mcp": "MCP servers",
-        "sound": "Sound"
+        "sound": "Sound",
+        "remote": "Remote"
       },
       "general": {
         "desc": "App basics.",
@@ -521,6 +522,23 @@
       "empty": {
         "appearance": "No appearance settings yet; they will be added here later.",
         "conversation": "No conversation settings yet; they will be added here later."
+      },
+      "remote": {
+        "desc": "Embed a token-authenticated HTTP server in the desktop process: browsers / mobile devices on the same Wi-Fi can connect to this app directly — full chat history, messaging and permission prompts, live alongside the desktop UI.",
+        "title": "Enable remote access",
+        "toggleTip": "Devices on your LAN can access this app via a token-protected link",
+        "statusRunning": "Running (port {{port}})",
+        "statusEnabledNotRunning": "Enabled but not running (startup failed; check logs)",
+        "statusStopped": "Off",
+        "portTitle": "Port",
+        "portDesc": "Listen port (1-65535). Applying while running restarts the listener; connected devices reconnect within ~1s.",
+        "portApply": "Apply",
+        "tokenTitle": "Access token",
+        "tokenDesc": "Devices exchange this token for a credential on first connect; regenerating invalidates existing sessions immediately.",
+        "regen": "Regenerate token",
+        "urlsTitle": "Connect URLs",
+        "urlsDesc": "Open any of these in a browser on your phone / another device (one-time exchange, no re-entry afterwards).",
+        "notAttached": "Embedded remote is unavailable in this build (server mode)."
       }
     },
     "language": "Language",
@@ -575,7 +593,11 @@
       "fEnv": "Environment (KEY=VALUE per line)",
       "fUrl": "URL",
       "fHeaders": "Headers (KEY=VALUE per line)",
-      "transport": { "stdio": "stdio", "http": "http", "sse": "sse" }
+      "transport": {
+        "stdio": "stdio",
+        "http": "http",
+        "sse": "sse"
+      }
     },
     "harness": {
       "desc": "Auto-discovered ACP harnesses installed on this machine. Versions are detected locally and checked against their upstream release.",

@@ -2152,6 +2152,24 @@ input, textarea { font-family: inherit; }
 .settings-switch.on .settings-switch-thumb { transform: translateX(16px); }
 .settings-empty { font-size: 12px; color: var(--text-3); padding: 24px 8px; text-align: center; line-height: 1.6; }
 
+/* ─── Remote access pane (§1.8): port input, token, connect URLs ─── */
+.remote-port-input {
+  width: 76px; padding: 4px 8px; border: 1px solid var(--sep); border-radius: 6px;
+  background: var(--elev-1); color: var(--text); font-size: 12px; font-family: inherit;
+}
+.remote-port-input:focus { outline: none; border-color: var(--accent); }
+.settings-error {
+  font-size: 11px; color: #ff6961; line-height: 1.4; padding: 6px 8px;
+  border: 1px solid rgba(255,105,97,0.35); border-radius: 6px; background: rgba(255,105,97,0.08);
+  word-break: break-all;
+}
+.settings-token-value { margin-top: 4px; letter-spacing: 0.4px; }
+.remote-url-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; min-width: 0; }
+.remote-url {
+  flex: 1; min-width: 0; font-size: 10.5px; color: var(--text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
 /* Slider row (font scale #102): a range input + a small "reset" button.
    Native range input is themed to match the accent color across WebKit/WebView2
    (per AGENTS.md §4.6: prefer CSS-driven, low-overhead, cross-platform primitives). */

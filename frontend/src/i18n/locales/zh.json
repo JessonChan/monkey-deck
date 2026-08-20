@@ -492,7 +492,8 @@
         "permissions": "权限",
         "models": "模型与 harness",
         "mcp": "MCP 服务器",
-        "sound": "声音"
+        "sound": "声音",
+        "remote": "远程访问"
       },
       "general": {
         "desc": "应用基本信息。",
@@ -521,6 +522,23 @@
       "empty": {
         "appearance": "外观设置暂未提供,后续将在此补充。",
         "conversation": "对话相关设置暂未提供,后续将在此补充。"
+      },
+      "remote": {
+        "desc": "在桌面进程内嵌一个 token 鉴权的 HTTP 服务:浏览器 / 移动端连同一 Wi-Fi 即可直连本应用,看全部聊天历史、发消息、批权限,与桌面端实时并存。",
+        "title": "启用远程访问",
+        "toggleTip": "开启后本机局域网内的设备可通过带 token 的链接访问本应用",
+        "statusRunning": "运行中(端口 {{port}})",
+        "statusEnabledNotRunning": "已开启但未运行(启动失败,查看日志)",
+        "statusStopped": "未开启",
+        "portTitle": "端口",
+        "portDesc": "监听端口(1-65535),修改后若服务运行中会自动重启,已连接的设备约 1 秒内自动重连。",
+        "portApply": "应用",
+        "tokenTitle": "访问令牌",
+        "tokenDesc": "设备首次连接需带此 token 换取凭据;重新生成后已连接设备立即失效。",
+        "regen": "重新生成 token",
+        "urlsTitle": "连接地址",
+        "urlsDesc": "在手机/其他设备的浏览器打开任一地址即可(一次性换取凭据,之后免输)。",
+        "notAttached": "当前构建不支持内嵌远程(server 模式)。"
       }
     },
     "language": "语言",
@@ -575,7 +593,11 @@
       "fEnv": "环境变量(每行 KEY=VALUE)",
       "fUrl": "URL",
       "fHeaders": "请求头(每行 KEY=VALUE)",
-      "transport": { "stdio": "stdio", "http": "http", "sse": "sse" }
+      "transport": {
+        "stdio": "stdio",
+        "http": "http",
+        "sse": "sse"
+      }
     },
     "harness": {
       "desc": "本机自动发现的 ACP harness。版本号取自本地可执行文件,并对照上游发布源检查是否有新版。",

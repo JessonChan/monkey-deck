@@ -1,19 +1,20 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { X, Settings, Globe, Palette, SlidersHorizontal, ShieldCheck, Boxes, Bell, MessageSquare, Plug } from "lucide-react";
+import { X, Settings, Globe, Palette, SlidersHorizontal, ShieldCheck, Boxes, Bell, MessageSquare, Plug, Smartphone } from "lucide-react";
 import type { AppLanguage } from "../i18n";
 import { useFrontendSettings } from "../lib/settingsStore";
 import { FONT_SCALE_DEFAULT, FONT_SCALE_MAX, FONT_SCALE_MIN } from "../lib/fontScale";
 import PermissionRulesPane from "./PermissionSettings";
 import HarnessPane from "./HarnessSettings";
 import McpPane from "./McpSettings";
+import RemoteSettingsPane from "./RemoteSettingsPane";
 
 // 统一设置中心面板:齿轮入口 → 左侧分类导航 + 右侧表单。
 // 把此前散落在侧栏头部的设置项(语言 / 提示音 / 权限规则 / harness)收敛到单一入口,
 // 各分类读写同一处(前端轻量开关经 useFrontendSettings;SQLite 持久化的由各 pane 直连 ChatService)。
 // 结构可扩展:新增设置只需在 CATEGORIES 加一项 + 渲染对应 pane(§设置中心)。
 
-type CategoryId = "general" | "appearance" | "language" | "conversation" | "permissions" | "models" | "mcp" | "sound";
+type CategoryId = "general" | "appearance" | "language" | "conversation" | "permissions" | "models" | "mcp" | "sound" | "remote";
 
 interface CategoryDef {
   id: CategoryId;
@@ -30,6 +31,7 @@ const CATEGORIES: CategoryDef[] = [
   { id: "models", labelKey: "settings.center.cat.models", icon: Boxes },
   { id: "mcp", labelKey: "settings.center.cat.mcp", icon: Plug },
   { id: "sound", labelKey: "settings.center.cat.sound", icon: Bell },
+  { id: "remote", labelKey: "settings.center.cat.remote", icon: Smartphone },
 ];
 
 interface Props {
@@ -104,6 +106,7 @@ export default function SettingsPanel({ onClose, initialCategory = "general", ha
             {active === "models" && <HarnessPane />}
             {active === "mcp" && <McpPane />}
             {active === "sound" && <SoundPane />}
+            {active === "remote" && <RemoteSettingsPane />}
           </div>
         </div>
       </div>
