@@ -143,7 +143,7 @@ spawn harness 子进程（独立进程组,见 §3.2）
 - **WS 断线只重连不补发**:custom.js 在重连成功后派发 `remote:resync`,前端据此重拉快照对账;不搞服务端事件回放。
 - **relay/推送显式推迟**（M4+,见 §7）:局域网/VPN（Tailscale）直连先行;跨网无 VPN 或 APNs/FCM 推送成为刚需时再评估 relay,当前不为它做任何设计。
 - **每设备独立会话 + 已登录设备管理**(2026-08-23):配对签发 128 位独立 session id(cookie 不再承载主 token),设置页「已登录设备」可查看(UA 派生标签/配对时间/最近活跃)并单独踢出;会话经 settings KV 持久化(重启存活),Regenerate token = 全部踢出。远程设置(开关/端口/token/配对/设备管理)为**桌面管理员专属**,远程浏览器端不渲染该分类(管理台分离,非安全边界)。
-- **浏览器配对走一次性配对码,长效 token 永不进 URL**(2026-08-23):设置页「配对新设备」生成 6 位一次性码(10 分钟有效、单次使用、错 5 次作废,新码替换旧码),`/pair?code=` 换 365 天 HttpOnly cookie;未认证浏览器访问 `/` 得配对登录页(原生客户端仍 401)。长效 token 仅保留 `Authorization: Bearer`(原生/CI)与设置页展示;泄露应急 = Regenerate token(全设备立即失效)。公网暴露须前置 TLS 反代(如 Caddy);旧 `/auth?token=` 已移除(token-in-URL 泄露面)。
+- **浏览器配对 = 2-of-2(一次性配对码 + 配对 sid),长效 token 永不进 URL**(2026-08-23):设置页「配对新设备」生成 {6 位码, 128 位 sid}(10 分钟、单次、码错 5 次烧死,新 attempt 替换旧的)。QR/复制链接只载 `/pair?sid=…`(「到哪去」,高熵瞄不动);码只在 sid 对应的输码页有效(「授权」,瞄得到但单独无用);无 sid 的 `/` 是纯说明页(无输码框)。表单 POST,码不进 URL/历史;换出 365 天 HttpOnly 会话 cookie。长效 token 仅 `Authorization: Bearer`(原生/CI)与设置页展示;泄露应急 = Regenerate token。公网暴露须前置 TLS 反代(如 Caddy);旧 `/auth?token=` 已移除。
 
 ---
 

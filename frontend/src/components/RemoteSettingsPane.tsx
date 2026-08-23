@@ -25,7 +25,7 @@ export default function RemoteSettingsPane() {
   const [portDraft, setPortDraft] = useState("");
   const [busy, setBusy] = useState(false);
   // Active pairing code: {code, expiresAt (RFC3339), baseUrl for the QR}.
-  const [pairing, setPairing] = useState<{ code: string; expiresAt: string; baseUrl: string } | null>(null);
+  const [pairing, setPairing] = useState<{ code: string; sid: string; expiresAt: string; baseUrl: string } | null>(null);
   // Paired devices (per-device sessions): list + individual kick.
   const [devices, setDevices] = useState<RemoteSessionInfo[]>([]);
   const [now, setNow] = useState(() => Date.now());
@@ -104,11 +104,11 @@ export default function RemoteSettingsPane() {
     setBusy(true);
     setError("");
     try {
-      // Go multi-return arrives as a tuple [code, expiresAt(RFC3339)].
-      const [code, expiresAt] = await ChatService.GenerateRemotePairingCode();
+      // Go multi-return arrives as a tuple [code, sid, expiresAt(RFC3339)].
+      const [code, sid, expiresAt] = await ChatService.GenerateRemotePairingCode();
       const cur = await ChatService.GetRemoteInfo();
       const base = cur?.URLs?.[0] ?? window.location.origin;
-      setPairing({ code, expiresAt, baseUrl: base });
+      setPairing({ code, sid, expiresAt, baseUrl: base });
       setNow(Date.now());
     } catch (e) {
       setError(String(e));
@@ -226,11 +226,12 @@ export default function RemoteSettingsPane() {
             <div className="settings-row-sub">{t("settings.center.remote.pairDesc")}</div>
             {pairing && pairingSecsLeft > 0 && (
               <div className="remote-pairing-box" data-testid="remote-pairing">
-                <div className="remote-pairing-qr" data-testid="remote-pairing-qr" data-pair-url={pairing.baseUrl}>
-                  {/* QR carries the ADDRESS only — the code is the secret and
-                      is typed on the phone. A QR/URL leak is then worthless
-                      (user review: code-in-URL was a rotating token-in-URL). */}
-                  <QRCode value={pairing.baseUrl} size={132} bgColor="#ffffff" fgColor="#1a1a1c" />
+                <div className="remote-pairing-qr" data-testid="remote-pairing-qr" data-pair-url={`${pairing.baseUrl}/pair?sid=${pairing.sid}`}>
+                  {/* 2-of-2: the QR/link carries the sid (high-entropy session
+                      binding — "where"); the 6-digit code is typed by the human
+                      ("authorization"). A leaked link alone has no working code;
+                      a glimpsed code alone has nowhere to be typed. */}
+                  <QRCode value={`${pairing.baseUrl}/pair?sid=${pairing.sid}`} size={132} bgColor="#ffffff" fgColor="#1a1a1c" />
                 </div>
                 <div className="remote-pairing-info">
                   <div className="remote-pairing-code" data-testid="remote-pairing-code">{pairing.code}</div>
@@ -238,6 +239,17 @@ export default function RemoteSettingsPane() {
                     {t("settings.center.remote.pairCountdown", { secs: pairingSecsLeft })}
                   </div>
                   <div className="remote-pairing-hint">{t("settings.center.remote.pairHint")}</div>
+                  <button
+                    type="button"
+                    className="btn remote-pairing-copylink"
+                    disabled={busy}
+                    data-testid="remote-pairing-copylink"
+                    data-tooltip-id="md-tip"
+                    data-tooltip-content={t("settings.center.remote.pairLinkTip")}
+                    onClick={() => copyText(`${pairing.baseUrl}/pair?sid=${pairing.sid}`)}
+                  >
+                    {t("settings.center.remote.pairLink")}
+                  </button>
                 </div>
               </div>
             )}

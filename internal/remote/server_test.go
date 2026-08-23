@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -82,9 +83,8 @@ func TestAuthGating(t *testing.T) {
 	}
 
 	// Cookie auth: pair a session first, then use its cookie.
-	pc, _ := srv.GeneratePairingCode()
-	preq := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	presp, perr := preq.Get(base + "/pair?code=" + pc)
+	code, sid, _ := srv.GeneratePairingCode()
+	presp, perr := postPairRaw(base, sid, code)
 	if perr != nil {
 		t.Fatalf("pair: %v", perr)
 	}
@@ -124,13 +124,22 @@ func TestAuthGating(t *testing.T) {
 func TestPairingLifecycle(t *testing.T) {
 	srv, base, _ := startTestServer(t)
 
-	code, expires := srv.GeneratePairingCode()
-	if len(code) != 6 || !expires.After(time.Now()) {
-		t.Fatalf("pairing code = %q/%v, want 6 digits + future expiry", code, expires)
+	code, sid, expires := srv.GeneratePairingCode()
+	if len(code) != 6 || len(sid) != 32 || !expires.After(time.Now()) {
+		t.Fatalf("pairing = code %q sid %q exp %v, want 6 digits + 32-hex sid + future expiry", code, sid, expires)
 	}
 
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Get(base + "/pair?code=" + code)
+	// sid alone (GET) serves the entry page; it must NOT pair.
+	entry := get(t, base+"/pair?sid="+sid)
+	if entry.StatusCode != http.StatusOK || entry.Body == nil {
+		t.Fatalf("entry page = %d, want 200", entry.StatusCode)
+	}
+	entryBody, _ := io.ReadAll(entry.Body)
+	if !bytes.Contains(entryBody, []byte(`name="sid" value="`+sid+`"`)) {
+		t.Fatal("entry page must embed the sid as a hidden field")
+	}
+
+	resp, err := postPairRaw(base, sid, code)
 	if err != nil {
 		t.Fatalf("pair: %v", err)
 	}
@@ -166,25 +175,34 @@ func TestPairingLifecycle(t *testing.T) {
 		t.Fatalf("reused code = %d, want 401", resp.StatusCode)
 	}
 
-	// Attempt cap: fresh code, 5 wrong guesses kill it before the right one.
-	code2, _ := srv.GeneratePairingCode()
+	// Attempt cap: fresh attempt, 5 wrong code guesses (valid sid) kill it.
+	code2, sid2, _ := srv.GeneratePairingCode()
 	for i := range pairingMaxFails {
-		if resp := get(t, base+"/pair?code=000000"); resp.StatusCode != http.StatusUnauthorized {
+		if resp := postPair(t, base, sid2, "000000"); resp.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("wrong guess %d = %d, want 401", i, resp.StatusCode)
 		}
 	}
-	if resp := get(t, base+"/pair?code="+code2); resp.StatusCode != http.StatusUnauthorized {
+	if resp := postPair(t, base, sid2, code2); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("code after %d fails = %d, want 401 (capped)", pairingMaxFails, resp.StatusCode)
 	}
 
-	// Wrong code on a browser flow returns the HTML error page.
-	srv.GeneratePairingCode()
-	req, _ := http.NewRequest("GET", base+"/pair?code=999999", nil)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml")
-	respHTML, _ := http.DefaultClient.Do(req)
-	body, _ := io.ReadAll(respHTML.Body)
-	if respHTML.StatusCode != http.StatusUnauthorized || !bytes.Contains(body, []byte("配对码无效")) {
-		t.Fatalf("browser wrong code = %d/%q, want 401 + HTML page", respHTML.StatusCode, body[:min(60, len(body))])
+	// 2-of-2 negatives: right code + WRONG sid fails; code alone (no sid)
+	// fails; the sid-less root page carries no input at all.
+	srv2code, srv2sid, _ := srv.GeneratePairingCode()
+	if r := postPair(t, base, "0123456789abcdef0123456789abcdef", srv2code); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("right code wrong sid = %d, want 401", r.StatusCode)
+	}
+	if r := postPair(t, base, "", srv2code); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("code without sid = %d, want 401", r.StatusCode)
+	}
+	if r := get(t, base+"/pair?sid=0123456789abcdef0123456789abcdef"); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unknown sid entry = %d, want 401", r.StatusCode)
+	}
+	// The valid sid still pairs after those failed attempts (fails were
+	// counted against code guesses on OTHER sids / empty — sid mismatch
+	// does not burn attempts; code guesses here were zero).
+	if r := postPair(t, base, srv2sid, srv2code); r.StatusCode != http.StatusFound {
+		t.Fatalf("valid pair after negatives = %d, want 302", r.StatusCode)
 	}
 }
 
@@ -197,8 +215,12 @@ func TestPairingLoginPage(t *testing.T) {
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	resp, _ := http.DefaultClient.Do(req)
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`action="/pair"`)) {
-		t.Fatalf("browser / = %d, want 200 pairing form", resp.StatusCode)
+	// Informational only: no code input on the sid-less page (2-of-2).
+	if resp.StatusCode != http.StatusOK || bytes.Contains(body, []byte(`name="code"`)) {
+		t.Fatalf("browser / = %d, want 200 info page WITHOUT code input", resp.StatusCode)
+	}
+	if !bytes.Contains(body, []byte("尚未配对")) {
+		t.Fatal("root page should explain pairing is required")
 	}
 
 	if resp := get(t, base+"/"); resp.StatusCode != http.StatusUnauthorized {
@@ -212,9 +234,8 @@ func TestSessionRevoke(t *testing.T) {
 	srv, base, _ := startTestServer(t)
 
 	pair := func() string {
-		code, _ := srv.GeneratePairingCode()
-		c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-		resp, err := c.Get(base + "/pair?code=" + code)
+		code, sid, _ := srv.GeneratePairingCode()
+		resp, err := postPairRaw(base, sid, code)
 		if err != nil {
 			t.Fatalf("pair: %v", err)
 		}
@@ -323,4 +344,21 @@ func TestHubFanout(t *testing.T) {
 	if _, _, err := c1.Read(readCtx); err == nil {
 		t.Fatalf("expected connection closed after Stop")
 	}
+}
+
+
+// postPair submits the 2-of-2 pair as a form POST (sid+code in the body).
+func postPair(t *testing.T, base, sid, code string) *http.Response {
+	t.Helper()
+	resp, err := postPairRaw(base, sid, code)
+	if err != nil {
+		t.Fatalf("postPair: %v", err)
+	}
+	return resp
+}
+
+func postPairRaw(base, sid, code string) (*http.Response, error) {
+	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	form := url.Values{"sid": {sid}, "code": {code}}
+	return c.PostForm(base+"/pair", form)
 }

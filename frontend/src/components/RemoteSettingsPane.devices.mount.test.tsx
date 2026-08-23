@@ -34,7 +34,7 @@ const overrides: Record<string, unknown> = {
   SetRemoteEnabled: mock(async () => {}),
   SetRemotePort: mock(async () => {}),
   RegenerateRemoteToken: mock(async () => "newtok"),
-  GenerateRemotePairingCode: mock(async () => ["123456", new Date(Date.now() + 600000).toISOString()]),
+  GenerateRemotePairingCode: mock(async () => ["654321", "123456", new Date(Date.now() + 600000).toISOString()]),
 };
 for (const [k, v] of Object.entries(realBindings)) {
   if (!(k in overrides)) overrides[k] = mock(async () => undefined);
@@ -100,7 +100,10 @@ describe("RemoteSettingsPane devices", () => {
       await tick();
       if (rootEl.querySelector('[data-testid="remote-pairing-qr"]')) break;
     }
-    expect(rootEl.querySelector('[data-testid="remote-pairing-qr"]')?.getAttribute("data-pair-url")).toBe("http://192.168.1.5:9260");
+    const pairUrl = rootEl.querySelector('[data-testid="remote-pairing-qr"]')?.getAttribute("data-pair-url") ?? "";
+    expect(pairUrl).toBe("http://192.168.1.5:9260/pair?sid=123456");
+    expect(pairUrl.includes("code=")).toBe(false);
+    expect(!!rootEl.querySelector('[data-testid="remote-pairing-copylink"]')).toBe(true);
   });
 
   test("kick calls RemoteRevokeSession with the session id and refreshes", async () => {

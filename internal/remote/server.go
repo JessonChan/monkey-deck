@@ -202,7 +202,7 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		if p == "/" && strings.Contains(r.Header.Get("Accept"), "text/html") {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(pairingLoginPage))
+			_, _ = w.Write([]byte(pairingRootPage))
 			return
 		}
 		w.Header().Set("WWW-Authenticate", `Bearer realm="monkey-deck"`)

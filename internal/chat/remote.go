@@ -162,21 +162,22 @@ func (s *ChatService) GetRemoteInfo() RemoteInfo {
 	return info
 }
 
-// GenerateRemotePairingCode issues a fresh one-time pairing code (10 min,
-// single use) for browser clients; the settings UI shows it as code + QR.
-// Requires the embedded remote server to be running.
-func (s *ChatService) GenerateRemotePairingCode() (code string, expiresAt string, err error) {
+// GenerateRemotePairingCode issues a fresh one-time pairing attempt (10 min,
+// single use) for browser clients: {6-digit code, pairing sid, expiry}. The
+// sid binds the QR/link to THIS attempt — the code only works on the
+// sid-bound entry page (2-of-2). Requires the remote server to be running.
+func (s *ChatService) GenerateRemotePairingCode() (code string, sid string, expiresAt string, err error) {
 	s.mu.Lock()
 	srv := s.remoteSrv
 	s.mu.Unlock()
 	if srv == nil {
-		return "", "", fmt.Errorf("remote server not attached")
+		return "", "", "", fmt.Errorf("remote server not attached")
 	}
 	if running, _ := srv.Running(); !running {
-		return "", "", fmt.Errorf("remote server not running")
+		return "", "", "", fmt.Errorf("remote server not running")
 	}
-	c, exp := srv.GeneratePairingCode()
-	return c, exp.Format(time.RFC3339), nil
+	c, s2, exp := srv.GeneratePairingCode()
+	return c, s2, exp.Format(time.RFC3339), nil
 }
 
 // SetRemoteEnabled toggles the listener live (persist + start/stop).
