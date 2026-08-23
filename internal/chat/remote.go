@@ -49,6 +49,7 @@ func AttachEmbeddedRemote(s *ChatService, tr *application.HTTPTransport, assets 
 		Assets:     assets,
 		EventNames: eventNames,
 		Token:      s.remoteTokenSnapshot,
+		Sessions:   sessionStore{svc: s},
 		Logger:     slog.Default(),
 	})
 }
