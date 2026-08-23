@@ -2697,9 +2697,44 @@ input, textarea { font-family: inherit; }
    and component structure are untouched — a desktop window never matches this
    breakpoint, and the elements added (drawer scrim) default to display:none. */
 @media (max-width: 768px) {
-  /* 100vh on iOS Safari spans behind the URL bar → the composer would sit
-     under it. dvh tracks the visible viewport (KISS: single line, no JS). */
-  .app { height: 100dvh; }
+  /* App height: 100dvh for the URL-bar, overridable by --md-vvh which App.tsx
+     derives from visualViewport — the layout viewport does not shrink when
+     the on-screen keyboard opens on iOS, so dvh alone leaves the composer
+     under the keyboard. Safe-area padding keeps content off the notch /
+     home indicator in the installed (standalone) PWA. */
+  .app {
+    height: var(--md-vvh, 100dvh);
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  /* Modals/sheets follow the same visible-height rule so their bottoms stay
+     above the keyboard (over-constrained fixed: top wins, bottom ignored). */
+  .modal-overlay { height: var(--md-vvh, 100dvh); }
+
+  /* iOS auto-zooms the page when focusing an input with font-size < 16px —
+     pin all form controls to 16px on mobile (font-scale fidelity loses to
+     not breaking the layout on every composer focus). */
+  input, textarea, select { font-size: 16px !important; }
+
+  /* Hover-gated controls (opacity:0 until row hover) are unreachable on
+     touch — reveal them persistently. msg-actions stays slightly muted to
+     avoid noise under every message; close buttons are small so full on. */
+  .msg-actions { opacity: 0.55; }
+  .tree-acts { opacity: 0.6; }
+  .tabbar-tab-close, .file-tab-close, .terminal-tab-close { opacity: 0.8; }
+
+  /* Kill the 300ms tap delay / double-tap zoom on controls (pinch-zoom stays). */
+  button, a, .session-item-row, .project-item, .project-main, .tabbar-tab,
+  .file-tab, .terminal-tab, .ctx-item { touch-action: manipulation; }
+
+  /* No text selection / iOS callout on navigation chrome — long-press then
+     cleanly fires contextmenu (rename/pin menus). Chat content keeps
+     user-select: text for the copy/quote selection toolbar. */
+  .sidebar, .chat-header, .tabbar, .file-tabbar, .compose-bar, .ctx-menu {
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    user-select: none;
+  }
   /* Sidebar → overlay drawer. react-resizable-panels drives inline flex sizing;
      position:fixed lifts the panel out of that flow entirely, so the drawer
      width/position here win without touching the panel library or desktop CSS.
@@ -2750,10 +2785,10 @@ input, textarea { font-family: inherit; }
      .modal-overlay (shared class) — the card fills that padded box exactly. */
   .modal-overlay { padding: 10px; }
   .modal-card, .add-harness-card { max-width: calc(100vw - 20px); }
-  .new-session-card { max-width: calc(100vw - 20px); max-height: calc(100dvh - 20px); overflow-y: auto; }
+  .new-session-card { max-width: calc(100vw - 20px); max-height: calc(var(--md-vvh, 100dvh) - 20px); overflow-y: auto; }
   .settings-card {
     width: 100%; max-width: 100%;
-    height: calc(100dvh - 20px); max-height: calc(100dvh - 20px);
+    height: calc(var(--md-vvh, 100dvh) - 20px); max-height: calc(var(--md-vvh, 100dvh) - 20px);
     /* Notch / home-indicator clearance (viewport-fit=cover, installed PWA). */
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }

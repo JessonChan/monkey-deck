@@ -1959,6 +1959,47 @@ export default function App() {
   }, []);
   const closeDrawer = () => setDrawerOpen(false);
 
+  // Swipe-left on the drawer closes it (the touch equivalent of tapping the
+  // scrim). Threshold + dominant-axis guard so vertical list scrolling inside
+  // the drawer never triggers it. Desktop never fires touch events — inert.
+  const drawerTouch = useRef<{ x: number; y: number } | null>(null);
+  const onDrawerTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    drawerTouch.current = { x: t.clientX, y: t.clientY };
+  };
+  const onDrawerTouchEnd = (e: React.TouchEvent) => {
+    const s = drawerTouch.current;
+    drawerTouch.current = null;
+    if (!s) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - s.x;
+    const dy = t.clientY - s.y;
+    if (dx < -60 && Math.abs(dx) > Math.abs(dy) * 2) setDrawerOpen(false);
+  };
+
+  // On-screen keyboard (mobile): the layout viewport does NOT shrink when the
+  // keyboard opens on iOS — 100dvh keeps the composer under it. visualViewport
+  // tracks the visible area; expose it as --md-vvh so the ≤768px layout
+  // (.app height, modal sheets) stays above the keyboard. Also reset the
+  // layout scroll iOS performs when the focused input sits low.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const apply = () => {
+      document.documentElement.style.setProperty("--md-vvh", `${Math.round(vv.height)}px`);
+      if (vv.offsetTop > 0) window.scrollTo(0, 0);
+    };
+    apply();
+    vv.addEventListener("resize", apply);
+    vv.addEventListener("scroll", apply);
+    return () => {
+      vv.removeEventListener("resize", apply);
+      vv.removeEventListener("scroll", apply);
+    };
+  }, []);
+
+
+
   return (
     <>
     <Group
@@ -1979,6 +2020,8 @@ export default function App() {
         maxSize="30%"
         collapsible
         panelRef={sidebarPanelRef}
+        onTouchStart={onDrawerTouchStart}
+        onTouchEnd={onDrawerTouchEnd}
         onResize={() => syncCollapsed(sidebarPanelRef, setLeftCollapsed)}
       >
         <Sidebar

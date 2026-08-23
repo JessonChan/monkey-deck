@@ -2,7 +2,10 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- interactive-widget=resizes-content: Android resizes the layout viewport
+         for the on-screen keyboard (iOS needs the visualViewport JS path instead).
+         Ignored on desktop webviews. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <title>Monkey Deck</title>
     <!-- PWA (M2): remote clients (phone browser / Capacitor shell) get an
          installable standalone app. Harmless no-op for the desktop webview. -->
