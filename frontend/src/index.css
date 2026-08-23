@@ -2871,6 +2871,35 @@ input, textarea { font-family: inherit; }
   /* Readonly banner: slim inline notice instead of a full-width loud strip. */
   .readonly-banner { padding: 3px 8px; gap: 8px; font-size: 11px; }
   .readonly-continue-btn { font-size: 11px; padding: 2px 8px; }
+
+  /* Active status badge → 3 animated dots (user feedback): during a turn the
+     text swaps 思考中/执行中/回复中 and the header jumps around. Dots are
+     color-coded per status and FIXED-WIDTH, so the header never shifts.
+     Idle/error keep their text (stable, meaningful). */
+  .chat-header .st-busy,
+  .chat-header .st-thinking,
+  .chat-header .st-executing,
+  .chat-header .st-replying {
+    font-size: 0;
+    min-width: 46px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 10px;
+  }
+  .chat-header .st-busy::before,
+  .chat-header .st-thinking::before,
+  .chat-header .st-executing::before,
+  .chat-header .st-replying::before {
+    content: "";
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    /* dots 2 and 3 ride along as shadows */
+    box-shadow: 9px 0 0 currentColor, 18px 0 0 currentColor;
+    margin-right: 23px; /* balance the shadow space so the trio centers */
+    animation: st-dots-bounce 1s ease-in-out infinite;
+  }
 }
 
 /* ─── App-root error boundary fallback (see AppErrorBoundary.tsx) ─── */
@@ -2895,3 +2924,10 @@ input, textarea { font-family: inherit; }
   background: var(--elev-1); color: var(--text); font-size: 12px; font-family: inherit;
 }
 .remote-public-input:focus { outline: none; border-color: var(--accent); }
+
+/* Shared bounce for the mobile status dots (trio rides one element via
+   box-shadow, so it bounces as a group — calm, low-cost). */
+@keyframes st-dots-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
