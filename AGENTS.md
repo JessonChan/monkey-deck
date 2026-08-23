@@ -142,6 +142,7 @@ spawn harness 子进程（独立进程组,见 §3.2）
 - **只在桌面构建启动内嵌远程**（`attachEmbeddedRemote` 的 build-tag 拆分,同 §5.5 的 runDesktop 模式）;server 二进制（`-tags server`）自带的 HTTP 服务与内嵌远程互斥,**桌面 app 与 server 二进制也绝不允许同时跑**（双进程抢 harness 所有权/ACP 连接/session live 状态）。
 - **WS 断线只重连不补发**:custom.js 在重连成功后派发 `remote:resync`,前端据此重拉快照对账;不搞服务端事件回放。
 - **relay/推送显式推迟**（M4+,见 §7）:局域网/VPN（Tailscale）直连先行;跨网无 VPN 或 APNs/FCM 推送成为刚需时再评估 relay,当前不为它做任何设计。
+- **每设备独立会话 + 已登录设备管理**(2026-08-23):配对签发 128 位独立 session id(cookie 不再承载主 token),设置页「已登录设备」可查看(UA 派生标签/配对时间/最近活跃)并单独踢出;会话经 settings KV 持久化(重启存活),Regenerate token = 全部踢出。远程设置(开关/端口/token/配对/设备管理)为**桌面管理员专属**,远程浏览器端不渲染该分类(管理台分离,非安全边界)。
 - **浏览器配对走一次性配对码,长效 token 永不进 URL**(2026-08-23):设置页「配对新设备」生成 6 位一次性码(10 分钟有效、单次使用、错 5 次作废,新码替换旧码),`/pair?code=` 换 365 天 HttpOnly cookie;未认证浏览器访问 `/` 得配对登录页(原生客户端仍 401)。长效 token 仅保留 `Authorization: Bearer`(原生/CI)与设置页展示;泄露应急 = Regenerate token(全设备立即失效)。公网暴露须前置 TLS 反代(如 Caddy);旧 `/auth?token=` 已移除(token-in-URL 泄露面)。
 
 ---
