@@ -188,10 +188,15 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
-// auth wraps the whole mux. /health and /auth are exempt.
+// auth wraps the whole mux. Exemptions: /health, /auth, and the PWA static
+// metadata (manifest + icons) — the browser fetches the manifest and the
+// apple-touch-icon WITHOUT cookies (spec-defined credentialless subresource
+// fetch), so behind auth the phone's "Add to Home Screen" would 401. These
+// files are public by design (app name, colors, icons) — no secrets.
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if p := r.URL.Path; p == "/health" || p == "/auth" {
+		p := r.URL.Path
+		if p == "/health" || p == "/auth" || p == "/manifest.webmanifest" || strings.HasPrefix(p, "/icons/") {
 			next.ServeHTTP(w, r)
 			return
 		}
