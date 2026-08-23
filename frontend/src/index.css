@@ -2804,8 +2804,8 @@ input, textarea { font-family: inherit; }
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     position: fixed;
     top: calc(env(safe-area-inset-top) + 48px);
+    z-index: 50;
     left: 12px; right: 12px;
-    z-index: 70;
     padding: 10px 12px;
     background: var(--elev-2);
     border: 1px solid var(--sep-strong);
