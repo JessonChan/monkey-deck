@@ -681,6 +681,18 @@ export default function App() {
         return next;
       });
     });
+    // Remote client reconnect (§1.8): custom.js dispatches remote:resync on every
+    // WS (re)connect so a phone that slept / roamed networks reconciles with the
+    // desktop process. Desktop never sees it (custom.js 404s there). Re-pull the
+    // server-side snapshots only — live streaming state is intentionally not
+    // replayed (WS reconnects resync, never backfill).
+    const offResync = Events.On("remote:resync", () => {
+      void refreshProjects();
+      ChatService.ListHarnesses().then((h) => setHarnesses(h ?? [])).catch(() => {});
+      for (const pid of Object.keys(sessionsByProjectRef.current)) {
+        void refreshSessions(pid, true);
+      }
+    });
     // OS file drag-and-drop onto the chat area (Task #24255 / #83): the backend
     // (internal/chat/drop.go) forwards native drop paths + the target session id
     // (data-md-session on .chat-view). Route each path: worktree-internal non-image
@@ -733,6 +745,7 @@ export default function App() {
       offMeta();
       offHarnesses();
       offDrop();
+      offResync();
     };
   }, [refreshProjects, applyEvent, refreshSessions, drainSession, isPopout, popoutMode]);
 
