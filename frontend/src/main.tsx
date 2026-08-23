@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import AppErrorBoundary from "./components/AppErrorBoundary";
 import { FrontendSettingsProvider } from "./lib/settingsStore";
 import { applyFontScale, readFontScale } from "./lib/fontScale";
 import "./i18n";
@@ -14,8 +15,10 @@ applyFontScale(readFontScale());
 const root = document.getElementById("root") as HTMLElement | null;
 if (root) {
   createRoot(root).render(
-    <FrontendSettingsProvider>
-      <App />
-    </FrontendSettingsProvider>,
+    <AppErrorBoundary>
+      <FrontendSettingsProvider>
+        <App />
+      </FrontendSettingsProvider>
+    </AppErrorBoundary>,
   );
 }

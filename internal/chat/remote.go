@@ -245,13 +245,14 @@ func (s *ChatService) RegenerateRemoteToken() (string, error) {
 }
 
 // RemoteSessionInfo is one paired remote device for the settings UI.
+// (No json tags — matches RemoteInfo's wire convention: Wails marshals Go
+// field names, and the generated bindings + pane code agree on PascalCase.)
 type RemoteSessionInfo struct {
-	ID        string `json:"id"`
-	Label     string `json:"label"`
-	CreatedAt string `json:"createdAt"`
-	LastSeen  string `json:"lastSeen"`
+	ID        string
+	Label     string
+	CreatedAt string
+	LastSeen  string
 }
-
 // RemoteListSessions returns the paired devices, newest first.
 func (s *ChatService) RemoteListSessions() []RemoteSessionInfo {
 	s.mu.Lock()

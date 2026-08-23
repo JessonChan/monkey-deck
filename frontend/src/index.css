@@ -2872,3 +2872,18 @@ input, textarea { font-family: inherit; }
   .readonly-banner { padding: 3px 8px; gap: 8px; font-size: 11px; }
   .readonly-continue-btn { font-size: 11px; padding: 2px 8px; }
 }
+
+/* ─── App-root error boundary fallback (see AppErrorBoundary.tsx) ─── */
+.app-error-boundary {
+  height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: var(--bg-window, #1a1a1c);
+}
+.app-error-card {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  width: min(420px, 86vw); padding: 28px 24px; text-align: center;
+  background: var(--elev-2, #232326); border: 1px solid var(--sep-strong, #3a3a3e);
+  border-radius: 14px;
+}
+.app-error-title { font-size: 16px; font-weight: 600; color: var(--text, #e8e8ea); }
+.app-error-msg { font-size: 11.5px; color: var(--text-3, #9a9aa0); line-height: 1.5; word-break: break-all; }
+.app-error-card .btn { margin-top: 6px; padding: 8px 22px; }
