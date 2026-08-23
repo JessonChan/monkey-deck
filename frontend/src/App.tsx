@@ -18,6 +18,7 @@ import { clearScrollPosition } from "./components/CodeViewer";
 import type { TerminalTab } from "./lib/terminalTypes";
 import { disposeTerminal } from "./lib/termRegistry";
 import { parseLaunchAction } from "./lib/launchAction";
+import { useBackLayer } from "./hooks/useBackLayer";
 import NewSessionModal, { type NewSessionChoice } from "./components/NewSessionModal";
 import SettingsPanel from "./components/SettingsPanel";
 import DeleteWorktreeDialog from "./components/DeleteWorktreeDialog";
@@ -1974,6 +1975,16 @@ export default function App() {
     return () => mq.removeEventListener("change", fn);
   }, []);
   const closeDrawer = () => setDrawerOpen(false);
+
+  // Android back gesture (M2 PWA): while a layer below is open, back closes
+  // the TOP layer instead of exiting the app (the biggest native-feel gap —
+  // no popstate/pushState existed before). All pushes are ≤768px-gated inside
+  // the stack, so desktop history and behavior are untouched.
+  useBackLayer(drawerOpen, closeDrawer);
+  useBackLayer(settingsOpen, () => setSettingsOpen(false));
+  useBackLayer(!!newSession, () => setNewSession(null));
+  useBackLayer(!!deleteWt, () => setDeleteWt(null));
+  useBackLayer(!!pendingCloseTab, () => setPendingCloseTab(null));
 
   // Swipe-left on the drawer closes it (the touch equivalent of tapping the
   // scrim). Threshold + dominant-axis guard so vertical list scrolling inside
