@@ -21,6 +21,7 @@ import { parseLaunchAction } from "./lib/launchAction";
 import { useBackLayer } from "./hooks/useBackLayer";
 import { appBadge } from "./lib/appBadge";
 import NewSessionModal, { type NewSessionChoice } from "./components/NewSessionModal";
+import InstallBanner from "./components/InstallBanner";
 import SettingsPanel from "./components/SettingsPanel";
 import DeleteWorktreeDialog from "./components/DeleteWorktreeDialog";
 import CloseTabDialog from "./components/CloseTabDialog";
@@ -2314,6 +2315,9 @@ export default function App() {
         data-testid="drawer-scrim"
       />
     )}
+    {/* PWA install banner (M2): mobile-only via CSS (display:none on desktop);
+        self-dismisses after install or explicit "not now" (localStorage). */}
+    {!isPopout && <InstallBanner />}
     {/* Sidebar collapse/expand toggle (fixed anchor): icon stays at the same spot whether
         the sidebar is open or collapsed — only the icon direction swaps. Hidden in popout
         (no sidebar there). Traffic lights occupy the top-left, so this anchor sits below them.

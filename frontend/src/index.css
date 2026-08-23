@@ -2712,6 +2712,8 @@ input, textarea { font-family: inherit; }
    Without this the unstyled <button> would leak UA default chrome into the
    desktop layout — the >768px render must stay byte-identical (§3.1 M2). */
 .drawer-scrim { display: none; }
+.install-banner { display: none; }
+.msg-share-btn { display: none; }
 
 /* ─── M2 mobile adaptation (≤768px only) ───
    HARD RULE (AGENTS.md §3.1 M2): every rule in this media query block is
@@ -2794,6 +2796,42 @@ input, textarea { font-family: inherit; }
     background: rgba(0, 0, 0, 0.45);
     border: none; padding: 0; cursor: default;
   }
+
+  /* PWA install banner: floating card under the top rail anchors (sidebar /
+     panel toggles sit at the very top). One-time (dismiss → localStorage),
+     never shown once installed (display-mode standalone). */
+  .install-banner {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    position: fixed;
+    top: calc(env(safe-area-inset-top) + 48px);
+    left: 12px; right: 12px;
+    z-index: 70;
+    padding: 10px 12px;
+    background: var(--elev-2);
+    border: 1px solid var(--sep-strong);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-pop);
+    font-size: 12px; color: var(--text);
+  }
+  .install-banner-text { flex: 1; line-height: 1.45; }
+  .install-banner-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .install-banner-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 10px; border-radius: 5px;
+    background: var(--accent); color: #fff;
+    font-size: 12px; cursor: pointer;
+  }
+  .install-banner-close {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 5px;
+    background: transparent; color: var(--text-3); cursor: pointer;
+  }
+  .install-banner-close:active { background: var(--hover); }
+
+  /* Message-level share (navigator.share) is mobile-only: the API exists on
+     desktop Chrome too, but showing it there would change the desktop message
+     actions row (M2 hard rule). */
+  .msg-share-btn { display: inline-flex; }
   .app[data-md-drawer="true"] ~ .drawer-scrim { display: block; }
 
   /* No drag separators on touch. */

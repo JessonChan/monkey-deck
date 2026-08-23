@@ -341,6 +341,13 @@
       "drillTip": "Open directory {{dir}} (Enter or click)"
     }
   },
+  "pwa": {
+    "bannerText": "Install Monkey Deck to your home screen for an app-like experience",
+    "iosHint": "Use Safari's Share menu → Add to Home Screen to install",
+    "install": "Install",
+    "notNow": "Not now"
+  },
+
   "queue": {
     "title": "Queued · {{count}}",
     "hint": "Auto-sent in order after this turn",
