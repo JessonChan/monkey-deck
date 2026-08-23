@@ -201,7 +201,7 @@ monkey-deck/
 |---|---|---|
 | **M0** | 零代码验证:server 模式二进制 + 局域网浏览器/手机直连摸底(传输层实证:binding curl 往返 + WS 事件流 + 0.0.0.0 绑定) | ✅ 完成(2026-08-20,见 worklog) |
 | **M1** | 桌面进程内嵌远程 HTTP 服务(§1.8):GUI 与远程客户端并存 + token 鉴权 + 设置页开关 | ✅ 完成(2026-08-20,见 worklog;E2E 全绿,双构建过) |
-| **M2** | 移动端可用性(2026-08-23 重新定位):响应式适配(≤768px 抽屉侧栏、tooltip 触屏等价物、对话框降级)+ `remote:resync` 前端 hook + PWA manifest。**硬约束:桌面 UI 零修改**——所有改动必须在 ≤768px 断点内条件生效,>768px 的布局/样式/交互/组件结构不变,验收含桌面端渲染前后一致比对 | 进行中 |
+| **M2** | 移动端可用性(2026-08-23 重新定位):响应式适配(≤768px 抽屉侧栏、tooltip 触屏等价物、对话框降级)+ `remote:resync` 前端 hook + PWA manifest。**硬约束:桌面 UI 零修改**——所有改动必须在 ≤768px 断点内条件生效,>768px 的布局/样式/交互/组件结构不变,验收含桌面端渲染前后一致比对 | 代码完成(2026-08-23,见 worklog):桌面像素 diff=0 实证、移动端浏览器 E2E 全绿、resync 真实路径增量验证;**剩 iOS/Android 真机实测**(软键盘/滚动手感)后才算关闭 |
 | **M2.5** | Capacitor 薄壳 APP(iOS/Android):server URL 模式加载远程服务 + 扫码配对(/auth?token=)+ token 入钥匙串 + mDNS 发现 + iOS ATS(NSAllowsLocalNetworking)。**复用同一份 React 前端,零 UI 重写**;触发条件:M2 完成且真机验证有安装 APP 的需求 | — |
 | **M3** | 远程访问通路文档化(Tailscale/VPN)+ 可选 TLS | — |
 | **M4** | relay/推送(显式推迟,见 §7) | — |
