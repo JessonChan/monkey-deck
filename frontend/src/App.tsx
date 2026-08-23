@@ -2347,6 +2347,10 @@ export default function App() {
       id="md-tip"
       delayShow={coarsePointer ? 0 : (isMac ? 1500 : 500)}
       openOnClick={coarsePointer}
+      // Touch: a tooltip opened by tapping must close when the user taps
+      // anywhere else (e.g. the tap that opens a modal) — otherwise it lingers
+      // over the new surface. Hover mode on desktop keeps library defaults.
+      globalCloseEvents={coarsePointer ? { clickOutsideAnchor: true } : undefined}
     />
     </>
   );

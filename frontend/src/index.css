@@ -2708,8 +2708,11 @@ input, textarea { font-family: inherit; }
     padding-bottom: env(safe-area-inset-bottom);
   }
   /* Modals/sheets follow the same visible-height rule so their bottoms stay
-     above the keyboard (over-constrained fixed: top wins, bottom ignored). */
-  .modal-overlay { height: var(--md-vvh, 100dvh); }
+     above the keyboard (over-constrained fixed: top wins, bottom ignored).
+     z-index: the drawer overlay is 60 / scrim 55 — a modal opened FROM the
+     drawer (new chat, settings, confirms) must stack ABOVE the drawer, which
+     stays open behind so browsing resumes when the modal is cancelled. */
+  .modal-overlay { height: var(--md-vvh, 100dvh); z-index: 65; }
 
   /* iOS auto-zooms the page when focusing an input with font-size < 16px —
      pin all form controls to 16px on mobile (font-scale fidelity loses to
@@ -2799,4 +2802,15 @@ input, textarea { font-family: inherit; }
     overflow-x: auto; overflow-y: hidden; padding: 6px 8px;
     flex-shrink: 0;
   }
+
+  /* New-session modal internals: the two worktree-mode cards sit side by side
+     on desktop — at 370px they are cramped with wrapped text. Stack them for
+     full-width rows and bigger tap targets. */
+  .ns-worktree-group { flex-direction: column; }
+  /* Branch selector dropdown: the desktop 240px cap can extend past the
+     visible sheet and clip its last rows mid-item — cap to the viewport. */
+  .ns-baseref-dropdown { max-height: min(320px, 45dvh); }
+  /* Elicitation action row: base has no wrap; multiple option buttons + Skip
+     overflow a 370px card. */
+  .elicit-actions { flex-wrap: wrap; justify-content: flex-start; }
 }
