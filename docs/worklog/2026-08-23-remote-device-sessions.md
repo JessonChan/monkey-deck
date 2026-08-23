@@ -47,3 +47,7 @@ main:993cb94(管理台分离)/ sessions 后端+绑定 / pane 设备段 / docs(�
 
 **用户报告**:PWA 发消息,桌面已见完整回复,PWA 停在半截;重进才恢复。根因:`remote:resync` 钩子只重拉列表(项目/session 列表),**不重载当前打开对话的内容**——WS 断线期间的流式事件永久丢失,半截消息冻住;重进=从 DB 重读,故"就好了"。修:resync 时若已加载过当前 session(区分首连,避免双载),删 loadedSessions 缓存标记并走 openSession 强制重载(与「切走丢弃后切回」同一路径)。E2E:主世界派发 remote:resync → LoadMessagesPage(876520863)被调用 1 次 ✓。
 空闲态:st-idle 移动端改单个静态绿点(用户:空闲也别用文字);error/readonly/closed 保留文字(有语义且不跳动)。
+
+## 追加三:后台/前台生命周期补强(visibilitychange)
+
+用户问:PWA 切后台 WS 会断吗?有重连吗?答:会断(OS 冻结进程),custom.js 有 1s 重连;但存在**半开连接**空隙——系统杀连接而 onclose 未送达,回前台后客户端以为还连着,resync 不触发。补:custom.js 增加 visibilitychange 处理——回前台时 readyState 非 OPEN 立即重连(不等被节流的定时器);仍 OPEN 也派发 remote:resync 对账(半开链路上什么都收不到)。服务端 hub 无心跳(下一次事件写失败也会驱逐死链),ping 心跳留作后续可选优化。

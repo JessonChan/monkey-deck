@@ -52,5 +52,16 @@ const customJS = `(function() {
 		};
 	}
 
+	// Foreground recovery: a backgrounded PWA gets frozen by the OS; the
+	// socket may die WITHOUT delivering onclose (half-open). On returning to
+	// the foreground, verify the connection immediately instead of waiting
+	// for the (possibly throttled) reconnect timer — and reconcile even when
+	// the socket still reads OPEN, since a half-open link delivers nothing.
+	document.addEventListener('visibilitychange', function() {
+		if (document.visibilityState !== 'visible') return;
+		if (!ws || ws.readyState > 1) { connect(); return; }
+		dispatch({ name: 'remote:resync', data: null });
+	});
+
 	connect();
 })();`
