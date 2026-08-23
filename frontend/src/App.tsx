@@ -692,6 +692,17 @@ export default function App() {
       for (const pid of Object.keys(sessionsByProjectRef.current)) {
         void refreshSessions(pid, true);
       }
+      // A reconnect implies a possible EVENT GAP, and the open conversation's
+      // tail exists only in the desktop's memory — lists alone leave a frozen
+      // partial message on the phone until manual re-entry (user report).
+      // Force a DB reload via the same path as the switch-away cache drop.
+      // Guard: only when this session was already loaded (first WS connect
+      // rides along initial boot — skip to avoid a double load).
+      const sid = selectedSessionIdRef.current;
+      if (sid && loadedSessionsRef.current.has(sid)) {
+        loadedSessionsRef.current.delete(sid);
+        void openSessionRef.current(sid);
+      }
     });
     // OS file drag-and-drop onto the chat area (Task #24255 / #83): the backend
     // (internal/chat/drop.go) forwards native drop paths + the target session id
@@ -995,6 +1006,10 @@ export default function App() {
     },
     [messagesToItems, selectedProjectId, sessionsByProject]
   );
+  // Late-bound handle for the mount effect's remote:resync handler (declared
+  // before openSession; a ref avoids both TDZ and stale-closure traps).
+  const openSessionRef = useRef(openSession);
+  openSessionRef.current = openSession;
 
   // popout 模式启动:本窗口是某 session 的独立窗口,直接打开目标 session。
   // projectId 从后端 GetSessionProjectID 拿(不依赖 sessionsByProject 的加载时序——

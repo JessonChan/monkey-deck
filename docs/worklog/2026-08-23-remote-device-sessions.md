@@ -42,3 +42,8 @@ main:993cb94(管理台分离)/ sessions 后端+绑定 / pane 设备段 / docs(�
 **为什么我的测试没拦住(mock 保真度教训)**:mount 测试 mock 了 `{ID, Label, ...}`(PascalCase)——与 pane 代码一致、与 wire 相反,假绿;E2E 层桌面 pane 又被自己的管理台分离挡住(远程上下文不渲染),成了验证盲区。**mock 的数据形状必须取自 wire 实测,不能照抄被测代码的期望。**
 
 **修复**:① struct 去 json tags 对齐 RemoteInfo wire 惯例(PascalCase 全链一致),curl 实测 wire 已返回 `ID/Label/...`;② 根级 AppErrorBoundary——渲染错误降级为「重新加载」卡片,杜绝不可退出的黑窗(已确认打进 served bundle)。
+
+## 追加二(同日晚):PWA 半截消息冻住 + 空闲态文字
+
+**用户报告**:PWA 发消息,桌面已见完整回复,PWA 停在半截;重进才恢复。根因:`remote:resync` 钩子只重拉列表(项目/session 列表),**不重载当前打开对话的内容**——WS 断线期间的流式事件永久丢失,半截消息冻住;重进=从 DB 重读,故"就好了"。修:resync 时若已加载过当前 session(区分首连,避免双载),删 loadedSessions 缓存标记并走 openSession 强制重载(与「切走丢弃后切回」同一路径)。E2E:主世界派发 remote:resync → LoadMessagesPage(876520863)被调用 1 次 ✓。
+空闲态:st-idle 移动端改单个静态绿点(用户:空闲也别用文字);error/readonly/closed 保留文字(有语义且不跳动)。

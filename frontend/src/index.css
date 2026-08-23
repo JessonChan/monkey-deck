@@ -2868,6 +2868,24 @@ input, textarea { font-family: inherit; }
   .chat-header-actions .icon-btn { display: none; }
   .chat-model, .chat-branch, .merge-btn { display: none; }
 
+  /* Idle badge → one static green dot (user feedback: no Chinese text up
+     top when idle either). Error/readonly/closed keep their text — those
+     words carry meaning ("出错"/"只读"), and they don't churn. */
+  .chat-header .st-idle {
+    font-size: 0;
+    min-width: 18px;
+    padding: 6px 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .chat-header .st-idle::before {
+    content: "";
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
   /* Readonly banner: slim inline notice instead of a full-width loud strip. */
   .readonly-banner { padding: 3px 8px; gap: 8px; font-size: 11px; }
   .readonly-continue-btn { font-size: 11px; padding: 2px 8px; }
