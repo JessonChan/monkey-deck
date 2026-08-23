@@ -32,3 +32,13 @@
 ## 分支与提交
 
 main:993cb94(管理台分离)/ sessions 后端+绑定 / pane 设备段 / docs(本条 + AGENTS.md §1.8)。
+
+## 追加:用户桌面实测抓到黑屏崩溃(commit dbb9063)
+
+**症状**:点设置 → 远程 → 全屏黑窗,Esc/关闭全失效。= React 未捕获渲染异常卸载整树的典型表现。
+
+**根因**:RemoteSessionInfo 的 Go struct 我写了小写 json tags → wire 与生成模型都是 `id/label/...`,pane 代码却用 `d.ID` → undefined → 模板里 `d.ID.slice(0,6)` 抛 TypeError。
+
+**为什么我的测试没拦住(mock 保真度教训)**:mount 测试 mock 了 `{ID, Label, ...}`(PascalCase)——与 pane 代码一致、与 wire 相反,假绿;E2E 层桌面 pane 又被自己的管理台分离挡住(远程上下文不渲染),成了验证盲区。**mock 的数据形状必须取自 wire 实测,不能照抄被测代码的期望。**
+
+**修复**:① struct 去 json tags 对齐 RemoteInfo wire 惯例(PascalCase 全链一致),curl 实测 wire 已返回 `ID/Label/...`;② 根级 AppErrorBoundary——渲染错误降级为「重新加载」卡片,杜绝不可退出的黑窗(已确认打进 served bundle)。
