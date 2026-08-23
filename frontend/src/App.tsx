@@ -879,6 +879,12 @@ export default function App() {
   // 关键:有缓存(含进行中的流式)就保留缓存,仅首次打开才从 DB 读 —— 否则切回会丢正在输出的内容。
   const openSession = useCallback(
     async (sessionId: string, projectId?: string) => {
+      // Mobile drawer (M2): opening a session means the user is done browsing
+      // and wants the chat — dismiss the drawer. This is the SINGLE close
+      // trigger tied to navigation; browsing actions inside the drawer
+      // (select project, add project, settings, new-session modal) keep it
+      // open. No-op on desktop (drawerOpen is false there and React bails).
+      setDrawerOpen(false);
       const pid = projectId ?? selectedProjectId;
       // 切走丢弃(内存优化,docs/worklog/2026-07-18-drop-session-items-on-switch.md):
       // 由「节省内存」设置开关控制(isMemorySaverEnabled,默认开)——内存不敏感的用户可在
@@ -1951,11 +1957,7 @@ export default function App() {
     mq.addEventListener("change", fn);
     return () => mq.removeEventListener("change", fn);
   }, []);
-  // Close the drawer whenever a navigation action leaves it (mobile pattern:
-  // picking something behind a drawer implies dismissing it). No-op on desktop.
   const closeDrawer = () => setDrawerOpen(false);
-
-
 
   return (
     <>
@@ -1984,10 +1986,10 @@ export default function App() {
           selectedProjectId={selectedProjectId}
           sessionsByProject={sessionsByProject}
           selectedSessionId={selectedSessionId}
-          onSelectProject={(id) => { closeDrawer(); void selectProject(id); }}
-          onSelectSession={(sid, pid) => { closeDrawer(); void openSession(sid, pid); }}
-          onCreateSession={(pid) => { closeDrawer(); void createSession(pid); }}
-          onAddProject={() => { closeDrawer(); void addProject(); }}
+          onSelectProject={(id) => void selectProject(id)}
+          onSelectSession={(sid, pid) => void openSession(sid, pid)}
+          onCreateSession={(pid) => void createSession(pid)}
+          onAddProject={() => void addProject()}
           permPendingBySession={permPendingBySession}
           draftBySession={draftBySession}
           hasTermBySession={hasTermBySession}
@@ -2000,7 +2002,7 @@ export default function App() {
           unreadBySession={unreadBySession}
           harnesses={harnesses}
           onReorderProjects={reorderProjects}
-          onOpenSettings={() => { closeDrawer(); setSettingsOpen(true); }}
+          onOpenSettings={() => setSettingsOpen(true)}
           harnessUpdateAvailable={harnessUpdateAvailable}
           poppedSessionIds={poppedSessionIds}
           onPopoutSession={popoutSession}
