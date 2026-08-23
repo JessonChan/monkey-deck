@@ -150,6 +150,18 @@ const AUDIO_MIME_ALLOWED = ["audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3
 // 单音频大小上限(base64 前,字节):25MB。音频比图片体积更大,但仍需控量以不爆上下文。
 const AUDIO_MAX_BYTES = 25 * 1024 * 1024;
 
+// Mobile virtual-keyboard attrs (M2 PWA): autocorrect/autocapitalize mangle
+// commands and code in prompts, spellcheck squiggles them, and enterKeyHint
+// labels the composer's Enter (= send, see onKeyDown). Gated to coarse-pointer
+// clients at module load — desktop typing behavior (incl. spellcheck) is
+// unchanged (M2 hard rule: >768px zero modification). Same pattern as App's
+// module-level `coarsePointer` (a desktop window never becomes touch mid-session).
+const coarsePointer = typeof window !== "undefined" && typeof window.matchMedia === "function"
+  && window.matchMedia("(pointer: coarse)").matches;
+const MOBILE_INPUT_ATTRS = coarsePointer
+  ? { autoCapitalize: "off", autoCorrect: "off", spellCheck: false, enterKeyHint: "send" } as const
+  : {};
+
 export default function Composer({ value, onChange, disabled, prompting, configOptions, commands, elicitation, onRespondElicitation, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, audios, onAudiosChange, audioSupported, usage, branch, onNewSessionOnBranch, onSend, onEnqueue, onStop, focusSignal = 0 }: Props) {
   const { t } = useTranslation();
   const [slashOpen, setSlashOpen] = useState(false);
@@ -907,6 +919,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
             data-testid="composer-input"
             value={value}
             placeholder={prompting ? t("composer.placeholderQueued") : t("composer.placeholderNormal")}
+            {...MOBILE_INPUT_ATTRS}
             onChange={handleChange}
             onSelect={handleSelect}
             onKeyDown={onKeyDown}
