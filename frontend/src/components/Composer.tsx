@@ -8,6 +8,7 @@ import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/
 import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
 import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, ListPlus, GitBranch, CornerUpLeft, ListChecks, ClipboardPaste } from "lucide-react";
 import McpChip from "./McpChip";
+import { isRemoteClient } from "../lib/remote";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -959,9 +960,22 @@ export default function Composer({ value, onChange, disabled, prompting, configO
 
         <div className="compose-bar">
           <div className="compose-tools">
-            <button className="tool-btn" data-testid="attach-btn" onClick={addFiles} disabled={disabled} title={t("composer.attachFilesTip")}>
-              <Paperclip size={17} />
-            </button>
+            {/* PickFiles opens a NATIVE dialog on the desktop host (§1.8 remote):
+                on a phone the tap would do nothing visible there. Hide the entry
+                for remote clients — image/audio pickers use DOM file inputs and
+                keep working. Phone→host file upload is future work (M2.5+). */}
+            {!isRemoteClient() && (
+              <button
+                className="tool-btn"
+                data-testid="attach-btn"
+                onClick={addFiles}
+                disabled={disabled}
+                data-tooltip-id="md-tip"
+                data-tooltip-content={t("composer.attachFilesTip")}
+              >
+                <Paperclip size={17} />
+              </button>
+            )}
             {imageSupported && (
               <button
                 className="tool-btn"
