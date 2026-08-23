@@ -2912,10 +2912,12 @@ input, textarea { font-family: inherit; }
   .chat-header .st-idle {
     font-size: 0;
     min-width: 18px;
-    padding: 6px 8px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    /* Same pinned height as every other badge — no growth. */
+    height: 22px;
+    padding: 0 8px;
   }
   .chat-header .st-idle::before {
     content: "";
@@ -2941,7 +2943,10 @@ input, textarea { font-family: inherit; }
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 6px 10px;
+    /* Height PINNED to the text badge's exact height (user: tags must never
+       grow — priority #1). Same box, only the glyph swaps. */
+    height: 22px;
+    padding: 0 10px;
   }
   .chat-header .st-busy::before,
   .chat-header .st-thinking::before,
