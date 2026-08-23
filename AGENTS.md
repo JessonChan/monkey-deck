@@ -200,10 +200,16 @@ monkey-deck/
 | 阶段 | 目标 | 状态 |
 |---|---|---|
 | **M0** | 零代码验证:server 模式二进制 + 局域网浏览器/手机直连摸底(传输层实证:binding curl 往返 + WS 事件流 + 0.0.0.0 绑定) | ✅ 完成(2026-08-20,见 worklog) |
-| **M1** | 桌面进程内嵌远程 HTTP 服务(§1.8):GUI 与远程客户端并存 + token 鉴权 + 设置页开关 | 进行中 |
-| **M2** | 移动端可用性:响应式布局(≤768px 抽屉侧栏)、tooltip 触屏等价物、对话框降级 | — |
-| **M3** | 远程访问通路文档化(Tailscale/VPN)+ 可选 TLS/PWA | — |
+| **M1** | 桌面进程内嵌远程 HTTP 服务(§1.8):GUI 与远程客户端并存 + token 鉴权 + 设置页开关 | ✅ 完成(2026-08-20,见 worklog;E2E 全绿,双构建过) |
+| **M2** | 移动端可用性(2026-08-23 重新定位):响应式适配(≤768px 抽屉侧栏、tooltip 触屏等价物、对话框降级)+ `remote:resync` 前端 hook + PWA manifest。**硬约束:桌面 UI 零修改**——所有改动必须在 ≤768px 断点内条件生效,>768px 的布局/样式/交互/组件结构不变,验收含桌面端渲染前后一致比对 | 进行中 |
+| **M2.5** | Capacitor 薄壳 APP(iOS/Android):server URL 模式加载远程服务 + 扫码配对(/auth?token=)+ token 入钥匙串 + mDNS 发现 + iOS ATS(NSAllowsLocalNetworking)。**复用同一份 React 前端,零 UI 重写**;触发条件:M2 完成且真机验证有安装 APP 的需求 | — |
+| **M3** | 远程访问通路文档化(Tailscale/VPN)+ 可选 TLS | — |
 | **M4** | relay/推送(显式推迟,见 §7) | — |
+
+**M 系列客户端技术路线决策(2026-08-23,用户拍板)**:
+- **放弃 Flutter / React Native 作为近期移动方案**(双前端永久双维护税,单人项目不可持续);RN 相对 Flutter 更贴本项目技术栈(React 19 + TS),仅当远期「专职移动客户端完全重写」被触发时作为首选框架再评估。
+- 渐进路径:PWA(M2 内)→ Capacitor 薄壳(M2.5,Mature v8/Ionic 维护/MIT,零重写)→ **RN 完全重写客户端仅在 WebView 手感成为真实瓶颈时触发**,触发前记入 §7 推迟。
+- 协议契约(binding wire 按名可调 + WS 闭集事件 + resync 语义)是所有远程客户端的稳定接口,M2/M2.5 不破坏之。
 
 **遇到非当前阶段的需求,记成 TODO/OPEN,不写代码。**
 
@@ -387,6 +393,7 @@ WAILS_SERVER_PORT=9246 ./bin/monkey-deck-server      # 或 wails3 task run:serve
 | 云端同步 / 账号系统 | 视情况 | 本地优先 |
 | 运行时监控仪表盘 / 菜单栏 HUD | 阶段 3+ | wesight 有,我们晚做 |
 | 远程 relay 服务 / 移动端推送(APNs/FCM) | M4+ | 局域网/VPN 直连先行(§1.8);跨网无 VPN 或推送成刚需再评估,当前零设计 |
+| Flutter / React Native 专职移动客户端(完全重写 UI) | 条件触发 | 2026-08-23 拍板放弃近期采用;渐进路径见 §3.1 M 系列。仅当 WebView 手感(PWA/Capacitor 薄壳)成为真实瓶颈时触发,届时首选 RN(React 19 + TS 同栈) |
 | 导入 opencode/OMP 历史聊天记录 | **不做** | ACP `session/list`+`session/load` 技术上可批量重放导入,但太重(每个 session 都要 spawn harness 重放)+ 协议字段贫瘠(`SessionInfo` 无 usage/cost/model,load 重放只带协议标准字段)。用户判定永不。详见 `docs/worklog/2026-07-01-decline-import-historical-chats.md` |
 
 ---
