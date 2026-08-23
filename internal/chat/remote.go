@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jessonchan/monkey-deck/internal/remote"
@@ -20,21 +21,23 @@ import (
 // in the main package), so remote stays inert there — server mode serves HTTP itself.
 
 const (
-	settingRemoteEnabled  = "remote.enabled"
-	settingRemotePort     = "remote.port"
-	settingRemoteToken    = "remote.token"
-	settingRemoteSessions = "remote.sessions"
-	defaultRemotePort     = 9250
+	settingRemoteEnabled   = "remote.enabled"
+	settingRemotePort      = "remote.port"
+	settingRemoteToken     = "remote.token"
+	settingRemoteSessions  = "remote.sessions"
+	settingRemotePublicURL = "remote.public_url"
+	defaultRemotePort      = 9250
 )
 
 // RemoteInfo is the settings-UI view of the embedded remote server.
 type RemoteInfo struct {
-	Enabled  bool // persisted preference
-	Running  bool // listener currently up
-	Port     int
-	Token    string
-	URLs     []string // ready-to-open auth URLs, one per LAN IPv4 address
-	Attached bool     // false when not wired (server-tag build / tests)
+	Enabled   bool // persisted preference
+	Running   bool // listener currently up
+	Port      int
+	Token     string
+	URLs      []string // tokenless base URLs, one per LAN IPv4 address
+	PublicURL string   // optional public reverse-proxy base (https://md.example.com)
+	Attached  bool     // false when not wired (server-tag build / tests)
 }
 
 // AttachEmbeddedRemote wires the transport + asset instances shared with the
@@ -80,6 +83,9 @@ func (s *ChatService) loadRemoteConfig() {
 	s.mu.Lock()
 	s.remotePort = port
 	s.remoteToken = token
+	if v, err := s.st.GetSetting(s.ctx, settingRemotePublicURL); err == nil {
+		s.remotePublicURL = v
+	}
 	s.mu.Unlock()
 
 	// Dev/CI escape hatches (AGENTS.md §1.8): env beats persisted settings so
@@ -145,9 +151,9 @@ func (s *ChatService) remotePortSnapshot() int {
 // GetRemoteInfo returns the remote server state for the settings UI.
 func (s *ChatService) GetRemoteInfo() RemoteInfo {
 	s.mu.Lock()
-	enabled, port, token, srv := s.remoteEnabled, s.remotePort, s.remoteToken, s.remoteSrv
+	enabled, port, token, pub, srv := s.remoteEnabled, s.remotePort, s.remoteToken, s.remotePublicURL, s.remoteSrv
 	s.mu.Unlock()
-	info := RemoteInfo{Enabled: enabled, Port: port, Token: token, Attached: srv != nil}
+	info := RemoteInfo{Enabled: enabled, Port: port, Token: token, PublicURL: pub, Attached: srv != nil}
 	if srv != nil {
 		info.Running, _ = srv.Running()
 		if info.Running {
@@ -160,6 +166,24 @@ func (s *ChatService) GetRemoteInfo() RemoteInfo {
 		}
 	}
 	return info
+}
+
+// SetRemotePublicURL persists the optional public reverse-proxy base used for
+// pairing links/QR (empty = LAN addresses only). No validation beyond
+// trimming: the origin must simply be the one the phone will use.
+func (s *ChatService) SetRemotePublicURL(url string) error {
+	url = strings.TrimSpace(url)
+	if url != "" && !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
+		return fmt.Errorf("public URL must start with http(s)://")
+	}
+	url = strings.TrimSuffix(url, "/")
+	if err := s.st.SetSetting(s.ctx, settingRemotePublicURL, url); err != nil {
+		return fmt.Errorf("persist remote.public_url: %w", err)
+	}
+	s.mu.Lock()
+	s.remotePublicURL = url
+	s.mu.Unlock()
+	return nil
 }
 
 // GenerateRemotePairingCode issues a fresh one-time pairing attempt (10 min,
@@ -254,6 +278,7 @@ type RemoteSessionInfo struct {
 	CreatedAt string
 	LastSeen  string
 }
+
 // RemoteListSessions returns the paired devices, newest first.
 func (s *ChatService) RemoteListSessions() []RemoteSessionInfo {
 	s.mu.Lock()

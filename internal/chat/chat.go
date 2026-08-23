@@ -264,10 +264,11 @@ type ChatService struct {
 	ctx context.Context
 
 	// Embedded remote server state (§1.8, remote.go): guarded by mu.
-	remoteSrv     *remote.Server // constructed by AttachEmbeddedRemote; nil until attached
-	remoteEnabled bool
-	remotePort    int
-	remoteToken   string
+	remoteSrv       *remote.Server // constructed by AttachEmbeddedRemote; nil until attached
+	remoteEnabled   bool
+	remotePort      int
+	remoteToken     string
+	remotePublicURL string
 
 	mu      sync.RWMutex
 	active  map[string]*liveSession // db sessionID → live

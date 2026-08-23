@@ -2889,3 +2889,9 @@ input, textarea { font-family: inherit; }
 .app-error-card .btn { margin-top: 6px; padding: 8px 22px; }
 
 .remote-pairing-copylink { font-size: 11px; padding: 3px 10px; margin-top: 4px; align-self: flex-start; }
+
+.remote-public-input {
+  width: 200px; padding: 4px 8px; border: 1px solid var(--sep); border-radius: 6px;
+  background: var(--elev-1); color: var(--text); font-size: 12px; font-family: inherit;
+}
+.remote-public-input:focus { outline: none; border-color: var(--accent); }

@@ -22,9 +22,11 @@ const listSessions = mock(async () => [
   { ID: "def456", Label: "Android · Chrome", CreatedAt: "2026-08-23 16:07", LastSeen: "2m ago" },
 ]);
 const revokeSession = mock(async () => true);
+let infoOverride: Record<string, unknown> | null = null;
 const getInfo = mock(async () => ({
   Enabled: true, Running: true, Port: 9260, Token: "verylongsecrettoken1234",
-  URLs: ["http://192.168.1.5:9260"], Attached: true,
+  URLs: ["http://192.168.1.5:9260"], Attached: true, PublicURL: "",
+  ...(infoOverride ?? {}),
 }));
 
 const overrides: Record<string, unknown> = {
@@ -101,9 +103,26 @@ describe("RemoteSettingsPane devices", () => {
       if (rootEl.querySelector('[data-testid="remote-pairing-qr"]')) break;
     }
     const pairUrl = rootEl.querySelector('[data-testid="remote-pairing-qr"]')?.getAttribute("data-pair-url") ?? "";
-    expect(pairUrl).toBe("http://192.168.1.5:9260/pair?sid=123456");
+    expect(pairUrl).toBe("http://192.168.1.5:9260/pair?sid=123456"); // LAN base when no public URL
     expect(pairUrl.includes("code=")).toBe(false);
     expect(!!rootEl.querySelector('[data-testid="remote-pairing-copylink"]')).toBe(true);
+  });
+
+  test("pairing link prefers the configured public URL (origin-bound cookies)", async () => {
+    infoOverride = { PublicURL: "https://md.example.com" };
+    try {
+      const { rootEl } = await mount();
+      const pairBtn = rootEl.querySelector('[data-testid="settings-remote-pair-btn"]');
+      pairBtn?.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+      for (let i = 0; i < 20; i++) {
+        await tick();
+        if (rootEl.querySelector('[data-testid="remote-pairing-qr"]')) break;
+      }
+      expect(rootEl.querySelector('[data-testid="remote-pairing-qr"]')?.getAttribute("data-pair-url"))
+        .toBe("https://md.example.com/pair?sid=123456");
+    } finally {
+      infoOverride = null;
+    }
   });
 
   test("kick calls RemoteRevokeSession with the session id and refreshes", async () => {

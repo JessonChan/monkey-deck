@@ -23,6 +23,7 @@ export default function RemoteSettingsPane() {
   const [info, setInfo] = useState<RemoteInfo | null>(null);
   const [error, setError] = useState("");
   const [portDraft, setPortDraft] = useState("");
+  const [publicDraft, setPublicDraft] = useState("");
   const [busy, setBusy] = useState(false);
   // Active pairing code: {code, expiresAt (RFC3339), baseUrl for the QR}.
   const [pairing, setPairing] = useState<{ code: string; sid: string; expiresAt: string; baseUrl: string } | null>(null);
@@ -49,6 +50,7 @@ export default function RemoteSettingsPane() {
       .then((r) => {
         setInfo(r);
         setPortDraft(String(r?.Port ?? ""));
+        setPublicDraft(r?.PublicURL ?? "");
       })
       .catch(() => {});
   }, []);
@@ -107,7 +109,9 @@ export default function RemoteSettingsPane() {
       // Go multi-return arrives as a tuple [code, sid, expiresAt(RFC3339)].
       const [code, sid, expiresAt] = await ChatService.GenerateRemotePairingCode();
       const cur = await ChatService.GetRemoteInfo();
-      const base = cur?.URLs?.[0] ?? window.location.origin;
+      // Public base wins when configured: pairing cookies are origin-bound,
+      // so the link must carry the origin the phone will actually keep using.
+      const base = cur?.PublicURL || cur?.URLs?.[0] || window.location.origin;
       setPairing({ code, sid, expiresAt, baseUrl: base });
       setNow(Date.now());
     } catch (e) {
@@ -182,6 +186,37 @@ export default function RemoteSettingsPane() {
             onClick={() => run(() => ChatService.SetRemotePort(Number(portDraft)))}
           >
             {t("settings.center.remote.portApply")}
+          </button>
+        </div>
+      </div>
+
+      <div className="settings-row">
+        <div className="settings-row-text">
+          <div className="settings-row-title">{t("settings.center.remote.publicTitle")}</div>
+          <div className="settings-row-sub">{t("settings.center.remote.publicDesc")}</div>
+        </div>
+        <div className="pane-actions">
+          <input
+            className="remote-public-input"
+            type="url"
+            placeholder="https://md.example.com"
+            value={publicDraft}
+            disabled={busy}
+            data-testid="settings-remote-public-input"
+            onChange={(e) => setPublicDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && publicDraft !== (info?.PublicURL ?? "")) run(() => ChatService.SetRemotePublicURL(publicDraft));
+            }}
+          />
+          <button
+            className="btn"
+            disabled={busy || publicDraft === (info?.PublicURL ?? "")}
+            data-testid="settings-remote-public-apply"
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("settings.center.remote.publicApply")}
+            onClick={() => run(() => ChatService.SetRemotePublicURL(publicDraft))}
+          >
+            {t("settings.center.remote.publicApply")}
           </button>
         </div>
       </div>
