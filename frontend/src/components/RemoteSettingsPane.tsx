@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import QRCode from "react-qr-code";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { RemoteInfo } from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/models";
 import { copyText } from "../lib/clipboard";
-import { Copy, KeyRound, RefreshCw } from "lucide-react";
+import { Copy, KeyRound, QrCode, RefreshCw } from "lucide-react";
 
 // 远程访问 pane(设置中心 → 远程,AGENTS.md §1.8):桌面进程内嵌的 token 鉴权
-// HTTP 服务开关 + 端口 + token + 连接地址。浏览器/移动端经 /auth?token= 直连
-// 同一进程,看历史/发消息/批权限与桌面端并存。SQLite settings 为真相源。
+// HTTP 服务开关 + 端口 + token + 一次性配对码 + 连接地址。浏览器/移动端经
+// /pair?code=<一次性配对码> 换 365 天 cookie(长效 token 不再进 URL),
+// 与桌面端并存。SQLite settings 为真相源。
 
 // Set by /wails/custom.js — true only in remote-browser contexts (the desktop
 // webview gets a 404 for that file and the runtime skips it).
@@ -21,6 +23,20 @@ export default function RemoteSettingsPane() {
   const [error, setError] = useState("");
   const [portDraft, setPortDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  // Active pairing code: {code, expiresAt (RFC3339), baseUrl for the QR}.
+  const [pairing, setPairing] = useState<{ code: string; expiresAt: string; baseUrl: string } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  // Countdown tick while a pairing code is on screen (1s).
+  useEffect(() => {
+    if (!pairing) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [pairing]);
+  const pairingSecsLeft = useMemo(() => {
+    if (!pairing) return 0;
+    return Math.max(0, Math.floor((new Date(pairing.expiresAt).getTime() - now) / 1000));
+  }, [pairing, now]);
 
   // Silent on fetch failure: when the listener is turned off, this pane's own
   // transport goes down with it — keep the last/optimistic state instead of
@@ -37,43 +53,52 @@ export default function RemoteSettingsPane() {
   useEffect(() => { reload(); }, [reload]);
 
   const run = useCallback(async (fn: () => Promise<unknown>) => {
-    setBusy(true); setError("");
-    try { await fn(); reload(); } catch (e) { setError(String(e)); } finally { setBusy(false); }
+    setBusy(true);
+    setError("");
+    try {
+      await fn();
+      reload();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
   }, [reload]);
 
   const toggleRemote = useCallback(async () => {
-    // NOTE: deps use optional chaining — this hook is declared before the
-    // `if (!info)` early return below, so info is null on first render.
-    const next = !(info?.Enabled ?? false);
-    setBusy(true); setError("");
-    // Patch state IMMEDIATELY: stopping the server kills this pane's own
-    // transport mid-response, so the awaited call below may never resolve —
-    // UI state must not depend on it. Reconcile via reload when it does.
-    setInfo((p) => p ? { ...p, Enabled: next, Running: next && p.Attached, URLs: next ? p.URLs : [] } : p);
+    if (!info) return;
+    // Optimistic flip: the response for the OFF direction can be lost in
+    // transport (we just shut our own pipe down) — flip at tap time and roll
+    // back on real errors. Remote clients cannot recover a turned-off server
+    // from their side (§1.8): show a human message instead of a fetch error.
+    const next = !info.Enabled;
+    setInfo({ ...info, Enabled: next, Running: next && info.Attached });
     try {
-      await ChatService.SetRemoteEnabled(next);
-      reload();
+      await run(next ? () => ChatService.SetRemoteEnabled(true) : () => ChatService.SetRemoteEnabled(false));
     } catch (e) {
-      // Turning OFF: transport going down mid-response is the expected end
-      // state, not an error. Turning ON must surface failures — and from a
-      // REMOTE client (our own transport is the server being started, which
-      // may be unreachable) it is simply impossible: revert + explain (§4.4).
-      if (next) {
-        setInfo((p) => p ? { ...p, Enabled: false, Running: false, URLs: [] } : p);
-        setError(window.__mdRemote
-          ? t("settings.center.remote.turnOnFromDesktop")
-          : String(e));
-      }
-    } finally { setBusy(false); }
-  }, [info?.Enabled, reload, t]);
+      setInfo({ ...info });
+      setError(window.__mdRemote ? t("settings.center.remote.turnOnFromDesktop") : String(e));
+    }
+  }, [info, run, t]);
 
-  if (!info) {
-    return (
-      <div className="settings-pane" data-testid="remote-pane">
-        <div className="pane-desc">{error || t("common.loading")}</div>
-      </div>
-    );
-  }
+  const newPairingCode = useCallback(async () => {
+    setBusy(true);
+    setError("");
+    try {
+      // Go multi-return arrives as a tuple [code, expiresAt(RFC3339)].
+      const [code, expiresAt] = await ChatService.GenerateRemotePairingCode();
+      const cur = await ChatService.GetRemoteInfo();
+      const base = cur?.URLs?.[0] ?? window.location.origin;
+      setPairing({ code, expiresAt, baseUrl: base });
+      setNow(Date.now());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  if (!info) return null;
 
   return (
     <div className="settings-pane" data-testid="remote-pane">
@@ -167,6 +192,49 @@ export default function RemoteSettingsPane() {
         </div>
       </div>
 
+      {info.Running && (
+        <div className="settings-row">
+          <div className="settings-row-text">
+            <div className="settings-row-title">
+              <QrCode size={12} style={{ verticalAlign: -2, marginRight: 4 }} />
+              {t("settings.center.remote.pairTitle")}
+            </div>
+            <div className="settings-row-sub">{t("settings.center.remote.pairDesc")}</div>
+            {pairing && pairingSecsLeft > 0 && (
+              <div className="remote-pairing-box" data-testid="remote-pairing">
+                <div className="remote-pairing-qr" data-testid="remote-pairing-qr">
+                  <QRCode value={`${pairing.baseUrl}/pair?code=${pairing.code}`} size={132} bgColor="#ffffff" fgColor="#1a1a1c" />
+                </div>
+                <div className="remote-pairing-info">
+                  <div className="remote-pairing-code" data-testid="remote-pairing-code">{pairing.code}</div>
+                  <div className="remote-pairing-countdown">
+                    {t("settings.center.remote.pairCountdown", { secs: pairingSecsLeft })}
+                  </div>
+                  <div className="remote-pairing-hint">{t("settings.center.remote.pairHint")}</div>
+                </div>
+              </div>
+            )}
+            {pairing && pairingSecsLeft <= 0 && (
+              <div className="settings-row-sub" data-testid="remote-pairing-expired">
+                {t("settings.center.remote.pairExpired")}
+              </div>
+            )}
+          </div>
+          <div className="pane-actions">
+            <button
+              className="btn"
+              disabled={busy}
+              data-testid="settings-remote-pair-btn"
+              data-tooltip-id="md-tip"
+              data-tooltip-content={t("settings.center.remote.pairBtnTip")}
+              onClick={() => void newPairingCode()}
+            >
+              {t("settings.center.remote.pairBtn")}
+            </button>
+          </div>
+        </div>
+      )}
+
       {info.Running && info.URLs && info.URLs.length > 0 && (
         <div className="settings-row">
           <div className="settings-row-text">
@@ -204,7 +272,6 @@ export default function RemoteSettingsPane() {
 
 // Token mask: keep head/tail recognizable, never render the full secret in the DOM.
 function maskToken(token: string): string {
-  if (!token) return "";
-  if (token.length <= 10) return token.slice(0, 2) + "…";
-  return `${token.slice(0, 6)}…${token.slice(-4)}`;
+  if (!token || token.length <= 10) return "••••••";
+  return token.slice(0, 5) + "…" + token.slice(-4);
 }

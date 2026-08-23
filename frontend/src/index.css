@@ -2214,6 +2214,18 @@ input, textarea { font-family: inherit; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
+/* Pairing box: QR + code + countdown. QR sits on a white pad (scanner
+   contrast); the code is large monospace for reading across the desk. */
+.remote-pairing-box {
+  display: flex; align-items: center; gap: 14px; margin-top: 8px;
+  padding: 10px; border: 1px solid var(--sep); border-radius: 8px; background: var(--elev-1);
+}
+.remote-pairing-qr { padding: 6px; background: #fff; border-radius: 6px; flex-shrink: 0; }
+.remote-pairing-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.remote-pairing-code { font-family: var(--mono); font-size: 24px; font-weight: 600; letter-spacing: 6px; color: var(--text); }
+.remote-pairing-countdown { font-size: 11px; color: var(--amber); }
+.remote-pairing-hint { font-size: 10.5px; color: var(--text-3); line-height: 1.4; }
+
 /* Slider row (font scale #102): a range input + a small "reset" button.
    Native range input is themed to match the accent color across WebKit/WebView2
    (per AGENTS.md §4.6: prefer CSS-driven, low-overhead, cross-platform primitives). */
