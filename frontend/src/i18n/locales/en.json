@@ -551,6 +551,11 @@
         "tokenTitle": "Access token",
         "tokenDesc": "Devices exchange this token for a credential on first connect; regenerating invalidates existing sessions immediately.",
         "regen": "Regenerate token",
+        "devicesTitle": "Logged-in devices",
+        "devicesDesc": "One independent session per paired device; kick individually. Regenerating the token kicks all of them.",
+        "deviceMeta": "paired {{paired}} · last seen {{seen}}",
+        "kick": "Kick",
+        "kickTip": "Disconnect this device; it must pair again",
         "pairTitle": "Pair a new device",
         "pairDesc": "Generates a 6-digit one-time pairing code: scan the QR on the phone, or open a connect URL and enter it. Valid 10 minutes, single use, dead after 5 wrong attempts — a leaked old link is worthless.",
         "pairBtn": "Generate code",
@@ -558,8 +563,8 @@
         "pairCountdown": "valid for {{secs}}s",
         "pairHint": "Scan the QR with the phone browser, or type the code on the pairing page",
         "pairExpired": "Pairing code expired — generate a new one.",
-        "urlsTitle": "Connect URLs",
-        "urlsDesc": "Open any of these in a browser on your phone / another device (one-time exchange, no re-entry afterwards).",
+        "urlsTitle": "Manual connect addresses",
+        "urlsDesc": "Every network interface of this Mac. When you cannot scan the QR, type one of these in the phone browser, then enter the pairing code.",
         "notAttached": "Embedded remote is unavailable in this build (server mode).",
         "turnOnFromDesktop": "The remote server is off: a remote client cannot restore its own connection — re-enable it from the desktop app."
       }

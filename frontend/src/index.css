@@ -2214,6 +2214,16 @@ input, textarea { font-family: inherit; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
+/* Logged-in devices: label + meta on the left, kick button on the right. */
+.remote-device-row {
+  display: flex; align-items: center; gap: 8px; margin-top: 6px;
+  padding: 6px 8px; border: 1px solid var(--sep); border-radius: 6px; background: var(--elev-1);
+}
+.remote-device-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.remote-device-label { font-size: 12px; font-weight: 600; color: var(--text); }
+.remote-device-meta { font-size: 10.5px; color: var(--text-3); }
+.remote-device-kick { font-size: 11px; padding: 3px 10px; flex-shrink: 0; }
+
 /* Pairing box: QR + code + countdown. QR sits on a white pad (scanner
    contrast); the code is large monospace for reading across the desk. */
 .remote-pairing-box {

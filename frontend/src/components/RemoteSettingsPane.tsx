@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import QRCode from "react-qr-code";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
-import type { RemoteInfo } from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/models";
+import type { RemoteInfo, RemoteSessionInfo } from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/models";
 import { copyText } from "../lib/clipboard";
 import { isRemoteClient } from "../lib/remote";
 import { Copy, KeyRound, QrCode, RefreshCw } from "lucide-react";
@@ -26,6 +26,8 @@ export default function RemoteSettingsPane() {
   const [busy, setBusy] = useState(false);
   // Active pairing code: {code, expiresAt (RFC3339), baseUrl for the QR}.
   const [pairing, setPairing] = useState<{ code: string; expiresAt: string; baseUrl: string } | null>(null);
+  // Paired devices (per-device sessions): list + individual kick.
+  const [devices, setDevices] = useState<RemoteSessionInfo[]>([]);
   const [now, setNow] = useState(() => Date.now());
 
   // Countdown tick while a pairing code is on screen (1s).
@@ -52,6 +54,10 @@ export default function RemoteSettingsPane() {
   }, []);
 
   useEffect(() => { reload(); }, [reload]);
+  const reloadDevices = useCallback(() => {
+    ChatService.RemoteListSessions().then((d) => setDevices(d ?? [])).catch(() => {});
+  }, []);
+  useEffect(() => { reloadDevices(); }, [reloadDevices]);
 
   const run = useCallback(async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -81,6 +87,18 @@ export default function RemoteSettingsPane() {
       setError(window.__mdRemote ? t("settings.center.remote.turnOnFromDesktop") : String(e));
     }
   }, [info, run, t]);
+
+  const revokeDevice = useCallback(async (id: string) => {
+    setBusy(true);
+    try {
+      await ChatService.RemoteRevokeSession(id);
+      reloadDevices();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [reloadDevices]);
 
   const newPairingCode = useCallback(async () => {
     setBusy(true);
@@ -237,6 +255,33 @@ export default function RemoteSettingsPane() {
             >
               {t("settings.center.remote.pairBtn")}
             </button>
+          </div>
+        </div>
+      )}
+
+      {info.Running && devices.length > 0 && (
+        <div className="settings-row">
+          <div className="settings-row-text">
+            <div className="settings-row-title">{t("settings.center.remote.devicesTitle")}</div>
+            <div className="settings-row-sub">{t("settings.center.remote.devicesDesc")}</div>
+            {devices.map((d) => (
+              <div key={d.ID} className="remote-device-row" data-testid="remote-device-row">
+                <div className="remote-device-main">
+                  <span className="remote-device-label" data-testid="remote-device-label">{d.Label}</span>
+                  <span className="remote-device-meta">{t("settings.center.remote.deviceMeta", { paired: d.CreatedAt, seen: d.LastSeen })}</span>
+                </div>
+                <button
+                  className="btn remote-device-kick"
+                  disabled={busy}
+                  data-testid={`remote-device-kick-${d.ID.slice(0, 6)}`}
+                  data-tooltip-id="md-tip"
+                  data-tooltip-content={t("settings.center.remote.kickTip")}
+                  onClick={() => void revokeDevice(d.ID)}
+                >
+                  {t("settings.center.remote.kick")}
+                </button>
+              </div>
+            ))}
           </div>
         </div>
       )}
