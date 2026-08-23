@@ -2457,12 +2457,27 @@ func (s *ChatService) SetSessionConfigOption(sessionID, configId, value string) 
 		}
 	}
 	if err := ls.chat.SetConfigOption(s.ctx, configId, value); err != nil {
+		// opencode 对每个 cwd 的模型目录快照进程内永久缓存:长命 harness 认不出目录里新增的模型,
+		// set 会被 -32602 "model not found" 拒绝。转成人话并给出用户自救路径(重开会话触发重 spawn),
+		// 不自动重连——切换是用户行为,由用户自己决定(§4.4 不吐协议原文)。
+		if configId == "model" && isModelNotFoundErr(err) {
+			return fmt.Errorf("模型 %s 在当前会话中不可用(agent 进程的模型列表未包含它)。请关闭并重新打开该会话后再选择", value)
+		}
 		return err
 	}
 	flat := ls.chat.FlatConfigOptions()
 	s.emit(EventUpdate, acp.SessionEvent{SessionID: sessionID, Kind: "config_option", ConfigOptions: flat})
 	s.persistConfigCache(sessionID, flat)
 	return nil
+}
+
+// isModelNotFoundErr reports whether the harness rejected a model set because the
+// model is absent from its (process-cached) directory snapshot. opencode returns
+// JSON-RPC -32602 with message "model not found: <id>"; match on the stable message
+// substring rather than the numeric code so other harnesses phrasing it differently
+// but containing the same words still map.
+func isModelNotFoundErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "model not found")
 }
 
 // GetSessionCachedConfigOptions 返回 session 持久化的 config options 快照(懒 spawn:只读态渲染用)。
