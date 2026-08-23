@@ -3,6 +3,11 @@
   "short_name": "Monkey Deck",
   "description": "ACP desktop client — agent sessions per project",
   "start_url": "/",
+  "shortcuts": [
+    { "name": "New Session", "short_name": "New", "url": "/?action=new-session" },
+    { "name": "Switch Project", "url": "/?action=switch-project" },
+    { "name": "Settings", "url": "/?action=settings" }
+  ],
   "display": "standalone",
   "background_color": "#1a1a1c",
   "theme_color": "#1a1a1c",

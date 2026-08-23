@@ -17,6 +17,7 @@ import DiffPane from "./components/DiffPane";
 import { clearScrollPosition } from "./components/CodeViewer";
 import type { TerminalTab } from "./lib/terminalTypes";
 import { disposeTerminal } from "./lib/termRegistry";
+import { parseLaunchAction } from "./lib/launchAction";
 import NewSessionModal, { type NewSessionChoice } from "./components/NewSessionModal";
 import SettingsPanel from "./components/SettingsPanel";
 import DeleteWorktreeDialog from "./components/DeleteWorktreeDialog";
@@ -2012,6 +2013,23 @@ export default function App() {
       vv.removeEventListener("scroll", apply);
     };
   }, []);
+
+  // PWA shortcut launch (?action= from manifest shortcuts): act once after
+  // projects have loaded (the new-session prep needs a selected project),
+  // then strip the param so a refresh doesn't re-trigger. Popout windows and
+  // the desktop webview never carry the param — this whole effect is inert
+  // there (M2: >768px behavior unchanged).
+  const launchActionDoneRef = useRef(false);
+  useEffect(() => {
+    if (launchActionDoneRef.current || isPopout || projects.length === 0) return;
+    const action = parseLaunchAction(window.location.search);
+    launchActionDoneRef.current = true;
+    if (!action) return;
+    window.history.replaceState(null, "", window.location.pathname);
+    if (action === "new-session") void createSession();
+    else if (action === "settings") setSettingsOpen(true);
+    else if (action === "switch-project") setDrawerOpen(true);
+  }, [projects.length, isPopout, createSession]);
 
 
 
