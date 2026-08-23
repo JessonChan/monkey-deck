@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/jessonchan/monkey-deck/internal/remote"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -149,11 +150,31 @@ func (s *ChatService) GetRemoteInfo() RemoteInfo {
 		info.Running, _ = srv.Running()
 		if info.Running {
 			for _, ip := range remote.LanAddresses() {
-				info.URLs = append(info.URLs, fmt.Sprintf("http://%s:%d/auth?token=%s", ip, port, token))
+				// Tokenless base URLs: browser pairing goes through the
+				// one-time /pair code (GenerateRemotePairingCode), never a
+				// token-in-URL link.
+				info.URLs = append(info.URLs, fmt.Sprintf("http://%s:%d", ip, port))
 			}
 		}
 	}
 	return info
+}
+
+// GenerateRemotePairingCode issues a fresh one-time pairing code (10 min,
+// single use) for browser clients; the settings UI shows it as code + QR.
+// Requires the embedded remote server to be running.
+func (s *ChatService) GenerateRemotePairingCode() (code string, expiresAt string, err error) {
+	s.mu.Lock()
+	srv := s.remoteSrv
+	s.mu.Unlock()
+	if srv == nil {
+		return "", "", fmt.Errorf("remote server not attached")
+	}
+	if running, _ := srv.Running(); !running {
+		return "", "", fmt.Errorf("remote server not running")
+	}
+	c, exp := srv.GeneratePairingCode()
+	return c, exp.Format(time.RFC3339), nil
 }
 
 // SetRemoteEnabled toggles the listener live (persist + start/stop).

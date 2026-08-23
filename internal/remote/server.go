@@ -52,8 +52,9 @@ type Options struct {
 
 // Server owns the embedded HTTP listener. Zero value is not usable; use New.
 type Server struct {
-	opts Options
-	hub  *hub
+	opts    Options
+	hub     *hub
+	pairing pairingState
 
 	mu      sync.Mutex
 	running bool
@@ -106,7 +107,7 @@ func (s *Server) Start(port int) error {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
-	mux.HandleFunc("/auth", s.handleAuth)
+	mux.HandleFunc("/pair", s.handlePair)
 	mux.HandleFunc("/wails/custom.js", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
 		w.WriteHeader(http.StatusOK)
@@ -170,38 +171,31 @@ func (s *Server) unregisterEvents() {
 	s.offs = nil
 }
 
-// handleAuth exchanges ?token= for a long-lived cookie, then redirects to /.
-func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
-	tok := r.URL.Query().Get("token")
-	if !s.tokenEqual(tok) {
-		http.Error(w, "invalid token", http.StatusUnauthorized)
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     CookieName,
-		Value:    tok,
-		Path:     "/",
-		MaxAge:   365 * 24 * 3600,
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-	})
-	http.Redirect(w, r, "/", http.StatusFound)
-}
+// (handleAuth was replaced by pairing.go's handlePair: the long-lived token
+// no longer travels in URLs.)
 
-// auth wraps the whole mux. Exemptions: /health, /auth, and the PWA static
+// auth wraps the whole mux. Exemptions: /health, /pair, and the PWA static
 // metadata (manifest + icons) — the browser fetches the manifest and the
 // apple-touch-icon WITHOUT cookies (spec-defined credentialless subresource
 // fetch), so behind auth the phone's "Add to Home Screen" would 401. These
 // files are public by design (app name, colors, icons) — no secrets.
+// Unauthenticated BROWSER navigations of "/" get the pairing login page
+// (form → /pair); native clients keep the plain 401.
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if p == "/health" || p == "/auth" || p == "/manifest.webmanifest" || strings.HasPrefix(p, "/icons/") {
+		if p == "/health" || p == "/pair" || p == "/manifest.webmanifest" || strings.HasPrefix(p, "/icons/") {
 			next.ServeHTTP(w, r)
 			return
 		}
 		if s.tokenEqual(cookieToken(r)) || s.tokenEqual(bearerToken(r)) {
 			next.ServeHTTP(w, r)
+			return
+		}
+		if p == "/" && strings.Contains(r.Header.Get("Accept"), "text/html") {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(pairingLoginPage))
 			return
 		}
 		w.Header().Set("WWW-Authenticate", `Bearer realm="monkey-deck"`)

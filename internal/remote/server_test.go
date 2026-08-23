@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -105,17 +106,24 @@ func TestAuthGating(t *testing.T) {
 	}
 }
 
-// TestAuthEndpointExchange: valid token sets cookie + redirects; invalid 401s.
-func TestAuthEndpointExchange(t *testing.T) {
-	_, base, _ := startTestServer(t)
+// TestPairingLifecycle: the complete one-time-code bootstrap flow —
+// generate → exchange for cookie → code consumed → attempts capped →
+// expiry → wrong-code handling for browsers (HTML) vs native (plain 401).
+func TestPairingLifecycle(t *testing.T) {
+	srv, base, _ := startTestServer(t)
+
+	code, expires := srv.GeneratePairingCode()
+	if len(code) != 6 || !expires.After(time.Now()) {
+		t.Fatalf("pairing code = %q/%v, want 6 digits + future expiry", code, expires)
+	}
 
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Get(base + "/auth?token=secret-token")
+	resp, err := client.Get(base + "/pair?code=" + code)
 	if err != nil {
-		t.Fatalf("auth: %v", err)
+		t.Fatalf("pair: %v", err)
 	}
 	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("auth = %d, want 302", resp.StatusCode)
+		t.Fatalf("pair = %d, want 302", resp.StatusCode)
 	}
 	var got string
 	for _, c := range resp.Cookies() {
@@ -123,14 +131,55 @@ func TestAuthEndpointExchange(t *testing.T) {
 			got = c.Value
 		}
 	}
-	if got != "secret-token" || resp.Header.Get("Set-Cookie") == "" {
-		t.Fatalf("auth cookie = %q, want token", got)
+	if got != "secret-token" {
+		t.Fatalf("pair cookie = %q, want the long-term token", got)
 	}
 
-	if resp := get(t, base+"/auth?token=wrong"); resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("auth wrong token = %d, want 401", resp.StatusCode)
+	// Single use: the same code is dead immediately.
+	if resp := get(t, base+"/pair?code="+code); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("reused code = %d, want 401", resp.StatusCode)
+	}
+
+	// Attempt cap: fresh code, 5 wrong guesses kill it before the right one.
+	code2, _ := srv.GeneratePairingCode()
+	for i := range pairingMaxFails {
+		if resp := get(t, base+"/pair?code=000000"); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("wrong guess %d = %d, want 401", i, resp.StatusCode)
+		}
+	}
+	if resp := get(t, base+"/pair?code="+code2); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("code after %d fails = %d, want 401 (capped)", pairingMaxFails, resp.StatusCode)
+	}
+
+	// Wrong code on a browser flow returns the HTML error page.
+	srv.GeneratePairingCode()
+	req, _ := http.NewRequest("GET", base+"/pair?code=999999", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	respHTML, _ := http.DefaultClient.Do(req)
+	body, _ := io.ReadAll(respHTML.Body)
+	if respHTML.StatusCode != http.StatusUnauthorized || !bytes.Contains(body, []byte("配对码无效")) {
+		t.Fatalf("browser wrong code = %d/%q, want 401 + HTML page", respHTML.StatusCode, body[:min(60, len(body))])
 	}
 }
+
+// TestPairingLoginPage: unauthenticated browser "/" gets the pairing form;
+// native clients keep the plain 401.
+func TestPairingLoginPage(t *testing.T) {
+	_, base, _ := startTestServer(t)
+
+	req, _ := http.NewRequest("GET", base+"/", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	resp, _ := http.DefaultClient.Do(req)
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`action="/pair"`)) {
+		t.Fatalf("browser / = %d, want 200 pairing form", resp.StatusCode)
+	}
+
+	if resp := get(t, base+"/"); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("native / = %d, want 401", resp.StatusCode)
+	}
+}
+
 
 // TestRootChain: authenticated / serves assets through the transport middleware;
 // /wails/runtime is intercepted by the binding middleware.

@@ -132,8 +132,8 @@ func TestRemoteAttachStartsWhenEnabled(t *testing.T) {
 	t.Cleanup(svc.stopRemote)
 
 	info := svc.GetRemoteInfo()
-	if !info.Running || len(info.URLs) == 0 || !strings.Contains(info.URLs[0], "/auth?token=") {
-		t.Fatalf("running info = %+v, want running + auth URLs", info)
+	if !info.Running || len(info.URLs) == 0 || strings.Contains(info.URLs[0], "/auth?token=") || strings.Contains(info.URLs[0], info.Token) {
+		t.Fatalf("running info = %+v, want running + tokenless base URLs (pairing via /pair)", info)
 	}
 
 	// Binding middleware chain is the real HTTPTransport: unauthenticated root 401s.
