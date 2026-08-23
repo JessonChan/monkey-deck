@@ -52,3 +52,36 @@
 ## 分支与提交
 
 main,2 个原子提交:fix(抽屉导航模型)/ feat(触屏键盘可用性)+ 本 docs。
+
+## 追加(同日第二轮):对话框逐个实测与修复
+
+用户二次反馈:「对话框就没有完全做自适应」——属实。上一轮只测了 settings 几何,未逐个打开验证。本轮盘点全部 8 类 modal + 3 类 popover,390px 逐个实开。
+
+### 实测发现并修复(commit 68a82aa)
+
+1. **模态被抽屉盖住(重大)**:`.modal-overlay` z=50 < 抽屉 60。从抽屉打开新建会话,模态只露右侧 70px,完全不可用(vision 检查实证)。修:≤768px 内 `.modal-overlay { z-index: 65 }`;settings 同类名一并修复。抽屉保持在模态后,取消即恢复浏览(与抽屉导航模型自洽)。
+2. **NewSessionModal worktree 两卡并排挤** → 移动端 `.ns-worktree-group` 纵向堆叠。
+3. **baseref 分支下拉 240px 限高超出可视区、末行裁切** → `min(320px, 45dvh)`。
+4. **elicitation 按钮行无 wrap** → wrap + flex-start。
+5. **触屏 tooltip 残留**(点开模态后 "New chat" tooltip 浮在模态上)→ `globalCloseEvents: { clickOutsideAnchor: true }`(仅 coarse pointer;桌面 hover 默认不变)。
+
+### 逐项验证矩阵(全部 390×844 实开)
+
+| 弹层 | 结果 |
+|---|---|
+| NewSessionModal(agent+MCP / git 项目 worktree+baseref 两模式) | ✓ 370×675,无横向溢出,卡堆叠,下拉 320px 封顶末行完整 |
+| AddHarnessModal | ✓ 370×340 居中 |
+| 删除确认(经 ctx 菜单) | ✓ 370×160,已取消未误删 |
+| Settings(全部 pane) | ✓ 唯一"溢出"是 nav 横滚(设计) |
+| ctx-menu(抽屉内可见行长按) | ✓ 定位 fit(注意:对 DOM 里不可见行合成 contextmenu 会得到 -195 的假阴性,必须测可见行) |
+| cfg 模型下拉(Radix portal) | ✓ 320×322,radix 碰撞避让生效 |
+| slash/mention popover | ✓ CSS 绝对定位 left/right 28px 自适应(未实开——需 harness 自报命令,几何上不可能横向溢出) |
+| permission 卡 | ✓ `.permission-actions` 既有 wrap |
+| CloseTab/DeleteWt/FilePanel 确认 | 共用 `.modal-card`(媒询 370px 上限覆盖),几何同删除确认,不再单测 |
+
+桌面像素 diff 复验:与第三轮完全一致(848px delta-1 头像渐变栅格化差,文字/布局零差)。
+
+### 残余(记录)
+
+- slash 菜单未实开(依赖 harness 自报命令的活跃 session);真机补。
+- EditorPane/FileTabBar 窄屏未实开(需从工具卡片打开文件 tab);文件 tab 条是横滚设计,预期可用,真机抽查。
