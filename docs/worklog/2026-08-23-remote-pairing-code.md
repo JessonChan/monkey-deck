@@ -38,3 +38,7 @@
 
 - M3:公网通路文档化(Caddyfile + launchd/autossh 隧道保活 + /pair 限速示例)。
 - 真机扫码配对实测(相机 → /pair → cookie → PWA 安装)。
+
+## 追加:配对逻辑正交化(commit 4f7a0cc)
+
+用户 review:QR 编 `/pair?code=xxx` = 「10 分钟版 token-in-URL」,扫码即进,泄二维码/URL 即泄秘密,配对码形同虚设。**正解:QR 只载地址(到哪去),码只经手输(证明授权),两通道正交。** 配对表单同步改 POST(码走请求体,不进 URL/历史;提交后地址栏干净,E2E 实证)。GET /pair?code= 保留供测试/程序化路径。
