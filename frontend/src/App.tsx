@@ -19,6 +19,7 @@ import type { TerminalTab } from "./lib/terminalTypes";
 import { disposeTerminal } from "./lib/termRegistry";
 import { parseLaunchAction } from "./lib/launchAction";
 import { useBackLayer } from "./hooks/useBackLayer";
+import { appBadge } from "./lib/appBadge";
 import NewSessionModal, { type NewSessionChoice } from "./components/NewSessionModal";
 import SettingsPanel from "./components/SettingsPanel";
 import DeleteWorktreeDialog from "./components/DeleteWorktreeDialog";
@@ -549,6 +550,8 @@ export default function App() {
       // 已弹出到独立窗口的 session:主窗口不弹权限(由 popout 窗口处理),避免双弹(§5.3 不变量)。
       if (e.data && !poppedSessionIdsRef.current.has(e.data.sessionId)) {
         setPermissionBySession((prev) => ({ ...prev, [e.data.sessionId]: e.data }));
+        // PWA icon badge: permission needs the user while the app is backgrounded.
+        if (document.hidden) appBadge.bump();
       }
     });
     const offElicit = Events.On("chat:elicitation", (e: { data: ElicitationPrompt }) => {
@@ -659,6 +662,9 @@ export default function App() {
         }
         // 未读:回合结束但用户没在看的 session → 标记未读(供侧栏尾部小圆点提示)。
         if (s.sessionId !== selectedSessionIdRef.current) setUnreadBySession((p) => ({ ...p, [s.sessionId]: true }));
+        // PWA icon badge: natural turn end while the app is hidden → attention
+        // (same stopReason= data-source distinction as the notify sound, §5.3).
+        if (document.hidden && s.detail?.startsWith("stopReason=")) appBadge.bump();
         const sid = selectedSessionIdRef.current;
         if (sid) { ChatService.SessionDiff(sid).then(d => setSessionDiff(d || "")).catch(() => {}); ChatService.SessionChanges(sid).then(setSessionChanges).catch(() => {}); ChatService.SessionMergeable(sid).then(m => setMergeableBySession((p) => ({ ...p, [sid]: m }))).catch(() => {}); }
       }
@@ -2025,6 +2031,13 @@ export default function App() {
     };
   }, []);
 
+
+  // Returning to the foreground retires the PWA icon badge (attention seen).
+  useEffect(() => {
+    const onVis = () => { if (!document.hidden) appBadge.reset(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
   // PWA shortcut launch (?action= from manifest shortcuts): act once after
   // projects have loaded (the new-session prep needs a selected project),
   // then strip the param so a refresh doesn't re-trigger. Popout windows and
