@@ -212,8 +212,12 @@ const pairingRootPage = `<!doctype html>
           border-radius:10px; border:1px solid #4a4a50; background:#1a1a1c;
           color:#e8e8ea; outline:none; }
   input:focus { border-color:#0a84ff; }
-  button { margin-top:12px; width:100%; padding:12px; font-size:15px; font-weight:600;
+  button { margin-top:12px; padding:12px; font-size:15px; font-weight:600;
            border:none; border-radius:10px; background:#0a84ff; color:#fff; cursor:pointer; }
+  .row { display:flex; gap:8px; }
+  .row button { flex:1; }
+  .row button.ghost { background:#2e2e33; color:#c8c8cc; border:1px solid #4a4a50; }
+  video { display:none; width:100%; border-radius:12px; margin-top:12px; background:#000; }
   .err { color:#ff6961; font-size:12px; margin-top:10px; min-height:14px; }
 </style>
 </head>
@@ -222,18 +226,70 @@ const pairingRootPage = `<!doctype html>
     <h1>Monkey Deck</h1>
     <p>此设备尚未配对。<br>请粘贴桌面端「设置 → 远程 → 复制配对链接」的内容:</p>
     <input id="link" placeholder="https://…/pair?sid=… 或 32 位 sid" autocomplete="off" spellcheck="false">
-    <button type="button" onclick="go()">继续</button>
+    <div class="row">
+      <button type="button" onclick="go()">继续</button>
+      <button type="button" id="scan" class="ghost" onclick="scan()">扫描二维码</button>
+    </div>
     <div class="err" id="err"></div>
-    <p class="dim">也可以用相机扫描桌面端二维码。粘贴的内容不含配对码——还需输入 6 位码才能登录。</p>
+    <video id="cam" playsinline muted></video>
+    <p class="dim">粘贴/扫描的内容不含配对码——还需输入 6 位码才能登录。</p>
   </div>
 <script>
+function extractSid(v) {
+  var m = (v || '').match(/sid=([0-9a-fA-F]{32})/) || (v || '').match(/^([0-9a-fA-F]{32})$/);
+  return m ? m[1].toLowerCase() : null;
+}
 function go() {
-  var v = document.getElementById('link').value.trim();
-  var m = v.match(/sid=([0-9a-fA-F]{32})/) || v.match(/^([0-9a-fA-F]{32})$/);
-  if (!m) { document.getElementById('err').textContent = '未识别到有效的配对链接或 32 位 sid'; return; }
-  location.href = '/pair?sid=' + m[1].toLowerCase();
+  var sid = extractSid(document.getElementById('link').value.trim());
+  if (!sid) { document.getElementById('err').textContent = '未识别到有效的配对链接或 32 位 sid'; return; }
+  location.href = '/pair?sid=' + sid;
 }
 document.getElementById('link').addEventListener('keydown', function(e) { if (e.key === 'Enter') go(); });
+
+// Camera QR scan (user request: typing a 32-hex sid is too long). Uses the
+// native BarcodeDetector (Android Chromium; needs HTTPS). On unsupported
+// engines the button stays hidden and paste remains the path.
+(function() {
+  var btn = document.getElementById('scan');
+  if (!('BarcodeDetector' in window) || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    btn.style.display = 'none';
+    return;
+  }
+  var stop = null;
+  window.scan = function() {
+    var err = document.getElementById('err');
+    err.textContent = '';
+    if (stop) { stop(); return; }
+    var video = document.getElementById('cam');
+    var detector = new BarcodeDetector({ formats: ['qr_code'] });
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }).then(function(stream) {
+      video.srcObject = stream;
+      video.style.display = 'block';
+      video.setAttribute('playsinline', '');
+      video.play();
+      btn.textContent = '停止扫描';
+      var timer = null;
+      function cleanup() {
+        if (timer) clearInterval(timer);
+        stream.getTracks().forEach(function(t) { t.stop(); });
+        video.style.display = 'none';
+        btn.textContent = '扫描二维码';
+        stop = null;
+      }
+      stop = cleanup;
+      timer = setInterval(function() {
+        detector.detect(video).then(function(barcodes) {
+          for (var i = 0; i < barcodes.length; i++) {
+            var sid = extractSid(barcodes[i].rawValue);
+            if (sid) { cleanup(); location.href = '/pair?sid=' + sid; return; }
+          }
+        }).catch(function() {});
+      }, 300);
+    }).catch(function(e) {
+      err.textContent = '相机不可用:' + (e && e.message ? e.message : e);
+    });
+  };
+})();
 </script>
 </body>
 </html>`

@@ -171,7 +171,13 @@ func sessionCookie(id string) *http.Cookie {
 		Path:     "/",
 		MaxAge:   365 * 24 * 3600,
 		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
+		// Lax, not Strict: Strict cookies are dropped on navigations without
+		// same-site initiating context — cold-launching an installed PWA from
+		// the launcher / entering via an app link (camera QR) logged the user
+		// out (user report). Lax still withholds the cookie from cross-site
+		// POSTs; our binding surface is same-origin fetch, so the CSRF surface
+		// is unchanged.
+		SameSite: http.SameSiteLaxMode,
 	}
 }
 

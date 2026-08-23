@@ -52,3 +52,9 @@
 用户实测:①splash 图标是难看的矩形;②**独立 PWA 窗口无地址栏,未配对启动卡死在说明页**(贴不了链接、输不了码)。
 - 图标:原图内容半径 1.25× 安全区,Android 不做圆形 mask 才显示成方框。生成 maskable 变体(画作缩至 78% 合成满幅深底)+ manifest 声明 `purpose: "maskable"`(192/512)。
 - 死路:未配对根页改为**粘贴配对链接/sid 恢复入口**——内联 JS 解析 `sid=<32hex>` 或裸 sid 跳转 sid 输码页,全程不出 PWA 窗口;2-of-2 不变(此页无秘密,只解析用户提供的)。E2E:无效输入报错不跳 ✓ 粘贴完整链接→sid 页→输码→进 app ✓。
+
+## 追加四:PWA 重开要求重配对(root cause)+ 配对页扫码
+
+**用户报告**:已配对过,重开 PWA 又要配对。排查:服务端会话存活且在被刷新(ListSessions lastSeen 1m ago)→ 会话未丢,是**客户端 cookie 未随请求发出**。根因:`SameSite=Strict` 在「无同站发起上下文的首航导航」(启动器冷启动已安装 PWA / 经相机等应用链接进入)会被丢弃。修:session cookie 改 **Lax**——仍拦截跨站 POST 携带,而我们 binding 面全是同源 fetch,CSRF 面不变。curl 实证 Set-Cookie: SameSite=Lax; Max-Age=31536000。
+
+**配对页扫码**(用户提议,32 位 sid 手输太长):根页加「扫描二维码」按钮——`BarcodeDetector` + `getUserMedia`(后置摄像头,300ms 轮询);扫到后**只取 sid 在当前 origin 内跳转**(不跳 QR 里的完整 URL,避免跨 origin 飞出 PWA 窗口);iOS 等不支持引擎自动隐藏按钮,粘贴路径保留。需 HTTPS(相机权限要求安全上下文)。
