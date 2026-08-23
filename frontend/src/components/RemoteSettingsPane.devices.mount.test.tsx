@@ -92,6 +92,15 @@ describe("RemoteSettingsPane devices", () => {
     expect(labels).toContain("Android · Chrome");
     expect(rootEl.querySelector(".remote-device-meta")?.textContent).toContain("2026-08-23 16:05");
     expect(rows[0].querySelector("button")).toBeTruthy();
+    // QR carries the base address only — never the one-time code. Generate a
+    // code first (the box renders only while one is active).
+    const pairBtn = rootEl.querySelector('[data-testid="settings-remote-pair-btn"]');
+    pairBtn?.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    for (let i = 0; i < 20; i++) {
+      await tick();
+      if (rootEl.querySelector('[data-testid="remote-pairing-qr"]')) break;
+    }
+    expect(rootEl.querySelector('[data-testid="remote-pairing-qr"]')?.getAttribute("data-pair-url")).toBe("http://192.168.1.5:9260");
   });
 
   test("kick calls RemoteRevokeSession with the session id and refreshes", async () => {

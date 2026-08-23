@@ -115,7 +115,6 @@ const pairingLoginPage = `<!doctype html>
   h1 { font-size:17px; margin:0 0 6px; }
   p { font-size:12.5px; color:#9a9aa0; margin:0 0 18px; line-height:1.5; }
   input { width:100%; box-sizing:border-box; padding:12px; font-size:22px; letter-spacing:8px;
-          text-align:center; border-radius:10px; border:1px solid #4a4a50; background:#1a1a1c;
           color:#e8e8ea; outline:none; }
   input:focus { border-color:#0a84ff; }
   button { margin-top:14px; width:100%; padding:12px; font-size:15px; font-weight:600;
@@ -123,7 +122,9 @@ const pairingLoginPage = `<!doctype html>
 </style>
 </head>
 <body>
-  <form class="card" method="get" action="/pair">
+  <!-- POST on purpose: a GET form would put the one-time code into the URL
+       (browser history / shares). The code travels in the request body. -->
+  <form class="card" method="post" action="/pair">
     <h1>Monkey Deck</h1>
     <p>请输入桌面端「设置 → 远程」生成的 6 位配对码<br>10 分钟内有效,仅可使用一次</p>
     <input name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="······" autofocus autocomplete="off">

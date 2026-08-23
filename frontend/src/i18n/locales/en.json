@@ -561,7 +561,7 @@
         "pairBtn": "Generate code",
         "pairBtnTip": "Generate a new pairing code (previous one dies immediately)",
         "pairCountdown": "valid for {{secs}}s",
-        "pairHint": "Scan the QR with the phone browser, or type the code on the pairing page",
+        "pairHint": "Scan the QR to open the pairing page, then type this code; the QR is just the address",
         "pairExpired": "Pairing code expired — generate a new one.",
         "urlsTitle": "Manual connect addresses",
         "urlsDesc": "Every network interface of this Mac. When you cannot scan the QR, type one of these in the phone browser, then enter the pairing code.",

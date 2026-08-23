@@ -226,8 +226,11 @@ export default function RemoteSettingsPane() {
             <div className="settings-row-sub">{t("settings.center.remote.pairDesc")}</div>
             {pairing && pairingSecsLeft > 0 && (
               <div className="remote-pairing-box" data-testid="remote-pairing">
-                <div className="remote-pairing-qr" data-testid="remote-pairing-qr">
-                  <QRCode value={`${pairing.baseUrl}/pair?code=${pairing.code}`} size={132} bgColor="#ffffff" fgColor="#1a1a1c" />
+                <div className="remote-pairing-qr" data-testid="remote-pairing-qr" data-pair-url={pairing.baseUrl}>
+                  {/* QR carries the ADDRESS only — the code is the secret and
+                      is typed on the phone. A QR/URL leak is then worthless
+                      (user review: code-in-URL was a rotating token-in-URL). */}
+                  <QRCode value={pairing.baseUrl} size={132} bgColor="#ffffff" fgColor="#1a1a1c" />
                 </div>
                 <div className="remote-pairing-info">
                   <div className="remote-pairing-code" data-testid="remote-pairing-code">{pairing.code}</div>
