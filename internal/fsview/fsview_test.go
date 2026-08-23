@@ -106,24 +106,65 @@ func TestListDirGit(t *testing.T) {
 	}
 }
 
-// 验证读文件:文本正常返回、二进制给提示、目录报错、越界拒绝。
+// ReadFile: text content, binary / too-large flags, dir error, escape rejected.
 func TestReadFile(t *testing.T) {
 	root := t.TempDir()
 	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello"), 0o644))
 	must(t, os.MkdirAll(filepath.Join(root, "d"), 0o755))
 	must(t, os.WriteFile(filepath.Join(root, "bin"), []byte("a\x00b"), 0o644))
+	must(t, os.WriteFile(filepath.Join(root, "big"), bytes.Repeat([]byte("x"), maxReadSize+1), 0o644))
 
-	if c, err := ReadFile(root, "a.txt"); err != nil || c != "hello" {
-		t.Fatalf("read a.txt = %q %v", c, err)
+	if fd, err := ReadFile(root, "a.txt"); err != nil || fd.Content != "hello" || fd.Binary || fd.TooLarge {
+		t.Fatalf("read a.txt = %+v %v", fd, err)
 	}
-	if c, err := ReadFile(root, "bin"); err != nil || c != "二进制文件,不预览。" {
-		t.Fatalf("read bin = %q %v", c, err)
+	if fd, err := ReadFile(root, "bin"); err != nil || !fd.Binary || fd.Content != "" {
+		t.Fatalf("read bin = %+v %v", fd, err)
+	}
+	if fd, err := ReadFile(root, "big"); err != nil || !fd.TooLarge || fd.Content != "" {
+		t.Fatalf("read big = %+v %v", fd, err)
 	}
 	if _, err := ReadFile(root, "d"); err == nil {
 		t.Fatal("read dir should error")
 	}
 	if _, err := ReadFile(root, "../x"); err == nil {
 		t.Fatal("read escape should error")
+	}
+}
+
+// WriteFile: overwrite round-trip, parent auto-create on missing target,
+// permission preservation, dir / escape / oversize rejection.
+func TestWriteFile(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("old"), 0o600))
+	must(t, os.MkdirAll(filepath.Join(root, "d"), 0o755))
+
+	// Overwrite an existing file; content and permission bits are preserved.
+	if err := WriteFile(root, "a.txt", "new"); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "a.txt")); string(b) != "new" {
+		t.Fatalf("a.txt = %q, want %q", b, "new")
+	}
+	if info, err := os.Stat(filepath.Join(root, "a.txt")); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("a.txt perm = %v %v, want 0600", info.Mode().Perm(), err)
+	}
+
+	// Missing parent dirs are created (save-after-delete mid-edit).
+	if err := WriteFile(root, "x/y.txt", "hi"); err != nil {
+		t.Fatalf("write x/y.txt: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "x", "y.txt")); string(b) != "hi" {
+		t.Fatalf("x/y.txt = %q", b)
+	}
+
+	if err := WriteFile(root, "d", "z"); err == nil {
+		t.Fatal("write dir should error")
+	}
+	if err := WriteFile(root, "../x", "z"); err == nil {
+		t.Fatal("write escape should error")
+	}
+	if err := WriteFile(root, "big.txt", strings.Repeat("x", maxWriteSize+1)); err == nil {
+		t.Fatal("write oversize should error")
 	}
 }
 

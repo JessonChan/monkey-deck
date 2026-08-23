@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { File as FileIcon, Copy, X, Search, ChevronUp, ChevronDown, Quote } from "lucide-react";
+import { File as FileIcon, Copy, X, Search, ChevronUp, ChevronDown, Quote, Pencil, Save, AlertTriangle } from "lucide-react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import CodeViewer from "./CodeViewer";
 import SelectionToolbar, { type SelectionAction } from "./SelectionToolbar";
@@ -9,8 +9,12 @@ import { copyText } from "../lib/clipboard";
 
 // EditorPane renders the content of one opened file tab: text -> CodeViewer
 // (syntax highlight + line numbers + virtualization + target-line highlight),
-// image -> <img>. This is read-only preview — no editing (per project scope:
-// code changes go through the agent via ACP, not an in-app editor).
+// image -> <img>. Text files additionally switch into an edit mode: a gutter +
+// textarea surface with dirty tracking, ⌘S save (SessionWriteFile), an
+// on-disk conflict check before overwriting (the agent may edit the same
+// worktree), and a per-path draft cache so switching file tabs mid-edit never
+// silently drops unsaved text. Agent-side code changes still go through ACP —
+// this is the human-at-the-desk convenience path.
 //
 // Loading logic ported from the deleted FilePreviewOverlay; the overlay shell
 // (modal, Esc, centered card) is gone — this is a plain flex-fill pane that
@@ -49,6 +53,29 @@ export default function EditorPane({
   const [imgUrl, setImgUrl] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Why content is absent (binary / too-large), from the backend's structured
+  // FileData — gates the Edit button and renders a plain message. null = text.
+  const [noPreview, setNoPreview] = useState<"binary" | "tooLarge" | null>(null);
+  // Edit mode state. `draft` is the edit buffer for the CURRENT path;
+  // `draftsRef` caches drafts per path so switching file tabs mid-edit and
+  // coming back restores the buffer (EditorPane stays mounted across tab
+  // switches — without this the load effect would silently drop edits).
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  // Drafts are keyed by `${sessionId}/${path}`: relative paths collide across
+  // sessions (each session is its own worktree), and a path-only key would
+  // leak a draft — and its save target — into another session's file.
+  const draftsRef = useRef<Map<string, string>>(new Map());
+  const draftKey = `${sessionId}/${file.path}`;
+  const [saving, setSaving] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // Non-null = the file changed on disk after we loaded it (typically the
+  // agent writing the same worktree); banner offers overwrite / reload / keep.
+  const [conflictDisk, setConflictDisk] = useState<string | null>(null);
+  const [confirmExit, setConfirmExit] = useState(false);
+  const gutterRef = useRef<HTMLDivElement | null>(null);
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   // Scope ref for the selection toolbar: the content area below the toolbar /
@@ -87,19 +114,38 @@ export default function EditorPane({
 
   // Load content when the path changes (line changes alone don't reload —
   // CodeViewer re-highlights via highlightLine prop without a refetch).
+  // Also (re)instates edit state from the per-path draft cache so returning
+  // to a tab with unsaved edits restores the buffer instead of dropping it.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     setContent("");
     setImgUrl("");
+    setNoPreview(null);
+    setSaveError(null);
+    setConflictDisk(null);
+    setConfirmExit(false);
+    const savedDraft = draftsRef.current.get(draftKey);
+    if (savedDraft !== undefined) {
+      setEditing(true);
+      setDraft(savedDraft);
+    } else {
+      setEditing(false);
+      setDraft("");
+    }
     const p = image
       ? ChatService.SessionReadImage(sessionId, file.path).then((d) => d?.dataUrl ?? "")
       : ChatService.SessionReadFile(sessionId, file.path);
     p.then((c) => {
         if (cancelled) return;
-        if (image) setImgUrl(c ?? "");
-        else setContent(c ?? "");
+        if (image) {
+          setImgUrl(c ?? "");
+          return;
+        }
+        const fd = c ?? {};
+        setContent(fd.content ?? "");
+        setNoPreview(fd.binary ? "binary" : fd.tooLarge ? "tooLarge" : null);
       })
       .catch((e) => {
         if (cancelled) return;
@@ -113,18 +159,171 @@ export default function EditorPane({
     };
   }, [file.path, sessionId, image]);
 
+  // ---- Edit mode (text files) ----
+
+  // Dirty = edit buffer diverged from the loaded on-disk content. Derived,
+  // never stored, so it can't drift (§5.3 find the invariant).
+  const dirty = editing && draft !== content;
+
+  const enterEdit = useCallback(() => {
+    setSearchOpen(false);
+    setDraft(content);
+    draftsRef.current.set(draftKey, content);
+    setEditing(true);
+    setConflictDisk(null);
+    setConfirmExit(false);
+    setSaveError(null);
+  }, [content, draftKey]);
+
+  const discardAndExit = useCallback(() => {
+    draftsRef.current.delete(draftKey);
+    setEditing(false);
+    setDraft("");
+    setConflictDisk(null);
+    setConfirmExit(false);
+    setSaveError(null);
+  }, [draftKey]);
+
+  const requestExitEdit = useCallback(() => {
+    if (dirty) {
+      setConfirmExit(true);
+      return;
+    }
+    discardAndExit();
+  }, [dirty, discardAndExit]);
+
+  // Save the draft. Unless `force`, first re-read the file and refuse to
+  // overwrite when the disk copy no longer matches what we loaded — the agent
+  // edits the same worktree, and silently clobbering its writes (or vice
+  // versa) is data loss. The conflict banner then offers overwrite / reload.
+  const save = useCallback(
+    async (force: boolean) => {
+      if (saving || loading) return;
+      setSaveError(null);
+      setSaving(true);
+      try {
+        if (!force) {
+          const c = await ChatService.SessionReadFile(sessionId, file.path);
+          const fd = c ?? {};
+          if (fd.binary || fd.tooLarge || (fd.content ?? "") !== content) {
+            setConflictDisk(fd.binary || fd.tooLarge ? "" : fd.content ?? "");
+            return;
+          }
+        }
+        await ChatService.SessionWriteFile(sessionId, file.path, draft);
+        setContent(draft);
+        draftsRef.current.delete(draftKey);
+        setEditing(false);
+        setDraft("");
+        setConflictDisk(null);
+        setConfirmExit(false);
+        setSavedFlash(true);
+        setTimeout(() => setSavedFlash(false), 1500);
+      } catch (e) {
+        setSaveError(String(e));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [saving, loading, sessionId, file.path, content, draft],
+  );
+
+  // Conflict banner → drop my edits and take the on-disk version.
+  const conflictReload = useCallback(async () => {
+    draftsRef.current.delete(draftKey);
+    setEditing(false);
+    setDraft("");
+    setConflictDisk(null);
+    setConfirmExit(false);
+    setSaveError(null);
+    try {
+      const c = await ChatService.SessionReadFile(sessionId, file.path);
+      const fd = c ?? {};
+      setContent(fd.content ?? "");
+      setNoPreview(fd.binary ? "binary" : fd.tooLarge ? "tooLarge" : null);
+    } catch {
+      // keep the current content; a failed re-read surfaces on next open
+    }
+  }, [sessionId, file.path]);
+
+  const onDraftChange = useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      setDraft(e.target.value);
+      draftsRef.current.set(draftKey, e.target.value);
+    },
+    [draftKey],
+  );
+
+  // Textarea keys: ⌘S saves, Esc peels banners off first then exits edit
+  // (confirm when dirty), Tab inserts a 2-space soft indent (default Tab would
+  // move focus out of the editor — broken UX for code).
+  const onEditKey = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) {
+        e.preventDefault();
+        if (dirty && !saving) void save(false);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (conflictDisk !== null) {
+          setConflictDisk(null);
+          return;
+        }
+        if (confirmExit) {
+          setConfirmExit(false);
+          return;
+        }
+        requestExitEdit();
+        return;
+      }
+      if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        const ta = e.currentTarget;
+        const s = ta.selectionStart;
+        const en = ta.selectionEnd;
+        const next = draft.slice(0, s) + "  " + draft.slice(en);
+        setDraft(next);
+        draftsRef.current.set(draftKey, next);
+        requestAnimationFrame(() => {
+          ta.selectionStart = ta.selectionEnd = s + 2;
+        });
+      }
+    },
+    [dirty, saving, conflictDisk, confirmExit, requestExitEdit, save, draft, draftKey],
+  );
+
+  // Keep the gutter scrolled with the textarea (single writer: user scrolls
+  // the textarea; the gutter just mirrors scrollTop).
+  const syncGutter = useCallback(() => {
+    if (gutterRef.current && taRef.current) {
+      gutterRef.current.scrollTop = taRef.current.scrollTop;
+    }
+  }, []);
+
+  // Focus the textarea whenever edit mode is (re)entered.
+  useEffect(() => {
+    if (editing) taRef.current?.focus();
+  }, [editing]);
+
+  // Gutter line numbers for the current draft. Plain sequential divs; the
+  // textarea itself is not virtualized, so the gutter may hold one node per
+  // line — same order of cost as the textarea's own content.
+  const lineCount = useMemo(() => draft.split("\n").length, [draft]);
+
   const copy = useCallback(async () => {
-    await copyText(content);
+    await copyText(editing ? draft : content);
     setCopied(true);
     setTimeout(() => setCopied(false), 1200);
-  }, [content]);
+  }, [content, draft, editing]);
 
-  // ⌘F / Ctrl+F opens the search overlay (text files only). Attached at window
-  // scope so it fires regardless of focus within the pane; preventDefault keeps
-  // the webview's native find (if any) out of the way. EditorPane only mounts
-  // when a file tab is active, so the listener's lifetime matches the pane.
+  // ⌘F / Ctrl+F opens the search overlay (view mode, text files only — edit
+  // mode has no CodeViewer to drive). Attached at window scope so it fires
+  // regardless of focus within the pane; preventDefault keeps the webview's
+  // native find (if any) out of the way. EditorPane only mounts when a file
+  // tab is active, so the listener's lifetime matches the pane.
   useEffect(() => {
-    if (image) return;
+    if (image || editing) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === "f" || e.key === "F")) {
         e.preventDefault();
@@ -133,7 +332,7 @@ export default function EditorPane({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [image]);
+  }, [image, editing]);
 
   // Debounce the query so rapid typing doesn't re-scan a large file + re-render
   // every CodeViewer line on each keystroke. Reset activeIdx to 0 so the user
@@ -227,7 +426,57 @@ export default function EditorPane({
         <span className="editor-path" title={file.path}>
           {file.path}{lineNum ? `:${lineNum}` : ""}
         </span>
-        {!image && (
+        {savedFlash && !editing && (
+          <span className="ed-saved" data-testid="editor-saved">✓ {t("filePreview.saved")}</span>
+        )}
+        {!image && !editing && !noPreview && !loading && !error && (
+          <button
+            className="tool-btn"
+            onClick={enterEdit}
+            data-testid="editor-edit-btn"
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("filePreview.editTip")}
+            aria-label={t("filePreview.editTip")}
+          >
+            <Pencil size={14} />
+          </button>
+        )}
+        {editing && (
+          <>
+            {dirty && (
+              <span
+                className="ed-dirty"
+                data-testid="editor-dirty"
+                data-tooltip-id="md-tip"
+                data-tooltip-content={t("filePreview.dirtyTip")}
+              >
+                ●
+              </span>
+            )}
+            <button
+              className="tool-btn"
+              onClick={() => void save(false)}
+              disabled={!dirty || saving}
+              data-testid="editor-save-btn"
+              data-tooltip-id="md-tip"
+              data-tooltip-content={t("filePreview.saveTip")}
+              aria-label={t("filePreview.saveTip")}
+            >
+              {saving ? <span style={{ fontSize: 11 }}>…</span> : <Save size={14} />}
+            </button>
+            <button
+              className="tool-btn"
+              onClick={requestExitEdit}
+              data-testid="editor-exit-btn"
+              data-tooltip-id="md-tip"
+              data-tooltip-content={t("filePreview.exitEditTip")}
+              aria-label={t("filePreview.exitEditTip")}
+            >
+              <X size={14} />
+            </button>
+          </>
+        )}
+        {!image && !editing && (
           <button
             className="tool-btn"
             onClick={copy}
@@ -238,7 +487,7 @@ export default function EditorPane({
             {copied ? <span style={{ fontSize: 11 }}>✓</span> : <Copy size={14} />}
           </button>
         )}
-        {!image && (
+        {!image && !editing && (
           <button
             className="tool-btn"
             onClick={() => setSearchOpen(true)}
@@ -315,6 +564,82 @@ export default function EditorPane({
       <div ref={contentRef} className="editor-pane-content">
         {error ? (
           <div className="preview-error">{t("filePreview.readFailed", { error })}</div>
+        ) : editing ? (
+          <div className="ed-wrap" data-testid="editor-edit">
+            {conflictDisk !== null && (
+              <div className="ed-banner ed-banner-warn" data-testid="editor-conflict" role="alert">
+                <AlertTriangle size={14} className="ed-banner-icon" />
+                <span className="ed-banner-text">{t("filePreview.conflictTitle")}</span>
+                <button
+                  className="ed-banner-btn"
+                  onClick={() => void save(true)}
+                  disabled={saving}
+                  data-testid="editor-conflict-force"
+                >
+                  {t("filePreview.conflictForce")}
+                </button>
+                <button
+                  className="ed-banner-btn"
+                  onClick={() => void conflictReload()}
+                  data-testid="editor-conflict-reload"
+                >
+                  {t("filePreview.conflictReload")}
+                </button>
+                <button className="ed-banner-btn ed-banner-cancel" onClick={() => setConflictDisk(null)}>
+                  {t("filePreview.keepEditing")}
+                </button>
+              </div>
+            )}
+            {confirmExit && (
+              <div className="ed-banner" data-testid="editor-exit-confirm" role="alert">
+                <span className="ed-banner-text">{t("filePreview.exitConfirmTitle")}</span>
+                <button
+                  className="ed-banner-btn"
+                  onClick={() => void save(false)}
+                  disabled={!dirty || saving}
+                  data-testid="editor-exit-save"
+                >
+                  {t("filePreview.saveAndExit")}
+                </button>
+                <button className="ed-banner-btn" onClick={discardAndExit} data-testid="editor-exit-discard">
+                  {t("filePreview.discard")}
+                </button>
+                <button className="ed-banner-btn ed-banner-cancel" onClick={() => setConfirmExit(false)}>
+                  {t("filePreview.keepEditing")}
+                </button>
+              </div>
+            )}
+            {saveError && (
+              <div className="ed-banner ed-banner-error" data-testid="editor-save-error" role="alert">
+                <span className="ed-banner-text">{t("filePreview.saveFailed", { error: saveError })}</span>
+                <button className="ed-banner-btn ed-banner-cancel" onClick={() => setSaveError(null)}>
+                  {t("common.close")}
+                </button>
+              </div>
+            )}
+            <div className="ed-scroll">
+              <div className="ed-gutter" ref={gutterRef} aria-hidden="true">
+                {Array.from({ length: lineCount }, (_, i) => (
+                  <div key={i} className="ed-no">{i + 1}</div>
+                ))}
+              </div>
+              <textarea
+                ref={taRef}
+                className="ed-text"
+                data-testid="editor-edit-textarea"
+                value={draft}
+                onChange={onDraftChange}
+                onScroll={syncGutter}
+                onKeyDown={onEditKey}
+                spellCheck={false}
+                wrap="off"
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                aria-label={file.path}
+              />
+            </div>
+          </div>
         ) : loading ? (
           <div className="preview-loading">{t("filePreview.loading")}</div>
         ) : image ? (
@@ -327,6 +652,10 @@ export default function EditorPane({
                 data-testid="editor-pane-img"
               />
             )}
+          </div>
+        ) : noPreview ? (
+          <div className="preview-empty" data-testid="editor-nopreview">
+            {noPreview === "binary" ? t("filePreview.binaryFile") : t("filePreview.tooLarge")}
           </div>
         ) : (
           <CodeViewer

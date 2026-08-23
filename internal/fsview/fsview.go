@@ -405,30 +405,71 @@ func fuzzyWalk(root, scope, query string, limit int) ([]FileNode, error) {
 	return matchAndLimit(root, cands, query, limit), nil
 }
 
-// ReadFile 读取 root/rel 的文本内容。过大或二进制不返回内容,只给提示。
-func ReadFile(root, rel string) (string, error) {
+// FileData is the structured result of ReadFile: the text content plus the
+// reasons content may be absent. Binary / too-large files return zero Content
+// with the flag set, so callers (frontend preview/edit gating) decide off a
+// typed field instead of matching placeholder strings.
+type FileData struct {
+	Content  string `json:"content"`
+	Binary   bool   `json:"binary"`
+	TooLarge bool   `json:"tooLarge"`
+}
+
+// ReadFile reads the text content of root/rel. Binary or oversized files
+// return FileData with the corresponding flag set and no content.
+func ReadFile(root, rel string) (FileData, error) {
 	target, err := safeJoin(root, rel)
 	if err != nil {
-		return "", err
+		return FileData{}, err
 	}
 	info, err := os.Stat(target)
 	if err != nil {
-		return "", err
+		return FileData{}, err
 	}
 	if info.IsDir() {
-		return "", fmt.Errorf("是目录: %s", rel)
+		return FileData{}, fmt.Errorf("是目录: %s", rel)
 	}
 	if info.Size() > maxReadSize {
-		return fmt.Sprintf("文件过大(%d 字节),不预览。", info.Size()), nil
+		return FileData{TooLarge: true}, nil
 	}
 	data, err := os.ReadFile(target)
 	if err != nil {
-		return "", err
+		return FileData{}, err
 	}
 	if isBinary(data) {
-		return "二进制文件,不预览。", nil
+		return FileData{Binary: true}, nil
 	}
-	return string(data), nil
+	return FileData{Content: string(data)}, nil
+}
+
+// maxWriteSize caps the payload of a single WriteFile call (keeps the edit
+// path symmetric with maxReadSize; a >2MB edit round-trip through the webview
+// is not a supported flow).
+const maxWriteSize = 2 * 1024 * 1024
+
+// WriteFile overwrites root/rel with content (the preview's edit/save path).
+// The target must stay inside root (safeJoin) and must not be a directory.
+// Parent directories are created if missing (covers save-after-delete mid-edit);
+// an existing file's permission bits are preserved.
+func WriteFile(root, rel, content string) error {
+	if len(content) > maxWriteSize {
+		return fmt.Errorf("content too large: %d bytes (max %d)", len(content), maxWriteSize)
+	}
+	target, err := safeJoin(root, rel)
+	if err != nil {
+		return err
+	}
+	perm := os.FileMode(0o644)
+	if info, err := os.Stat(target); err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("is a directory: %s", rel)
+		}
+		perm = info.Mode().Perm()
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(target, []byte(content), perm)
 }
 
 // maxImageSize 读图大小上限(超出报错;避免把大文件 base64 灌进 webview)。

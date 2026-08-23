@@ -1968,6 +1968,50 @@ input, textarea { font-family: inherit; }
 }
 .editor-search-overlay .tool-btn:disabled { opacity: 0.4; cursor: default; }
 
+/* ─── EditorPane edit mode (text file editing) ───
+   Gutter + textarea surface mirroring .cv metrics (mono 12px / 19px rows,
+   8px vertical padding) so the edit surface reads as the same viewer with a
+   caret. The gutter is overflow:hidden and mirrors the textarea's scrollTop
+   (single writer: the user scrolls the textarea). No syntax highlight —
+   §4.6 keeps this native-primitive; highlight returns in view mode after
+   save. Banners (conflict / exit-confirm / error) stack above the surface. */
+.ed-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ed-scroll { flex: 1; min-height: 0; display: flex; }
+.ed-gutter {
+  flex-shrink: 0; overflow: hidden; min-width: 4em; padding: 8px 14px 8px 0;
+  text-align: right; user-select: none;
+  font-family: var(--mono); font-size: 12px; line-height: 19px; color: var(--text-3);
+  font-variant-numeric: tabular-nums; opacity: 0.7;
+  border-right: 1px solid var(--sep);
+}
+.ed-no { height: 19px; }
+.ed-text {
+  flex: 1; min-width: 0; resize: none; outline: none; border: none;
+  background: transparent; color: var(--text); caret-color: var(--accent-2);
+  font-family: var(--mono); font-size: 12px; line-height: 19px;
+  padding: 8px 13px; white-space: pre; overflow: auto; overscroll-behavior: contain;
+}
+.ed-dirty { color: var(--yellow, #ffd60a); font-size: 9px; flex-shrink: 0; }
+.ed-saved { color: var(--green, #30d158); font-size: 11px; flex-shrink: 0; }
+.ed-banner {
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+  padding: 7px 12px; background: var(--elev-2); border-bottom: 1px solid var(--sep);
+  font-size: 12px; color: var(--text);
+}
+.ed-banner-warn { background: rgba(255, 159, 10, 0.10); border-bottom-color: rgba(255, 159, 10, 0.35); }
+.ed-banner-warn .ed-banner-icon { color: var(--yellow, #ffd60a); flex-shrink: 0; }
+.ed-banner-error { background: rgba(255, 69, 58, 0.08); border-bottom-color: rgba(255, 69, 58, 0.35); }
+.ed-banner-error .ed-banner-text { color: var(--red); }
+.ed-banner-text { flex: 1; min-width: 0; line-height: 1.4; }
+.ed-banner-btn {
+  flex-shrink: 0; padding: 3px 10px; border-radius: 5px; font-size: 11.5px; cursor: default;
+  background: var(--accent); color: #fff; border: none; transition: filter 0.1s;
+}
+.ed-banner-btn:hover:not(:disabled) { filter: brightness(1.15); }
+.ed-banner-btn:disabled { opacity: 0.5; cursor: default; }
+.ed-banner-cancel { background: transparent; color: var(--text-2); border: 1px solid var(--sep-strong); }
+.preview-empty { padding: 24px; text-align: center; color: var(--text-3); font-size: 12.5px; }
+
 /* 对话 / 工具 I/O 里的文件路径可点击链接(Task #15084)。
    内联、mono、accent 色、下划线在 hover 显出,提示可点。 */
 .path-link {

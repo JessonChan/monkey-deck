@@ -1266,13 +1266,24 @@ func (s *ChatService) SessionListDir(sessionID, rel string) ([]fsview.FileNode, 
 	return fsview.ListDir(root, rel)
 }
 
-// SessionReadFile 读取 session 工作目录下 rel 的文本内容(预览用)。
-func (s *ChatService) SessionReadFile(sessionID, rel string) (string, error) {
+// SessionReadFile reads the text content of rel under the session workdir
+// (preview). Binary / too-large files return zero Content with the flag set.
+func (s *ChatService) SessionReadFile(sessionID, rel string) (fsview.FileData, error) {
 	root, err := s.cwdOf(sessionID)
 	if err != nil {
-		return "", err
+		return fsview.FileData{}, err
 	}
 	return fsview.ReadFile(root, rel)
+}
+
+// SessionWriteFile overwrites rel with content under the session workdir
+// (the file preview's edit/save path). Path is pinned to the workdir.
+func (s *ChatService) SessionWriteFile(sessionID, rel, content string) error {
+	root, err := s.cwdOf(sessionID)
+	if err != nil {
+		return err
+	}
+	return fsview.WriteFile(root, rel, content)
 }
 
 // SessionReadImage 读取 session 工作目录下 rel 的图片,返回 dataURL(data:<mime>;base64,<b64>)
