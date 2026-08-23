@@ -186,9 +186,13 @@ func pairingEntryPage(sid string) string {
 </html>`
 }
 
-// pairingRootPage is served to unauthenticated BROWSER navigations of "/":
-// informational only — no code input here (a glimpsed code must have nowhere
-// to be typed; pairing requires the sid-bound page via QR or pairing link).
+// pairingRootPage is served to unauthenticated BROWSER navigations of "/".
+// It is the DEAD-END RECOVERY path (user report: a standalone PWA window has
+// no address bar, so an unpaired launch must be able to complete pairing
+// IN-PLACE). The user pastes the pairing link (or bare sid); inline JS
+// extracts the sid and navigates to the sid-bound entry page. The 6-digit
+// code itself is still only accepted there — the 2-of-2 model is unchanged:
+// this page carries NO secret, it just parses one the user supplies.
 const pairingRootPage = `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -197,21 +201,40 @@ const pairingRootPage = `<!doctype html>
 <title>Monkey Deck</title>
 <style>
   body { margin:0; min-height:100dvh; display:flex; align-items:center; justify-content:center;
-         background:#1a1a1c; color:#e8e8ea; font-family:-apple-system,"SF Pro Text",sans-serif; }
-  .card { width:min(340px,86vw); background:#232326; border:1px solid #3a3a3e; border-radius:14px;
+         background:#1a1a1c; color:#e8e8ea; font-family:-apple-system,"SF Pro Text",sans-serif;
+         padding:24px; box-sizing:border-box; }
+  .card { width:min(360px,90vw); background:#232326; border:1px solid #3a3a3e; border-radius:14px;
           padding:28px 24px; text-align:center; }
   h1 { font-size:17px; margin:0 0 10px; }
-  p { font-size:13px; color:#c8c8cc; margin:0 0 8px; line-height:1.6; }
-  .dim { font-size:11.5px; color:#9a9aa0; }
+  p { font-size:13px; color:#c8c8cc; margin:0 0 14px; line-height:1.6; }
+  .dim { font-size:11.5px; color:#9a9aa0; margin:0 0 16px; }
+  input { width:100%; box-sizing:border-box; padding:11px 10px; font-size:13px;
+          border-radius:10px; border:1px solid #4a4a50; background:#1a1a1c;
+          color:#e8e8ea; outline:none; }
+  input:focus { border-color:#0a84ff; }
+  button { margin-top:12px; width:100%; padding:12px; font-size:15px; font-weight:600;
+           border:none; border-radius:10px; background:#0a84ff; color:#fff; cursor:pointer; }
+  .err { color:#ff6961; font-size:12px; margin-top:10px; min-height:14px; }
 </style>
 </head>
 <body>
   <div class="card">
     <h1>Monkey Deck</h1>
-    <p>此设备尚未配对。</p>
-    <p>请在桌面端打开「设置 → 远程 → 配对新设备」,<br><b>扫描二维码</b>或<b>打开配对链接</b>,然后输入 6 位配对码。</p>
-    <p class="dim">配对码需要与配对链接匹配,单独获取配对码无法登录。</p>
+    <p>此设备尚未配对。<br>请粘贴桌面端「设置 → 远程 → 复制配对链接」的内容:</p>
+    <input id="link" placeholder="https://…/pair?sid=… 或 32 位 sid" autocomplete="off" spellcheck="false">
+    <button type="button" onclick="go()">继续</button>
+    <div class="err" id="err"></div>
+    <p class="dim">也可以用相机扫描桌面端二维码。粘贴的内容不含配对码——还需输入 6 位码才能登录。</p>
   </div>
+<script>
+function go() {
+  var v = document.getElementById('link').value.trim();
+  var m = v.match(/sid=([0-9a-fA-F]{32})/) || v.match(/^([0-9a-fA-F]{32})$/);
+  if (!m) { document.getElementById('err').textContent = '未识别到有效的配对链接或 32 位 sid'; return; }
+  location.href = '/pair?sid=' + m[1].toLowerCase();
+}
+document.getElementById('link').addEventListener('keydown', function(e) { if (e.key === 'Enter') go(); });
+</script>
 </body>
 </html>`
 
