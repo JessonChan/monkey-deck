@@ -4,6 +4,7 @@ import QRCode from "react-qr-code";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { RemoteInfo } from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/models";
 import { copyText } from "../lib/clipboard";
+import { isRemoteClient } from "../lib/remote";
 import { Copy, KeyRound, QrCode, RefreshCw } from "lucide-react";
 
 // 远程访问 pane(设置中心 → 远程,AGENTS.md §1.8):桌面进程内嵌的 token 鉴权
@@ -97,6 +98,11 @@ export default function RemoteSettingsPane() {
       setBusy(false);
     }
   }, []);
+
+  // Admin separation: the whole pane (toggle/port/token/pairing) is
+  // desktop-only — remote browser clients never render it (see
+  // SettingsPanel CATEGORIES). Belt-and-braces guard for direct renders.
+  if (isRemoteClient()) return null;
 
   if (!info) return null;
 

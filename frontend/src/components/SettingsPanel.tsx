@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { X, Settings, Globe, Palette, SlidersHorizontal, ShieldCheck, Boxes, Bell, MessageSquare, Plug, Smartphone } from "lucide-react";
 import type { AppLanguage } from "../i18n";
@@ -8,6 +8,7 @@ import PermissionRulesPane from "./PermissionSettings";
 import HarnessPane from "./HarnessSettings";
 import McpPane from "./McpSettings";
 import RemoteSettingsPane from "./RemoteSettingsPane";
+import { isRemoteClient } from "../lib/remote";
 
 // 统一设置中心面板:齿轮入口 → 左侧分类导航 + 右侧表单。
 // 把此前散落在侧栏头部的设置项(语言 / 提示音 / 权限规则 / harness)收敛到单一入口,
@@ -22,7 +23,13 @@ interface CategoryDef {
   icon: typeof Settings;
 }
 
-const CATEGORIES: CategoryDef[] = [
+// Admin separation (2026-08-23): remote-server administration (toggle, port,
+// token, pairing) is a DESKTOP-admin capability — remote browser clients are
+// consumers and must not see the pane at all (a phone tapping "regenerate
+// token" / "server off" bricks every client incl. itself). Not a security
+// boundary (an authed remote session already holds full agent control via
+// bindings) — an admin-console separation.
+const ALL_CATEGORIES: CategoryDef[] = [
   { id: "general", labelKey: "settings.center.cat.general", icon: SlidersHorizontal },
   { id: "appearance", labelKey: "settings.center.cat.appearance", icon: Palette },
   { id: "language", labelKey: "settings.center.cat.language", icon: Globe },
@@ -37,13 +44,22 @@ const CATEGORIES: CategoryDef[] = [
 interface Props {
   onClose: () => void;
   initialCategory?: CategoryId;
-  // 有 harness 新版时,harness 菜单(harness 分类导航项)亮红点(§设置入口/harness 菜单红点)。
   harnessUpdateAvailable?: boolean;
 }
 
 export default function SettingsPanel({ onClose, initialCategory = "general", harnessUpdateAvailable = false }: Props) {
   const { t } = useTranslation();
   const [active, setActive] = useState<CategoryId>(initialCategory);
+  // Belt-and-braces: if a remote context ever opens with the admin category
+  // preselected (stale state), fall back to general — the remote pane itself
+  // also returns null under __mdRemote.
+  // Admin separation: filter AT RENDER TIME (module-load-time filtering races
+  // custom.js, which sets __mdRemote asynchronously after the bundle).
+  const categories = useMemo(
+    () => ALL_CATEGORIES.filter((c) => c.id !== "remote" || !isRemoteClient()),
+    [],
+  );
+  const activeCat: CategoryId = active === "remote" && isRemoteClient() ? "general" : active;
 
   // Esc 关闭(§4.2)。
   useEffect(() => {
@@ -73,13 +89,13 @@ export default function SettingsPanel({ onClose, initialCategory = "general", ha
         </div>
         <div className="settings-body">
           <nav className="settings-nav" data-testid="settings-nav">
-            {CATEGORIES.map((c) => {
+            {categories.map((c) => {
               const Icon = c.icon;
               const dot = c.id === "models" && harnessUpdateAvailable;
               return (
                 <button
                   key={c.id}
-                  className={`settings-nav-item has-update-dot ${active === c.id ? "active" : ""}`}
+                  className={`settings-nav-item has-update-dot ${activeCat === c.id ? "active" : ""}`}
                   data-testid={`settings-cat-${c.id}`}
                   onClick={() => setActive(c.id)}
                 >
@@ -98,15 +114,15 @@ export default function SettingsPanel({ onClose, initialCategory = "general", ha
           </nav>
           <div className="settings-content">
             {/* 懒挂载:仅渲染当前分类的 pane,避免一次性拉取所有分类数据。 */}
-            {active === "general" && <GeneralPane />}
-            {active === "appearance" && <AppearancePane />}
-            {active === "language" && <LanguagePane />}
-            {active === "conversation" && <ConversationPane />}
-            {active === "permissions" && <PermissionRulesPane />}
-            {active === "models" && <HarnessPane />}
-            {active === "mcp" && <McpPane />}
-            {active === "sound" && <SoundPane />}
-            {active === "remote" && <RemoteSettingsPane />}
+            {activeCat === "general" && <GeneralPane />}
+            {activeCat === "appearance" && <AppearancePane />}
+            {activeCat === "language" && <LanguagePane />}
+            {activeCat === "conversation" && <ConversationPane />}
+            {activeCat === "permissions" && <PermissionRulesPane />}
+            {activeCat === "models" && <HarnessPane />}
+            {activeCat === "mcp" && <McpPane />}
+            {activeCat === "sound" && <SoundPane />}
+            {activeCat === "remote" && <RemoteSettingsPane />}
           </div>
         </div>
       </div>
