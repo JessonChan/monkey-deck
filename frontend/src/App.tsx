@@ -34,6 +34,10 @@ import { isMemorySaverEnabled } from "./lib/memorySaver";
 import { deleteFilePanelState } from "./lib/filePanelCache";
 import { routeDroppedFiles, type ReadImageFn } from "./lib/dropFiles";
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+// Coarse pointer (touch) detection for the tooltip click-to-show equivalence.
+// Evaluated once at module load — a desktop window never becomes touch mid-session.
+const coarsePointer = typeof window !== "undefined" && typeof window.matchMedia === "function"
+  && window.matchMedia("(pointer: coarse)").matches;
 
 // readImageForDrop adapts ChatService.SessionReadImage to the ReadImageFn shape used
 // by routeDroppedFiles (worktree-relative image → {dataUrl}). Injected so the pure
@@ -1898,22 +1902,45 @@ export default function App() {
   const expandSide = () => { sidePanelRef.current?.expand(); if (isPopout && popoutMode) void ChatService.ExpandSessionWindow(popoutMode); };
 
   // 窗口窄时自动折叠右侧面板:聊天区需要足够宽度(对话流可读),窗口 < 750px 时
- // 右侧 SidePanel 自动收起,给聊天区让空间。用户仍可手动展开(rail 按钮),
- // 但展开后聊天区有 minSize 保障不会被挤没。popout 窗口默认比主窗口小,尤其需要。
- const NARROW_THRESHOLD = 750;
- useEffect(() => {
-   const onResize = () => {
-     const w = window.innerWidth;
-     if (w < NARROW_THRESHOLD) {
-       sidePanelRef.current?.collapse();
-     }
-   };
-   window.addEventListener("resize", onResize);
-   // popout 模式:首次挂载直接收起右侧面板(给对话区最大面积)。
-   if (isPopout) sidePanelRef.current?.collapse();
-   else onResize(); // 主窗口:首次挂载检查窄屏
-   return () => window.removeEventListener("resize", onResize);
- }, [isPopout]);
+  // 右侧 SidePanel 自动收起,给聊天区让空间。用户仍可手动展开(rail 按钮),
+  // 但展开后聊天区有 minSize 保障不会被挤没。popout 窗口默认比主窗口小,尤其需要。
+  const NARROW_THRESHOLD = 750;
+  useEffect(() => {
+    const onResize = () => {
+      const w = window.innerWidth;
+      if (w < NARROW_THRESHOLD) {
+        sidePanelRef.current?.collapse();
+      }
+    };
+    window.addEventListener("resize", onResize);
+    // popout 模式:首次挂载直接收起右侧面板(给对话区最大面积)。
+    if (isPopout) sidePanelRef.current?.collapse();
+    else onResize(); // 主窗口:首次挂载检查窄屏
+    return () => window.removeEventListener("resize", onResize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPopout]);
+
+  // ── M2 mobile drawer (≤768px) ──
+  // The sidebar drawer is driven by EXPLICIT state, not the panel library's
+  // collapsed state: mount-time imperative collapse() races the library's
+  // deferred initial layout (observed: the call is silently overridden and the
+  // drawer renders open on phones). A dedicated drawerOpen state is
+  // race-free by construction; at >768px every touchpoint below is inert
+  // (scrim is display:none, rail toggle takes the leftCollapsed branch).
+  const MOBILE_BP = 768;
+  const [mdViewport, setMdViewport] = useState(
+    () => typeof window !== "undefined" && window.matchMedia(`(max-width: ${MOBILE_BP}px)`).matches,
+  );
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${MOBILE_BP}px)`);
+    const fn = () => setMdViewport(mq.matches);
+    mq.addEventListener("change", fn);
+    return () => mq.removeEventListener("change", fn);
+  }, []);
+  // Close the drawer whenever a navigation action leaves it (mobile pattern:
+  // picking something behind a drawer implies dismissing it). No-op on desktop.
+  const closeDrawer = () => setDrawerOpen(false);
 
 
 
@@ -1927,6 +1954,7 @@ export default function App() {
       onLayoutChanged={onLayoutChanged}
       data-sidebar-collapsed={isPopout ? "popout" : (leftCollapsed ? "true" : "false")}
       data-side-collapsed={rightCollapsed ? "true" : "false"}
+      data-md-drawer={drawerOpen ? "true" : "false"}
     >
       {!isPopout && (
       <Panel
@@ -1943,10 +1971,10 @@ export default function App() {
           selectedProjectId={selectedProjectId}
           sessionsByProject={sessionsByProject}
           selectedSessionId={selectedSessionId}
-          onSelectProject={selectProject}
-          onSelectSession={openSession}
-          onCreateSession={createSession}
-          onAddProject={addProject}
+          onSelectProject={(id) => { closeDrawer(); void selectProject(id); }}
+          onSelectSession={(sid, pid) => { closeDrawer(); void openSession(sid, pid); }}
+          onCreateSession={(pid) => { closeDrawer(); void createSession(pid); }}
+          onAddProject={() => { closeDrawer(); void addProject(); }}
           permPendingBySession={permPendingBySession}
           draftBySession={draftBySession}
           hasTermBySession={hasTermBySession}
@@ -1959,7 +1987,7 @@ export default function App() {
           unreadBySession={unreadBySession}
           harnesses={harnesses}
           onReorderProjects={reorderProjects}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={() => { closeDrawer(); setSettingsOpen(true); }}
           harnessUpdateAvailable={harnessUpdateAvailable}
           poppedSessionIds={poppedSessionIds}
           onPopoutSession={popoutSession}
@@ -2158,21 +2186,40 @@ export default function App() {
         )}
       </Panel>
     </Group>
+    {/* Mobile drawer scrim (M2): tap-to-close behind the ≤768px sidebar drawer.
+        display:none on desktop (CSS default) and whenever the drawer is closed —
+        the >768px layout renders identically to before. */}
+    {!isPopout && (
+      <button
+        type="button"
+        className="drawer-scrim"
+        onClick={closeDrawer}
+        aria-hidden="true"
+        tabIndex={-1}
+        data-testid="drawer-scrim"
+      />
+    )}
     {/* Sidebar collapse/expand toggle (fixed anchor): icon stays at the same spot whether
         the sidebar is open or collapsed — only the icon direction swaps. Hidden in popout
-        (no sidebar there). Traffic lights occupy the top-left, so this anchor sits below them. */}
+        (no sidebar there). Traffic lights occupy the top-left, so this anchor sits below them.
+        ≤768px (M2): the same anchor toggles the mobile drawer (explicit state, race-free)
+        instead of the panel imperative API. */}
     {!isPopout && (
       <button
         type="button"
         className="panel-toggle left"
-        onClick={leftCollapsed ? expandSidebar : collapseSidebar}
-        data-testid={leftCollapsed ? "expand-sidebar" : "collapse-sidebar"}
-        aria-label={leftCollapsed ? t("app.expandSidebar") : t("sidebar.collapse")}
+        onClick={() => {
+          if (mdViewport) setDrawerOpen((v) => !v);
+          else if (leftCollapsed) expandSidebar();
+          else collapseSidebar();
+        }}
+        data-testid={mdViewport ? (drawerOpen ? "collapse-sidebar" : "expand-sidebar") : (leftCollapsed ? "expand-sidebar" : "collapse-sidebar")}
+        aria-label={mdViewport ? (drawerOpen ? t("sidebar.collapse") : t("app.expandSidebar")) : (leftCollapsed ? t("app.expandSidebar") : t("sidebar.collapse"))}
         data-tooltip-id="md-tip"
-        data-tooltip-content={leftCollapsed ? t("app.expandSidebar") : t("sidebar.collapse")}
+        data-tooltip-content={mdViewport ? (drawerOpen ? t("sidebar.collapse") : t("app.expandSidebar")) : (leftCollapsed ? t("app.expandSidebar") : t("sidebar.collapse"))}
         data-tooltip-place="right"
       >
-        {leftCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+        {(mdViewport ? drawerOpen : !leftCollapsed) ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
       </button>
     )}
     {/* Right side panel collapse/expand toggle (fixed anchor): icon stays pinned to the
@@ -2235,7 +2282,14 @@ export default function App() {
     {settingsOpen && (
       <SettingsPanel onClose={() => setSettingsOpen(false)} harnessUpdateAvailable={harnessUpdateAvailable} />
     )}
-    <Tooltip id="md-tip" delayShow={isMac ? 1500 : 500} />
+    {/* Touch equivalence for tooltips (M2): react-tooltip is hover-only, so on
+        coarse-pointer devices tooltips would never show (§4.5 leaves touch users
+        guessing). Gated behind pointer:coarse — desktop keeps pure-hover timing. */}
+    <Tooltip
+      id="md-tip"
+      delayShow={coarsePointer ? 0 : (isMac ? 1500 : 500)}
+      openOnClick={coarsePointer}
+    />
     </>
   );
 }

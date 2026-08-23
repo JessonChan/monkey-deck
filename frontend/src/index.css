@@ -2685,3 +2685,83 @@ input, textarea { font-family: inherit; }
 .file-tab.diff-tab .file-tab-icon { color: var(--text-3); }
 .file-tab.diff-tab.staged .file-tab-icon { color: var(--green); }
 .file-tab.diff-tab.active .file-tab-icon { color: var(--accent-2); }
+
+/* Desktop default for the M2 drawer scrim (see below): never rendered above 768px.
+   Without this the unstyled <button> would leak UA default chrome into the
+   desktop layout — the >768px render must stay byte-identical (§3.1 M2). */
+.drawer-scrim { display: none; }
+
+/* ─── M2 mobile adaptation (≤768px only) ───
+   HARD RULE (AGENTS.md §3.1 M2): every rule in this media query block is
+   small-viewport-conditional. The >768px desktop layout, styling, interaction
+   and component structure are untouched — a desktop window never matches this
+   breakpoint, and the elements added (drawer scrim) default to display:none. */
+@media (max-width: 768px) {
+  /* 100vh on iOS Safari spans behind the URL bar → the composer would sit
+     under it. dvh tracks the visible viewport (KISS: single line, no JS). */
+  .app { height: 100dvh; }
+  /* Sidebar → overlay drawer. react-resizable-panels drives inline flex sizing;
+     position:fixed lifts the panel out of that flow entirely, so the drawer
+     width/position here win without touching the panel library or desktop CSS.
+     Visibility = App's explicit data-md-drawer state (the ≤768px rail toggle),
+     NOT the panel library's collapsed state — mount-time imperative collapse()
+     races the library's deferred initial layout and loses. */
+  #sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: min(80vw, 320px);
+    max-width: 80vw;
+    z-index: 60;
+    background: var(--elev-2);
+    box-shadow: var(--shadow-pop);
+    transform: translateX(-105%);
+    transition: transform 0.18s ease-out;
+    /* Notch / home-indicator clearance (viewport-fit=cover, installed PWA).
+       env() resolves to 0 where no inset exists. */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+  }
+  .app[data-md-drawer="true"] #sidebar { transform: translateX(0); }
+
+  /* Scrim behind the drawer: hidden unless the drawer is open. Tap closes it
+     (button rendered in App.tsx, closeDrawer onClick). The scrim is a DOM
+     sibling after .app, hence the general-sibling selector. */
+  .drawer-scrim {
+    display: none;
+    position: fixed; inset: 0;
+    z-index: 55;
+    background: rgba(0, 0, 0, 0.45);
+    border: none; padding: 0; cursor: default;
+  }
+  .app[data-md-drawer="true"] ~ .drawer-scrim { display: block; }
+
+  /* No drag separators on touch. */
+  .resize-handle { display: none; }
+
+  /* Hide the right-panel rail toggle: the side panel (file tree / diff /
+     editor) is desktop-density UI — expanded into a 390px viewport it is a
+     54px unusable sliver squeezing the chat. It stays auto-collapsed here. */
+  .panel-toggle.right { display: none; }
+
+  /* Dialog degradation: dense modals (NewSessionModal, settings center) become
+     near-full-bleed sheets inside the 10px-padded overlay so forms and the
+     two-pane settings body stay usable on phones. The settings overlay is a
+     .modal-overlay (shared class) — the card fills that padded box exactly. */
+  .modal-overlay { padding: 10px; }
+  .modal-card, .add-harness-card { max-width: calc(100vw - 20px); }
+  .new-session-card { max-width: calc(100vw - 20px); max-height: calc(100dvh - 20px); overflow-y: auto; }
+  .settings-card {
+    width: 100%; max-width: 100%;
+    height: calc(100dvh - 20px); max-height: calc(100dvh - 20px);
+    /* Notch / home-indicator clearance (viewport-fit=cover, installed PWA). */
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  .settings-body { flex-direction: column; }
+  .settings-nav {
+    flex-direction: row; width: 100%;
+    border-right: none; border-bottom: 1px solid var(--sep);
+    overflow-x: auto; overflow-y: hidden; padding: 6px 8px;
+    flex-shrink: 0;
+  }
+}
