@@ -20,7 +20,7 @@ import { highlightToLines } from "../lib/highlight";
 import "../hljs-theme.css";
 import { buildRows, computeLayout, computeWindow, anchorAt, restoreScroll, isAtBottom, HeightModel, TAIL_PRIOR, HEAD_PRIOR, type VRow, type Layout } from "../lib/virtualList";
 import SelectionToolbar, { type SelectionAction } from "./SelectionToolbar";
-import { SquareTerminal, Sparkles, Brain, Check, Copy, FolderOpen, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus, Quote, Paperclip } from "lucide-react";
+import { SquareTerminal, Sparkles, Brain, Check, Copy, FolderOpen, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus, Quote, Paperclip, Share2 } from "lucide-react";
 
 interface Props {
   project: Project | null;
@@ -1055,6 +1055,14 @@ function MessageActions({ text, className = "", testId = "copy-msg" }: { text: s
   const copy = async () => {
     await copyText(text); setCopied(true); setTimeout(() => setCopied(false), 1500);
   };
+  // Mobile-only share (CSS-gated): the OS share sheet ships agent output to
+  // chats/notes. navigator.share exists on desktop Chrome too — hiding it
+  // there keeps the desktop message actions row unchanged (M2 hard rule).
+  // AbortError (user cancelled the sheet) is swallowed.
+  const share = async () => {
+    if (!navigator.share) return;
+    try { await navigator.share({ text }); } catch { /* cancelled */ }
+  };
   return (
     <div className={`msg-actions${className ? ` ${className}` : ""}`}>
       <button
@@ -1066,6 +1074,16 @@ function MessageActions({ text, className = "", testId = "copy-msg" }: { text: s
         data-tooltip-content={copied ? t("chat.messageCopiedTip") : t("chat.copyMessageTip")}
       >
         {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? t("common.copied") : t("common.copy")}
+      </button>
+      <button
+        className="msg-action-btn msg-share-btn"
+        type="button"
+        onClick={share}
+        data-testid="share-msg"
+        data-tooltip-id="md-tip"
+        data-tooltip-content={t("chat.shareMessageTip")}
+      >
+        <Share2 size={12} /> {t("chat.shareMessage")}
       </button>
     </div>
   );

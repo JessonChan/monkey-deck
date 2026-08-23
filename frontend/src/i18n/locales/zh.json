@@ -186,6 +186,8 @@
     "collapseThought": "收起",
     "copyMessageTip": "复制消息",
     "messageCopiedTip": "消息已复制",
+    "shareMessage": "分享",
+    "shareMessageTip": "分享消息到其他应用",
     "outputTruncated": "输出已被 agent 截断",
     "permissionTitleFallback": "权限请求",
     "elicitationTitleFallback": "需要你的输入",
