@@ -2813,4 +2813,40 @@ input, textarea { font-family: inherit; }
   /* Elicitation action row: base has no wrap; multiple option buttons + Skip
      overflow a 370px card. */
   .elicit-actions { flex-wrap: wrap; justify-content: flex-start; }
+
+  /* Session tab strip = desktop density UI; on phones switching lives in the
+     drawer (user feedback). Reclaims a full row for the chat. */
+  .tabbar { display: none; }
+
+  /* Drawer toggle anchored into the chat-header line (hamburger position)
+     instead of floating mid-screen (user feedback). Header clears it. */
+  .panel-toggle.left { top: 13px; }
+  .chat-header { padding-left: 46px; }
+
+  /* Composer = the chat-app pattern: photo button + input + stop/send.
+     Desktop-density controls hide on phones (user feedback: less info, not
+     squeezed info): slash & history (typed "/" still opens the menu),
+     model/mode/effort chips, usage meter, branch, MCP, ref-count, enqueue
+     (send already queues while prompting).
+     Grid puts the input and the action column (image / stop / send) on ONE
+     row — the desktop stacks them, which reads tall and empty on a phone. */
+  .compose-card { display: grid; grid-template-columns: 1fr auto; align-items: end; column-gap: 8px; }
+  .compose-card > .att-chips { grid-column: 1 / -1; }
+  .compose-card > .composer-input,
+  .compose-card > .composer-collapse { grid-column: 1; min-height: 36px; max-height: 140px; padding: 7px 6px; align-self: center; }
+  .compose-bar { grid-column: 2; display: flex; flex-direction: column; align-items: center; gap: 6px; align-self: center; }
+  .compose-tools .tool-btn:not([data-testid="image-btn"]) { display: none; }
+  .compose-history-chip, .compose-history-badge { display: none; }
+  .compose-branch, .compose-mcp, .composer-usage, .composer-count { display: none; }
+  .compose-right .cfg-trigger, .compose-right .send-btn.enqueue { display: none; }
+
+  /* Header: session title + status only. Project name, terminal / model /
+     branch / merge chips are desktop density on a phone. */
+  .chat-project, .chat-sep { display: none; }
+  .chat-header-actions .icon-btn { display: none; }
+  .chat-model, .chat-branch, .merge-btn { display: none; }
+
+  /* Readonly banner: slim inline notice instead of a full-width loud strip. */
+  .readonly-banner { padding: 3px 8px; gap: 8px; font-size: 11px; }
+  .readonly-continue-btn { font-size: 11px; padding: 2px 8px; }
 }

@@ -2340,18 +2340,11 @@ export default function App() {
     {settingsOpen && (
       <SettingsPanel onClose={() => setSettingsOpen(false)} harnessUpdateAvailable={harnessUpdateAvailable} />
     )}
-    {/* Touch equivalence for tooltips (M2): react-tooltip is hover-only, so on
-        coarse-pointer devices tooltips would never show (§4.5 leaves touch users
-        guessing). Gated behind pointer:coarse — desktop keeps pure-hover timing. */}
-    <Tooltip
-      id="md-tip"
-      delayShow={coarsePointer ? 0 : (isMac ? 1500 : 500)}
-      openOnClick={coarsePointer}
-      // Touch: a tooltip opened by tapping must close when the user taps
-      // anywhere else (e.g. the tap that opens a modal) — otherwise it lingers
-      // over the new surface. Hover mode on desktop keeps library defaults.
-      globalCloseEvents={coarsePointer ? { clickOutsideAnchor: true } : undefined}
-    />
+    {/* Tooltips are a hover affordance (§4.5). On touch they mislead more
+        than they help (user feedback, 2026-08-23): taps fire them alongside
+        the real action and they linger over new surfaces — hide entirely on
+        coarse-pointer clients; desktop keeps the hover timing. */}
+    <Tooltip id="md-tip" delayShow={isMac ? 1500 : 500} hidden={coarsePointer} />
     </>
   );
 }
