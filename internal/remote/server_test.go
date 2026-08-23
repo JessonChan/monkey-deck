@@ -69,7 +69,7 @@ func get(t *testing.T, url string) *http.Response {
 // TestAuthGating: /health is open; everything else 401s without credentials;
 // cookie and Bearer both authenticate.
 func TestAuthGating(t *testing.T) {
-	_, base, _ := startTestServer(t)
+	srv, base, _ := startTestServer(t)
 
 	if resp := get(t, base+"/health"); resp.StatusCode != http.StatusOK {
 		t.Fatalf("/health = %d, want 200", resp.StatusCode)
@@ -81,9 +81,21 @@ func TestAuthGating(t *testing.T) {
 		}
 	}
 
-	// Cookie auth.
+	// Cookie auth: pair a session first, then use its cookie.
+	pc, _ := srv.GeneratePairingCode()
+	preq := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	presp, perr := preq.Get(base + "/pair?code=" + pc)
+	if perr != nil {
+		t.Fatalf("pair: %v", perr)
+	}
+	sessID := ""
+	for _, c := range presp.Cookies() {
+		if c.Name == "md_remote_session" {
+			sessID = c.Value
+		}
+	}
 	req, _ := http.NewRequest("GET", base+"/", nil)
-	req.AddCookie(&http.Cookie{Name: CookieName, Value: "secret-token"})
+	req.AddCookie(&http.Cookie{Name: "md_remote_session", Value: sessID})
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("cookie auth = %v/%d, want nil/200", err, resp.StatusCode)
@@ -97,9 +109,9 @@ func TestAuthGating(t *testing.T) {
 		t.Fatalf("bearer auth = %v/%d, want nil/200", err, resp2.StatusCode)
 	}
 
-	// Wrong token rejected.
+	// Unknown session id rejected.
 	req3, _ := http.NewRequest("GET", base+"/", nil)
-	req3.AddCookie(&http.Cookie{Name: CookieName, Value: "wrong"})
+	req3.AddCookie(&http.Cookie{Name: "md_remote_session", Value: "deadbeefdeadbeefdeadbeefdeadbeef"})
 	resp3, _ := http.DefaultClient.Do(req3)
 	if resp3.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("wrong token = %d, want 401", resp3.StatusCode)
@@ -127,12 +139,26 @@ func TestPairingLifecycle(t *testing.T) {
 	}
 	var got string
 	for _, c := range resp.Cookies() {
-		if c.Name == CookieName {
+		if c.Name == "md_remote_session" {
 			got = c.Value
 		}
 	}
-	if got != "secret-token" {
-		t.Fatalf("pair cookie = %q, want the long-term token", got)
+	if got == "" || got == "secret-token" || len(got) != 32 {
+		t.Fatalf("pair cookie = %q, want a fresh 128-bit session id", got)
+	}
+
+	// The session cookie actually authorizes (session registry path).
+	reqAuth, _ := http.NewRequest("GET", base+"/", nil)
+	reqAuth.AddCookie(&http.Cookie{Name: "md_remote_session", Value: got})
+	respAuth, err2 := http.DefaultClient.Do(reqAuth)
+	if err2 != nil || respAuth.StatusCode != http.StatusOK {
+		t.Fatalf("session cookie auth = %v/%d, want nil/200", err2, respAuth.StatusCode)
+	}
+
+	// Exactly one session registered, labeled from the UA.
+	sessions := srv.ListSessions()
+	if len(sessions) != 1 || sessions[0].ID != got || sessions[0].Label == "" {
+		t.Fatalf("sessions = %+v, want exactly the paired one", sessions)
 	}
 
 	// Single use: the same code is dead immediately.
@@ -180,6 +206,51 @@ func TestPairingLoginPage(t *testing.T) {
 	}
 }
 
+
+// TestSessionRevoke: individual kick + kill switch.
+func TestSessionRevoke(t *testing.T) {
+	srv, base, _ := startTestServer(t)
+
+	pair := func() string {
+		code, _ := srv.GeneratePairingCode()
+		c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		resp, err := c.Get(base + "/pair?code=" + code)
+		if err != nil {
+			t.Fatalf("pair: %v", err)
+		}
+		for _, ck := range resp.Cookies() {
+			if ck.Name == "md_remote_session" {
+				return ck.Value
+			}
+		}
+		return ""
+	}
+	a, b := pair(), pair()
+	if len(srv.ListSessions()) != 2 {
+		t.Fatalf("sessions = %d, want 2", len(srv.ListSessions()))
+	}
+
+	// Revoke a → its cookie dies, b keeps working.
+	if !srv.RevokeSession(a) {
+		t.Fatal("revoke(a) = false, want true")
+	}
+	reqA, _ := http.NewRequest("GET", base+"/", nil)
+	reqA.AddCookie(&http.Cookie{Name: "md_remote_session", Value: a})
+	if resp, _ := http.DefaultClient.Do(reqA); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoked a = %d, want 401", resp.StatusCode)
+	}
+	reqB, _ := http.NewRequest("GET", base+"/", nil)
+	reqB.AddCookie(&http.Cookie{Name: "md_remote_session", Value: b})
+	if resp, _ := http.DefaultClient.Do(reqB); resp.StatusCode != http.StatusOK {
+		t.Fatalf("surviving b = %d, want 200", resp.StatusCode)
+	}
+
+	// Kill switch: everything dies.
+	srv.RevokeAllSessions()
+	if resp, _ := http.DefaultClient.Do(reqB); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("after revokeAll b = %d, want 401", resp.StatusCode)
+	}
+}
 
 // TestRootChain: authenticated / serves assets through the transport middleware;
 // /wails/runtime is intercepted by the binding middleware.

@@ -89,19 +89,11 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	tok := s.opts.Token()
-	if tok == "" {
-		http.Error(w, "remote token unavailable", http.StatusInternalServerError)
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     CookieName,
-		Value:    tok,
-		Path:     "/",
-		MaxAge:   365 * 24 * 3600,
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-	})
+	// Pairing issues an INDEPENDENT per-device session (cookie no longer
+	// carries the master token): listable, individually revocable, and a
+	// stolen cookie is not the master key.
+	sess := s.sessions.issue(r.UserAgent())
+	http.SetCookie(w, sessionCookie(sess.ID))
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
@@ -150,3 +142,13 @@ const pairingErrPage = `<!doctype html>
 a{color:#64d2ff;text-decoration:none}</style></head>
 <body><div class="c"><p>配对码无效或已过期(错误超过 5 次或超过 10 分钟)。<br>请到桌面端重新生成。</p>
 <a href="/">返回重试</a></div></body></html>`
+
+// ListSessions snapshots the paired-device sessions (newest first).
+func (s *Server) ListSessions() []Session { return s.sessions.list() }
+
+// RevokeSession kicks one device by session id.
+func (s *Server) RevokeSession(id string) bool { return s.sessions.revoke(id) }
+
+// RevokeAllSessions is the token-regeneration kill switch: every paired
+// device dies with the old token.
+func (s *Server) RevokeAllSessions() { s.sessions.revokeAll() }

@@ -31,9 +31,6 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// CookieName is the auth cookie set by /auth (HttpOnly, SameSite=Strict).
-const CookieName = "md_remote_token"
-
 // transportHandler is the subset of *application.HTTPTransport we need: the
 // binding middleware. Declared as an interface so tests can inject a stub.
 type transportHandler interface {
@@ -47,14 +44,16 @@ type Options struct {
 	Assets     http.Handler
 	Token      func() string // current token, read per request (regeneration applies live)
 	EventNames []string      // closed set of events bridged to remote clients
+	Sessions   SessionStore  // per-device session persistence (nil = memory only)
 	Logger     *slog.Logger
 }
 
 // Server owns the embedded HTTP listener. Zero value is not usable; use New.
 type Server struct {
-	opts    Options
-	hub     *hub
-	pairing pairingState
+	opts     Options
+	hub      *hub
+	pairing  pairingState
+	sessions *sessionRegistry
 
 	mu      sync.Mutex
 	running bool
@@ -69,7 +68,7 @@ func New(opts Options) *Server {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	return &Server{opts: opts}
+	return &Server{opts: opts, sessions: newSessionRegistry(opts.Sessions)}
 }
 
 // Running reports whether the listener is up, plus its port.
@@ -188,7 +187,15 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if s.tokenEqual(cookieToken(r)) || s.tokenEqual(bearerToken(r)) {
+		// Cookie = per-device session id (registry lookup); Bearer = master
+		// token (native clients / CI).
+		if c, err := r.Cookie(cookieName); err == nil {
+			if _, ok := s.sessions.lookup(c.Value); ok {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		if s.tokenEqual(bearerToken(r)) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -201,13 +208,6 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="monkey-deck"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	})
-}
-
-func cookieToken(r *http.Request) string {
-	if c, err := r.Cookie(CookieName); err == nil {
-		return c.Value
-	}
-	return ""
 }
 
 func bearerToken(r *http.Request) string {

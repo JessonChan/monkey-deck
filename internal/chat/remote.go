@@ -20,10 +20,11 @@ import (
 // in the main package), so remote stays inert there — server mode serves HTTP itself.
 
 const (
-	settingRemoteEnabled = "remote.enabled"
-	settingRemotePort    = "remote.port"
-	settingRemoteToken   = "remote.token"
-	defaultRemotePort    = 9250
+	settingRemoteEnabled  = "remote.enabled"
+	settingRemotePort     = "remote.port"
+	settingRemoteToken    = "remote.token"
+	settingRemoteSessions = "remote.sessions"
+	defaultRemotePort     = 9250
 )
 
 // RemoteInfo is the settings-UI view of the embedded remote server.
@@ -233,8 +234,84 @@ func (s *ChatService) RegenerateRemoteToken() (string, error) {
 	}
 	s.mu.Lock()
 	s.remoteToken = tok
+	srv := s.remoteSrv
 	s.mu.Unlock()
+	// Kill switch: every paired session dies with the old token.
+	if srv != nil {
+		srv.RevokeAllSessions()
+	}
 	return tok, nil
+}
+
+// RemoteSessionInfo is one paired remote device for the settings UI.
+type RemoteSessionInfo struct {
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	CreatedAt string `json:"createdAt"`
+	LastSeen  string `json:"lastSeen"`
+}
+
+// RemoteListSessions returns the paired devices, newest first.
+func (s *ChatService) RemoteListSessions() []RemoteSessionInfo {
+	s.mu.Lock()
+	srv := s.remoteSrv
+	s.mu.Unlock()
+	if srv == nil {
+		return nil
+	}
+	out := []RemoteSessionInfo{}
+	for _, sess := range srv.ListSessions() {
+		out = append(out, RemoteSessionInfo{
+			ID:        sess.ID,
+			Label:     sess.Label,
+			CreatedAt: sess.CreatedAt.Format("2006-01-02 15:04"),
+			LastSeen:  relativeTime(sess.LastSeen),
+		})
+	}
+	return out
+}
+
+// RemoteRevokeSession kicks one paired device by session id.
+func (s *ChatService) RemoteRevokeSession(id string) (bool, error) {
+	s.mu.Lock()
+	srv := s.remoteSrv
+	s.mu.Unlock()
+	if srv == nil {
+		return false, fmt.Errorf("remote server not attached")
+	}
+	return srv.RevokeSession(id), nil
+}
+
+// sessionStore persists remote sessions through the settings KV table
+// (AGENTS.md §1.5: SQLite is the truth source — sessions survive restarts).
+type sessionStore struct{ svc *ChatService }
+
+func (ss sessionStore) LoadSessions() string {
+	v, err := ss.svc.st.GetSetting(ss.svc.ctx, settingRemoteSessions)
+	if err != nil {
+		return ""
+	}
+	return v
+}
+
+func (ss sessionStore) SaveSessions(blob string) {
+	_ = ss.svc.st.SetSetting(ss.svc.ctx, settingRemoteSessions, blob)
+}
+
+// relativeTime renders a coarse "just now / Nm ago / Nh ago" label (§4.4
+// human words; the i18n layer could localize later if needed).
+func relativeTime(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return t.Format("2006-01-02")
+	}
 }
 
 // newRemoteToken returns a 256-bit URL-safe random token.
