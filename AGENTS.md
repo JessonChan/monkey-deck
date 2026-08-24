@@ -291,6 +291,16 @@ monkey-deck/
 
 **决策链路**:有现成轻量跨平台成熟库 → 用;没有 → React + 原语 CSS 自研;仅当自研成本远高于不一致风险时选平台适配型库,并在 README/THIRD_PARTY_LICENSES 记录理由与已验证平台。
 
+### 4.7 前端改动三端覆盖:桌面 GUI / 远程浏览器 / PWA(硬约束)
+
+- **同一份 React 前端跑在三张脸上**(§1.8),任何触及 `frontend/` 的改动(组件/布局/样式/交互/依赖/manifest)都同时作用于三端——**验证必须三端都过、结果都确认**,不允许「只在我改的那一端看了就算完」:
+  1. **桌面 GUI**:Wails3 webview(macOS WebKit / Win WebView2 / Linux WebKitGTK),fine pointer + hover,>768px 桌面布局,原生宿主能力(原生对话框 / clipboard / 菜单窗口)。
+  2. **远程浏览器**:直连内嵌远程服务(§1.8)的普通浏览器标签页——引擎差异(Chromium vs webview)、`isRemoteClient()` 守卫分支(`window.__mdRemote`,如 PickFiles 回形针隐藏)、WS 事件通道(断线 `remote:resync` 对账)都与 GUI 端不同。
+  3. **PWA(移动端)**:同一服务的 ≤768px 响应式布局(抽屉侧栏/对话框降级)+ coarse pointer(无 hover,tooltip 走点按)+ standalone display-mode 专属能力(安装横幅/角标/返回手势/分享/shortcuts/safe-area/dvh)。
+- **单端定向改动也必须回归另两端**:功能可以只为一端做(如 PWA 六件套),但「另两端不回归」必须**显式确认**,不是默认没事——M2 的「桌面 UI 零修改 + 像素 diff=0 验收」(§3.1)就是该原则的既有实例。反向同理:桌面端改动要冒烟浏览器/PWA 端(响应式断点没破、远程守卫没破、WS 事件流没断)。
+- **后端(Go / binding / 协议)能力的验证统一做一次,不在三端重复**;三端各自只需确认「本端通道正常」:GUI=webview binding/event,浏览器/PWA=`/wails/runtime` + WS。
+- **worklog 的验证小节必须写清三端结果**(每端怎么验、结论),单端定向改动要写明另两端的回归结论。验证方法见 §5.6;M2.5 Capacitor 薄壳落地后同规则扩展到该端。
+
 ---
 
 ## 5. 测试与质量
@@ -360,6 +370,22 @@ WAILS_SERVER_PORT=9246 ./bin/monkey-deck-server      # 或 wails3 task run:serve
 
 **优先级**:能在单测(mock)里覆盖的逻辑,不上升到 server 模式(慢、要起进程)。server 模式留给"必须真数据 / 真 UI"的集成与内存测试。
 
+### 5.6 三端验证矩阵:GUI / 远程浏览器 / PWA 各怎么验(§4.7 的落地)
+
+> 三端共享同一前端与同一后端,但**宿主 / 引擎 / 输入 / 视口 / 事件通道不同,验证通道也不同**——先想清楚改动落在矩阵哪几格,再动手验。
+
+| 端 | 启动方式 | 本端必测维度(别端替代不了的) |
+|---|---|---|
+| 桌面 GUI | `wails3 dev` 或桌面二进制(真 webview,macOS=WebKit) | >768px 布局交互、hover/fine pointer、原生宿主能力(原生对话框/clipboard/菜单)——只在真 webview 存在,浏览器模拟不了 |
+| 远程浏览器 | 桌面二进制 + `MD_REMOTE_ENABLED=1`(真实产品路径,含 custom.js/`__mdRemote`/WS);或 server 模式(§5.5,测试形态) | >768px 下与 GUI 的一致性、`isRemoteClient()` 守卫分支、WS 事件流 + `remote:resync` 重连对账 |
+| PWA | 同上服务 + 浏览器 ≤768px 视口 + coarse pointer 模拟 + `display-mode: standalone` 媒询 | 抽屉/对话框降级布局、768/769 断点边界、触屏交互(tooltip 点按/返回手势)、standalone 门控能力(角标/安装/分享) |
+
+- **后端 / binding 改动**:能力在 server 模式下统一验一次(§5.5);三端只各确认本端通道(上表第三列)。
+- **浏览器模拟 PWA 的实测坑**:coarse pointer 须走 CDP `Emulation.setEmulatedMedia`(Puppeteer `emulateMediaFeatures` 不支持 pointer);模块级 `coarsePointer` 常量只评估一次,改模拟后须重载;React 19 树上合成 `dispatchEvent` 不触发 onClick,一律真实 CDP click;evaluate 跑在隔离世界读不到 `window.*` 全局,断言走主世界 script 注入。详见 `docs/worklog/2026-08-23-m2-mobile-responsive-resync-pwa.md` / `2026-08-23-pwa-mobile-enhancements.md`。
+- **「桌面零修改」类验收**:前后构建的 server 二进制 + 同一 db 拷贝、固定视口、空态/打开 session 双态,像素级 diff(方法见 M2 worklog)。
+- **桌面 app 与 server 二进制绝不并发**(§1.8/§5.5):孤儿 server 实例会让 UI 假死(session 行 aria 全 `[disabled]`),测前先清孤儿进程。
+- **真机(iOS Safari / Android Chrome)是用户侧动作**:agent 完成仿真验证并在 worklog 标注「待真机实测」;真机结果回写 worklog 与 §3.1 M 系列状态。
+
 ---
 
 ## 6. 文档与 Git 纪律
@@ -410,6 +436,7 @@ WAILS_SERVER_PORT=9246 ./bin/monkey-deck-server      # 或 wails3 task run:serve
 - [ ] 没碰外部参考库(`/tmp/monkey-deck-reference`,见 §0.2)下任何文件?
 - [ ] 借用参考库下任何项目的代码已按其原始协议署名(版权声明 + 许可文本 + THIRD_PARTY_LICENSES 登记;openwork 避开 `ee/`)?(§0.4)
 - [ ] ACP 单测用 mock,没启真 harness?(§5.1)
+- [ ] 涉及前端的改动已按三端矩阵验证(桌面 GUI / 远程浏览器 / PWA),单端定向改动也确认另两端不回归、worklog 写清三端结果?(§4.7/§5.6)
 - [ ] `go test ./...` 通过?
 
 **任一项不满足,不要提交。** 架构硬约束(§1/§3)是违反=推翻重来的底线,不在此重复——直接遵守。
