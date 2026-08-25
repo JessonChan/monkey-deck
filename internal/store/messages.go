@@ -42,8 +42,11 @@ func (s *Store) AppendMessage(ctx context.Context, sessionID, role, kind, conten
 // UpsertTurnMessage 幂等写一条 turn 内的消息(#125,增量落库的唯一写入口)。
 // 以 (session_id, turn_id, entry_key) 为主键(partial unique index,0017):
 //   - 首次:INSERT,seq = 会话内 MAX(seq)+1(与 AppendMessage 同序);
-//   - 再次:就地 UPDATE content/role/kind/tool_call_id,seq 与 created_at 不动
+//   - 再次:就地 UPDATE content/role/kind/tool_call_id/created_at,seq 不动
 //     —— 行保持首次出现的时序位置(timeline 只追加不移位,§5.4 #5)。
+//     created_at 随写刷新:收尾 reconcile(turn 结束)必写最终全文,故终态
+//     created_at ≈ 回合结束时刻,与旧「回合结束统一落库」的时间语义一致
+//     (前端 #68 回合时长依赖最后一条消息 ts = turn end)。
 // turnID/entryKey 必须非空(空键在 partial index 之外,永远无法命中 upsert 分支);
 // 由调用方(internal/chat)保证,此处不兜底。旧行(entry_key='')不受影响。
 func (s *Store) UpsertTurnMessage(ctx context.Context, sessionID, turnID, entryKey, role, kind, content, toolCallID string) (*Message, error) {
@@ -56,7 +59,8 @@ func (s *Store) UpsertTurnMessage(ctx context.Context, sessionID, turnID, entryK
 		`INSERT INTO messages(id,session_id,role,kind,content,tool_call_id,turn_id,entry_key,seq,created_at)
 		 VALUES(?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(session_id, turn_id, entry_key) WHERE entry_key != ''
-		 DO UPDATE SET role=excluded.role, kind=excluded.kind, content=excluded.content, tool_call_id=excluded.tool_call_id`,
+		 DO UPDATE SET role=excluded.role, kind=excluded.kind, content=excluded.content,
+		               tool_call_id=excluded.tool_call_id, created_at=excluded.created_at`,
 		uuid.NewString(), sessionID, role, kind, content, toolCallID, turnID, entryKey, seq, now()); err != nil {
 		return nil, fmt.Errorf("upsert turn message: %w", err)
 	}

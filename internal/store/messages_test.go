@@ -3,8 +3,9 @@ package store
 // messages_test.go:UpsertTurnMessage 回归(#125 增量落库)。
 //
 // 覆盖:
-//   - 幂等:同键重复 upsert 只有一行,内容就地更新,seq/created_at/id 稳定
-//     (行保持首次出现位置,重放不重排历史,§5.4 #5)。
+//   - 幂等:同键重复 upsert 只有一行,内容就地更新,seq/id 稳定(行保持首次
+//     出现位置,重放不重排历史,§5.4 #5);created_at 随写刷新(收尾 reconcile
+//     最后写,终态 ≈ 回合结束,保持旧时间语义,#68)。
 //   - 新键:插新行,seq 续接会话内 MAX(seq)+1。
 //   - 不同 turn 同 entry_key:互不冲突(turn_id 是 upsert 键的一部分)。
 //   - 旧行兼容:AppendMessage 写的行(entry_key='')不参与去重,与 upsert 行共存。
@@ -63,9 +64,12 @@ func TestUpsertTurnMessageIdempotent(t *testing.T) {
 	if got.TurnID != "turn-1" || got.EntryKey != "msg:m1:agent" {
 		t.Fatalf("keys not persisted: %+v", got)
 	}
-	// 同一行:id/seq/created_at 稳定(upsert 不重排、不换行)。
-	if m1.ID != m2.ID || m1.Seq != m2.Seq || m1.CreatedAt != m2.CreatedAt {
+	// 同一行:id/seq 稳定(upsert 不重排、不换行);created_at 随写刷新(见上)。
+	if m1.ID != m2.ID || m1.Seq != m2.Seq {
 		t.Fatalf("row identity moved: first=%+v second=%+v", m1, m2)
+	}
+	if m2.CreatedAt < m1.CreatedAt {
+		t.Fatalf("created_at must not go backwards: %d -> %d", m1.CreatedAt, m2.CreatedAt)
 	}
 	if got.ID != m1.ID || got.Seq != m1.Seq {
 		t.Fatalf("stored row differs from first write: %+v vs %+v", got, m1)

@@ -10,8 +10,11 @@
 -- this migration (empty entry_key, no dedupe semantics) stay outside the index
 -- and cannot violate it; SQLite upsert targets it via
 -- ON CONFLICT(session_id, turn_id, entry_key) WHERE entry_key != ''.
--- seq/created_at are only set on INSERT: a row keeps the position of its first
--- appearance, so repeated upserts never reorder history (§5.4 #5).
+-- seq is only set on INSERT: a row keeps the position of its first appearance,
+-- so repeated upserts never reorder history (§5.4 #5). created_at refreshes on
+-- update: the turn-end reconcile writes the final content last, so the stored
+-- timestamp converges to turn end — same time semantics as the old
+-- write-everything-at-turn-end behavior (frontend #68 relies on it).
 ALTER TABLE messages ADD COLUMN turn_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE messages ADD COLUMN entry_key TEXT NOT NULL DEFAULT '';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_turn_entry
