@@ -465,16 +465,37 @@ func (s *ChatService) armQueueTimerLocked(sessionID string, rows []store.QueueIt
 	}
 	var t *time.Timer
 	t = time.AfterFunc(delay, func() {
-		// Drop self from the map first (stopQueueTimer may lose the Stop race
-		// against a firing timer; map identity check keeps it exact).
+		// Read the captured t under queueMu before anything else: the
+		// assignment above runs while the caller holds queueMu, so the
+		// mutex release→acquire edge is what makes this read race-free
+		// (Go's AfterFunc self-reference gotcha — evaluating it as a call
+		// argument has no such edge).
 		s.queueMu.Lock()
-		if cur := s.queueTimers[sessionID]; cur == t {
-			delete(s.queueTimers, sessionID)
-		}
+		self := t
 		s.queueMu.Unlock()
-		s.drainQueue(sessionID)
+		s.queueTimerFired(sessionID, self)
 	})
 	s.queueTimers[sessionID] = t
+}
+
+// queueTimerFired handles a schedule-timer callback. It only drains when this
+// timer is still the registered one for the session: a callback that lost the
+// Stop race against stopAllQueueTimers (shutdown), cleanupQueueState (session
+// deleted) or a re-arm (queue changed) must NOT fire a drain — during shutdown
+// that is exactly the "drain races the store close" hazard stopAllQueueTimers
+// exists to prevent (a drain could even spawn a harness mid-teardown via
+// ensureLive).
+func (s *ChatService) queueTimerFired(sessionID string, self *time.Timer) {
+	s.queueMu.Lock()
+	cur, registered := s.queueTimers[sessionID]
+	mine := registered && cur == self
+	if mine {
+		delete(s.queueTimers, sessionID)
+	}
+	s.queueMu.Unlock()
+	if mine {
+		s.drainQueue(sessionID)
+	}
 }
 
 // stopAllQueueTimers disarms every schedule timer (ServiceShutdown — drain

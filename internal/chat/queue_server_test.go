@@ -312,3 +312,43 @@ func TestOpenSessionEmitsQueueSnapshot(t *testing.T) {
 		t.Fatalf("empty queue must still emit an (empty) snapshot, got %+v ok=%v", p, ok)
 	}
 }
+
+// TestQueueTimerFiredSkipsWhenStale: a timer callback whose registration was
+// replaced or disarmed (shutdown / session delete / re-arm lost the Stop race)
+// must NOT drain — during shutdown a drain could race the store close; only
+// the still-registered timer's callback wakes the queue.
+func TestQueueTimerFiredSkipsWhenStale(t *testing.T) {
+	svc, sid, fc := newTestService(t)
+
+	if err := svc.EnqueueMessage(sid, "due", nil); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	// Arm a far-future schedule so a real timer is registered (it must not
+	// fire on its own within the test).
+	svc.queueMu.Lock()
+	svc.armQueueTimerLocked(sid, []store.QueueItem{store.NewQueueItem("later", "", time.Now().Add(time.Hour).UnixMilli())})
+	svc.queueMu.Unlock()
+	svc.queueMu.Lock()
+	registered := svc.queueTimers[sid]
+	svc.queueMu.Unlock()
+	if registered == nil {
+		t.Fatal("schedule timer must be armed")
+	}
+
+	// Stale (unregistered) timer fires → no drain, queue untouched.
+	svc.queueTimerFired(sid, &time.Timer{})
+	time.Sleep(20 * time.Millisecond)
+	if got := fc.count(); got != 0 {
+		t.Fatalf("stale timer callback must not drain, got %d prompts (%v)", got, fc.prompts)
+	}
+	if rows := listQueue(t, svc, sid); len(rows) != 1 || rows[0].Text != "due" {
+		t.Fatalf("queue must be untouched by a stale timer fire, got %+v", rows)
+	}
+
+	// The registered timer fires → drains the due item.
+	svc.queueTimerFired(sid, registered)
+	waitStarted(t, fc, 1)
+	if fc.prompts[0] != "due" {
+		t.Fatalf("registered timer must drain the due item, got %v", fc.prompts)
+	}
+}
