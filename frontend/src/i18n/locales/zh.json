@@ -93,6 +93,7 @@
       "executing": "执行中",
       "replying": "回复中",
       "generating": "生成中",
+      "reconnecting": "重连中",
       "idle": "空闲"
     },
     "harnessTip": "Agent:{{name}}"
@@ -225,6 +226,7 @@
       "readonly": "就绪",
       "error": "出错",
       "closed": "已关闭",
+      "reconnecting": "重连中",
       "executing": "执行中",
       "replying": "回复中",
       "thinking": "思考中",

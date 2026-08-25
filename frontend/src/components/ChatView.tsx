@@ -99,6 +99,10 @@ const STATUS_MAP: Record<string, { key: string; cls: string }> = {
   // 具体提示由 notice-bar(蓝色条)承载,头部徽标不额外强调(避免与提示条重复)。
   notice: { key: "chat.status.idle", cls: "st-idle" },
   closed: { key: "chat.status.closed", cls: "st-closed" },
+  // reconnecting: background auto-reconnect in flight (§3.3). Amber = degraded
+  // transient (vs error red / idle green); self-heals without a live harness,
+  // and the badge keeps its text (meaning outweighs churn).
+  reconnecting: { key: "chat.status.reconnecting", cls: "st-reconnecting" },
   empty: { key: "", cls: "" },
 };
 const statusInfo = (status: string, activity?: string): { key: string; cls: string } => {

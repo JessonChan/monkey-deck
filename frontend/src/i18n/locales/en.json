@@ -93,6 +93,7 @@
       "executing": "Executing",
       "replying": "Replying",
       "generating": "Generating",
+      "reconnecting": "Reconnecting",
       "idle": "Idle"
     },
     "harnessTip": "Agent: {{name}}"
@@ -225,6 +226,7 @@
       "readonly": "Ready",
       "error": "Error",
       "closed": "Closed",
+      "reconnecting": "Reconnecting",
       "executing": "Executing",
       "replying": "Replying",
       "thinking": "Thinking",

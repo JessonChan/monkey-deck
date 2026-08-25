@@ -318,6 +318,9 @@ input, textarea { font-family: inherit; }
 .draft-indicator { display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; flex-shrink: 0; border-radius: 50%; color: var(--accent-2); background: rgba(100, 210, 255, 0.16); }
 .draft-indicator svg { width: 8px; height: 8px; display: block; }
 .session-dot.error { background: var(--red); }
+/* Reconnecting (background auto-reconnect, §3.3): amber = degraded transient,
+   distinct from error red / idle green / generating green. */
+.session-dot.reconnecting { background: var(--amber); }
 /* ─── 右键菜单 ─── */
 .ctx-menu {
   position: fixed; z-index: 60; min-width: 168px; background: var(--elev-2);
@@ -433,6 +436,7 @@ input, textarea { font-family: inherit; }
 .st-closed { background: var(--elev); color: var(--text-3); }
 .st-readonly { background: var(--elev); color: var(--text-3); }
 .st-thinking { background: rgba(255,214,10,0.16); color: var(--amber); }
+.st-reconnecting { background: rgba(255,214,10,0.14); color: var(--amber); }
 .st-executing { background: rgba(10,132,255,0.16); color: var(--accent-2); }
 .st-replying { background: rgba(48,209,88,0.14); color: var(--green); }
 

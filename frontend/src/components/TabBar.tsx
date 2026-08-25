@@ -58,11 +58,12 @@ export default function TabBar(props: TabBarProps) {
       <div className="tabbar-scroll">
         {tabs.map((tab) => {
           // Status dot class — identical logic to Sidebar.tsx so the indicator color matches
-          // the sidebar's session row (error / activity / running / idle).
+          // the sidebar's session row (error / activity / running / reconnecting / idle).
           const active = tab.status === "prompting";
-          const cls = tab.status === "error" ? "error" : active ? tab.activity ?? "running" : "";
+          const cls = tab.status === "error" ? "error" : active ? tab.activity ?? "running" : tab.status === "reconnecting" ? "reconnecting" : "";
           const dotTip = tab.status === "error" ? t("sidebar.status.error")
             : active ? ({ thinking: t("sidebar.status.thinking"), executing: t("sidebar.status.executing"), replying: t("sidebar.status.replying") } as Record<string, string>)[tab.activity ?? ""] ?? t("tabbar.generating")
+            : tab.status === "reconnecting" ? t("sidebar.status.reconnecting")
             : t("sidebar.status.idle");
           return (
             <div

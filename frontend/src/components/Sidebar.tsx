@@ -473,9 +473,10 @@ export default function Sidebar(props: Props) {
                     const st = props.statusBySession[s.id];
                     const active = st === "prompting";
                     const act = props.activityBySession[s.id];
-                    const cls = st === "error" ? "error" : active ? act ?? "running" : "";
+                    const cls = st === "error" ? "error" : active ? act ?? "running" : st === "reconnecting" ? "reconnecting" : "";
                     const dotTip = st === "error" ? t("sidebar.status.error")
                       : active ? ({ thinking: t("sidebar.status.thinking"), executing: t("sidebar.status.executing"), replying: t("sidebar.status.replying") } as Record<string, string>)[act ?? ""] ?? t("sidebar.status.generating")
+                      : st === "reconnecting" ? t("sidebar.status.reconnecting")
                       : t("sidebar.status.idle");
                     const unread = !active && props.unreadBySession[s.id];
                     // 显示标题:custom_title 优先(用户重命名),回退 auto title,再回退兜底文案(0016)。
