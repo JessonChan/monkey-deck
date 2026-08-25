@@ -169,6 +169,37 @@ func TestTranscribeFFmpegSilentTruncation(t *testing.T) {
 	}
 }
 
+// TestTranscribeFFmpegBadPathIsServerError: MD_FFMPEG pointing at a
+// missing (or unexecutable) binary is an infrastructure fault, not bad
+// audio — the error must NOT carry ErrUnsupportedAudioType (the remote
+// bridge would turn it into a misleading 415 "could not decode"); it stays
+// generic so it maps to 500, naming the broken path. (#24311 P3-a)
+func TestTranscribeFFmpegBadPathIsServerError(t *testing.T) {
+	for name, path := range map[string]string{
+		"missing path-style override": filepath.Join(t.TempDir(), "no-such-ffmpeg"),
+		"bare name not on PATH":       "monkey-deck-definitely-not-ffmpeg",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("MD_FFMPEG", path)
+			svc := newTestService(t, defaultModelID)
+
+			_, err := svc.Transcribe(context.Background(), []byte("webm-ish"), "audio/webm")
+			if err == nil {
+				t.Fatal("Transcribe must fail when the ffmpeg binary cannot run")
+			}
+			if errors.Is(err, ErrUnsupportedAudioType) {
+				t.Fatalf("infra failure misclassified as client 415: %v", err)
+			}
+			if !strings.Contains(err.Error(), path) && !strings.Contains(err.Error(), "run ffmpeg") {
+				t.Fatalf("error should name the broken ffmpeg path: %v", err)
+			}
+			if st := svc.STTStatus(); st.SidecarRunning {
+				t.Fatal("spawn failure must not start a sidecar")
+			}
+		})
+	}
+}
+
 // TestWavHasAudioFrames: the truncation net — only a RIFF/WAVE whose data
 // chunk is non-empty counts as audio-bearing.
 func TestWavHasAudioFrames(t *testing.T) {

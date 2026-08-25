@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strings"
@@ -151,6 +153,14 @@ func transcodeToWav(ctx context.Context, ffmpeg string, audio []byte) ([]byte, e
 	if err := cmd.Run(); err != nil {
 		if tctx.Err() != nil {
 			return nil, fmt.Errorf("stt: ffmpeg transcode timed out after %s", transcodeTimeout)
+		}
+		// Spawn-side infrastructure failures (a broken MD_FFMPEG override,
+		// missing binary, no execute permission) are server faults, not bad
+		// audio: keep them generic (500) instead of a misleading 415
+		// "could not decode" (#24311 P3-a). ENOENT covers path-style
+		// overrides; exec.ErrNotFound covers bare names missing from PATH.
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) || errors.Is(err, exec.ErrNotFound) {
+			return nil, fmt.Errorf("stt: run ffmpeg %q: %w", ffmpeg, err)
 		}
 		return nil, fmt.Errorf("%w: ffmpeg could not decode the audio (%v): %s",
 			ErrUnsupportedAudioType, err, stderr.String())
