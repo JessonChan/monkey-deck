@@ -376,6 +376,47 @@ describe("QueuePanel schedule picker (Task #22134)", () => {
     expect(host.querySelector('[data-testid="queue-schedule-input"]')).not.toBeNull();
   });
 
+  test("Save cap gate supersedes a stale expiry error — never both notices (issue #130 review)", async () => {
+    // Reproduces the review fix: a prior failed Save leaves the expiry error
+    // showing; a later over-cap DOM value reaching the Save final gate must
+    // REPLACE that error with the cap notice (the value cannot be both past
+    // and >24h-future). happy-dom not firing onChange is exactly the edge the
+    // final gate exists for, so this path is reproducible here.
+    const calls: number[] = [];
+    const { host } = mount(
+      <QueuePanel queue={[item("q1", "hi", Date.now())]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(_id, scheduledAt) => calls.push(scheduledAt)} onReorder={() => {}} />
+    );
+    await flush();
+
+    (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    const input = host.querySelector('[data-testid="queue-schedule-input"]') as HTMLInputElement;
+    const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
+    const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    // 1) Past value → Save → expiry error shows, nothing commits.
+    setInputValue(input, fmt(new Date(Date.now() - 5 * 60_000)));
+    await flush();
+    (host.querySelector('[data-testid="queue-schedule-save"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(calls).toHaveLength(0);
+    expect(host.querySelector('[data-testid="queue-schedule-error"]')).not.toBeNull();
+
+    // 2) Then a >24h value → Save → cap gate REPLACES the expiry error.
+    setInputValue(input, fmt(new Date(Date.now() + 3 * 24 * 60 * 60_000)));
+    await flush();
+    (host.querySelector('[data-testid="queue-schedule-save"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    expect(calls).toHaveLength(0);
+    expect(host.querySelector('[data-testid="queue-schedule-cap"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-error"]')).toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-input"]')).not.toBeNull();
+  });
+
   test("datetime-local input has max ≈ now+24h (issue #130)", async () => {
     const before = Date.now();
     const { host } = mount(

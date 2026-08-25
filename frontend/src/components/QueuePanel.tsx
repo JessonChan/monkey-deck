@@ -134,7 +134,10 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
     // past the onChange rejection in edge engines — re-verify at submit, right
     // next to the expiry re-check above.
     if (ts > Date.now() + SCHEDULE_CAP_MS) {
+      // The cap verdict supersedes any stale expiry error (same "latest
+      // verdict wins" rule as the preset/onChange rejections).
       setScheduleCapped(true);
+      setScheduleError(null);
       return;
     }
     onSchedule(schedulingId, ts > 0 ? ts : Date.now());
