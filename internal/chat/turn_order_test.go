@@ -99,7 +99,7 @@ func TestPersistTurnWritesItemsInOrder(t *testing.T) {
 	ls.mu.Lock()
 	timeline := ls.finalizeTurn()
 	ls.mu.Unlock()
-	svc.persistTurn(sessionID, timeline)
+	svc.persistTurn(ls, sessionID, "turn-1", timeline)
 
 	msgs, err := svc.st.ListMessages(svc.ctx, sessionID)
 	if err != nil {

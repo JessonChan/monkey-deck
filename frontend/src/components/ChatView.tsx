@@ -305,8 +305,9 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   const rows = useMemo(() => buildRows(items), [items]);
   // 每个回合的持续时间,挂到该回合「最后一条 agent 回复」的 msg-meta(需求钉死 #68:
   // duration 不许放 user 消息,只挂 agent 回复)。turn start = user 消息 ts(发送时刻落库);
-  // turn end = 该回合最后一条消息的 ts —— persistTurn 在回合结束时统一写库,最后一条
-  // createdAt ≈ 回合结束时刻(§5.3 尊重数据源)。
+  // turn end = 该回合最后一条消息的 ts —— turn 内容增量落库(#125),但收尾 reconcile
+  // 在回合结束必写最终全文且 created_at 随写刷新,故最后一条 createdAt ≈ 回合结束时刻
+  // (§5.3 尊重数据源)。
   // 仅「已结束」回合算出 duration:有后续 user 消息(下回合已开)必为结束;最后一回合在非
   // prompting(idle/error/…)时视为结束。进行中(prompting)的回合不显示时长(无结束时刻)。
   // 返回 map:agent 消息下标 → 本回合 durationMs(仅每回合最后一条 agent 进入 map)。

@@ -201,9 +201,18 @@ type liveSession struct {
 	turnCancel   context.CancelFunc // 取消本轮 Prompt(干净 session/cancel,非杀进程)
 	turnDone     chan struct{}      // 本轮 runPrompt 返回时关闭(供 InterruptAndSend 等待其落定)
 	suppressIdle bool               // InterruptAndSend 置位:本轮结束不发 idle(打断后由新轮发 prompting,避免触发 auto-continue 误续发)
+
+	// 增量落库(#125,turnpersist.go):turn 进行中的脏条目 + 1s 防抖 flush 定时器。
+	// flushDirty/flushTimer 受 ls.mu 保护;persistMu 串行化增量 flush 与收尾 reconcile,
+	// 保证陈旧 flush 快照不会覆盖最终全文。
+	flushDirty map[string]struct{}
+	flushTimer *time.Timer
+	persistMu  sync.Mutex
 }
 
 // resetBuffers 清空本轮 timeline(turn 开始时调)。调用方:startTurn/SendAndWaitSync。
+// 同时停掉上一轮遗留的增量 flush 定时器并清脏(#125):旧定时器即使触发也会因
+// turnID 不匹配 no-op,在此显式停免跨 turn 干扰。
 func (ls *liveSession) resetBuffers() {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
@@ -213,6 +222,11 @@ func (ls *liveSession) resetBuffers() {
 	ls.currentPlan = nil
 	ls.fallbackRole = ""
 	ls.fallbackSeq = 0
+	if ls.flushTimer != nil {
+		ls.flushTimer.Stop()
+		ls.flushTimer = nil
+	}
+	ls.flushDirty = nil
 }
 
 // appendEntry 新建 entry 并入队 timeline + 登记 index。调用方须持 ls.mu。
@@ -329,6 +343,11 @@ type ChatService struct {
 	// 默认 = s.startLive;单测注入 mock 以免启真 harness(§5.1)。ensureLive 经它 spawn,
 	// 使懒 spawn(OpenSession/ContinueSession/SendMessage)的触发路径可被单测断言。
 	spawnFn func(se *store.Session, proj *store.Project, acpSessionID string, resume bool) error
+
+	// turnFlushEvery:增量落库的防抖间隔(#125,turnpersist.go)。turn 进行中首个脏
+	// 事件后 interval 触发一次批量 upsert(窗口内继续攒脏),崩溃最多丢 ~interval 的
+	// 流式内容。生产默认 1s;单测注入短值加速。
+	turnFlushEvery time.Duration
 }
 
 // NewChatService 构造(尚未启动;ServiceStartup 时 open store)。
@@ -344,6 +363,7 @@ func NewChatService(cfg *config.Config) *ChatService {
 		harnessRefreshEvery:    time.Hour,
 		autoUpgradeCooldown:    map[string]time.Time{},
 		autoUpgradeCooldownDur: time.Hour,
+		turnFlushEvery:         time.Second,
 	}
 }
 
@@ -2064,7 +2084,7 @@ func (s *ChatService) SendAndWaitSync(sessionID, text string, attachments []acp.
 	ls.currentPlan = nil
 	ls.currentTurnID = ""
 	ls.mu.Unlock()
-	s.persistTurn(sessionID, timeline)
+	s.persistTurn(ls, sessionID, turnID, timeline)
 	s.persistTurnPlan(sessionID, turnID, planSnapshot)
 	agentText := ""
 	for _, e := range timeline {
@@ -2134,8 +2154,9 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 	ls.mu.Unlock()
 
 	cancelled := err != nil && turnCtx.Err() != nil
-	// 持久化已收到的部分回复(取消/失败也不丢)。
-	s.persistTurn(sessionID, timeline)
+	// 持久化已收到的部分回复(取消/失败也不丢)。reconcile:增量 flush 已写过的行
+	// 就地更新为最终全文,未写过的插入(#125,turnpersist.go)。
+	s.persistTurn(ls, sessionID, turnID, timeline)
 	// 持久化本轮 plan 快照(role='plan' message),使重开会话能回看每轮 plan。
 	// 放在 status emit 之前:前端收到 idle 时持久化已落库,重开会话 / 翻页能拿到。
 	s.persistTurnPlan(sessionID, turnID, planSnapshot)
@@ -2201,52 +2222,7 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 	s.emitStatus(sessionID, "idle", "stopReason="+string(stopReason))
 }
 
-// persistTurn 把本轮 timeline 按真实发生顺序写库。
-// message(thought/agent)与 tool 交错写入 —— 重开会话加载历史时,顺序与实时流式一一对应,
-// 工具卡片不会全部堆到 turn 末尾(§5.4 #12)。
-func (s *ChatService) persistTurn(sessionID string, timeline []*turnEntry) {
-	if s.persistHook != nil {
-		s.persistHook() // 测试钩子:在此阻塞放大收尾窗口(生产 nil,直通)
-	}
-	for _, e := range timeline {
-		switch e.kind {
-		case "message":
-			content := e.text.String()
-			if strings.TrimSpace(content) == "" {
-				continue
-			}
-			kind := "agent_message_chunk"
-			if e.role == "thought" {
-				kind = "agent_thought_chunk"
-			}
-			if _, err := s.st.AppendMessage(s.ctx, sessionID, e.role, kind, content, ""); err != nil {
-				slog.Warn("persist "+e.role, "err", err)
-			}
-		case "tool":
-			body, _ := json.Marshal(e.tool)
-			if _, err := s.st.AppendMessage(s.ctx, sessionID, "tool", "tool_call", string(body), e.tool.ID); err != nil {
-				slog.Warn("persist tool", "err", err)
-			}
-		}
-	}
-}
-
-// persistTurnPlan 把本轮 plan 最终快照写库(role='plan' message),使重开会话能回看
-// 每轮 plan。空 entries 不写(无 plan 的 turn 不留痕)。turnID 存进 tool_call_id 列,
-// 前端据此把 plan item 钉在对应 turn(plan 是按 turn 索引的历史快照)。
-func (s *ChatService) persistTurnPlan(sessionID, turnID string, entries []acp.PlanEntry) {
-	if len(entries) == 0 {
-		return
-	}
-	body, err := json.Marshal(entries)
-	if err != nil {
-		slog.Warn("marshal plan entries", "err", err)
-		return
-	}
-	if _, err := s.st.AppendMessage(s.ctx, sessionID, "plan", "plan", string(body), turnID); err != nil {
-		slog.Warn("persist plan", "err", err)
-	}
-}
+// persistTurn / persistTurnPlan(收尾 reconcile + plan 快照)移至 turnpersist.go(#125)。
 
 // persistConfigCache 把最新的扁平化 config options 序列化写库(懒 spawn:只读态渲染 ModelSelect 用)。
 // 在 spawn 完成(startLive)/ config_option_update(handleEvent) / set_config_option / refresh config 时调用。
@@ -2301,6 +2277,7 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 		}
 		entry.text.WriteString(e.Text)
 		e.Text = entry.text.String()
+		s.markTurnDirty(ls, sessionID, entry.id)
 	case "tool_call":
 		ls.fallbackRole = "" // tool_call is a hard boundary: next chunk opens a new fallback entry
 		t, exists := ls.index[e.ToolCallID]
@@ -2314,6 +2291,7 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 			ta := &toolAccum{ID: e.ToolCallID, Title: e.ToolTitle, Status: e.ToolStatus, Kind: e.ToolKind, RawInput: e.RawInput}
 			ls.appendEntry(&turnEntry{id: e.ToolCallID, kind: "tool", tool: ta})
 		}
+		s.markTurnDirty(ls, sessionID, e.ToolCallID)
 	case "tool_call_update":
 		t, exists := ls.index[e.ToolCallID]
 		if exists && t.kind == "tool" && t.tool != nil {
@@ -2336,6 +2314,7 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 			ta := &toolAccum{ID: e.ToolCallID, Title: e.ToolTitle, Status: e.ToolStatus, Kind: e.ToolKind, RawOutput: e.RawOutput}
 			ls.appendEntry(&turnEntry{id: e.ToolCallID, kind: "tool", tool: ta})
 		}
+		s.markTurnDirty(ls, sessionID, e.ToolCallID)
 	case "plan":
 		// plan 按 turn 索引(协议无 turnId,client 用 user message ID 作 turnID,见 startTurn)。
 		// 整表替换:每条 plan 事件都是全量,直接覆盖 ls.currentPlan;turn 结束时落库。
