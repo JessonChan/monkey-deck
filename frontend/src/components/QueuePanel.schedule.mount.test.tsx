@@ -12,6 +12,9 @@
 //     Over-cap clicks/picks (> now+24h) are REJECTED (issue #130 wrap-up):
 //     the staged time does not move, a cap notice shows, and Save re-verifies
 //     the cap as the final gate. Cancelling fully drops the staged time.
+//  5. ✕ on the staged chip (issue #130 wrap-up 2) resets the staging IN PLACE:
+//     row stays open, chip/cap/seed all drop, the input snaps back to the
+//     default (now+1m), and presets re-base on now.
 //
 // Follows the existing edit-mount test pattern: happy-dom + non-controlled input set via
 // the native prototype setter (React 19 + happy-dom onChange edge, see
@@ -424,6 +427,124 @@ describe("QueuePanel schedule picker (Task #22134)", () => {
     expect(host.querySelector('[data-testid="queue-schedule-cap"]')).toBeNull();
 
     // +5 re-bases on now (a leaked ~5m staging would double it to ~10m).
+    const before = Date.now();
+    (host.querySelector('[data-testid="queue-schedule-preset-5"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    (host.querySelector('[data-testid="queue-schedule-save"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBeGreaterThanOrEqual(before + 5 * 60_000 - 60_000);
+    expect(calls[0]).toBeLessThanOrEqual(before + 5 * 60_000 + 60_000);
+  });
+
+  test("✕ on the staged chip resets the staging in place — row open, input back to default, presets re-base on now (issue #130)", async () => {
+    const calls: number[] = [];
+    const { host } = mount(
+      <QueuePanel queue={[item("q1", "hi", Date.now())]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(_id, scheduledAt) => calls.push(scheduledAt)} onReorder={() => {}} />
+    );
+    await flush();
+
+    // Open → +5 +10 → staged ~15m out, chip (with its ✕) visible.
+    (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    for (const mins of [5, 10] as const) {
+      (host.querySelector(`[data-testid="queue-schedule-preset-${mins}"]`) as HTMLElement)
+        .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+      await flush();
+    }
+    expect(host.querySelector('[data-testid="queue-schedule-pending"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-pending-reset"]')).not.toBeNull();
+
+    // ✕ — nothing commits, the row stays open, the chip drops, and the input
+    // snaps back to the default pick (~now+1m, minute-truncated).
+    const resetBefore = Date.now();
+    (host.querySelector('[data-testid="queue-schedule-pending-reset"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    const resetAfter = Date.now();
+    expect(calls).toHaveLength(0);
+    expect(host.querySelector('[data-testid="queue-schedule-input"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-pending"]')).toBeNull();
+    const input = host.querySelector('[data-testid="queue-schedule-input"]') as HTMLInputElement;
+    const snapped = Date.parse(input.value);
+    expect(Number.isNaN(snapped)).toBe(false);
+    expect(snapped).toBeGreaterThanOrEqual(resetBefore);
+    expect(snapped).toBeLessThanOrEqual(resetAfter + 60_000);
+
+    // +5 re-bases on now: Save commits ~reset-time+5min (a leaked ~15m staging
+    // would land ~10 minutes later).
+    const before = Date.now();
+    (host.querySelector('[data-testid="queue-schedule-preset-5"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    (host.querySelector('[data-testid="queue-schedule-save"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBeGreaterThanOrEqual(before + 5 * 60_000 - 60_000);
+    expect(calls[0]).toBeLessThanOrEqual(before + 5 * 60_000 + 60_000);
+  });
+
+  test("✕ also clears the cap notice — chip and cap both drop, row stays open (issue #130)", async () => {
+    // Seed 23h55m out; +30min gets rejected with the cap notice. ✕ must clear
+    // BOTH the staged chip and the cap notice without closing the row.
+    const seed = Date.now() + 24 * 60 * 60_000 - 5 * 60_000;
+    const { host } = mount(
+      <QueuePanel queue={[item("q1", "later", seed)]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={() => {}} onReorder={() => {}} />
+    );
+    await flush();
+
+    (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    (host.querySelector('[data-testid="queue-schedule-preset-30"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(host.querySelector('[data-testid="queue-schedule-pending"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-cap"]')).not.toBeNull();
+
+    const resetBefore = Date.now();
+    (host.querySelector('[data-testid="queue-schedule-pending-reset"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    const resetAfter = Date.now();
+
+    expect(host.querySelector('[data-testid="queue-schedule-pending"]')).toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-cap"]')).toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-input"]')).not.toBeNull();
+    // The input no longer holds the far-out seed — it snapped back to ~now+1m.
+    const input = host.querySelector('[data-testid="queue-schedule-input"]') as HTMLInputElement;
+    const snapped = Date.parse(input.value);
+    expect(Number.isNaN(snapped)).toBe(false);
+    expect(snapped).toBeGreaterThanOrEqual(resetBefore);
+    expect(snapped).toBeLessThanOrEqual(resetAfter + 60_000);
+  });
+
+  test("✕ drops a seeded schedule too — presets after it re-base on now, not on the seed (issue #130)", async () => {
+    const seed = Date.now() + 10 * 60_000;
+    const calls: number[] = [];
+    const { host } = mount(
+      <QueuePanel queue={[item("q1", "later", seed)]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(_id, scheduledAt) => calls.push(scheduledAt)} onReorder={() => {}} />
+    );
+    await flush();
+
+    (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(host.querySelector('[data-testid="queue-schedule-pending"]')).not.toBeNull();
+
+    (host.querySelector('[data-testid="queue-schedule-pending-reset"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(host.querySelector('[data-testid="queue-schedule-pending"]')).toBeNull();
+
+    // +5 after the reset stages now+5min — a surviving seed would commit
+    // ~seed+5min (≈15min out) instead.
     const before = Date.now();
     (host.querySelector('[data-testid="queue-schedule-preset-5"]') as HTMLElement)
       .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
