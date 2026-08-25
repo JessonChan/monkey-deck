@@ -1,11 +1,15 @@
 // Mount-test QueuePanel schedule picker (Task #22134).
 //
 // Pins:
-//  1. A future scheduledAt shows the "scheduled send" badge (clock) instead of the
-//     plain "queued" label.
-//  2. Clicking "schedule" opens a datetime-local input; Save calls onSchedule with the
-//     picked epoch ms.
+//  1. A future scheduledAt shows the "scheduled send" badge (clock) instead of
+//     the plain "queued" label.
+//  2. Clicking "schedule" opens a datetime-local input; Save calls onSchedule
+//     with the picked epoch ms.
 //  3. "Now" (clearSchedule) calls onSchedule with a due timestamp (<= now).
+//  4. Accumulative presets (issue #130): clicks stack on the staged time
+//     (base = max(staged, now)), the row stays open with a staged chip, Save
+//     commits, stacking on a seeded pending schedule adds on top, and the
+//     stack is capped at now+24h with a cap notice.
 //
 // Follows the existing edit-mount test pattern: happy-dom + non-controlled input set via
 // the native prototype setter (React 19 + happy-dom onChange edge, see
@@ -184,31 +188,113 @@ describe("QueuePanel schedule picker (Task #22134)", () => {
     expect(host.querySelector('[data-testid="queue-schedule-input"]')).not.toBeNull();
   });
 
-  test("+5/+10/+30min preset buttons call onSchedule with now+Nmin and close the row (Task #24226)", async () => {
+  test("preset clicks stack on the staged time; row stays open; Save commits the total (issue #130)", async () => {
+    const calls: Array<{ id: string; scheduledAt: number }> = [];
+    const { host } = mount(
+      <QueuePanel queue={[item("q1", "hi", Date.now())]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(id, scheduledAt) => calls.push({ id, scheduledAt })} onReorder={() => {}} />
+    );
+    await flush();
+
+    (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    // +5 then +10 then +30 → staged at (first-click time) + 45min. Each click
+    // stacks on the staged value (base = max(staged, now)), NOT on now alone.
+    const before = Date.now();
     for (const mins of [5, 10, 30] as const) {
-      const calls: Array<{ id: string; scheduledAt: number }> = [];
-      const { host } = mount(
-        <QueuePanel queue={[item("q1", "hi", Date.now())]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(id, scheduledAt) => calls.push({ id, scheduledAt })} onReorder={() => {}} />
-      );
-      await flush();
-
-      (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
-        .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
-      await flush();
-
-      const before = Date.now();
       (host.querySelector(`[data-testid="queue-schedule-preset-${mins}"]`) as HTMLElement)
         .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
       await flush();
-      const after = Date.now();
-
-      expect(calls).toHaveLength(1);
-      expect(calls[0].id).toBe("q1");
-      // scheduledAt must be ~now + mins (tolerate event-loop latency).
-      expect(calls[0].scheduledAt).toBeGreaterThanOrEqual(before + mins * 60_000);
-      expect(calls[0].scheduledAt).toBeLessThanOrEqual(after + mins * 60_000);
-      // Schedule row closed after preset click.
-      expect(host.querySelector('[data-testid="queue-schedule-input"]')).toBeNull();
     }
+    const after = Date.now();
+
+    // Presets only STAGE — nothing committed yet, and the row stays open with
+    // the staged-time chip visible (issue #130).
+    expect(calls).toHaveLength(0);
+    expect(host.querySelector('[data-testid="queue-schedule-input"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-pending"]')).not.toBeNull();
+
+    (host.querySelector('[data-testid="queue-schedule-save"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].id).toBe("q1");
+    // datetime-local truncates to the minute, so the committed epoch may be up
+    // to 1 minute below the staged (first-click + 45min) anchor.
+    expect(calls[0].scheduledAt).toBeGreaterThanOrEqual(before + 45 * 60_000 - 60_000);
+    expect(calls[0].scheduledAt).toBeLessThanOrEqual(after + 45 * 60_000);
+    // Row closed after Save commits.
+    expect(host.querySelector('[data-testid="queue-schedule-input"]')).toBeNull();
+  });
+
+  test("opening the schedule row on a pending item seeds the staged chip; presets stack on the seed (issue #130)", async () => {
+    const future = Date.now() + 10 * 60_000;
+    const calls: number[] = [];
+    const { host } = mount(
+      <QueuePanel queue={[item("q1", "later", future)]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(_id, scheduledAt) => calls.push(scheduledAt)} onReorder={() => {}} />
+    );
+    await flush();
+
+    (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    // Seeded from the item's existing schedule → chip visible immediately, no cap.
+    expect(host.querySelector('[data-testid="queue-schedule-pending"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-cap"]')).toBeNull();
+
+    // +5 stacks ON TOP of the seeded time → ~15min out (not 5min from now).
+    (host.querySelector('[data-testid="queue-schedule-preset-5"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    (host.querySelector('[data-testid="queue-schedule-save"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    expect(calls).toHaveLength(1);
+    // seed (10min out) + 5min, minus up to 1min datetime-local truncation.
+    expect(calls[0]).toBeGreaterThanOrEqual(future + 5 * 60_000 - 60_000);
+    expect(calls[0]).toBeLessThanOrEqual(future + 5 * 60_000);
+  });
+
+  test("preset stacking is capped at now+24h with a cap notice (issue #130)", async () => {
+    // Seed 23h55m out; +30min twice would be +60m uncapped → must clamp to 24h.
+    const seed = Date.now() + 24 * 60 * 60_000 - 5 * 60_000;
+    const calls: number[] = [];
+    const { host } = mount(
+      <QueuePanel queue={[item("q1", "later", seed)]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(_id, scheduledAt) => calls.push(scheduledAt)} onReorder={() => {}} />
+    );
+    await flush();
+
+    (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    const before = Date.now();
+    (host.querySelector('[data-testid="queue-schedule-preset-30"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(host.querySelector('[data-testid="queue-schedule-cap"]')).not.toBeNull();
+
+    // Stacking again stays capped at 24h (no further growth).
+    (host.querySelector('[data-testid="queue-schedule-preset-30"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    const end = Date.now();
+    expect(host.querySelector('[data-testid="queue-schedule-cap"]')).not.toBeNull();
+
+    (host.querySelector('[data-testid="queue-schedule-save"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    expect(calls).toHaveLength(1);
+    // Committed time is clamped into [before+24h (−1min truncation), end+24h].
+    expect(calls[0]).toBeGreaterThanOrEqual(before + 24 * 60 * 60_000 - 60_000);
+    expect(calls[0]).toBeLessThanOrEqual(end + 24 * 60 * 60_000);
+    // Clamp actually applied: uncapped stacking would be seed + 60min.
+    expect(calls[0]).toBeLessThan(seed + 60 * 60_000);
   });
 });
