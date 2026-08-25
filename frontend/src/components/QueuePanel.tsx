@@ -14,12 +14,17 @@ interface Props {
 }
 
 // QueuePanel:turn 进行中时排队消息的列表面板。
-// ACP 协议无 queue —— 这是前端 FIFO 缓冲,回合结束自动续发;每条可「立即发送」(打断)
-// 或「撤回编辑」(回填输入框),也可「inline 编辑」(点编辑变 input,保存写回队列)。多条 FIFO,
-// 按序逐条自动发(每条 = 一个独立 turn)。
+// ACP has no queue — this renders the SERVER-side FIFO buffer (#126A: the queue
+// moved to the backend + SQLite persistence); the backend's drainQueue
+// auto-continues at turn end. Each item can be "send now" (interrupt),
+// "revoke to edit" (refill the composer) or inline-edited (write back to the
+// queue). Multiple items go FIFO, one item = one independent turn.
+// 本组件只渲染 queue props(chat:queue 事件镜像),不持有队列真相。
 //
-// 拖拽重排:每条左侧的 ⠿ 手柄 draggable(HTML5 drag-drop),整行作 drop target;松手时调
-// onReorder(activeId, overId),父层把 activeId 这条移到 overId 位置,drainSession 按新顺序发。
+// Drag reorder: each row's ⠿ grip is draggable (HTML5 drag-drop), the whole row
+// is the drop target; on drop the panel calls onReorder(activeId, overId) and the
+// parent forwards it to the backend's ReorderQueueItem (#126A: the queue lives on
+// the server, which drains in the new order).
 //
 // Narrow screens (≤768px, issue #126B): HTML5 drag is unreachable on touch, so CSS
 // hides the grip and the actions row gains explicit up/down buttons — both reuse

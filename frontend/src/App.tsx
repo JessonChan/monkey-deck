@@ -4,7 +4,7 @@ import { Events } from "@wailsio/runtime";
 import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import * as TerminalService from "../bindings/github.com/jessonchan/monkey-deck/internal/terminal/terminalservice";
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
-import type { ChatItem, ConfigOption, PermissionPrompt, ElicitationPrompt, SessionEvent, StatusPayload, QueueItem, Mention, ImageAttachment, AudioAttachment, PlanEntry, LivePlan, Usage, SlashCommand } from "./types";
+import type { ChatItem, ConfigOption, PermissionPrompt, ElicitationPrompt, SessionEvent, StatusPayload, QueueItem, QueuePayload, Mention, ImageAttachment, AudioAttachment, Attachment, PlanEntry, LivePlan, Usage, SlashCommand } from "./types";
 import Sidebar from "./components/Sidebar";
 import TabBar from "./components/TabBar";
 import ChatView, { type ChatViewHandle } from "./components/ChatView";
@@ -72,16 +72,17 @@ const EMPTY_USAGE: Usage = { used: 0, size: 0, cost: 0, cachedReadTokens: 0, cac
 // 分页:首次打开只加载最近 PAGE_SIZE 条,滚到顶部点「加载更多」继续往前翻(游标 = 最旧 seq)。
 const PAGE_SIZE = 30;
 
-// buildAttachments 把三类用户输入归一成后端 SendMessage/InterruptAndSend 接受的 Attachment[]
-// (与 internal/acp.Attachment 对齐)。显式带 Kind —— internal/acp/runner.go 的 attachmentBlock
-// switch 据此选 ContentBlock 类型:
+// buildAttachments 把三类用户输入归一成后端 SendMessage/EnqueueMessage/InterruptAndSend
+// 接受的 Attachment[](与 internal/acp.Attachment 对齐)。显式带 Kind —— internal/acp/runner.go
+// 的 attachmentBlock switch 据此选 ContentBlock 类型:
 //   - mentions(@提及)/ 回形针文件 → "file" → ContentBlock::ResourceLink(协议 baseline,所有 agent MUST support)
 //   - images                       → "image" → ContentBlock::Image(内联 base64,需 image 能力)
 //   - audios                       → "audio" → ContentBlock::Audio(内联 base64,需 audio 能力)
 // mentions 与回形针文件在 Composer.submit 已合并为同一个 mentions 数组(两者都 → ResourceLink,
-// 协议无差别),此处统一带 kind:"file"。三处发送路径(sendMessage / drainSession / interruptQueue)
-// 共用本 helper,避免 Kind 漂移(§5.3:重复 3 次再抽象)。
-function buildAttachments(mentions?: Mention[], imgs?: ImageAttachment[], aus?: AudioAttachment[]) {
+// 协议无差别),此处统一带 kind:"file"。发送路径(sendMessage / enqueueMessage / 立即发送)共用本
+// helper,避免 Kind 漂移(§5.3:重复 3 次再抽象)。入队时 Attachment[] 随 QueueItem 原样存进
+// 服务端队列,drain/立即发送时后端直接复用(#126A)。
+function buildAttachments(mentions?: Mention[], imgs?: ImageAttachment[], aus?: AudioAttachment[]): Attachment[] {
   return [
     ...(mentions || []).map((m) => ({ kind: "file", path: m.path, name: m.name })),
     ...(imgs || []).map((im) => ({ kind: "image", name: im.name, data: im.data, mimeType: im.mimeType })),
@@ -137,7 +138,10 @@ export default function App() {
   // notice:非异常的温和提示(如 empty-turn:本轮无输出,但连接正常)。与 error 分开:
   // 蓝色而非红色,语义是「提示」不是「出错」。只对当前查看的 session 显示(同 error)。
   const [notice, setNotice] = useState<string | null>(null);
-  const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({});  // 前端 FIFO 队列(按 session 隔离,切走保留)
+  // Queue cache (#126A: the queue lives on the server; this is a pure mirror of
+  // chat:queue events — only ever wholesale-replaced, never mutated locally.
+  // OpenSession also pushes an authoritative snapshot as the initial state).
+  const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({});
   const [draftBySession, setDraftBySession] = useState<Record<string, string>>({});  // composer 草稿(按 session 隔离,切走保留)
   const [historyBySession, setHistoryBySession] = useState<Record<string, string[]>>({});  // 输入框历史(上下键翻):按 session 隔离,seed 自 DB + 每次发送追加
   const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, string[]>>({});  // composer 回形针附件(按 session 隔离,切走保留)
@@ -181,20 +185,13 @@ export default function App() {
   // 解耦:面板可收起但终端仍活着(图标应亮);反之面板开着但终端已死(图标应灭)。
   const [hasTermBySession, setHasTermBySession] = useState<Record<string, boolean>>({});
   const termCwdRef = useRef("");
+  // Mirror of queueBySession (the chat:queue event cache) for stable callbacks:
+  // interrupt/revoke need the current item (text/attachments); a ref reads the
+  // latest value without adding queue state to callback deps (rebuilding these on
+  // every queue change would drag the whole ChatView tree; same pattern as
+  // sessionsByProjectRef). The queue itself is server-side (#126A) — read-only.
   const queueBySessionRef = useRef<Record<string, QueueItem[]>>({});
-  // per-session 用户主动停止标记:Stop 该 session → 加入;该 session 下一个 idle/error 的
-  // drainSession 消费一次性标记并跳过 auto-continue(队列保留)。per-session 化后,停 A 不再误抑制
-  // B 的续发(原为全局 ref:停 A 后切走,B 的 idle 会被错误抑制或漏触发)。
-  const userStoppedBySessionRef = useRef<Set<string>>(new Set());
-  // per-session 竞态隔离:同一 session 的 drain 同时只允许一个在飞。SendMessage 是绑定调用,后端
-  // runPrompt 在 goroutine 里跑,故绑定几乎立即返回、guard 仅短暂持有;但能挡住 idle/error 抖动或
-  // 重复事件触发的并发 dequeue(防跳序 / 重发)。后端 busy 守卫是最终兜底。
-  const drainingBySessionRef = useRef<Set<string>>(new Set());
-  // 定时发送:per-session setTimeout 句柄。drainSession 发现队列里所有条目都未到点(scheduledAt 在
-  // 未来)时,armScheduleTimer 按最早 scheduledAt 设一个一次性定时器,到点再触发 drainSession —— 否则
-  // idle 状态下没有 idle 事件会触发、定时消息会静死。drainSession / scheduleQueueItem 改动队列后重 arm(enqueueMessage 只停车、不 arm)。
-  const scheduledTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const drainSessionRef = useRef<(sid: string) => Promise<void>>(async () => {});
+  queueBySessionRef.current = queueBySession;
   // status 派生值的 ref:sendMessage 闭包锁 status 导致「prompting 时仍直发 → 后端报 busy」,
   // 用 ref 绕过 stale closure,读取最新的派生 status。
   const statusRef = useRef<string>("empty");
@@ -464,72 +461,10 @@ export default function App() {
     setAudiosBySession((prev) => ({ ...prev, [sid]: next }));
   }, []);
 
-  // auto-continue:指定 session 的 turn 结束(idle/error)时,若非用户主动停且队列非空,自动发下一条
-  // (FIFO)。每条排队消息 = 一个独立 turn,按序逐个发(协议无 queue,一次只一个 Prompt)。
-  // 由 chat:status 事件直接按 sessionId 触发(§5.3 尊重数据源:status 事件携带 sessionId,是「哪个
-  // session 该续发」的权威信号)——故后台(非选中)session 的队列也能自动续发,不再限于选中态。
-  //
-  // 定时发送(Task #22134):队列里 scheduledAt 在未来的条目「未到点跳过」,不阻塞后续已到点/无定时项
-  // (扫描找第一条已到点的发)。全队都未到点 → 不发,armScheduleTimer 设定时器到点再触发(见上方 ref)。
-  const drainSession = useCallback(async (sid: string) => {
-    // 用户主动停止该 session:消费一次性标记,不自动续发(队列保留)。
-    if (userStoppedBySessionRef.current.has(sid)) {
-      userStoppedBySessionRef.current.delete(sid);
-      return;
-    }
-    // per-session 竞态隔离:同一 session 已有 drain 在飞 → 跳过(防重复 dequeue)。
-    if (drainingBySessionRef.current.has(sid)) return;
-    const q = queueBySessionRef.current[sid] || [];
-    if (q.length === 0) return;
-    // 找第一条已到点(scheduledAt <= now)的;定时未到的跳过,不阻塞后续无定时项。
-    const now = Date.now();
-    const dueIdx = q.findIndex((it) => it.scheduledAt <= now);
-    if (dueIdx < 0) {
-      // 全队都是未来定时项:设定时器到最早 scheduledAt 再触发,队列静死。
-      armScheduleTimer(sid);
-      return;
-    }
-    drainingBySessionRef.current.add(sid);
-    const next = q[dueIdx];
-    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: q.filter((_, i) => i !== dueIdx) };
-    setQueueBySession(queueBySessionRef.current);
-    // error 条只对当前查看的 session 弹(后台 session 续发失败不打扰用户视图)。
-    const isViewing = sid === selectedSessionIdRef.current;
-    if (isViewing) { setError(null); setNotice(null); }
-    setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
-    try {
-      await ChatService.SendMessage(sid, next.text, buildAttachments(next.mentions, next.images, next.audios));
-    } catch (e) {
-      if (isViewing) setError(extractErrMsg(e));
-      setStatusBySession((prev) => ({ ...prev, [sid]: "idle" }));
-    } finally {
-      drainingBySessionRef.current.delete(sid);
-      // 剩余条目可能仍是未来定时项 —— 重 arm 让到点时再发。
-      armScheduleTimer(sid);
-    }
-  }, []);
-
-  // armScheduleTimer:为指定 session 设一个一次性定时器,在「最早的未来 scheduledAt」触发 drainSession。
-  // 幂等:先清该 session 既有定时器再重设。无未来定时项则清掉(不设)。用 drainSessionRef 解循环依赖。
-  const armScheduleTimer = useCallback((sid: string) => {
-    const ex = scheduledTimersRef.current[sid];
-    if (ex) clearTimeout(ex);
-    const q = queueBySessionRef.current[sid] || [];
-    const now = Date.now();
-    let earliest = 0;
-    for (const it of q) {
-      if (it.scheduledAt > now && (earliest === 0 || it.scheduledAt < earliest)) earliest = it.scheduledAt;
-    }
-    if (earliest > 0) {
-      scheduledTimersRef.current[sid] = setTimeout(() => {
-        delete scheduledTimersRef.current[sid];
-        void drainSessionRef.current(sid);
-      }, Math.min(earliest - now, 2_147_000_000));
-    } else {
-      delete scheduledTimersRef.current[sid];
-    }
-  }, []);
-  drainSessionRef.current = drainSession;
+  // auto-continue (drain) moved to the server (#126A): the backend's drainQueue
+  // sends the next item at turn end / timer-due and syncs the queue via chat:queue
+  // events (see the subscription below). The frontend no longer owns drain logic,
+  // schedule timers or stop markers — it only consumes events.
 
   // Reconcile cached session statuses with the backend snapshot (#134/#127):
   // chat:status is push-only, so a remote client whose WS dropped mid-turn — or
@@ -698,14 +633,9 @@ export default function App() {
         const sid = selectedSessionIdRef.current;
         if (sid) { ChatService.SessionDiff(sid).then(d => setSessionDiff(d || "")).catch(() => {}); ChatService.SessionChanges(sid).then(setSessionChanges).catch(() => {}); ChatService.SessionMergeable(sid).then(m => setMergeableBySession((p) => ({ ...p, [sid]: m }))).catch(() => {}); }
       }
-      // auto-continue:turn 结束(idle/error)→ 续发该 session 队列下一条(不限选中态,§1.6)。
-      // 由 status 事件按 sessionId 直接触发(尊重数据源:status 事件是「哪个 session 该续发」的权威
-      // 信号),后台 session 的队列也能自动续发。closed = idle reaper 回收,session 已关,不续发。
-      // 用户主动停则 drainSession 内部按 per-session 标记跳过(队列保留)。
-      // notice = 非异常空 turn(end_turn,连接正常),语义等同 idle —— 续发排队消息。
-      if (s.status === "idle" || s.status === "error" || s.status === "notice") {
-        void drainSession(s.sessionId);
-      }
+        // auto-continue moved server-side (#126A): the backend drains in its own
+        // runPrompt tail at turn end (idle/error/notice) — the frontend no longer
+        // triggers on status events; it only consumes chat:queue snapshots.
     });
     const offMeta = Events.On("chat:session-meta", (e: { data: { sessionId: string; title: string } }) => {
       const m = e.data;
@@ -718,6 +648,16 @@ export default function App() {
         }
         return next;
       });
+    });
+    // Server-side queue sync (#126A): the queue is backend-owned — every mutation
+    // (enqueue/revoke/edit/schedule/reorder/drain-dequeue) and OpenSession push a
+    // full authoritative snapshot. The frontend is a DEGRADED CONSUMER: it only
+    // mirrors what arrives, never mutating queue state locally (an empty payload
+    // authoritatively clears).
+    const offQueue = Events.On("chat:queue", (e: { data: QueuePayload }) => {
+      const q = e.data;
+      if (!q || !q.sessionId) return;
+      setQueueBySession((prev) => ({ ...prev, [q.sessionId]: q.items ?? [] }));
     });
     // Remote client reconnect (§1.8): custom.js dispatches remote:resync on every
     // WS (re)connect so a phone that slept / roamed networks reconciles with the
@@ -796,18 +736,21 @@ export default function App() {
       offElicitResolved();
       offStatus();
       offMeta();
+      offQueue();
       offHarnesses();
       offDrop();
       offResync();
     };
-  }, [refreshProjects, applyEvent, refreshSessions, drainSession, syncSessionStatuses, isPopout, popoutMode]);
+  }, [refreshProjects, applyEvent, refreshSessions, syncSessionStatuses, isPopout, popoutMode]);
 
   // popout 启动标记:目标 session 在本 popout 窗口 open 成功后置 true(快照 effect 据此触发)。
   // 用 state 而非 ref:快照还原 effect 依赖它——openSession 异步完成后 state 变化触发 effect 重跑。
   const [popoutOpened, setPopoutOpened] = useState(false);
   // popout 快照还原:popout 窗口 boot 时从后端取主窗口打包的 React state 快照,
-  // 作为初始 state(items/queue/draft/livePlan/permission)。取后即删(一次性)。
-  // 仅在 popout 模式且目标 session 已 open 后执行一次。
+  // 作为初始 state(items/draft/livePlan/permission)。取后即删(一次性)。
+  // 仅在 popout 模式且目标 session 已 open 后执行一次。Queue is no longer packed
+  // (#126A: the popout gets the server-side queue from OpenSession's chat:queue
+  // authoritative snapshot — the main window's in-memory mirror may be stale).
   const snapshotAppliedRef = useRef(false);
   useEffect(() => {
     if (!popoutMode || !popoutOpened || snapshotAppliedRef.current) return;
@@ -820,7 +763,6 @@ export default function App() {
         if (Array.isArray(snap.items) && snap.items.length > 0) {
           setItemsBySession((prev) => ({ ...prev, [popoutMode]: snap.items }));
         }
-        if (Array.isArray(snap.queue)) setQueueBySession((prev) => ({ ...prev, [popoutMode]: snap.queue }));
         if (typeof snap.draft === "string") setDraftBySession((prev) => ({ ...prev, [popoutMode]: snap.draft }));
         if (snap.livePlan) setLivePlanBySession((prev) => ({ ...prev, [popoutMode]: snap.livePlan }));
         if (snap.permission) setPermissionBySession((prev) => ({ ...prev, [popoutMode]: snap.permission }));
@@ -972,8 +914,10 @@ export default function App() {
       // don't render the tab bar and shouldn't maintain openTabs).
       if (!isPopout) setOpenTabs((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
       setUnreadBySession((prev) => { if (!prev[sessionId]) return prev; const n = { ...prev }; delete n[sessionId]; return n; });
-      userStoppedBySessionRef.current.delete(sessionId);
       setError(null); setNotice(null);
+      // OpenSession also pushes the session's authoritative queue snapshot
+      // (#126A); the chat:queue subscription overwrites the local mirror — the
+      // queue survives tab re-open / popout / remote reconnect.
       await ChatService.OpenSession(sessionId);
       // Seed the status from backend truth (#127): a remote client that
       // connects mid-turn missed the "prompting" push — without this the
@@ -1187,11 +1131,14 @@ export default function App() {
     }
   }, [newSession, selectedProjectId, refreshSessions, openSession, selectProject]);
 
-  // 发送消息:idle 直发;prompting(一轮进行中)入前端队列,回合结束自动续发(§5.4 协议无 queue)。
-  // mentions(@提及 + 回形针文件)经 ACP ContentBlock::ResourceLink 发给 agent;images(内联图片)经
-  // ContentBlock::Image 发(需 agent 声明 image 能力);audios(内联音频)经 ContentBlock::Audio 发
-  // (需 agent 声明 audio 能力)。attachments 由 buildAttachments 构造,显式带 Kind。入队时随 QueueItem
-  // 携带。只要按过发送键就记进输入框历史(上下键翻历史),无论后端是否成功/排队。
+  // Send a message: idle → direct send; prompting (turn in flight) → enqueue on
+  // the server (#126A); the backend's drainQueue auto-continues at turn end (the
+  // protocol has no queue, §5.4). mentions (@mentions + paperclip files) go to the
+  // agent as ContentBlock::ResourceLink; images as ContentBlock::Image (needs the
+  // image capability); audios as ContentBlock::Audio (needs the audio capability).
+  // attachments are built by buildAttachments with an explicit Kind and stored
+  // verbatim with the QueueItem on the server. Every send-key press is recorded
+  // into the input history (arrow keys), regardless of backend success/queueing.
   const sendMessage = useCallback(
     async (text: string, mentions: Mention[], imgs?: ImageAttachment[], aus?: AudioAttachment[]) => {
       if (!selectedSessionId || !text.trim()) return;
@@ -1203,15 +1150,16 @@ export default function App() {
         if (cur[cur.length - 1] === text) return prev; // 与最后一条相同则不重复
         return { ...prev, [selectedSessionId]: [...cur, text] };
       });
-      // 回合进行中(statusRef 防 stale closure):入队而非直发,避免后端 busy 报错。
-      // statusRef.current 始终反映最新 status,闭包锁的 status 可能在 re-render 前仍为旧值。
+      // Turn in flight (statusRef avoids stale closures): enqueue on the server
+      // instead of a direct send, which the busy guard would reject. statusRef.current
+      // always reflects the latest status; the closure-captured state may lag a
+      // re-render. The queue snapshot arrives via chat:queue — never built locally.
       if (statusRef.current === "prompting") {
-        const item: QueueItem = { id: `q-${Date.now()}-${selectedSessionId}`, text, mentions, images: imgs, audios: aus, scheduledAt: Date.now() };
-        queueBySessionRef.current = {
-          ...queueBySessionRef.current,
-          [selectedSessionId]: [...(queueBySessionRef.current[selectedSessionId] || []), item],
-        };
-        setQueueBySession(queueBySessionRef.current);
+        try {
+          await ChatService.EnqueueMessage(selectedSessionId, text, buildAttachments(mentions, imgs, aus));
+        } catch (e) {
+          setError(extractErrMsg(e));
+        }
         return;
       }
       // idle 直发(attachments 经 buildAttachments 构造,显式带 Kind,见模块顶部)。
@@ -1229,14 +1177,15 @@ export default function App() {
 
   // stopSessionById cancels a session's in-flight turn by explicit id (not the selected one).
   // Used both by the composer Stop button (for the active session) and by CloseTabDialog's
-  // "stop & close" choice (for a tab that may not be the active one). Marks the session as
-  // user-stopped so the next idle event won't auto-continue the queue (§ drainSession guard).
+  // "stop & close" choice (for a tab that may not be the active one). The one-shot stop
+  // intent lives server-side now (#126A): the backend records it in StopSession and the
+  // following drain consumes it (queue kept, auto-continue suppressed).
   const stopSessionById = useCallback(async (sid: string) => {
-    userStoppedBySessionRef.current.add(sid);
     await ChatService.StopSession(sid);
   }, []);
 
-  // 回合结束 drainSession 自动续发(由 chat:status 事件按 sessionId 触发);idle 直发,status 由 chat:status 事件驱动。
+  // The backend's drainQueue auto-continues after the turn ends (#126A); idle
+  // sends directly, status is driven by chat:status events.
   const stopSession = useCallback(async () => {
     if (!selectedSessionId) return;
     await stopSessionById(selectedSessionId);
@@ -1254,32 +1203,35 @@ export default function App() {
     }
   }, []);
 
-  // 立即发送:打断当前 turn,这条插队先发(其余保留排队)。后端 InterruptAndSend 原子完成
-  // (cancel + 等落定 + 发新);被取消的轮不发 idle,故 status 保持 prompting,不会误触发 auto-continue。
+  // Send now: interrupt the current turn and send this item first (the rest stay
+  // queued). RevokeQueueItem removes it from the server queue (#126A), then
+  // InterruptAndSend does cancel + wait-settle + send atomically (the backend also
+  // clears the stop intent). The cancelled turn emits no idle, so status stays
+  // prompting and auto-continue is not falsely triggered. attachments reuse the
+  // array stored verbatim in the queue snapshot (built at enqueue time).
   const interruptQueue = useCallback(async (id: string) => {
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
-    const q = queueBySessionRef.current[sid] || [];
-    const item = q.find((x) => x.id === id);
+    const item = (queueBySessionRef.current[sid] || []).find((x) => x.id === id);
     if (!item) return;
-    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: q.filter((x) => x.id !== id) };
-    setQueueBySession(queueBySessionRef.current);
     setError(null); setNotice(null);
-    userStoppedBySessionRef.current.delete(sid);
     setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
     try {
-      await ChatService.InterruptAndSend(sid, item.text, buildAttachments(item.mentions, item.images, item.audios));
+      await ChatService.RevokeQueueItem(sid, id);
+      await ChatService.InterruptAndSend(sid, item.text, item.attachments ?? []);
     } catch (e) {
       setError(extractErrMsg(e));
     }
   }, []);
 
-  // 主动入队列:与「发送」并列的显式入队入口(Composer 入队列按钮 / ⌘⇧↩)。无论 idle/prompting
-  // 都只把消息压入该 session 的前端队列 —— **永远只停车,不 auto-start**(不主动 drainSession、
-  // 不 arm 定时器)。续发时机统一交给「turn 结束的 idle 事件」(chat:status handler 内按 sessionId
-  // 触发 drainSession):prompting 时入队,本轮结束的 idle 续发;idle 时入队,等下一次自然 turn 结束
-  // 或下一次直发触发。主动入队 = 用户想继续,清掉该 session 的停意图(与 interruptQueue 一致),
-  // 否则被 Stop 标记抑制、到点续发时被跳过。
+  // Explicit enqueue: the sibling of "send" (Composer enqueue button / ⌘⇧↵Enter).
+  // Whether idle or prompting, the message only parks in the session's server-side
+  // queue (#126A) — **never auto-starts** (backend EnqueueMessage triggers no drain
+  // and arms no timer). Continuation is left to "turn end": enqueued while
+  // prompting → the upcoming idle continues it; enqueued while idle → it waits for
+  // the next natural turn end or direct send. Enqueueing implies the user wants to
+  // continue, so the backend clears that session's stop intent (like
+  // InterruptAndSend).
   const enqueueMessage = useCallback(
     async (text: string, mentions: Mention[], imgs?: ImageAttachment[], aus?: AudioAttachment[]) => {
       if (!selectedSessionId || !text.trim()) return;
@@ -1289,81 +1241,73 @@ export default function App() {
         if (cur[cur.length - 1] === text) return prev; // 与最后一条相同则不重复
         return { ...prev, [selectedSessionId]: [...cur, text] };
       });
-      const item: QueueItem = { id: `q-${Date.now()}-${selectedSessionId}`, text, mentions, images: imgs, audios: aus, scheduledAt: Date.now() };
-      queueBySessionRef.current = {
-        ...queueBySessionRef.current,
-        [selectedSessionId]: [...(queueBySessionRef.current[selectedSessionId] || []), item],
-      };
-      setQueueBySession(queueBySessionRef.current);
-      userStoppedBySessionRef.current.delete(selectedSessionId);
+      try {
+        await ChatService.EnqueueMessage(selectedSessionId, text, buildAttachments(mentions, imgs, aus));
+      } catch (e) {
+        setError(extractErrMsg(e));
+      }
     },
     [selectedSessionId]
   );
 
-  // 撤回编辑:移出队列,文本回填 composer。
-  const revokeQueue = useCallback((id: string) => {
+  // Revoke-to-edit: RevokeQueueItem removes the item from the server queue, then
+  // the text refills the composer (item read from the event mirror; refill only on
+  // success — on failure the item is still queued, avoiding duplicate text).
+  const revokeQueue = useCallback(async (id: string) => {
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
-    const q = queueBySessionRef.current[sid] || [];
-    const item = q.find((x) => x.id === id);
+    const item = (queueBySessionRef.current[sid] || []).find((x) => x.id === id);
     if (!item) return;
-    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: q.filter((x) => x.id !== id) };
-    setQueueBySession(queueBySessionRef.current);
+    try {
+      await ChatService.RevokeQueueItem(sid, id);
+    } catch (e) {
+      setError(extractErrMsg(e));
+      return;
+    }
     setDraftBySession((prev) => {
       const cur = prev[sid] || "";
       return { ...prev, [sid]: cur.trim() ? cur + "\n" + item.text : item.text };
     });
   }, []);
 
-  // inline 编辑:直接改队列里某条的文本(mentions/images/scheduledAt 原地保留),不离开队列。
-  const editQueueItem = useCallback((id: string, text: string) => {
+  // Inline edit: EditQueueItem rewrites the item's text in the server queue
+  // (attachments/scheduledAt are kept in place).
+  const editQueueItem = useCallback(async (id: string, text: string) => {
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
-    const q = queueBySessionRef.current[sid] || [];
-    const idx = q.findIndex((x) => x.id === id);
-    if (idx < 0) return;
-    const next = q.slice();
-    next[idx] = { ...q[idx], text };
-    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: next };
-    setQueueBySession(queueBySessionRef.current);
+    try {
+      await ChatService.EditQueueItem(sid, id, text);
+    } catch (e) {
+      setError(extractErrMsg(e));
+    }
   }, []);
 
-  // 定时发送:设置/清空队列里某条的 scheduledAt(Task #22134)。<= now 视为「立即可发」(清除定时)。
-  // 改动后重 arm 定时器;若该 session idle 且新设的 scheduledAt 已到点 → 主动 drain 一次立即发。
-  const scheduleQueueItem = useCallback((id: string, scheduledAt: number) => {
+  // Scheduled send: ScheduleQueueItem sets/clears an item's scheduledAt (Task
+  // #22134 / #97). <= now means "due immediately" (timer cleared). Arming the
+  // timer and the "idle + due → send now" path are both handled by the backend.
+  const scheduleQueueItem = useCallback(async (id: string, scheduledAt: number) => {
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
-    const q = queueBySessionRef.current[sid] || [];
-    const idx = q.findIndex((x) => x.id === id);
-    if (idx < 0) return;
     const at = scheduledAt > 0 ? scheduledAt : Date.now();
-    const next = q.slice();
-    next[idx] = { ...q[idx], scheduledAt: at };
-    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: next };
-    setQueueBySession(queueBySessionRef.current);
-    armScheduleTimer(sid);
-    if (at <= Date.now() && statusRef.current !== "prompting") {
-      void drainSession(sid);
+    try {
+      await ChatService.ScheduleQueueItem(sid, id, at);
+    } catch (e) {
+      setError(extractErrMsg(e));
     }
-  }, [armScheduleTimer, drainSession]);
+  }, []);
 
-  // 拖拽重排:把 activeId 这条移到 overId 的位置(remove 后插到 overIdx),drainSession 按新顺序发。
-  // 重 arm 定时器(order 变了首条可能变);若 idle 且新首条已到点 → 主动 drain(与 scheduleQueueItem 一致)。
-  const reorderQueue = useCallback((activeId: string, overId: string) => {
+  // Drag reorder: ReorderQueueItem moves activeId onto overId's position (remove,
+  // then insert at overIdx) and the backend drains in the new order; re-arming the
+  // timer and the "idle + due head → send now" path are likewise backend-side.
+  const reorderQueue = useCallback(async (activeId: string, overId: string) => {
     const sid = selectedSessionIdRef.current;
     if (!sid || activeId === overId) return;
-    const q = queueBySessionRef.current[sid] || [];
-    const from = q.findIndex((x) => x.id === activeId);
-    const to = q.findIndex((x) => x.id === overId);
-    if (from < 0 || to < 0) return;
-    const next = q.slice();
-    const [moved] = next.splice(from, 1);
-    next.splice(to, 0, moved);
-    queueBySessionRef.current = { ...queueBySessionRef.current, [sid]: next };
-    setQueueBySession(queueBySessionRef.current);
-    armScheduleTimer(sid);
-    if (statusRef.current !== "prompting") void drainSession(sid);
-  }, [armScheduleTimer, drainSession]);
+    try {
+      await ChatService.ReorderQueueItem(sid, activeId, overId);
+    } catch (e) {
+      setError(extractErrMsg(e));
+    }
+  }, []);
 
   const respondPermission = useCallback(
     async (optionId: string) => {
@@ -1653,11 +1597,8 @@ export default function App() {
     setConfigOptionsBySession(drop);
     setFileTabsBySession(drop);
     setActiveFileTabBySession(drop);
-    queueBySessionRef.current = drop(queueBySessionRef.current);
-    userStoppedBySessionRef.current.delete(sessionId);
-    drainingBySessionRef.current.delete(sessionId);
-    const t = scheduledTimersRef.current[sessionId];
-    if (t) { clearTimeout(t); delete scheduledTimersRef.current[sessionId]; }
+    // Queue cache drops too (#126A): re-opening the session re-syncs via
+    // OpenSession's authoritative snapshot.
     delete oldestSeqRef.current[sessionId];
     loadedSessionsRef.current.delete(sessionId);
     historySeededRef.current.delete(sessionId);
@@ -1855,11 +1796,12 @@ export default function App() {
 
   // popout:把某 session 弹到独立窗口(主窗口打包当前 React state 快照 → 后端中转 → 新窗口还原)。
   const popoutSession = useCallback(async (sessionId: string) => {
-    // 打包当前内存 state(进行中的流式 turn / 队列 / 草稿 / 实时 plan / 待决权限),供 popout 还原。
-    // 已落库的对话历史由 popout 自己从 SQLite LoadMessages 拉,不打包(太大)。
+    // 打包当前内存 state(进行中的流式 turn / 草稿 / 实时 plan / 待决权限),供 popout 还原。
+    // 已落库的对话历史由 popout 自己从 SQLite LoadMessages 拉,不打包(太大)。The queue is
+    // not packed (#126A): the popout gets the server-side queue from OpenSession's
+    // chat:queue authoritative snapshot.
     const snapshot = JSON.stringify({
       items: itemsBySession[sessionId] ?? [],
-      queue: queueBySession[sessionId] ?? [],
       draft: draftBySession[sessionId] ?? "",
       livePlan: livePlanBySession[sessionId] ?? null,
       permission: permissionBySession[sessionId] ?? null,
@@ -1878,7 +1820,7 @@ export default function App() {
     // strip. (Re-popping back to main does NOT auto-restore it as a tab — MVP decision; the user
     // re-opens it from the sidebar, which re-registers it via openSession.)
     setOpenTabs((prev) => prev.filter((id) => id !== sessionId));
-  }, [itemsBySession, queueBySession, draftBySession, livePlanBySession, permissionBySession, termOpenBySession, termTabsBySession, activeTermBySession]);
+  }, [itemsBySession, draftBySession, livePlanBySession, permissionBySession, termOpenBySession, termTabsBySession, activeTermBySession]);
   // 临时调试:暴露 popoutSession 到 window,供 server 模式浏览器测试调用。
   useEffect(() => { (window as unknown as Record<string, unknown>).__popoutSession = popoutSession; }, [popoutSession]);
 

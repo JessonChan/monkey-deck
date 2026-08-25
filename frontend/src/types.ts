@@ -162,17 +162,36 @@ export interface Usage {
   thoughtTokens: number; totalTokens: number;
 }
 
-// 排队消息(前端队列:ACP 协议无 queue,turn 进行中的消息先入前端队列,回合结束自动续发)。
-// scheduledAt:定时发送时刻(epoch ms)。默认 = 入队时刻(Date.now()),即「立即可发」;
-// 用户可在 QueuePanel 选定一个未来时刻 → drainSession 跳过未到点的条目(不阻塞后续无定时项),
-// 到点后才发。QueuePanel 据此显示「排队于 HH:mm」(已到点)或「⏰定时 HH:mm」(未来)。
+// Prompt attachment sent alongside a message (frontend mirror of the backend
+// internal/acp.Attachment). buildAttachments produces this shape; SendMessage /
+// EnqueueMessage / InterruptAndSend all take it.
+export interface Attachment {
+  kind?: string;   // "" | file | image | audio | resource (decides the ContentBlock)
+  name: string;    // display name
+  path?: string;   // file/dir path (mentions / paperclip files)
+  data?: string;   // base64 payload (inline image/audio)
+  mimeType?: string;
+}
+
+// Queued message (#126A: the queue lives on the SERVER; the frontend is only a
+// chat:queue event consumer). attachments is the pre-built prompt-attachment
+// array captured at enqueue time — the backend reuses it verbatim on drain and
+// the frontend reuses it for "send now" (InterruptAndSend).
+// scheduledAt: epoch-ms send time; default = enqueue time ("due now"). A future
+// value parks the item (backend skips it on drain, fires a one-shot timer).
 export interface QueueItem {
   id: string;
   text: string;
-  mentions?: Mention[];
-  images?: ImageAttachment[];
-  audios?: AudioAttachment[];
+  attachments?: Attachment[];
   scheduledAt: number;
+}
+
+// chat:queue event body (#126A): full authoritative per-session queue snapshot,
+// emitted on every mutation and on OpenSession. items is always an array
+// (possibly empty — an empty snapshot authoritatively clears stale state).
+export interface QueuePayload {
+  sessionId: string;
+  items: QueueItem[];
 }
 
 // 前端展示用的对话条目(由持久化历史 + 实时流式合并而来)。
