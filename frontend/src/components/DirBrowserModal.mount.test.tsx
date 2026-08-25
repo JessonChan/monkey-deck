@@ -29,9 +29,13 @@ globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
 globalThis.MouseEvent = window.MouseEvent;
 window.React = React;
 
-// react-i18next: return the key so the DOM is predictable.
+// react-i18next: return the key so the DOM is predictable. The {{error}}
+// interpolation is appended when passed, so failure tests can anchor the
+// rendered error VALUE (not just node existence, §5.3).
 mock.module("react-i18next", () => ({
-  useTranslation: () => ({ t: (k: string) => k }),
+  useTranslation: () => ({
+    t: (k: string, opts?: { error?: string }) => (opts?.error !== undefined ? `${k}:${opts.error}` : k),
+  }),
   initReactI18next: { type: "3rd-party" },
 }));
 
@@ -155,6 +159,29 @@ describe("DirBrowserModal navigation", () => {
     await flush();
     expect(onCancel).toHaveBeenCalled();
   });
+
+  test("Enter on a focused button runs that button's action, not the global confirm", async () => {
+    const onConfirm = mock();
+    const onCancel = mock();
+    const { host } = mount(<DirBrowserModal onConfirm={onConfirm} onCancel={onCancel} />);
+    await flush();
+    entry(host, "dir-browser-root-~").dispatchEvent(click());
+    await flush();
+    // Enter with focus on the cancel button: cancel stays the user's action.
+    const cancelBtn = host.querySelector('[data-testid="dir-browser-cancel"]') as HTMLButtonElement;
+    cancelBtn.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flush();
+    expect(onConfirm).not.toHaveBeenCalled();
+    // Enter with focus on a subdir row: descend intent, not confirm-parent.
+    entry(host, "dir-browser-entry-projects").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flush();
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+    // Enter with no focused control (window-level) still confirms the dir.
+    window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+    await flush();
+    expect(onConfirm).toHaveBeenCalledWith("/home/me");
+  });
 });
 
 describe("DirBrowserModal failure handling", () => {
@@ -165,7 +192,10 @@ describe("DirBrowserModal failure handling", () => {
     browseDirMock.mockImplementationOnce(async () => { throw new Error("boom"); });
     entry(host, "dir-browser-root-~").dispatchEvent(click());
     await flush();
-    expect(host.querySelector('[data-testid="dir-browser-error"]')).not.toBeNull();
+    const errNode = host.querySelector('[data-testid="dir-browser-error"]');
+    expect(errNode).not.toBeNull();
+    // The extracted message value is rendered (anchored, not just existence).
+    expect(errNode!.textContent).toContain("dirBrowser.readFailed:boom");
     expect(confirmBtn(host).disabled).toBe(true);
     // Up still works from the error state (seq-guarded reload).
     upBtn(host).dispatchEvent(click());

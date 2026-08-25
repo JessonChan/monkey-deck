@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { BrowseDirResult, BrowseEntry } from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/models";
+import { extractErrMsg } from "../lib/errorMsg";
 import { ArrowUp, ChevronRight, Folder, HardDrive, Home, Loader2 } from "lucide-react";
 
 interface Props {
@@ -41,7 +42,7 @@ export default function DirBrowserModal({ onConfirm, onCancel }: Props) {
       setCur(res ?? null);
     } catch (e) {
       if (seq !== seqRef.current) return;
-      setError(String(e));
+      setError(extractErrMsg(e));
     } finally {
       if (seq === seqRef.current) setLoading(false);
     }
@@ -58,7 +59,7 @@ export default function DirBrowserModal({ onConfirm, onCancel }: Props) {
       setRoots(list ?? []);
     } catch (e) {
       if (seq !== seqRef.current) return;
-      setError(String(e));
+      setError(extractErrMsg(e));
     } finally {
       if (seq === seqRef.current) setLoading(false);
     }
@@ -68,11 +69,18 @@ export default function DirBrowserModal({ onConfirm, onCancel }: Props) {
     void showRoots();
   }, [showRoots]);
 
-  // Esc closes (§4.2); Enter confirms the displayed directory.
+  // Esc closes (§4.2); Enter confirms the displayed directory — but only when
+  // no control has focus: Enter on a focused button must run that button's
+  // own action (row = descend, cancel = cancel, confirm = confirm via native
+  // activation), never be overridden by the global confirm.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onCancel();
-      if (e.key === "Enter" && cur && !loading && !error) onConfirm(cur.path);
+      if (e.key === "Enter" && cur && !loading && !error) {
+        const el = e.target as HTMLElement | null;
+        if (el && typeof el.closest === "function" && el.closest("button, input, textarea, select, a, [contenteditable]")) return;
+        onConfirm(cur.path);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
