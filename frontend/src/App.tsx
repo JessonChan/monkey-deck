@@ -15,6 +15,7 @@ import FileTabBar, { type FileTab, tabKey } from "./components/FileTabBar";
 import EditorPane from "./components/EditorPane";
 import DiffPane from "./components/DiffPane";
 import { clearScrollPosition } from "./components/CodeViewer";
+import { mergeStatusSnapshot } from "./lib/sessionStatusMerge";
 import type { TerminalTab } from "./lib/terminalTypes";
 import { disposeTerminal } from "./lib/termRegistry";
 import { parseLaunchAction } from "./lib/launchAction";
@@ -123,6 +124,10 @@ export default function App() {
   const oldestSeqRef = useRef<Record<string, number>>({});
   const [usageBySession, setUsageBySession] = useState<Record<string, Usage>>({});
   const [statusBySession, setStatusBySession] = useState<Record<string, StatusPayload["status"] | "empty">>({});
+  // Client receive time of the last chat:status push per session — backs the
+  // fresher-wins guard in syncSessionStatuses (a push received during a snapshot
+  // pull is newer than that snapshot; WS delivery is ordered per connection).
+  const statusPushAtRef = useRef<Record<string, number>>({});
   const [statusDetailBySession, setStatusDetailBySession] = useState<Record<string, string>>({});
   const [activityBySession, setActivityBySession] = useState<Record<string, "thinking" | "executing" | "replying">>({});
   const [unreadBySession, setUnreadBySession] = useState<Record<string, boolean>>({});
@@ -529,35 +534,24 @@ export default function App() {
   // Reconcile cached session statuses with the backend snapshot (#134/#127):
   // chat:status is push-only, so a remote client whose WS dropped mid-turn — or
   // connected after a turn started — holds a stale "prompting"/"empty" forever.
-  // The snapshot is authoritative at pull time; live events arriving after the
-  // pull overwrite as usual (no cross-channel ordering assumptions, §5.3).
+  // The snapshot is authoritative at pull time — EXCEPT for sessions whose
+  // chat:status push arrived after the pull started (fresher-wins, §5.3: the
+  // pull is a picture of the past; a push received during the pull window is
+  // newer, and the backend pushes prompting once per turn so a stale snapshot
+  // applying late would stick until turn end). Merge rules live in the pure
+  // helper (unit-tested in lib/sessionStatusMerge.test.ts).
   const syncSessionStatuses = useCallback(async () => {
-    let snap: Record<string, StatusPayload["status"]> | null = null;
+    const pullStart = Date.now();
+    let snap: Record<string, string> | null = null;
     try {
-      snap = (await ChatService.SessionStatuses()) as Record<string, StatusPayload["status"]>;
+      snap = (await ChatService.SessionStatuses()) as Record<string, string>;
     } catch {
       return; // binding unavailable (app shutting down): keep cached state
     }
     if (!snap) return;
-    const live = snap;
-    setStatusBySession((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      for (const [sid, st] of Object.entries(live)) {
-        if (next[sid] !== st) { next[sid] = st; changed = true; }
-      }
-      // Absent = no live harness on the backend: drop stale liveness states
-      // ("prompting" stuck after the idle event was lost to a WS gap, #134).
-      // Display states (error/notice/readonly) carry meaning without a live
-      // harness and are kept as-is.
-      for (const sid of Object.keys(next)) {
-        if (!(sid in live) && (next[sid] === "prompting" || next[sid] === "reconnecting")) {
-          next[sid] = "idle";
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
+    setStatusBySession((prev) =>
+      mergeStatusSnapshot(prev, snap!, (sid) => (statusPushAtRef.current[sid] ?? 0) > pullStart)
+    );
   }, []);
 
   // 启动:加载项目 + 订阅事件。
@@ -604,6 +598,7 @@ export default function App() {
     const offStatus = Events.On("chat:status", (e: { data: StatusPayload }) => {
       const s = e.data;
       if (!s) return;
+      statusPushAtRef.current[s.sessionId] = Date.now();
       // 懒 spawn:发消息触发的 spawn 会推 started(再紧跟 prompting)。不把活跃 turn 降级回 ready,
       // 避免「只读态发消息 → started 闪烁 → prompting」的瞬态(§3.x 懒 spawn)。
       setStatusBySession((prev) => {
