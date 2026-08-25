@@ -8,8 +8,10 @@
 //  3. "Now" (clearSchedule) calls onSchedule with a due timestamp (<= now).
 //  4. Accumulative presets (issue #130): clicks stack on the staged time
 //     (base = max(staged, now)), the row stays open with a staged chip, Save
-//     commits, stacking on a seeded pending schedule adds on top, and the
-//     stack is capped at now+24h with a cap notice.
+//     commits, and stacking on a seeded pending schedule adds on top.
+//     Over-cap clicks/picks (> now+24h) are REJECTED (issue #130 wrap-up):
+//     the staged time does not move, a cap notice shows, and Save re-verifies
+//     the cap as the final gate. Cancelling fully drops the staged time.
 //
 // Follows the existing edit-mount test pattern: happy-dom + non-controlled input set via
 // the native prototype setter (React 19 + happy-dom onChange edge, see
@@ -260,8 +262,10 @@ describe("QueuePanel schedule picker (Task #22134)", () => {
     expect(calls[0]).toBeLessThanOrEqual(future + 5 * 60_000);
   });
 
-  test("preset stacking is capped at now+24h with a cap notice (issue #130)", async () => {
-    // Seed 23h55m out; +30min twice would be +60m uncapped → must clamp to 24h.
+  test("preset stacking beyond now+24h is REJECTED — staged time unchanged, cap notice (issue #130)", async () => {
+    // Seed 23h55m out; +30min would exceed 24h → rejected (NOT clamped: the
+    // staged time must not move, and a clamp could also jump an over-cap base
+    // backward — see the legacy-seed test below).
     const seed = Date.now() + 24 * 60 * 60_000 - 5 * 60_000;
     const calls: number[] = [];
     const { host } = mount(
@@ -273,17 +277,15 @@ describe("QueuePanel schedule picker (Task #22134)", () => {
       .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
     await flush();
 
-    const before = Date.now();
     (host.querySelector('[data-testid="queue-schedule-preset-30"]') as HTMLElement)
       .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
     await flush();
     expect(host.querySelector('[data-testid="queue-schedule-cap"]')).not.toBeNull();
 
-    // Stacking again stays capped at 24h (no further growth).
+    // Clicking again keeps being rejected — the staged time never moves.
     (host.querySelector('[data-testid="queue-schedule-preset-30"]') as HTMLElement)
       .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
     await flush();
-    const end = Date.now();
     expect(host.querySelector('[data-testid="queue-schedule-cap"]')).not.toBeNull();
 
     (host.querySelector('[data-testid="queue-schedule-save"]') as HTMLElement)
@@ -291,10 +293,147 @@ describe("QueuePanel schedule picker (Task #22134)", () => {
     await flush();
 
     expect(calls).toHaveLength(1);
-    // Committed time is clamped into [before+24h (−1min truncation), end+24h].
-    expect(calls[0]).toBeGreaterThanOrEqual(before + 24 * 60 * 60_000 - 60_000);
-    expect(calls[0]).toBeLessThanOrEqual(end + 24 * 60 * 60_000);
-    // Clamp actually applied: uncapped stacking would be seed + 60min.
-    expect(calls[0]).toBeLessThan(seed + 60 * 60_000);
+    // Rejected = nothing was added: Save commits (a truncation-rounded) seed,
+    // strictly below seed+30min — an uncapped stack or a clamp to now+24h
+    // would both land higher.
+    expect(calls[0]).toBeGreaterThanOrEqual(seed - 60_000);
+    expect(calls[0]).toBeLessThanOrEqual(seed);
+    expect(calls[0]).toBeLessThan(seed + 30 * 60_000);
+    // Row closed after Save commits.
+    expect(host.querySelector('[data-testid="queue-schedule-input"]')).toBeNull();
+  });
+
+  test("preset on a staged time already beyond the cap does not jump backward; Save is gated (issue #130)", async () => {
+    // Legacy schedule 3 days out (created before the cap) seeds the staged
+    // time beyond now+24h. A preset click must be REJECTED — the old clamp
+    // behaviour would have pulled the staged time BACK to now+24h (~48h
+    // earlier). Reject never writes pendingAt nor the input, so this is
+    // pinned via the visible outcomes: cap notice, no commit of an over-cap
+    // value, row stays open.
+    const seed = Date.now() + 3 * 24 * 60 * 60_000;
+    const calls: number[] = [];
+    const { host } = mount(
+      <QueuePanel queue={[item("q1", "later", seed)]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(_id, scheduledAt) => calls.push(scheduledAt)} onReorder={() => {}} />
+    );
+    await flush();
+
+    (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    // Seeded beyond the cap: chip visible, no cap notice yet (nothing rejected).
+    expect(host.querySelector('[data-testid="queue-schedule-pending"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-cap"]')).toBeNull();
+
+    (host.querySelector('[data-testid="queue-schedule-preset-5"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(host.querySelector('[data-testid="queue-schedule-cap"]')).not.toBeNull();
+
+    // The over-cap DOM value (still the 3-days-out seed) must not commit —
+    // the Save-time 24h gate intercepts with the cap notice, row stays open.
+    (host.querySelector('[data-testid="queue-schedule-save"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(calls).toHaveLength(0);
+    expect(host.querySelector('[data-testid="queue-schedule-cap"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-input"]')).not.toBeNull();
+  });
+
+  test("typing a time beyond now+24h is intercepted at Save with the cap notice (issue #130)", async () => {
+    // happy-dom cannot fire React onChange for datetime-local (documented
+    // edge in the file header), so the onChange rejection is best-effort
+    // here — this pins the Save-time final gate instead, mirroring how the
+    // past-time interception is covered via its Save-time re-check.
+    const calls: number[] = [];
+    const { host } = mount(
+      <QueuePanel queue={[item("q1", "hi", Date.now())]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(_id, scheduledAt) => calls.push(scheduledAt)} onReorder={() => {}} />
+    );
+    await flush();
+
+    (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    const input = host.querySelector('[data-testid="queue-schedule-input"]') as HTMLInputElement;
+    // Type a time 3 days ahead — beyond the 24h cap.
+    const target = new Date(Date.now() + 3 * 24 * 60 * 60_000);
+    const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
+    const v = `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}T${pad(target.getHours())}:${pad(target.getMinutes())}`;
+    setInputValue(input, v);
+    await flush();
+
+    (host.querySelector('[data-testid="queue-schedule-save"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    // Intercepted with the CAP notice (not the expiry error), no commit, row open.
+    expect(calls).toHaveLength(0);
+    expect(host.querySelector('[data-testid="queue-schedule-cap"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-error"]')).toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-input"]')).not.toBeNull();
+  });
+
+  test("datetime-local input has max ≈ now+24h (issue #130)", async () => {
+    const before = Date.now();
+    const { host } = mount(
+      <QueuePanel queue={[item("q1", "hi", Date.now())]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={() => {}} onReorder={() => {}} />
+    );
+    await flush();
+
+    (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    const after = Date.now();
+
+    const input = host.querySelector('[data-testid="queue-schedule-input"]') as HTMLInputElement;
+    expect(input).not.toBeNull();
+    // max attribute must be set and reflect ~now+24h (datetime-local truncates
+    // to the minute, hence the 1-minute tolerance, mirroring the min test).
+    const max = input.getAttribute("max");
+    expect(max).not.toBeNull();
+    const maxTs = Date.parse(max!);
+    expect(Number.isNaN(maxTs)).toBe(false);
+    expect(maxTs).toBeGreaterThanOrEqual(before + 24 * 60 * 60_000 - 60_000);
+    expect(maxTs).toBeLessThanOrEqual(after + 24 * 60 * 60_000);
+  });
+
+  test("cancel drops the staged time — reopening starts fresh, presets re-base on now (issue #130)", async () => {
+    const calls: number[] = [];
+    const { host } = mount(
+      <QueuePanel queue={[item("q1", "hi", Date.now())]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={(_id, scheduledAt) => calls.push(scheduledAt)} onReorder={() => {}} />
+    );
+    await flush();
+
+    // Open → +5 (stage ~5m out) → cancel: staged state must be fully dropped.
+    (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    (host.querySelector('[data-testid="queue-schedule-preset-5"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(host.querySelector('[data-testid="queue-schedule-pending"]')).not.toBeNull();
+    (host.querySelector('[data-testid="queue-schedule-cancel"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    // Reopen: no chip (staging did not survive the cancel), no cap notice.
+    (host.querySelector('[data-testid="queue-schedule"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    expect(host.querySelector('[data-testid="queue-schedule-pending"]')).toBeNull();
+    expect(host.querySelector('[data-testid="queue-schedule-cap"]')).toBeNull();
+
+    // +5 re-bases on now (a leaked ~5m staging would double it to ~10m).
+    const before = Date.now();
+    (host.querySelector('[data-testid="queue-schedule-preset-5"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+    (host.querySelector('[data-testid="queue-schedule-save"]') as HTMLElement)
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true, button: 0 }));
+    await flush();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBeGreaterThanOrEqual(before + 5 * 60_000 - 60_000);
+    expect(calls[0]).toBeLessThanOrEqual(before + 5 * 60_000 + 60_000);
   });
 });
