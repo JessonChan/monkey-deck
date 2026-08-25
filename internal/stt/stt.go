@@ -371,9 +371,9 @@ func (s *Service) TranscribeAudio(audioB64, mimeType string) (string, error) {
 }
 
 // Transcribe is the core pipeline (also the remote /api/stt bridge target):
-// validate → transcode containers whisper-server cannot decode (ffmpeg) →
-// ensure a healthy sidecar on the selected model → POST the audio to
-// whisper-server /inference → return the transcript text.
+// validate → transcode everything whisper-server cannot decode natively
+// (ffmpeg) → ensure a healthy sidecar on the selected model → POST the
+// audio to whisper-server /inference → return the transcript text.
 //
 // Client-fault rejections carry ErrAudioTooLarge / ErrUnsupportedAudioType
 // so the remote bridge maps them to 413/415 instead of 500.
@@ -395,7 +395,7 @@ func (s *Service) Transcribe(ctx context.Context, audio []byte, mimeType string)
 	if !strings.HasPrefix(mimeType, "audio/") {
 		return "", fmt.Errorf("%w %q", ErrUnsupportedAudioType, mimeType)
 	}
-	if needsTranscode(mimeType) {
+	if !nativelyDecodable(mimeType) {
 		wav, err := s.ensureWav(ctx, mimeType, audio)
 		if err != nil {
 			return "", err
@@ -528,11 +528,12 @@ func formFileDisposition(field, filename string) string {
 }
 
 // extForMIME maps an audio MIME type to a file extension for the multipart
-// filename (whisper-server uses it to pick the demuxer). Container types the
-// engine cannot decode (webm/m4a/aac/ogg-opus) never get here — Transcribe
-// transcodes them to WAV first (or rejects them when ffmpeg is missing, with
-// OGG the lone pass-through exception: native Vorbis decode). Unknown audio
-// types fall back to .wav — the least surprising default for whisper inputs.
+// filename (whisper-server uses it to pick the demuxer). It must cover
+// every nativelyDecodable type plus audio/ogg — the lone no-ffmpeg
+// pass-through (native Vorbis decode). Everything else reaches this point
+// only as the audio/wav produced by Transcribe's transcode step. Unknown
+// types fall back to .wav — the least surprising default for whisper
+// inputs.
 func extForMIME(mt string) string {
 	switch mt {
 	case "audio/wav", "audio/x-wav", "audio/wave":
@@ -543,9 +544,6 @@ func extForMIME(mt string) string {
 		return ".flac"
 	case "audio/ogg":
 		return ".ogg"
-	}
-	if exts, _ := mime.ExtensionsByType(mt); len(exts) > 0 {
-		return exts[0]
 	}
 	return ".wav"
 }

@@ -8,9 +8,13 @@
 // containers are transcoded to 16 kHz mono PCM WAV — the one input shape the
 // engine always accepts — before the multipart POST is built.
 //
-// Without ffmpeg: OGG is passed through (native Vorbis decode may still
-// work); webm/m4a/aac are rejected with ErrUnsupportedAudioType (remote
-// maps it to 415) carrying an install hint instead of a downstream 500.
+// Routing (#24311 P3-b, whitelist inversion): natively decodable types
+// (WAV/MP3/FLAC) pass through; EVERY other audio/* container takes the
+// ffmpeg path. The previous "known-bad list" failed open — amr/wma/3gp and
+// other undecodable types slipped through to an engine 500. Without ffmpeg:
+// OGG is passed through (native Vorbis decode may still work); everything
+// else is rejected with ErrUnsupportedAudioType (remote maps it to 415)
+// carrying an install hint instead of a downstream 500.
 
 package stt
 
@@ -39,16 +43,19 @@ const transcodeTimeout = 2 * time.Minute
 // maxTranscodeStderr caps captured ffmpeg stderr for error messages.
 const maxTranscodeStderr = 2 * 1024
 
-// needsTranscode reports whether whisper-server cannot decode the container
-// natively: webm (opus), ISO-BMFF audio (m4a/AAC), raw AAC, and the OGG
-// family (OGG-Opus fails natively; OGG-Vorbis would work, but the codec is
-// not distinguishable without sniffing, so both take the ffmpeg path).
-func needsTranscode(mt string) bool {
+// nativelyDecodable reports whether whisper-server's in-memory decoder
+// (miniaudio + stb_vorbis) accepts the container as-is: RIFF WAV, MP3,
+// FLAC. Every other audio/* type routes to ffmpeg — the known-bad
+// containers (webm/opus, the ISO-BMFF family m4a/AAC, raw AAC, OGG: Opus
+// fails natively while Vorbis would work, but the codec is not
+// distinguishable without sniffing) plus unknown types (amr/wma/3gp…),
+// which the old known-bad list let fail open into an engine 500 (#24311
+// P3-b).
+func nativelyDecodable(mt string) bool {
 	switch mt {
-	case "audio/webm", "audio/x-webm",
-		"audio/mp4", "audio/m4a", "audio/x-m4a",
-		"audio/aac", "audio/aacp",
-		"audio/ogg", "audio/opus":
+	case "audio/wav", "audio/x-wav", "audio/wave",
+		"audio/mpeg", "audio/mp3",
+		"audio/flac", "audio/x-flac":
 		return true
 	}
 	return false
@@ -88,7 +95,7 @@ func (s *Service) ensureWav(ctx context.Context, mimeType string, audio []byte) 
 			return audio, nil // native Vorbis decode may still work
 		}
 		return nil, fmt.Errorf(
-			"%w %q: whisper-server cannot decode this container and no ffmpeg was found (install ffmpeg to enable webm/m4a/ogg)",
+			"%w %q: whisper-server cannot decode this container and no ffmpeg was found (install ffmpeg to transcode it)",
 			ErrUnsupportedAudioType, mimeType)
 	}
 	wav, err := transcodeToWav(ctx, ffmpeg, audio)

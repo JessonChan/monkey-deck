@@ -52,12 +52,13 @@ func fakeWav(n int) []byte {
 	return wav
 }
 
-// TestTranscribeTranscodesUnsupportedContainers: webm/m4a/ogg inputs go
-// through ffmpeg and arrive at whisper as WAV — the transcript must carry
-// the ffmpeg output length and the audio.wav filename, not the original
-// bytes/container.
+// TestTranscribeTranscodesUnsupportedContainers: non-native inputs — the
+// known-bad containers plus previously fail-open unknown types (amr/wma,
+// #24311 P3-b) — go through ffmpeg and arrive at whisper as WAV; the
+// transcript must carry the ffmpeg output length and the audio.wav
+// filename, not the original bytes/container.
 func TestTranscribeTranscodesUnsupportedContainers(t *testing.T) {
-	for _, mt := range []string{"audio/webm", "audio/m4a", "audio/mp4", "audio/ogg", "audio/opus"} {
+	for _, mt := range []string{"audio/webm", "audio/m4a", "audio/mp4", "audio/ogg", "audio/opus", "audio/amr", "audio/wma", "audio/x-zebra"} {
 		t.Run(mt, func(t *testing.T) {
 			t.Setenv("MD_FFMPEG", buildFakeFFmpeg(t))
 			svc := newTestService(t, defaultModelID)
@@ -75,14 +76,16 @@ func TestTranscribeTranscodesUnsupportedContainers(t *testing.T) {
 	}
 }
 
-// TestTranscribeNoFFmpegRejectsWebm: without ffmpeg, containers whisper
-// cannot decode are refused up front with ErrUnsupportedAudioType (remote
-// maps 415) — never passed through to die as an inference 500.
-func TestTranscribeNoFFmpegRejectsWebm(t *testing.T) {
+// TestTranscribeNoFFmpegRejectsNonNative: without ffmpeg, anything the
+// engine cannot decode natively — known-bad containers and unknown audio
+// types alike (whitelist inversion, #24311 P3-b) — is refused up front
+// with ErrUnsupportedAudioType (remote maps 415), never passed through to
+// die as an inference 500.
+func TestTranscribeNoFFmpegRejectsNonNative(t *testing.T) {
 	svc := newTestService(t, defaultModelID)
 	svc.ffmpegFn = func() string { return "" } // hermetic: ignore any real ffmpeg
 
-	for _, mt := range []string{"audio/webm", "audio/m4a", "audio/aac"} {
+	for _, mt := range []string{"audio/webm", "audio/m4a", "audio/aac", "audio/amr", "audio/x-zebra"} {
 		if _, err := svc.Transcribe(context.Background(), []byte("x"), mt); !errors.Is(err, ErrUnsupportedAudioType) {
 			t.Fatalf("Transcribe(%s) err = %v, want ErrUnsupportedAudioType", mt, err)
 		}
@@ -230,17 +233,19 @@ func TestWavHasAudioFrames(t *testing.T) {
 	}
 }
 
-// TestNeedsTranscode: the container gate — whisper-native types pass, the
-// rest route to ffmpeg.
-func TestNeedsTranscode(t *testing.T) {
-	for _, mt := range []string{"audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3", "audio/flac", "audio/x-zebra"} {
-		if needsTranscode(mt) {
-			t.Errorf("needsTranscode(%q) = true, want false (natively decodable)", mt)
+// TestNativelyDecodable: the routing gate (whitelist inversion, #24311
+// P3-b) — whisper-native types pass through; every other audio/* type,
+// known-bad containers AND unknown ones alike, routes to ffmpeg instead of
+// failing open into an engine 500.
+func TestNativelyDecodable(t *testing.T) {
+	for _, mt := range []string{"audio/wav", "audio/x-wav", "audio/wave", "audio/mpeg", "audio/mp3", "audio/flac", "audio/x-flac"} {
+		if !nativelyDecodable(mt) {
+			t.Errorf("nativelyDecodable(%q) = false, want true (natively decodable)", mt)
 		}
 	}
-	for _, mt := range []string{"audio/webm", "audio/x-webm", "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/aac", "audio/ogg", "audio/opus"} {
-		if !needsTranscode(mt) {
-			t.Errorf("needsTranscode(%q) = false, want true", mt)
+	for _, mt := range []string{"audio/webm", "audio/x-webm", "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/aac", "audio/aacp", "audio/ogg", "audio/opus", "audio/amr", "audio/wma", "audio/3gpp", "audio/x-zebra"} {
+		if nativelyDecodable(mt) {
+			t.Errorf("nativelyDecodable(%q) = true, want false (ffmpeg path)", mt)
 		}
 	}
 }
