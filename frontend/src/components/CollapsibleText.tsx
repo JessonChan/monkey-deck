@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ChevronDown, ChevronUp, Copy } from "lucide-react";
-import { copyText } from "../lib/clipboard";
+import { Check, ChevronDown, ChevronUp, Copy, X } from "lucide-react";
+import { useCopyFeedback } from "../hooks/useCopyFeedback";
 import { pathPartLabel, splitByPaths } from "../lib/filePath";
 
 // 可复用的「长文本折叠」块(AGENTS.md §5.3:references 优先参考——形态沿用本项目
@@ -77,7 +77,6 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
   const lines = useMemo(() => text.split("\n"), [text]);
   const isLong = lines.length > longLineThreshold || text.length > longCharThreshold;
   const [collapsed, setCollapsed] = useState(isLong && defaultCollapsed);
-  const [copied, setCopied] = useState(false);
 
   // 把单行渲染成节点:可选行 className(+ path 链接化)。
   // 短态/展开态/折叠预览态均复用本函数,保持三态一致。
@@ -156,11 +155,7 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
     return { head: lines, tail: [], note: t("collapsibleText.longLineTruncated", { count: text.length }) };
   }, [isLong, lines, text.length, headLines, tailLines, lineUnitText, t]);
 
-  const copy = async () => {
-    await copyText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
-  };
+  const { copied, failed, copy } = useCopyFeedback();
   const expand = () => setCollapsed(false);
 
   // 短文本:无 meta、无折叠,直接等宽 <pre>(横向滚动、保留换行)。
@@ -173,11 +168,11 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
             <button
               className="msg-action-btn"
               type="button"
-              onClick={copy}
+              onClick={() => void copy(text)}
               data-tooltip-id="md-tip"
-              data-tooltip-content={copied ? t("common.copied") : t("common.copy")}
+              data-tooltip-content={copied ? t("common.copied") : failed ? t("common.copyFailed") : t("common.copy")}
             >
-              {copied ? <Check size={11} /> : <Copy size={11} />}
+              {copied ? <Check size={11} /> : failed ? <X size={11} /> : <Copy size={11} />}
             </button>
             {extra}
           </div>
@@ -196,11 +191,11 @@ export default function CollapsibleText(props: CollapsibleTextProps) {
             <button
               className="msg-action-btn"
               type="button"
-              onClick={copy}
+              onClick={() => void copy(text)}
               data-tooltip-id="md-tip"
-              data-tooltip-content={copied ? t("common.copied") : t("common.copy")}
+              data-tooltip-content={copied ? t("common.copied") : failed ? t("common.copyFailed") : t("common.copy")}
             >
-              {copied ? <Check size={11} /> : <Copy size={11} />}
+              {copied ? <Check size={11} /> : failed ? <X size={11} /> : <Copy size={11} />}
             </button>
           )}
           {extra}

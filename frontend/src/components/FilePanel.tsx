@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import type { FileChange } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
-import { copyText } from "../lib/clipboard";
+import { copyTextQuiet } from "../lib/clipboard";
 import { getFilePanelState, saveFilePanelState, type ChildrenMap, type FilePanelSnapshot } from "../lib/filePanelCache";
 import {
   ChevronRight,
@@ -309,7 +309,7 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
             style={{ left: ctxMenu.x, top: ctxMenu.y }}
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <button className="ctx-item" onClick={() => { const p = absPath(node.path); if (p) void copyText(p); closeCtxMenu(); }}>
+            <button className="ctx-item" onClick={() => { const p = absPath(node.path); if (p) copyTextQuiet(p); closeCtxMenu(); }}>
               <Copy size={13} /> {t("filePanel.copyPath")}
             </button>
             <button className="ctx-item" onClick={() => { const p = absPath(node.path); if (p) void ChatService.RevealPath(p); closeCtxMenu(); }}>

@@ -19,8 +19,8 @@
 import { useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued";
-import { Columns2, Rows2, Copy, Check } from "lucide-react";
-import { copyText } from "../lib/clipboard";
+import { Columns2, Rows2, Copy, Check, X } from "lucide-react";
+import { useCopyFeedback } from "../hooks/useCopyFeedback";
 import { detectDiffLanguage } from "../lib/lang";
 
 export interface DiffViewProps {
@@ -65,7 +65,6 @@ export default function DiffView({
 }: DiffViewProps) {
   const { t } = useTranslation();
   const [split, setSplit] = useState(defaultSplit);
-  const [copied, setCopied] = useState(false);
 
   const lang = language || (filename ? detectDiffLanguage(filename) : undefined);
 
@@ -95,15 +94,7 @@ export default function DiffView({
     [oldStr, newStr, split, lang, maxHeight]
   );
 
-  const onCopy = async () => {
-    try {
-      await copyText(newStr);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch {
-      /* ignore copy failures */
-    }
-  };
+  const { copied, failed, copy } = useCopyFeedback();
 
   return (
     <div className="diff-view" data-testid={testId}>
@@ -119,12 +110,12 @@ export default function DiffView({
         </button>
         <button
           className="diff-view-btn"
-          onClick={onCopy}
-          title={t("diff.copyNew")}
+          onClick={() => void copy(newStr)}
+          title={copied ? t("diff.copied") : failed ? t("common.copyFailed") : t("diff.copyNew")}
           data-testid="diff-view-copy"
         >
-          {copied ? <Check size={13} /> : <Copy size={13} />}
-          <span>{copied ? t("diff.copied") : t("diff.copy")}</span>
+          {copied ? <Check size={13} /> : failed ? <X size={13} /> : <Copy size={13} />}
+          <span>{copied ? t("diff.copied") : failed ? t("common.copyFailed") : t("diff.copy")}</span>
         </button>
       </div>
       <div className="diff-view-body" style={{ maxHeight }}>

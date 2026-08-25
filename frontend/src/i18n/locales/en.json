@@ -9,6 +9,7 @@
     "done": "Done",
     "copy": "Copy",
     "copied": "Copied",
+    "copyFailed": "Copy failed",
     "new": "New",
     "loading": "Loading…",
     "search": "Search",

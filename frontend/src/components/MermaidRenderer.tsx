@@ -16,7 +16,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Code2, Copy, GitGraph as DiagramIcon, Maximize2, RefreshCw, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
-import { copyText } from "../lib/clipboard";
+import { useCopyFeedback } from "../hooks/useCopyFeedback";
 import { renderMermaid, getCachedSvg, type MermaidRenderResult } from "../lib/mermaidRenderer";
 
 interface Props {
@@ -185,7 +185,7 @@ export default function MermaidRenderer({ code, streaming = false }: Props) {
     }
     return { kind: "idle" };
   });
-  const [copied, setCopied] = useState(false);
+  const { copied, failed, copy: copyCode } = useCopyFeedback(1500);
   // success 状态下的查看源码开关(true = 显示源码而非 SVG)。
   const [viewSource, setViewSource] = useState(false);
   // success 状态下的全屏 modal 开关。
@@ -237,17 +237,13 @@ export default function MermaidRenderer({ code, streaming = false }: Props) {
     };
   }, [code, streaming]);
 
-  const copy = async () => {
-    await copyText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
+  const copy = () => { void copyCode(code); };
 
   // streaming 期间:展示源码(让用户看到图在被写),不渲染。
   if (streaming || phase.kind === "idle") {
     return (
       <div className="mermaid-box mermaid-streaming" data-testid="mermaid-source">
-        <MermaidHeader label={t("chat.mermaidWriting")} onCopy={copy} copied={copied} />
+        <MermaidHeader label={t("chat.mermaidWriting")} onCopy={copy} copied={copied} failed={failed} />
         <pre className="mermaid-src-pre"><code>{code}</code></pre>
       </div>
     );
@@ -266,7 +262,7 @@ export default function MermaidRenderer({ code, streaming = false }: Props) {
     // 渲染失败回退:展示源码 + 简短错误提示,绝不把异常吞掉。
     return (
       <div className="mermaid-box mermaid-error" data-testid="mermaid-fallback">
-        <MermaidHeader label={t("chat.mermaidRenderFailed")} onCopy={copy} copied={copied} error />
+        <MermaidHeader label={t("chat.mermaidRenderFailed")} onCopy={copy} copied={copied} failed={failed} error />
         <pre className="mermaid-src-pre"><code>{code}</code></pre>
         {phase.message && <div className="mermaid-error-msg" data-testid="mermaid-error-msg">{phase.message}</div>}
       </div>
@@ -277,7 +273,7 @@ export default function MermaidRenderer({ code, streaming = false }: Props) {
   return (
     <>
       <div className="mermaid-box mermaid-ok" data-testid="mermaid-diagram">
-        <MermaidHeader label={t("chat.mermaidDiagram")} onCopy={copy} copied={copied}>
+        <MermaidHeader label={t("chat.mermaidDiagram")} onCopy={copy} copied={copied} failed={failed}>
           <button
             className="msg-action-btn"
             type="button"
@@ -388,12 +384,14 @@ function MermaidHeader({
   label,
   onCopy,
   copied,
+  failed,
   error,
   children,
 }: {
   label: string;
   onCopy: () => void;
   copied: boolean;
+  failed: boolean;
   error?: boolean;
   children?: ReactNode;
 }) {
@@ -412,9 +410,9 @@ function MermaidHeader({
           onClick={onCopy}
           data-testid="copy-mermaid"
           data-tooltip-id="md-tip"
-          data-tooltip-content={t("common.copy")}
+          data-tooltip-content={copied ? t("common.copied") : failed ? t("common.copyFailed") : t("common.copy")}
         >
-          {copied ? <Check size={12} /> : <Copy size={12} />}
+          {copied ? <Check size={12} /> : failed ? <X size={12} /> : <Copy size={12} />}
         </button>
       </div>
     </div>

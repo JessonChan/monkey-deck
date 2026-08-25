@@ -74,6 +74,13 @@ export default function RemoteSettingsPane() {
     }
   }, [reload]);
 
+  // Copy with failure feedback routed to this pane's error slot (issue #129):
+  // desktop-only pane (isRemoteClient() → null), so the Wails3 channel carries
+  // it and failure is near-impossible — but never show a silent nothing.
+  const copyOrErr = useCallback((text: string) => {
+    void copyText(text).then((ok) => { if (!ok) setError(t("common.copyFailed")); });
+  }, [t]);
+
   const toggleRemote = useCallback(async () => {
     if (!info) return;
     // Optimistic flip: the response for the OFF direction can be lost in
@@ -234,7 +241,7 @@ export default function RemoteSettingsPane() {
             data-testid="settings-remote-token-copy"
             data-tooltip-id="md-tip"
             data-tooltip-content={t("common.copy")}
-            onClick={() => copyText(info.Token)}
+            onClick={() => copyOrErr(info.Token)}
           >
             <Copy size={13} />
           </button>
@@ -281,7 +288,7 @@ export default function RemoteSettingsPane() {
                     data-testid="remote-pairing-copylink"
                     data-tooltip-id="md-tip"
                     data-tooltip-content={t("settings.center.remote.pairLinkTip")}
-                    onClick={() => copyText(`${pairing.baseUrl}/pair?sid=${pairing.sid}`)}
+                    onClick={() => copyOrErr(`${pairing.baseUrl}/pair?sid=${pairing.sid}`)}
                   >
                     {t("settings.center.remote.pairLink")}
                   </button>
@@ -352,7 +359,7 @@ export default function RemoteSettingsPane() {
                   data-testid="settings-remote-url-copy"
                   data-tooltip-id="md-tip"
                   data-tooltip-content={t("common.copy")}
-                  onClick={() => copyText(u)}
+                  onClick={() => copyOrErr(u)}
                 >
                   <Copy size={12} />
                 </button>

@@ -13,14 +13,15 @@ import DiffView from "./DiffView";
 import MermaidRenderer from "./MermaidRenderer";
 import PathLinkified from "./PathLinkified";
 import CopyIconButton from "./CopyIconButton";
-import { copyText } from "../lib/clipboard";
+import { copyTextQuiet } from "../lib/clipboard";
+import { useCopyFeedback } from "../hooks/useCopyFeedback";
 import { countDiffLines } from "../lib/diff";
 import { unifiedToOldNew } from "../lib/unified";
 import { highlightToLines } from "../lib/highlight";
 import "../hljs-theme.css";
 import { buildRows, computeLayout, computeWindow, anchorAt, restoreScroll, isAtBottom, HeightModel, TAIL_PRIOR, HEAD_PRIOR, type VRow, type Layout } from "../lib/virtualList";
 import SelectionToolbar, { type SelectionAction } from "./SelectionToolbar";
-import { SquareTerminal, Sparkles, Brain, Check, Copy, FolderOpen, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus, Quote, Paperclip, Share2 } from "lucide-react";
+import { SquareTerminal, Sparkles, Brain, Check, Copy, FolderOpen, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus, Quote, Paperclip, Share2, X } from "lucide-react";
 
 interface Props {
   project: Project | null;
@@ -223,7 +224,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         tipKey: "selectionToolbar.copyTip",
         Icon: Copy,
         testId: "selection-copy",
-        run: (text) => { void copyText(text); },
+        run: (text) => { copyTextQuiet(text); },
       },
       {
         key: "quote",
@@ -242,11 +243,13 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   // 当前生效的工作目录:优先 session.worktreePath(独立 worktree),降级 project.path(共享目录)。
   // 与 App.tsx 的 termCwdRef 同一套优先级(worktree 优先 → 项目目录)。
   const activePath = props.session?.worktreePath || props.project?.path || "";
-  // 复制工作目录到剪贴板(对话区右键菜单调用);无路径时不执行(openCtxMenu 入口已兜底)。
-  // 不做 copied 反馈:右键菜单点击即关闭,反馈不可见(与 Sidebar 项目菜单一致)。
+  // Copy the working directory to the clipboard (chat-area context menu); no-op
+  // without a path (openCtxMenu already guards). No copied feedback: the context
+  // menu closes on click, so feedback would be invisible (same as Sidebar project
+  // menu). copyTextQuiet logs a console warning when every channel fails.
   const copyPath = useCallback(() => {
     if (!activePath) return;
-    void copyText(activePath);
+    copyTextQuiet(activePath);
   }, [activePath]);
   // ─── 对话区右键菜单(复用 Sidebar ctx-menu 范式:fixed 定位 + 全局 Esc / outside-mousedown / resize 关闭 + 视口裁剪)───
   // 仅放与工作目录相关的项(复制路径 / 在 Finder 打开),与 Sidebar 项目菜单的路径项对齐。
@@ -1055,10 +1058,7 @@ function ThoughtBlock({ item, sessionId, onOpenFilePreview }: { item: Extract<Ch
 
 function MessageActions({ text, className = "", testId = "copy-msg" }: { text: string; className?: string; testId?: string }) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    await copyText(text); setCopied(true); setTimeout(() => setCopied(false), 1500);
-  };
+  const { copied, failed, copy } = useCopyFeedback(1500);
   // Mobile-only share (CSS-gated): the OS share sheet ships agent output to
   // chats/notes. navigator.share exists on desktop Chrome too — hiding it
   // there keeps the desktop message actions row unchanged (M2 hard rule).
@@ -1072,12 +1072,12 @@ function MessageActions({ text, className = "", testId = "copy-msg" }: { text: s
       <button
         className="msg-action-btn"
         type="button"
-        onClick={copy}
+        onClick={() => void copy(text)}
         data-testid={testId}
         data-tooltip-id="md-tip"
-        data-tooltip-content={copied ? t("chat.messageCopiedTip") : t("chat.copyMessageTip")}
+        data-tooltip-content={copied ? t("chat.messageCopiedTip") : failed ? t("common.copyFailed") : t("chat.copyMessageTip")}
       >
-        {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? t("common.copied") : t("common.copy")}
+        {copied ? <Check size={12} /> : failed ? <X size={12} /> : <Copy size={12} />} {copied ? t("common.copied") : failed ? t("common.copyFailed") : t("common.copy")}
       </button>
       <button
         className="msg-action-btn msg-share-btn"
@@ -1099,12 +1099,10 @@ function MessageActions({ text, className = "", testId = "copy-msg" }: { text: s
 // Render only when `text` is non-empty (caller decides what to copy — usually extractToolText(rawOutput)).
 function SummaryCopyBtn({ text, testId }: { text: string; testId?: string }) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const onCopy = async (e: React.MouseEvent) => {
+  const { copied, failed, copy } = useCopyFeedback();
+  const onCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
-    await copyText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
+    void copy(text);
   };
   const stop = (e: React.MouseEvent) => { e.stopPropagation(); };
   return (
@@ -1114,10 +1112,10 @@ function SummaryCopyBtn({ text, testId }: { text: string; testId?: string }) {
       onClick={onCopy}
       onMouseDown={stop}
       data-tooltip-id="md-tip"
-      data-tooltip-content={copied ? t("common.copied") : t("chat.copyOutputTip")}
+      data-tooltip-content={copied ? t("common.copied") : failed ? t("common.copyFailed") : t("chat.copyOutputTip")}
       {...(testId ? { "data-testid": testId } : {})}
     >
-      {copied ? <Check size={12} /> : <Copy size={12} />}
+      {copied ? <Check size={12} /> : failed ? <X size={12} /> : <Copy size={12} />}
     </button>
   );
 }
@@ -1359,12 +1357,10 @@ function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, 
   const stInfo = TOOL_STATUS_MAP[item.status] || { key: null, cls: "tc-unknown" };
   const stLabel = stInfo.key ? t(stInfo.key) : (item.status || t("chat.toolStatus.unknown"));
   const running = item.status === "pending" || item.status === "in_progress";
-  const [copiedIn, setCopiedIn] = useState(false);
-  const [copiedOut, setCopiedOut] = useState(false);
   const inputR = item.rawInput != null ? extractToolText(item.rawInput) : null;
   const outputR = item.rawOutput != null ? extractToolText(item.rawOutput) : null;
-  const copyIn = async () => { await copyText(inputR?.text || ""); setCopiedIn(true); setTimeout(() => setCopiedIn(false), 1200); };
-  const copyOut = async () => { await copyText(outputR?.text || ""); setCopiedOut(true); setTimeout(() => setCopiedOut(false), 1200); };
+  const inFb = useCopyFeedback();
+  const outFb = useCopyFeedback();
   return (
     <Collapsible
       className="tool-card"
@@ -1382,7 +1378,14 @@ function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, 
         <div className="tool-section">
           <div className="tool-section-head">
             <span className="tool-section-label">{t("chat.input")}</span>
-            <button className="msg-action-btn" onClick={copyIn}>{copiedIn ? <Check size={11} /> : <Copy size={11} />}</button>
+            <button
+              className="msg-action-btn"
+              onClick={() => void inFb.copy(inputR?.text || "")}
+              data-tooltip-id="md-tip"
+              data-tooltip-content={inFb.copied ? t("common.copied") : inFb.failed ? t("common.copyFailed") : t("common.copy")}
+            >
+              {inFb.copied ? <Check size={11} /> : inFb.failed ? <X size={11} /> : <Copy size={11} />}
+            </button>
           </div>
           <pre className={inputR.fallback ? "tool-pre" : "tool-pre tool-term"}>
             <PathLinkified text={inputR.text} onOpen={onOpenFilePreview} />
@@ -1395,7 +1398,14 @@ function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, 
             <span className="tool-section-label">
               {t("chat.output")}{outputR.exit != null ? t("chat.exitSuffix", { code: outputR.exit }) : ""}{outputR.truncated ? t("chat.truncatedSuffix") : ""}
             </span>
-            <button className="msg-action-btn" onClick={copyOut}>{copiedOut ? <Check size={11} /> : <Copy size={11} />}</button>
+            <button
+              className="msg-action-btn"
+              onClick={() => void outFb.copy(outputR?.text || "")}
+              data-tooltip-id="md-tip"
+              data-tooltip-content={outFb.copied ? t("common.copied") : outFb.failed ? t("common.copyFailed") : t("common.copy")}
+            >
+              {outFb.copied ? <Check size={11} /> : outFb.failed ? <X size={11} /> : <Copy size={11} />}
+            </button>
           </div>
           <pre className={outputR.fallback ? "tool-pre" : "tool-pre tool-term"}>
             <PathLinkified text={outputR.text} onOpen={onOpenFilePreview} />
@@ -1416,10 +1426,7 @@ function BashToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
   const running = item.status === "pending" || item.status === "in_progress";
   const command = extractBashCommand(item.rawInput);
   const outputR = item.rawOutput != null ? extractToolText(item.rawOutput) : null;
-  const [copiedCmd, setCopiedCmd] = useState(false);
-  const copyCmd = async () => {
-    await copyText(command || ""); setCopiedCmd(true); setTimeout(() => setCopiedCmd(false), 1200);
-  };
+  const { copied: copiedCmd, failed: failedCmd, copy: copyCmd } = useCopyFeedback();
   return (
     <Collapsible
       className="tool-card bash-tool-card"
@@ -1441,12 +1448,12 @@ function BashToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
             <button
               className="msg-action-btn"
               type="button"
-              onClick={copyCmd}
+              onClick={() => void copyCmd(command || "")}
               data-tooltip-id="md-tip"
-              data-tooltip-content={copiedCmd ? t("common.copied") : t("chat.copyCommandTip")}
+              data-tooltip-content={copiedCmd ? t("common.copied") : failedCmd ? t("common.copyFailed") : t("chat.copyCommandTip")}
               data-testid="bash-copy-cmd"
             >
-              {copiedCmd ? <Check size={11} /> : <Copy size={11} />}
+              {copiedCmd ? <Check size={11} /> : failedCmd ? <X size={11} /> : <Copy size={11} />}
             </button>
           </div>
           <pre className="bash-cmd-pre" data-testid="bash-cmd-pre">{command}</pre>
@@ -1778,11 +1785,7 @@ function CodeRenderer(props: ComponentPropsWithoutRef<"code">) {
 
 function CodeBox({ language, raw }: { language: string; raw: string }) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    // Keep copy as plain text: always write raw (original source), not highlighted HTML.
-    await copyText(raw); setCopied(true); setTimeout(() => setCopied(false), 1500);
-  };
+  const { copied, failed, copy } = useCopyFeedback(1500);
   // 复用 lib/highlight 的 highlightToLines(Task #15088):显式 language 优先,否则 highlightAuto。
   // 流式下 raw 每次变化都会重算 —— highlight.js 同步快、对不完整代码也安全(不抛错、降级转义),
   // 故边到边高亮,无需等 turn 结束。
@@ -1794,8 +1797,15 @@ function CodeBox({ language, raw }: { language: string; raw: string }) {
     <div className="code-box">
       <div className="code-box-head">
         <span className="code-lang">{detected || language}</span>
-        <button className="msg-action-btn" onClick={copy} data-testid="copy-code">
-          {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? t("common.copied") : t("common.copy")}
+        {/* Keep copy as plain text: always write raw (original source), not highlighted HTML. */}
+        <button
+          className="msg-action-btn"
+          onClick={() => void copy(raw)}
+          data-testid="copy-code"
+          data-tooltip-id="md-tip"
+          data-tooltip-content={copied ? t("common.copied") : failed ? t("common.copyFailed") : t("common.copy")}
+        >
+          {copied ? <Check size={12} /> : failed ? <X size={12} /> : <Copy size={12} />} {copied ? t("common.copied") : failed ? t("common.copyFailed") : t("common.copy")}
         </button>
       </div>
       <pre className="code-box-pre">

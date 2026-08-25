@@ -5,7 +5,7 @@ import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/i
 import CodeViewer from "./CodeViewer";
 import SelectionToolbar, { type SelectionAction } from "./SelectionToolbar";
 import { isImageFile } from "../utils";
-import { copyText } from "../lib/clipboard";
+import { useCopyFeedback } from "../hooks/useCopyFeedback";
 
 // EditorPane renders the content of one opened file tab: text -> CodeViewer
 // (syntax highlight + line numbers + virtualization + target-line highlight),
@@ -77,7 +77,7 @@ export default function EditorPane({
   const gutterRef = useRef<HTMLDivElement | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
+  const { copied, failed, copy: copyFn } = useCopyFeedback();
   // Scope ref for the selection toolbar: the content area below the toolbar /
   // search overlay. Excludes the toolbar inputs so selecting in them doesn't
   // pop the quote toolbar.
@@ -311,11 +311,9 @@ export default function EditorPane({
   // line — same order of cost as the textarea's own content.
   const lineCount = useMemo(() => draft.split("\n").length, [draft]);
 
-  const copy = useCallback(async () => {
-    await copyText(editing ? draft : content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
-  }, [content, draft, editing]);
+  const copy = useCallback(() => {
+    void copyFn(editing ? draft : content);
+  }, [content, draft, editing, copyFn]);
 
   // ⌘F / Ctrl+F opens the search overlay (view mode, text files only — edit
   // mode has no CodeViewer to drive). Attached at window scope so it fires
@@ -481,10 +479,10 @@ export default function EditorPane({
             className="tool-btn"
             onClick={copy}
             data-tooltip-id="md-tip"
-            data-tooltip-content={copied ? t("common.copied") : t("filePreview.copyTip")}
+            data-tooltip-content={copied ? t("common.copied") : failed ? t("common.copyFailed") : t("filePreview.copyTip")}
             aria-label={t("filePreview.copyTip")}
           >
-            {copied ? <span style={{ fontSize: 11 }}>✓</span> : <Copy size={14} />}
+            {copied ? <span style={{ fontSize: 11 }}>✓</span> : failed ? <span style={{ fontSize: 11 }}>✗</span> : <Copy size={14} />}
           </button>
         )}
         {!image && !editing && (

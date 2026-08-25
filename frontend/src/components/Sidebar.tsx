@@ -15,7 +15,7 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { timeAgo, formatDateTime, sanitizeFileName } from "../utils";
-import { copyText } from "../lib/clipboard";
+import { copyTextQuiet } from "../lib/clipboard";
 import { downloadText } from "../lib/download";
 import HarnessIcon from "./HarnessIcon";
 
@@ -593,7 +593,7 @@ export default function Sidebar(props: Props) {
 
       {ctx?.kind === "project" && (
         <div ref={menuRef} className="ctx-menu" style={{ left: ctx.x, top: ctx.y }} onMouseDown={(e) => e.stopPropagation()}>
-          <button className="ctx-item" onClick={() => { void copyText(ctx.project.path); closeCtx(); }}>
+          <button className="ctx-item" onClick={() => { copyTextQuiet(ctx.project.path); closeCtx(); }}>
             <Copy size={13} /> {t("sidebar.copyWorkdir")}
           </button>
           <button className="ctx-item" onClick={() => { void ChatService.RevealPath(ctx.project.path); closeCtx(); }}>
@@ -640,14 +640,14 @@ export default function Sidebar(props: Props) {
           >
             <Pencil size={13} /> {t("sidebar.rename")}
           </button>
-          <button className="ctx-item" onClick={() => { void copyText(ctx.session.id); closeCtx(); }}>
+          <button className="ctx-item" onClick={() => { copyTextQuiet(ctx.session.id); closeCtx(); }}>
             <Copy size={13} /> {t("sidebar.copySessionId")}
           </button>
           <button
             className="ctx-item"
             onClick={() => {
               const project = props.projects.find((p) => p.id === ctx.session.projectId);
-              void copyText(ctx.session.worktreePath || project?.path || "");
+              copyTextQuiet(ctx.session.worktreePath || project?.path || "");
               closeCtx();
             }}
           >
