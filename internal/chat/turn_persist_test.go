@@ -1,17 +1,24 @@
 package chat
 
-// turn_persist_test.go:增量落库回归(#125,turnpersist.go)。
+// turn_persist_test.go: incremental turn persistence regression (#125,
+// turnpersist.go).
 //
-// 覆盖:
-//   - 增量 flush:turn 进行中(无 persistTurn 收尾)防抖后 DB 即有部分内容
-//     —— 崩溃 / 杀进程最多丢一个防抖窗口,而非整轮。
-//   - upsert 累积:flush 后继续流式,同 entry 仍一行,内容为累积全文。
-//   - 收尾 reconcile:flush 过的行更新为最终全文,未 flush 的插入;重复 reconcile
-//     幂等;顺序 = timeline 真实时序(thought→tool→agent 交错,§5.4 #5/#12)。
-//   - 陈旧 flush no-op:turn 已收尾(currentTurnID 已清)后 flush 触发,不得把
-//     部分内容写回覆盖终态。
-//   - resetBuffers 清防抖遗留:跨 turn 定时器 / 脏集不污染新 turn。
-//   - 并发:事件流与 flush 并发(配 -race),收敛后每 entry 恰一行、内容完整。
+// Coverage:
+//   - Incremental flush: while a turn is running (no persistTurn finalize),
+//     partial content reaches the DB after the debounce — a crash / kill
+//     loses at most one debounce window, not the whole turn.
+//   - Upsert accumulation: streaming continues after a flush; the same entry
+//     stays one row with the accumulated full text.
+//   - Turn-end reconcile: flushed rows update to the final full text,
+//     unflushed ones insert; repeated reconcile is idempotent; order equals
+//     the timeline's true sequence (thought→tool→agent interleaved, §5.4
+//     #5/#12).
+//   - Stale flush no-op: a flush firing after the turn ended (currentTurnID
+//     cleared) must not write partial content back over the final state.
+//   - resetBuffers clears debounce leftovers: cross-turn timers / dirty sets
+//     don't pollute the new turn.
+//   - Concurrency: event stream racing the flush (with -race); after
+//     convergence each entry is exactly one row with complete content.
 
 import (
 	"encoding/json"
@@ -22,8 +29,10 @@ import (
 	"github.com/jessonchan/monkey-deck/internal/acp"
 )
 
-// beginTestTurn 直接置 currentTurnID,模拟 startTurn 已发生(绕开 Prompt 流程,
-// 聚焦落库语义)。返回收尾用的清理(清 currentTurnID,模拟 runPrompt finalize)。
+// beginTestTurn sets currentTurnID directly, simulating that startTurn has
+// happened (bypassing the Prompt flow to focus on persistence semantics).
+// Returns a cleanup that clears currentTurnID, simulating runPrompt
+// finalization.
 func beginTestTurn(ls *liveSession, turnID string) func() {
 	ls.mu.Lock()
 	ls.currentTurnID = turnID
@@ -35,7 +44,7 @@ func beginTestTurn(ls *liveSession, turnID string) func() {
 	}
 }
 
-// waitUntil 轮询等待条件成立(默认 2s 超时)。
+// waitUntil polls until cond holds (2s default timeout).
 func waitUntil(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -70,7 +79,8 @@ func listRows(t *testing.T, svc *ChatService, sid string) []struct {
 	return out
 }
 
-// 增量 flush:turn 未收尾(不调 persistTurn),防抖窗口后部分内容已在库。
+// Incremental flush: the turn is not finalized (persistTurn not called);
+// after the debounce window partial content is already in the DB.
 func TestFlushTurnPersistsIncrementally(t *testing.T) {
 	svc, sid, _ := newTestService(t)
 	ls := svc.active[sid]
@@ -81,7 +91,8 @@ func TestFlushTurnPersistsIncrementally(t *testing.T) {
 	svc.handleEvent(ls, sid, acp.SessionEvent{Kind: "tool_call", ToolCallID: "T1", ToolTitle: "read", ToolStatus: "in_progress"})
 	svc.handleEvent(ls, sid, acp.SessionEvent{Kind: "agent_message_chunk", Text: "部分回", MessageID: "m2"})
 
-	// 不等收尾:防抖(测试注入 5ms)后应出现 thought + tool + agent 三行。
+	// No finalize: after the debounce (5ms injected in tests) the thought +
+	// tool + agent rows should appear.
 	waitUntil(t, func() bool { return len(listRows(t, svc, sid)) >= 3 })
 
 	rows := listRows(t, svc, sid)
@@ -93,7 +104,8 @@ func TestFlushTurnPersistsIncrementally(t *testing.T) {
 	}
 }
 
-// upsert 累积:flush 后继续流式,同 entry 仍是一行,内容为累积全文。
+// Upsert accumulation: streaming continues after a flush; the same entry
+// stays one row with the accumulated full text.
 func TestFlushTurnUpsertAccumulates(t *testing.T) {
 	svc, sid, _ := newTestService(t)
 	ls := svc.active[sid]
@@ -110,7 +122,8 @@ func TestFlushTurnUpsertAccumulates(t *testing.T) {
 		return false
 	})
 
-	// 同 messageId 继续流式 → 再 flush 后仍是 1 行、全文。
+	// Keep streaming with the same messageId → still 1 row with the full text
+	// after the next flush.
 	svc.handleEvent(ls, sid, acp.SessionEvent{Kind: "agent_message_chunk", Text: ",世界", MessageID: "mA"})
 	waitUntil(t, func() bool {
 		for _, r := range listRows(t, svc, sid) {
@@ -125,7 +138,8 @@ func TestFlushTurnUpsertAccumulates(t *testing.T) {
 	}
 }
 
-// 收尾 reconcile:增量 flush 之后的终态写入 —— 幂等、顺序 = 真实时序、内容为最终全文。
+// Turn-end reconcile: the final write after incremental flushes — idempotent,
+// order = true sequence, content = final full text.
 func TestPersistTurnReconcileAfterFlush(t *testing.T) {
 	svc, sid, _ := newTestService(t)
 	ls := svc.active[sid]
@@ -133,16 +147,17 @@ func TestPersistTurnReconcileAfterFlush(t *testing.T) {
 	svc.handleEvent(ls, sid, acp.SessionEvent{Kind: "agent_thought_chunk", Text: "想", MessageID: "m1"})
 	svc.handleEvent(ls, sid, acp.SessionEvent{Kind: "tool_call", ToolCallID: "T1", ToolTitle: "read", ToolStatus: "in_progress"})
 	svc.handleEvent(ls, sid, acp.SessionEvent{Kind: "agent_message_chunk", Text: "答", MessageID: "m2"})
-	// tool 终态补输出(增量 flush 期间到达)。
+	// Tool terminal state gains output (arriving during incremental flushes).
 	svc.handleEvent(ls, sid, acp.SessionEvent{Kind: "tool_call_update", ToolCallID: "T1", ToolStatus: "completed", RawOutput: "42"})
 
-	// 收尾:finalize + reconcile(runPrompt 语义:先清 currentTurnID 再 persistTurn)。
+	// Finalize: finalize + reconcile (runPrompt semantics: clear currentTurnID
+	// before persistTurn).
 	ls.mu.Lock()
 	timeline := ls.finalizeTurn()
 	ls.currentTurnID = ""
 	ls.mu.Unlock()
 	svc.persistTurn(ls, sid, "turn-1", timeline)
-	svc.persistTurn(ls, sid, "turn-1", timeline) // 重放:幂等
+	svc.persistTurn(ls, sid, "turn-1", timeline) // replay: idempotent
 
 	rows := listRows(t, svc, sid)
 	if len(rows) != 3 {
@@ -151,7 +166,7 @@ func TestPersistTurnReconcileAfterFlush(t *testing.T) {
 	want := []string{"thought", "tool", "agent"}
 	for i, w := range want {
 		if rows[i].role != w {
-			t.Fatalf("row[%d].role: want %q got %q — 顺序与真实时序不符", i, w, rows[i].role)
+			t.Fatalf("row[%d].role: want %q got %q — order diverges from the true sequence", i, w, rows[i].role)
 		}
 	}
 	var ta toolAccum
@@ -163,8 +178,9 @@ func TestPersistTurnReconcileAfterFlush(t *testing.T) {
 	}
 }
 
-// 崩溃模拟:增量 flush 发生后进程「死掉」(不收尾),DB 保留部分内容;
-// 随后新 turn 重新开始(resetBuffers),旧 turn 的陈旧 flush 不得污染。
+// Crash simulation: the process "dies" after an incremental flush (no
+// finalize); the DB keeps the partial content; a new turn then starts
+// (resetBuffers) and the old turn's stale flush must not pollute it.
 func TestStaleFlushAfterTurnEndIsNoop(t *testing.T) {
 	svc, sid, _ := newTestService(t)
 	ls := svc.active[sid]
@@ -179,9 +195,10 @@ func TestStaleFlushAfterTurnEndIsNoop(t *testing.T) {
 		}
 		return false
 	})
-	end() // 模拟 runPrompt 收尾:currentTurnID 已清(reconcile 已写终态)
+	end() // simulate runPrompt finalize: currentTurnID cleared (reconcile wrote the final state)
 
-	// 陈旧 flush(turn 排定时器此刻才触发):不得写任何内容。
+	// Stale flush (the turn's scheduled timer fires only now): must not write
+	// anything.
 	svc.flushTurn(sid, ls, "turn-1")
 	rows := listRows(t, svc, sid)
 	if len(rows) != 1 || rows[0].content != "turn1部分" {
@@ -189,8 +206,9 @@ func TestStaleFlushAfterTurnEndIsNoop(t *testing.T) {
 	}
 }
 
-// resetBuffers 清掉上一轮的防抖定时器与脏集:新 turn 的脏条目从零开始,
-// 旧定时器(即使已经触发)不吞掉新 turn 的增量写。
+// resetBuffers clears the previous round's debounce timer and dirty set: the
+// new turn's dirty entries start from zero, and the old timer (even if it
+// already fired) can't swallow the new turn's incremental writes.
 func TestResetBuffersClearsPendingFlush(t *testing.T) {
 	svc, sid, _ := newTestService(t)
 	ls := svc.active[sid]
@@ -204,7 +222,8 @@ func TestResetBuffersClearsPendingFlush(t *testing.T) {
 	if !pending {
 		t.Fatal("expected a flush timer to be scheduled after a dirty event")
 	}
-	// 等 turn-1 的增量写落库(resetBuffers 会停掉 pending 定时器,须先等它完成使命)。
+	// Wait for turn-1's incremental write to land (resetBuffers stops the
+	// pending timer, so let it finish its job first).
 	waitUntil(t, func() bool {
 		for _, r := range listRows(t, svc, sid) {
 			if r.content == "t1" {
@@ -214,7 +233,7 @@ func TestResetBuffersClearsPendingFlush(t *testing.T) {
 		return false
 	})
 
-	ls.resetBuffers() // turn 边界:startTurn 语义
+	ls.resetBuffers() // turn boundary: startTurn semantics
 	ls.mu.Lock()
 	if ls.flushTimer != nil || ls.flushDirty != nil {
 		ls.mu.Unlock()
@@ -222,7 +241,8 @@ func TestResetBuffersClearsPendingFlush(t *testing.T) {
 	}
 	ls.mu.Unlock()
 
-	// 新 turn:fallback 键与 turn-1 相同(无 messageId 场景),靠 turn_id 消歧。
+	// New turn: same fallback key as turn-1 (no-messageId case); turn_id
+	// disambiguates.
 	end2 := beginTestTurn(ls, "turn-2")
 	defer end2()
 	svc.handleEvent(ls, sid, acp.SessionEvent{Kind: "agent_message_chunk", Text: "t2"})
@@ -240,8 +260,9 @@ func TestResetBuffersClearsPendingFlush(t *testing.T) {
 	}
 }
 
-// 并发:多 goroutine 事件流 × 防抖 flush(配 -race 验证快照持锁);收敛后 reconcile,
-// 每 entry 恰一行、内容完整、无交错损坏。
+// Concurrency: multi-goroutine event streams × debounced flush (-race
+// verifies the locked snapshot); reconcile after convergence — each entry
+// exactly one row, complete content, no interleaved corruption.
 func TestFlushConcurrentWithEventStream(t *testing.T) {
 	svc, sid, _ := newTestService(t)
 	ls := svc.active[sid]
@@ -258,7 +279,7 @@ func TestFlushConcurrentWithEventStream(t *testing.T) {
 				svc.handleEvent(ls, sid, acp.SessionEvent{
 					Kind:      "agent_message_chunk",
 					Text:      "x",
-					MessageID: "mA", // 同 key 并发累积
+					MessageID: "mA", // concurrent accumulation on the same key
 				})
 				svc.handleEvent(ls, sid, acp.SessionEvent{
 					Kind:        "tool_call_update",
@@ -270,7 +291,7 @@ func TestFlushConcurrentWithEventStream(t *testing.T) {
 		}(w)
 	}
 	wg.Wait()
-	// 让最后一次防抖 flush 落定,再收尾 reconcile。
+	// Let the last debounced flush settle, then do the turn-end reconcile.
 	time.Sleep(30 * time.Millisecond)
 
 	ls.mu.Lock()
@@ -296,7 +317,8 @@ func TestFlushConcurrentWithEventStream(t *testing.T) {
 	}
 }
 
-// plan 快照经 UpsertTurnMessage 幂等写:重复收尾不留重复行,tool_call_id 仍钉 turn。
+// The plan snapshot writes idempotently via UpsertTurnMessage: repeated
+// finalize leaves no duplicate rows; tool_call_id still pins the turn.
 func TestPersistTurnPlanUpsertIdempotent(t *testing.T) {
 	svc, sid, _ := newTestService(t)
 	entries := []acp.PlanEntry{{Content: "a", Status: "completed"}}

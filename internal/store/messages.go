@@ -39,16 +39,22 @@ func (s *Store) AppendMessage(ctx context.Context, sessionID, role, kind, conten
 	return m, nil
 }
 
-// UpsertTurnMessage 幂等写一条 turn 内的消息(#125,增量落库的唯一写入口)。
-// 以 (session_id, turn_id, entry_key) 为主键(partial unique index,0017):
-//   - 首次:INSERT,seq = 会话内 MAX(seq)+1(与 AppendMessage 同序);
-//   - 再次:就地 UPDATE content/role/kind/tool_call_id/created_at,seq 不动
-//     —— 行保持首次出现的时序位置(timeline 只追加不移位,§5.4 #5)。
-//     created_at 随写刷新:收尾 reconcile(turn 结束)必写最终全文,故终态
-//     created_at ≈ 回合结束时刻,与旧「回合结束统一落库」的时间语义一致
-//     (前端 #68 回合时长依赖最后一条消息 ts = turn end)。
-// turnID/entryKey 必须非空(空键在 partial index 之外,永远无法命中 upsert 分支);
-// 由调用方(internal/chat)保证,此处不兜底。旧行(entry_key='')不受影响。
+// UpsertTurnMessage idempotently writes one in-turn message (#125, the single
+// write entry point for incremental turn persistence).
+// Keyed by (session_id, turn_id, entry_key) (partial unique index, 0017):
+//   - First write: INSERT with seq = MAX(seq)+1 within the session (same
+//     ordering as AppendMessage).
+//   - Replays: in-place UPDATE of content/role/kind/tool_call_id/created_at;
+//     seq stays put — the row keeps the position of its first appearance
+//     (the timeline only appends, never shifts, §5.4 #5). created_at refreshes
+//     on every write: the turn-end reconcile always writes the final full
+//     text last, so the stored timestamp converges to turn end — the same
+//     time semantics as the old write-everything-at-turn-end behavior
+//     (frontend #68 relies on "last message ts = turn end").
+// turnID/entryKey must be non-empty (an empty key sits outside the partial
+// index and can never hit the upsert branch); the caller (internal/chat)
+// guarantees this, no defensive fallback here. Legacy rows (entry_key='')
+// are unaffected.
 func (s *Store) UpsertTurnMessage(ctx context.Context, sessionID, turnID, entryKey, role, kind, content, toolCallID string) (*Message, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq),0)+1 FROM messages WHERE session_id=?`, sessionID)
 	var seq int64
@@ -67,7 +73,8 @@ func (s *Store) UpsertTurnMessage(ctx context.Context, sessionID, turnID, entryK
 	if err := s.TouchSession(ctx, sessionID); err != nil {
 		return nil, err
 	}
-	// 读回落库后的真实行(id/seq/created_at 可能是冲突前已存在的旧值)。
+	// Read back the real stored row (id/seq/created_at may be pre-conflict
+	// values of an already-existing row).
 	m, err := s.getTurnMessage(ctx, sessionID, turnID, entryKey)
 	if err != nil {
 		return nil, err
@@ -75,7 +82,8 @@ func (s *Store) UpsertTurnMessage(ctx context.Context, sessionID, turnID, entryK
 	return m, nil
 }
 
-// getTurnMessage 按 upsert 键取一行(UPSERT 之后读回真实行)。
+// getTurnMessage fetches one row by the upsert key (reads back the real row
+// after the UPSERT).
 func (s *Store) getTurnMessage(ctx context.Context, sessionID, turnID, entryKey string) (*Message, error) {
 	m := &Message{}
 	err := s.db.QueryRowContext(ctx,

@@ -134,7 +134,7 @@ func newTestService(t *testing.T) (svc *ChatService, sessionID string, fc *fakeC
 	svc = NewChatService(config.TestConfig(t.TempDir()))
 	svc.ctx = context.Background()
 	svc.st = st
-	svc.turnFlushEvery = 5 * time.Millisecond // 增量落库防抖缩短,测试内即时 flush(#125)
+	svc.turnFlushEvery = 5 * time.Millisecond // shorten the incremental-persist debounce so tests flush immediately (#125)
 
 	proj, err := st.CreateProject(svc.ctx, "p", t.TempDir(), "")
 	if err != nil {

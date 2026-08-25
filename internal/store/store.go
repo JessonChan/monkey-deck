@@ -27,9 +27,10 @@ type Message struct {
 	Kind       string `json:"kind"`
 	Content    string `json:"content"`
 	ToolCallID string `json:"toolCallId,omitempty"`
-	// TurnID/EntryKey:incremental turn persistence 的幂等 upsert 键(0017,#125)。
-	// TurnID = 开启该 turn 的 user message id;EntryKey = timeline entry id。
-	// 空串 = 旧行(user 消息 / 迁移前的历史),不参与 upsert 去重。
+	// TurnID/EntryKey: idempotent upsert keys for incremental turn persistence
+	// (0017, #125). TurnID = the user message id that opened the turn;
+	// EntryKey = timeline entry id. Empty = legacy rows (user messages /
+	// pre-migration history) that don't participate in upsert dedupe.
 	TurnID    string `json:"turnId,omitempty"`
 	EntryKey  string `json:"entryKey,omitempty"`
 	Seq       int64  `json:"seq"`

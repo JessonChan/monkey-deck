@@ -1,14 +1,17 @@
 package store
 
-// messages_test.go:UpsertTurnMessage 回归(#125 增量落库)。
+// messages_test.go: UpsertTurnMessage regression (#125 incremental persistence).
 //
-// 覆盖:
-//   - 幂等:同键重复 upsert 只有一行,内容就地更新,seq/id 稳定(行保持首次
-//     出现位置,重放不重排历史,§5.4 #5);created_at 随写刷新(收尾 reconcile
-//     最后写,终态 ≈ 回合结束,保持旧时间语义,#68)。
-//   - 新键:插新行,seq 续接会话内 MAX(seq)+1。
-//   - 不同 turn 同 entry_key:互不冲突(turn_id 是 upsert 键的一部分)。
-//   - 旧行兼容:AppendMessage 写的行(entry_key='')不参与去重,与 upsert 行共存。
+// Coverage:
+//   - Idempotence: repeated upserts with the same key leave one row, content
+//     updated in place, seq/id stable (rows keep their first-appearance
+//     position; replays never reorder history, §5.4 #5); created_at refreshes
+//     on write (the turn-end reconcile writes last, so the final value ≈ turn
+//     end — preserving the old time semantics, #68).
+//   - New keys: insert a new row with seq = MAX(seq)+1 within the session.
+//   - Same entry_key across turns: no conflict (turn_id is part of the key).
+//   - Legacy rows: rows written by AppendMessage (entry_key='') stay outside
+//     dedupe and coexist with upserted rows.
 
 import (
 	"context"
@@ -35,17 +38,17 @@ func TestUpsertTurnMessageIdempotent(t *testing.T) {
 	s, sid := newUpsertTestSession(t)
 	ctx := context.Background()
 
-	// 首次写入(flush 阶段的部分内容)。
+	// First write (partial content from the flush phase).
 	m1, err := s.UpsertTurnMessage(ctx, sid, "turn-1", "msg:m1:agent", "agent", "agent_message_chunk", "部分回", "")
 	if err != nil {
 		t.Fatalf("first upsert: %v", err)
 	}
-	// 同键重放:内容增长(reconcile 阶段的最终全文)。
+	// Same-key replay: content grows (final full text from the reconcile phase).
 	m2, err := s.UpsertTurnMessage(ctx, sid, "turn-1", "msg:m1:agent", "agent", "agent_message_chunk", "部分回复全文", "")
 	if err != nil {
 		t.Fatalf("second upsert: %v", err)
 	}
-	// 第三次重放(相同内容,reconcile 重入)。
+	// Third replay (same content, reconcile re-entry).
 	if _, err := s.UpsertTurnMessage(ctx, sid, "turn-1", "msg:m1:agent", "agent", "agent_message_chunk", "部分回复全文", ""); err != nil {
 		t.Fatalf("third upsert: %v", err)
 	}
@@ -64,7 +67,8 @@ func TestUpsertTurnMessageIdempotent(t *testing.T) {
 	if got.TurnID != "turn-1" || got.EntryKey != "msg:m1:agent" {
 		t.Fatalf("keys not persisted: %+v", got)
 	}
-	// 同一行:id/seq 稳定(upsert 不重排、不换行);created_at 随写刷新(见上)。
+	// Same row: id/seq stable (upsert doesn't reorder or swap rows); created_at
+	// refreshes on write (see above).
 	if m1.ID != m2.ID || m1.Seq != m2.Seq {
 		t.Fatalf("row identity moved: first=%+v second=%+v", m1, m2)
 	}
@@ -80,7 +84,8 @@ func TestUpsertTurnMessageNewKeysAppendInOrder(t *testing.T) {
 	s, sid := newUpsertTestSession(t)
 	ctx := context.Background()
 
-	// user 消息(AppendMessage,entry_key='')先落库,随后增量条目按 timeline 序插入。
+	// The user message (AppendMessage, entry_key='') lands first; incremental
+	// entries then insert in timeline order.
 	if _, err := s.AppendMessage(ctx, sid, "user", "", "问", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +104,8 @@ func TestUpsertTurnMessageNewKeysAppendInOrder(t *testing.T) {
 	if !(first.Seq == 2 && tool.Seq == 3 && agent.Seq == 4) {
 		t.Fatalf("seq not appended in timeline order: %d %d %d", first.Seq, tool.Seq, agent.Seq)
 	}
-	// 后到的 upsert 重放早先条目:seq 不动(交错时序保持,§5.4 #5)。
+	// A late upsert replaying an earlier entry: seq stays put (interleaved
+	// ordering preserved, §5.4 #5).
 	again, err := s.UpsertTurnMessage(ctx, sid, "turn-1", "msg:m2:agent", "agent", "agent_message_chunk", "答(终)", "")
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +129,8 @@ func TestUpsertTurnMessageSeparateTurns(t *testing.T) {
 	s, sid := newUpsertTestSession(t)
 	ctx := context.Background()
 
-	// fallback entry key("msg:_fb:1:agent")在每个 turn 都会出现,turn_id 消歧。
+	// The fallback entry key ("msg:_fb:1:agent") appears in every turn;
+	// turn_id disambiguates.
 	for _, turn := range []string{"turn-1", "turn-2"} {
 		if _, err := s.UpsertTurnMessage(ctx, sid, turn, "msg:_fb:1:agent", "agent", "agent_message_chunk", "回复"+turn, ""); err != nil {
 			t.Fatalf("upsert %s: %v", turn, err)
@@ -142,8 +149,9 @@ func TestUpsertTurnMessageLegacyRowsCoexist(t *testing.T) {
 	s, sid := newUpsertTestSession(t)
 	ctx := context.Background()
 
-	// 旧行(entry_key='',AppendMessage 写入)在 partial unique index 之外:
-	// 多条共存合法,且不影响 upsert 行的去重。
+	// Legacy rows (entry_key='', written by AppendMessage) sit outside the
+	// partial unique index: multiple rows coexist legally and don't affect
+	// upsert dedupe.
 	for _, c := range []string{"旧1", "旧2"} {
 		if _, err := s.AppendMessage(ctx, sid, "agent", "agent_message_chunk", c, ""); err != nil {
 			t.Fatal(err)
@@ -158,18 +166,21 @@ func TestUpsertTurnMessageLegacyRowsCoexist(t *testing.T) {
 	}
 }
 
-// 迁移兼容:带数据的旧库跑 0017(ALTER + partial unique index)不炸、旧行可读。
+// Migration compatibility: an existing DB with data runs 0017 (ALTER + partial
+// unique index) without blowing up; legacy rows stay readable.
 func TestMessageTurnKeysMigrationOnExistingDB(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 	ctx := context.Background()
 
-	// 阶段 1:只跑到 0016(手工建最小 v1 messages 表 + 两行重复空键数据)。
+	// Stage 1: open a fresh DB and seed two legacy rows with duplicate empty
+	// keys by hand.
 	s1, err := New(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// New 已跑全部迁移;直接验证迁移后的库上旧行(手工插入 entry_key='')与 index 共存。
+	// New already ran all migrations; verify directly that hand-inserted
+	// legacy rows (entry_key='') coexist with the index on the migrated DB.
 	p, err := s1.CreateProject(ctx, "p", filepath.Join(dir, "wd"), "")
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +197,8 @@ func TestMessageTurnKeysMigrationOnExistingDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed legacy rows: %v", err)
 	}
-	// 多条 entry_key='' 的行不触发 unique 冲突(partial index 排除空键)。
+	// Multiple entry_key='' rows don't trip the unique index (the partial
+	// index excludes empty keys).
 	if _, err := s1.UpsertTurnMessage(ctx, se.ID, "t", "k", "agent", "agent_message_chunk", "v", ""); err != nil {
 		t.Fatalf("upsert alongside legacy rows: %v", err)
 	}
@@ -194,7 +206,7 @@ func TestMessageTurnKeysMigrationOnExistingDB(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 阶段 2:重开(迁移幂等,IF NOT EXISTS)后数据仍在。
+	// Stage 2: reopen (migrations idempotent via IF NOT EXISTS); data survives.
 	s2, err := New(dbPath)
 	if err != nil {
 		t.Fatal(err)

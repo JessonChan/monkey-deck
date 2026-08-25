@@ -202,17 +202,21 @@ type liveSession struct {
 	turnDone     chan struct{}      // 本轮 runPrompt 返回时关闭(供 InterruptAndSend 等待其落定)
 	suppressIdle bool               // InterruptAndSend 置位:本轮结束不发 idle(打断后由新轮发 prompting,避免触发 auto-continue 误续发)
 
-	// 增量落库(#125,turnpersist.go):turn 进行中的脏条目 + 1s 防抖 flush 定时器。
-	// flushDirty/flushTimer 受 ls.mu 保护;persistMu 串行化增量 flush 与收尾 reconcile,
-	// 保证陈旧 flush 快照不会覆盖最终全文。
+	// Incremental turn persistence (#125, turnpersist.go): dirty entries while
+	// a turn is running + the 1s-debounced flush timer. flushDirty/flushTimer
+	// are guarded by ls.mu; persistMu serializes incremental flushes against
+	// the turn-end reconcile so a stale flush snapshot can never overwrite the
+	// final full text.
 	flushDirty map[string]struct{}
 	flushTimer *time.Timer
 	persistMu  sync.Mutex
 }
 
-// resetBuffers 清空本轮 timeline(turn 开始时调)。调用方:startTurn/SendAndWaitSync。
-// 同时停掉上一轮遗留的增量 flush 定时器并清脏(#125):旧定时器即使触发也会因
-// turnID 不匹配 no-op,在此显式停免跨 turn 干扰。
+// resetBuffers clears this turn's timeline (called at turn start). Callers:
+// startTurn/SendAndWaitSync. It also stops any leftover incremental flush
+// timer from the previous turn and clears the dirty set (#125): the old timer
+// would no-op anyway on turnID mismatch; stopping it explicitly avoids
+// cross-turn interference.
 func (ls *liveSession) resetBuffers() {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
@@ -344,9 +348,12 @@ type ChatService struct {
 	// 使懒 spawn(OpenSession/ContinueSession/SendMessage)的触发路径可被单测断言。
 	spawnFn func(se *store.Session, proj *store.Project, acpSessionID string, resume bool) error
 
-	// turnFlushEvery:增量落库的防抖间隔(#125,turnpersist.go)。turn 进行中首个脏
-	// 事件后 interval 触发一次批量 upsert(窗口内继续攒脏),崩溃最多丢 ~interval 的
-	// 流式内容。生产默认 1s;单测注入短值加速。
+	// turnFlushEvery: debounce interval for incremental turn persistence
+	// (#125, turnpersist.go). While a turn runs, the first dirty event
+	// schedules one batched upsert after this interval (further dirt
+	// accumulates within the window), so a crash loses at most ~interval of
+	// streamed content. Production default is 1s; tests inject a short value
+	// to speed up.
 	turnFlushEvery time.Duration
 }
 
@@ -2154,8 +2161,9 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 	ls.mu.Unlock()
 
 	cancelled := err != nil && turnCtx.Err() != nil
-	// 持久化已收到的部分回复(取消/失败也不丢)。reconcile:增量 flush 已写过的行
-	// 就地更新为最终全文,未写过的插入(#125,turnpersist.go)。
+	// Persist whatever reply arrived (cancel/failure must not lose it).
+	// Reconcile: rows already flushed incrementally are updated in place to
+	// the final full text, the rest are inserted (#125, turnpersist.go).
 	s.persistTurn(ls, sessionID, turnID, timeline)
 	// 持久化本轮 plan 快照(role='plan' message),使重开会话能回看每轮 plan。
 	// 放在 status emit 之前:前端收到 idle 时持久化已落库,重开会话 / 翻页能拿到。
@@ -2222,7 +2230,8 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 	s.emitStatus(sessionID, "idle", "stopReason="+string(stopReason))
 }
 
-// persistTurn / persistTurnPlan(收尾 reconcile + plan 快照)移至 turnpersist.go(#125)。
+// persistTurn / persistTurnPlan (turn-end reconcile + plan snapshot) moved to
+// turnpersist.go (#125).
 
 // persistConfigCache 把最新的扁平化 config options 序列化写库(懒 spawn:只读态渲染 ModelSelect 用)。
 // 在 spawn 完成(startLive)/ config_option_update(handleEvent) / set_config_option / refresh config 时调用。

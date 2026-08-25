@@ -1,23 +1,31 @@
 package chat
 
-// turnpersist.go:turn 增量落库(#125)。
+// turnpersist.go: incremental turn persistence (#125).
 //
-// 模型:timeline 是唯一真相(§5.4 #5,#12),落库分两层——
-//   1. 增量 flush(本文件):turn 进行中,事件弄脏 timeline 条目后 1s 防抖批量
-//      UpsertTurnMessage 写库。崩溃 / 杀进程时最多丢 ~1s 流式内容,而非整轮。
-//   2. 收尾 reconcile(persistTurn,本文件):turn 结束把整条 timeline 逐条 upsert
-//      ——已 flush 过的行就地更新为最终全文,未 flush 的插入。幂等:无论 flush 跑了
-//      几次,DB 收敛到 timeline 终态。
+// Model: the timeline is the single source of truth (§5.4 #5, #12); persistence
+// is split into two layers —
+//   1. Incremental flush (this file): while a turn is running, events dirty
+//      timeline entries and a 1s-debounced batch UpsertTurnMessage writes them
+//      to the DB. A crash / kill loses at most ~1s of streamed content, not
+//      the whole turn.
+//   2. Turn-end reconcile (persistTurn, this file): when the turn ends, every
+//      timeline entry is upserted — rows already flushed are updated in place
+//      to the final full text, unflushed ones are inserted. Idempotent: no
+//      matter how many flushes ran, the DB converges to the timeline's final
+//      state.
 //
-// 并发不变量(§5.3 找不变量,不堆 if):
-//   - upsert 主键 = (session_id, turn_id, entry_key)。turn_id = 开启 turn 的
-//     user message id,entry_key = timeline entry id(messageId 主键 / toolCallId /
-//     fallback 键)。timeline 只追加不移位 → 首写定 seq,重放不重排。
-//   - flush 与 reconcile 经 ls.persistMu 串行;flush 在 persistMu 临界区内重验
-//     turnID(reconcile 前 runPrompt 已清 currentTurnID),陈旧快照必然 no-op,
-//     不会用部分内容覆盖最终全文。
-//   - 防抖是「首个脏事件后 1s 定时」(trailing throttle),不是「最后一个事件后
-//     1s」——持续流式不会饿死 flush,写入间隔上界 = 1s。
+// Concurrency invariants (§5.3 find the invariant, don't pile up ifs):
+//   - Upsert primary key = (session_id, turn_id, entry_key). turn_id = the
+//     user message id that opened the turn; entry_key = timeline entry id
+//     (messageId key / toolCallId / fallback key). The timeline only appends,
+//     never shifts → the first write fixes seq; replays never reorder.
+//   - Flush and reconcile are serialized via ls.persistMu; flush re-validates
+//     turnID inside the persistMu critical section (runPrompt clears
+//     currentTurnID before reconcile), so a stale snapshot is always a no-op
+//     and partial content can never overwrite the final full text.
+//   - The debounce is "1s after the FIRST dirty event" (trailing throttle),
+//     not "1s after the last event" — continuous streaming never starves the
+//     flush; the write interval is bounded at 1s.
 
 import (
 	"encoding/json"
@@ -28,7 +36,7 @@ import (
 	"github.com/jessonchan/monkey-deck/internal/acp"
 )
 
-// turnPersistItem:一条 timeline entry 的落库形态(upsert 参数)。
+// turnPersistItem is one timeline entry's persist form (upsert arguments).
 type turnPersistItem struct {
 	entryKey   string
 	role       string
@@ -37,9 +45,10 @@ type turnPersistItem struct {
 	toolCallID string
 }
 
-// buildTurnItem 把 timeline entry 转成落库形态。空白消息返回 ok=false
-// (与旧 persistTurn 的 skip 语义一致:空 thought/agent 段不落库)。
-// 调用方须持 ls.mu(strings.Builder / toolAccum 非并发安全)。
+// buildTurnItem converts a timeline entry into its persist form. Whitespace-
+// only messages return ok=false (same skip semantics as the old persistTurn:
+// empty thought/agent segments are not persisted). Caller must hold ls.mu
+// (strings.Builder / toolAccum are not concurrency-safe).
 func buildTurnItem(e *turnEntry) (turnPersistItem, bool) {
 	switch e.kind {
 	case "message":
@@ -59,9 +68,12 @@ func buildTurnItem(e *turnEntry) (turnPersistItem, bool) {
 	return turnPersistItem{}, false
 }
 
-// markTurnDirty 在事件弄脏某 timeline entry 后登记待写并(必要时)排防抖 flush。
-// 调用方须持 ls.mu(handleEvent 内)。无在跑 turn(currentTurnID="")不登记:
-// turn 结束后到达的迟到异步更新今日同样不落库(无回归),由 reconcile 全权负责终态。
+// markTurnDirty registers a timeline entry as pending-write after an event
+// dirtied it, and schedules the debounced flush if none is pending. Caller
+// must hold ls.mu (inside handleEvent). No running turn (currentTurnID="")
+// registers nothing: late async updates arriving after turn end were not
+// persisted before this change either (no regression); the reconcile owns the
+// final state.
 func (s *ChatService) markTurnDirty(ls *liveSession, sessionID, entryID string) {
 	if ls.currentTurnID == "" {
 		return
@@ -71,23 +83,26 @@ func (s *ChatService) markTurnDirty(ls *liveSession, sessionID, entryID string) 
 	}
 	ls.flushDirty[entryID] = struct{}{}
 	if ls.flushTimer != nil {
-		return // 已有排定的 flush:窗口内继续攒脏,定时不动
+		return // a flush is already scheduled: keep accumulating within the window, timer untouched
 	}
 	turnID := ls.currentTurnID
 	interval := s.turnFlushEvery
 	if interval <= 0 {
-		return // 未启用(防御;生产 NewChatService 默认 1s)
+		return // disabled (defensive; production NewChatService defaults to 1s)
 	}
 	ls.flushTimer = time.AfterFunc(interval, func() { s.flushTurn(sessionID, ls, turnID) })
 }
 
-// flushTurn 执行一次增量落库(防抖定时器回调):串行化(persistMu)→ 重验 turn
-// → 按时序快照脏条目 → 逐条 upsert。
+// flushTurn performs one incremental persist (debounce timer callback):
+// serialize (persistMu) → re-validate the turn → snapshot dirty entries in
+// timeline order → upsert one by one.
 func (s *ChatService) flushTurn(sessionID string, ls *liveSession, turnID string) {
 	ls.persistMu.Lock()
 	defer ls.persistMu.Unlock()
-	// persistMu 临界区内重验:若等待期间 turn 已收尾(reconcile 前必清 currentTurnID),
-	// 陈旧快照作废——reconcile 已写 / 将写权威终态,部分内容不得覆盖。
+	// Re-validate inside the persistMu critical section: if the turn already
+	// finalized while we waited (currentTurnID is cleared before reconcile),
+	// the stale snapshot is void — the reconcile has written / will write the
+	// authoritative final state; partial content must not overwrite it.
 	items := s.takeDirtyTurnItems(ls, turnID)
 	if len(items) == 0 {
 		return
@@ -98,8 +113,10 @@ func (s *ChatService) flushTurn(sessionID string, ls *liveSession, turnID string
 	}
 }
 
-// takeDirtyTurnItems 在 ls.mu 下取出脏条目的落库快照并清脏。
-// turn 已切换(≠turnID)时返回 nil(陈旧 flush no-op;不清脏,免波及新 turn 的脏集)。
+// takeDirtyTurnItems snapshots the dirty entries' persist form under ls.mu
+// and clears the dirty set. If the turn has moved on (≠turnID) it returns nil
+// (stale flush no-op; the dirty set is left untouched so a new turn's dirty
+// set is not affected).
 func (s *ChatService) takeDirtyTurnItems(ls *liveSession, turnID string) []turnPersistItem {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
@@ -116,32 +133,40 @@ func (s *ChatService) takeDirtyTurnItems(ls *liveSession, turnID string) []turnP
 			items = append(items, it)
 		}
 	}
-	// 脏集整体消费(空白消息跳过后不再等重放;再弄脏会重新登记)。
+	// The dirty set is consumed as a whole (whitespace-only messages skipped
+	// don't wait for a replay; getting dirty again re-registers them).
 	ls.flushDirty = nil
 	return items
 }
 
-// upsertTurnItem 写一条(失败只记日志,不影响其余条目与主流程)。
+// upsertTurnItem writes one entry (failures are logged only; they don't
+// affect the other entries or the main flow).
 func (s *ChatService) upsertTurnItem(sessionID, turnID string, it turnPersistItem) {
 	if _, err := s.st.UpsertTurnMessage(s.ctx, sessionID, turnID, it.entryKey, it.role, it.kind, it.content, it.toolCallID); err != nil {
 		slog.Warn("upsert turn entry", "session", sessionID, "turn", turnID, "entry", it.entryKey, "err", err)
 	}
 }
 
-// persistTurn 收尾 reconcile(#125):turn 结束把整条 timeline 按真实时序逐条 upsert,
-// 使 DB 收敛到最终全文——增量 flush 写过的行就地更新,没写过的插入。幂等:重复调用、
-// 与任意次 flush 交错,结果一致。message(thought/agent)与 tool 交错写入,重开会话
-// 加载历史时顺序与实时流式一一对应(§5.4 #12)。
+// persistTurn is the turn-end reconcile (#125): when the turn ends, every
+// timeline entry is upserted in true chronological order so the DB converges
+// to the final full text — rows already flushed incrementally are updated in
+// place, the rest are inserted. Idempotent: repeated calls interleaved with
+// any number of flushes converge to the same result. Messages (thought/agent)
+// and tools are written interleaved, so reloading a session replays history
+// in the same order as the live stream (§5.4 #12).
 //
-// 并发:先停掉在排定的 flush 定时器并清脏(reconcile 全量覆盖脏集),再持 persistMu
-// 与在途 flush 串行——后到的陈旧 flush 因 currentTurnID 已清而 no-op。
+// Concurrency: first stop any scheduled flush timer and clear the dirty set
+// (the reconcile fully covers it), then take persistMu to serialize with
+// in-flight flushes — a later stale flush no-ops because currentTurnID is
+// already cleared.
 func (s *ChatService) persistTurn(ls *liveSession, sessionID, turnID string, timeline []*turnEntry) {
 	if s.persistHook != nil {
-		s.persistHook() // 测试钩子:在此阻塞放大收尾窗口(生产 nil,直通)
+		s.persistHook() // test hook: block here to widen the finalize window (nil in production, pass-through)
 	}
-	// 停掉排定的 flush 定时器并清脏(reconcile 全量覆盖脏集),同时在同一临界区
-	// 快照 timeline 终态 —— Prompt 返回后仍可能有迟到 tool_call_update 并发 patch
-	// toolAccum,快照须持 ls.mu。
+	// Stop the scheduled flush timer and clear the dirty set (the reconcile
+	// fully covers it), snapshotting the timeline's final state in the same
+	// critical section — after Prompt returns a late tool_call_update can
+	// still concurrently patch toolAccum, so the snapshot must hold ls.mu.
 	ls.mu.Lock()
 	if ls.flushTimer != nil {
 		ls.flushTimer.Stop()
@@ -155,7 +180,8 @@ func (s *ChatService) persistTurn(ls *liveSession, sessionID, turnID string, tim
 		}
 	}
 	ls.mu.Unlock()
-	// 持 persistMu 与在途 flush 串行:后到的陈旧 flush 因 currentTurnID 已清而 no-op。
+	// Take persistMu to serialize with in-flight flushes: a later stale flush
+	// no-ops because currentTurnID is already cleared.
 	ls.persistMu.Lock()
 	defer ls.persistMu.Unlock()
 	for _, it := range items {
@@ -163,10 +189,13 @@ func (s *ChatService) persistTurn(ls *liveSession, sessionID, turnID string, tim
 	}
 }
 
-// persistTurnPlan 把本轮 plan 最终快照写库(role='plan' message),使重开会话能回看
-// 每轮 plan。空 entries 不写(无 plan 的 turn 不留痕)。turnID 存进 tool_call_id 列,
-// 前端据此把 plan item 钉在对应 turn(plan 是按 turn 索引的历史快照)。
-// 经 UpsertTurnMessage(entry_key="plan")幂等写:与消息同一机制,重放不重复。
+// persistTurnPlan persists the turn's final plan snapshot (role='plan'
+// message) so reopening a session can review each turn's plan. Empty entries
+// are not written (a turn without a plan leaves no trace). The turnID is
+// stored in the tool_call_id column; the frontend pins plan items to their
+// turn with it (plans are per-turn indexed history snapshots). Written via
+// UpsertTurnMessage (entry_key="plan") for idempotence: same mechanism as
+// messages, replays never duplicate.
 func (s *ChatService) persistTurnPlan(sessionID, turnID string, entries []acp.PlanEntry) {
 	if len(entries) == 0 {
 		return
