@@ -31,6 +31,7 @@ func remoteEventNames() []string {
 		chat.EventElicitationResolved,
 		chat.EventStatus,
 		chat.EventSessionMeta,
+		chat.EventQueue,
 		chat.EventHarnesses,
 		chat.EventHarnessCapabilities,
 		chat.EventFilesDropped,

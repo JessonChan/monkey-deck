@@ -44,6 +44,11 @@ const (
 	EventElicitationResolved = "chat:elicitation-resolved"
 	EventStatus              = "chat:status"       // StatusPayload(会话状态:started/prompting/idle/error/closed)
 	EventSessionMeta         = "chat:session-meta" // SessionMetaPayload(标题等元信息更新)
+	// EventQueue: QueuePayload — a full authoritative snapshot of a session's
+	// server-side message queue (#126A, queue.go). Emitted on every mutation
+	// (enqueue/revoke/edit/schedule/reorder/drain-dequeue) and on OpenSession;
+	// the frontend is a degraded consumer that only renders what arrives here.
+	EventQueue = "chat:queue"
 	EventHarnesses           = "chat:harnesses"    // harness 发现/版本变更(前端据此重拉 ListHarnesses)
 	// EventHarnessCapabilities:harness 能力探测完成(ProbeCapabilities 后),前端据此重拉
 	// ListHarnessCapabilities。异步触发(Discover 之后),独立于 EventHarnesses。
@@ -355,6 +360,14 @@ type ChatService struct {
 	// streamed content. Production default is 1s; tests inject a short value
 	// to speed up.
 	turnFlushEvery time.Duration
+
+	// Server-side per-session queue (#126A, queue.go): FIFO buffer of messages
+	// not yet sent, persisted in the queue_items table. All runtime state below
+	// is guarded by queueMu, which is never held while acquiring s.mu/sendMu.
+	queueMu       sync.Mutex                // serializes queue mutations + drain decisions
+	userStopped   map[string]bool           // sessionID → one-shot stop intent (StopSession sets; the next drain consumes and skips)
+	queueDraining map[string]bool           // sessionID → a drain is in flight (collapses concurrent triggers)
+	queueTimers   map[string]*time.Timer    // sessionID → one-shot timer at the earliest future scheduledAt (#97)
 }
 
 // NewChatService 构造(尚未启动;ServiceStartup 时 open store)。
@@ -362,6 +375,9 @@ func NewChatService(cfg *config.Config) *ChatService {
 	return &ChatService{
 		cfg: cfg, active: map[string]*liveSession{}, idleTimeout: 5 * time.Minute,
 		reconnects: map[string]*reconnectCtl{}, reconnectGiveUp: map[string]bool{},
+		userStopped:   map[string]bool{},
+		queueDraining: map[string]bool{},
+		queueTimers:   map[string]*time.Timer{},
 		healthInterval:         3 * time.Second,
 		reconnMaxAttempt:       5,
 		reconnInitBackoff:      1 * time.Second,
@@ -425,6 +441,7 @@ func (s *ChatService) ServiceShutdown() error {
 	}
 	s.stopHarnessRefresh() // 停 harness 周期刷新 ticker
 	s.stopAllReconnects()
+	s.stopAllQueueTimers() // #126A: stop queue schedule timers — drain callbacks must not race the store close
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, ls := range s.active {
@@ -597,6 +614,12 @@ func (s *ChatService) RemoveProject(id string) error {
 				}
 			}
 		}
+	}
+	// #126A: queue cleanup for every session of the project (not just the
+	// live ones): rows cascade with the session rows above, but an idle
+	// session's schedule timer may still be armed.
+	for _, se := range sess {
+		s.cleanupQueueState(se.ID)
 	}
 	return nil
 }
@@ -957,6 +980,9 @@ func (s *ChatService) DeleteSession(sessionID string) error {
 	s.reconnectGiveUp[sessionID] = true // suppress auto-reconnect (session is being deleted)
 	s.mu.Unlock()
 	s.stopReconnect(sessionID)
+	// #126A: queue cleanup — disarm the schedule timer + drop queue runtime
+	// state; queue rows cascade with the session row (FK).
+	s.cleanupQueueState(sessionID)
 	return s.st.DeleteSession(s.ctx, sessionID)
 }
 
@@ -1383,6 +1409,12 @@ func (s *ChatService) SessionFuzzyFind(sessionID, scope, query string, limit int
 // 立即返回(不阻塞前端加载历史,历史从 DB 读,独立于 harness)。ensureLive 的 spawnMu
 // 串行化保证用户在 spawn 完成前发消息不会双 spawn。
 func (s *ChatService) OpenSession(sessionID string) error {
+	// Queue snapshot sync FIRST and unconditionally (#126A): every window
+	// attaching to the session — desktop boot, popout, tab re-open after
+	// cache eviction, remote reconnect — starts from backend truth. Later
+	// mutations arrive as chat:queue events. Runs even when already active
+	// (re-opening a cached tab must re-sync, not trust stale local state).
+	s.syncQueueSnapshot(sessionID)
 	if s.isActive(sessionID) {
 		return nil // 已活跃
 	}
@@ -1934,8 +1966,9 @@ func (s *ChatService) ListUserMessages(sessionID string) ([]string, error) {
 
 // SendMessage 发送用户消息并驱动 opencode 回复(Prompt,§1.3)。
 // 仅在 idle 时可用:协议规定一个 session 同时只允许一个 Prompt(§5.4 调研结论)。
-// turn 进行中时前端应把消息入前端队列(不调本方法);busy 守卫兜底防竞态。
+// turn 进行中时前端应把消息入服务端队列 EnqueueMessage(#126A,不调本方法);busy 守卫兜底防竞态。
 func (s *ChatService) SendMessage(sessionID, text string, attachments []acp.Attachment) error {
+	s.clearUserStopped(sessionID) // a fresh user send overrides any pending stop intent (#126A)
 	if err := s.ensureLive(sessionID); err != nil {
 		return err
 	}
@@ -2005,8 +2038,9 @@ func (s *ChatService) startTurn(ls *liveSession, sessionID, text string, attachm
 //   - <-turnDone:等本轮落定(persist 仍执行,partial 回复不丢)
 //   - startTurn:发新消息(发 prompting)
 //
-// 当前空闲时等价于 SendMessage。其余排队消息由前端持有,本方法不动(用户选「保留其余」)。
+// 当前空闲时等价于 SendMessage。其余排队消息留在服务端队列,本方法不动(用户选「保留其余」)。
 func (s *ChatService) InterruptAndSend(sessionID, text string, attachments []acp.Attachment) error {
+	s.clearUserStopped(sessionID) // interrupting implies intent to continue (#126A)
 	if err := s.ensureLive(sessionID); err != nil {
 		return err
 	}
@@ -2112,6 +2146,7 @@ func (s *ChatService) SendAndWaitSync(sessionID, text string, attachments []acp.
 	}
 	s.emitStatus(sessionID, "idle", "stopReason="+string(stopReason))
 	s.syncSessionTitle(ls, sessionID)
+	go s.drainQueue(sessionID) // #126A: driver path keeps queue parity with runPrompt
 	return agentText, nil
 }
 
@@ -2175,6 +2210,9 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 	if err != nil {
 		if cancelled {
 			s.emitStatus(sessionID, "idle", "cancelled")
+			// auto-continue the queue unless the user stopped this turn (#126A);
+			// the goroutine blocks on sendMu until this tail returns.
+			go s.drainQueue(sessionID)
 			return
 		}
 		// 非用户取消的失败(peer 断 / 静默或绝对超时 / 其它):harness 可能已死或不可信,
@@ -2190,6 +2228,9 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 		// §3.3 busy 分支自动重连:harness 断连后后台 spawn 新 harness,使 session 自愈。
 		// userStopped(cancelled)天然不触发——干净 cancel 不 teardown、harness 仍可用。
 		s.startReconnect(sessionID)
+		// auto-continue the queue (#126A): drain's SendMessage goes through
+		// ensureLive, which accelerates the reconnect for the queued message.
+		go s.drainQueue(sessionID)
 		return
 	}
 	// 空响应检测:Prompt 成功返回但零输出(timeline 空)。end_turn + 零输出是协议合法结果
@@ -2206,6 +2247,7 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 		if declined {
 			slog.Info("empty turn after user declined elicitation, silent idle", "session", sessionID)
 			s.emitStatus(sessionID, "idle", "elicit-declined")
+			go s.drainQueue(sessionID)
 			return
 		}
 		// 非异常的零输出 end_turn(connection 没坏,只是这轮没产出):推 notice 状态而非 error。
@@ -2213,6 +2255,8 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 		// interactive 命令在 headless 无产出等。i18n 文案见 chat.notice.*(注意不是 chat.error.*)。
 		slog.Warn("prompt empty turn", "session", sessionID, "stopReason", stopReason)
 		s.emit(EventStatus, StatusPayload{SessionID: sessionID, Status: "notice", Code: ErrCodeHarnessEmptyTurn})
+		// notice = 非异常空 turn,语义等同 idle(#126A):续发排队消息。
+		go s.drainQueue(sessionID)
 		return
 	}
 	// 非空 turn 也清(防 decline 标志跨 turn 残留:用户 decline 后 agent 仍可能产出内容)。
@@ -2225,9 +2269,11 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 	// 不会到此;此处 stopReason 非 end_turn 必是 agent 自身发起的异常结束。
 	if stopReason != acp.StopReasonEndTurn {
 		s.emitError(sessionID, ErrCodeAgentTurnIncomplete)
+		go s.drainQueue(sessionID)
 		return
 	}
 	s.emitStatus(sessionID, "idle", "stopReason="+string(stopReason))
+	go s.drainQueue(sessionID)
 }
 
 // persistTurn / persistTurnPlan (turn-end reconcile + plan snapshot) moved to
@@ -2430,6 +2476,9 @@ func (s *ChatService) RespondElicitation(sessionID, reqID, action, contentJSON s
 
 // StopSession 取消正在进行的 Prompt(用户点「停止」):发干净 session/cancel(非杀进程),
 // harness 与连接保持可用。runPrompt 在 Prompt 返回后推 idle/cancelled,前端据此切回可发送态。
+// It also records the one-shot stop intent (#126A): the drain right after that
+// turn's idle consumes it and skips auto-continue (queue kept) — Stop must mean
+// "stop", not "skip one item and keep going".
 func (s *ChatService) StopSession(sessionID string) error {
 	s.mu.RLock()
 	ls, ok := s.active[sessionID]
@@ -2441,9 +2490,12 @@ func (s *ChatService) StopSession(sessionID string) error {
 	tc := ls.turnCancel
 	ls.mu.Unlock()
 	if tc != nil {
+		s.setUserStopped(sessionID)
 		tc()
 	} else {
 		// 无在跑 turn(竞态/重复点):直接推 idle 兜底,避免前端卡在 prompting。
+		// No stop intent here — there is no turn to cancel, and a lingering
+		// marker would wrongly suppress the next unrelated auto-continue.
 		s.emitStatus(sessionID, "idle", "")
 	}
 	return nil

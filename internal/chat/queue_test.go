@@ -27,6 +27,7 @@ import (
 type fakeChat struct {
 	mu         sync.Mutex
 	prompts    []string
+	promptAtts [][]acp.Attachment // attachments per Prompt call (#126A assertions)
 	cancelled  int
 	block      chan struct{}    // 关闭则所有阻塞 Prompt 返回 end_turn
 	started    chan struct{}    // 每次 Prompt 进入时发信号(buffered,防丢)
@@ -50,9 +51,10 @@ func newFakeChat() *fakeChat {
 // kill 模拟 harness 进程退出(IsAlive → false)。供重连 / health watcher 测试用。
 func (f *fakeChat) kill() { f.alive.Store(false) }
 
-func (f *fakeChat) Prompt(ctx context.Context, msg string, _ []acp.Attachment) (acp.StopReason, error) {
+func (f *fakeChat) Prompt(ctx context.Context, msg string, atts []acp.Attachment) (acp.StopReason, error) {
 	f.mu.Lock()
 	f.prompts = append(f.prompts, msg)
+	f.promptAtts = append(f.promptAtts, atts)
 	err := f.promptErr
 	f.mu.Unlock()
 	select {
@@ -99,6 +101,16 @@ func (f *fakeChat) RefreshConfig(_ context.Context) ([]acp.ConfigOption, error) 
 	return nil, nil
 }
 func (f *fakeChat) SetPermissionRules(_ []permissions.Rule) {}
+
+// promptAttachmentsAt returns the attachments recorded for the n-th Prompt.
+func (f *fakeChat) promptAttachmentsAt(n int) []acp.Attachment {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if n < 0 || n >= len(f.promptAtts) {
+		return nil
+	}
+	return f.promptAtts[n]
+}
 
 // release 放行所有阻塞的 Prompt(幂等),供 t.Cleanup 防止 goroutine 泄漏。
 func (f *fakeChat) release() {
