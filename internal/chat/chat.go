@@ -1389,6 +1389,41 @@ func (s *ChatService) ContinueSession(sessionID string) error {
 	return s.ensureLive(sessionID)
 }
 
+// SessionStatuses returns a read-only snapshot of every live session's current
+// status. Remote clients (§1.8) whose WebSocket dropped mid-turn — or connected
+// after a turn started — missed the chat:status push events; this pull API is
+// the reconciliation channel behind remote:resync (issues #134/#127).
+//
+// Status is derived from backend truth, not replayed event state:
+//   - busy turn in flight        → "prompting"
+//   - auto-reconnect in progress → "reconnecting"
+//   - reconnect budget exhausted → "error"
+//   - otherwise (live but idle)  → "idle"
+//
+// Absence means "no live harness": a caller's cached "prompting" for an absent
+// session is stale and must be dropped (the turn is definitively over).
+func (s *ChatService) SessionStatuses() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]string, len(s.active))
+	for id, ls := range s.active {
+		ls.mu.Lock()
+		busy := ls.busy
+		ls.mu.Unlock()
+		switch {
+		case busy:
+			out[id] = "prompting"
+		case s.reconnects[id] != nil:
+			out[id] = statusReconnecting
+		case s.reconnectGiveUp[id]:
+			out[id] = "error"
+		default:
+			out[id] = "idle"
+		}
+	}
+	return out
+}
+
 // ensureLive 确保 session 的 harness 已启动且仍存活:未活跃则 spawn;活跃但进程已死
 // (预热后空闲断连 / 崩溃)则先拆掉再 spawn(用 Resume),不把 broken pipe 抛给用户。
 // 开 session 时冷缓存会预热 spawn 保持连接等首条消息(见 maybeWarmSession)。
