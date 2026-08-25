@@ -17,6 +17,7 @@ import {
   Pencil,
   Trash2,
   Copy,
+  Search,
 } from "lucide-react";
 
 interface Props {
@@ -37,6 +38,12 @@ type Modal =
   | { kind: "delete"; dir: string; target: string; isDir: boolean };
 
 const joinPath = (dir: string, name: string) => (dir === "" ? name : dir + "/" + name);
+
+// Debounce for the fuzzy-find backend call (#132): rapid keystrokes coalesce
+// into a single SessionFuzzyFind per pause.
+const SEARCH_DEBOUNCE_MS = 200;
+// Result cap for one search (#132): enough to be useful, bounded for the flat list.
+const SEARCH_LIMIT = 50;
 
 export default function FilePanel({ sessionId, rootName, rootPath, changes, status, onOpenFile }: Props) {
   const { t } = useTranslation();
@@ -174,6 +181,151 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
     setTick((t) => t + 1);
   }, [expanded, loadChildren]);
 
+  // ── File search (#132) ──
+  // Transient UI state: deliberately NOT part of the per-session snapshot
+  // (filePanelCache stays untouched — search closes/clears, the tree state it
+  // returns to is exactly what was there before).
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<FileNode[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const activeRowRef = useRef<HTMLDivElement | null>(null);
+  // Monotonic seq: an in-flight response for an older query must not overwrite
+  // a newer one (clearTimeout only cancels the pending timer, not a request
+  // already on the wire).
+  const searchSeq = useRef(0);
+
+  const searchActive = searchOpen && query.trim() !== "";
+
+  const exitSearch = useCallback(() => {
+    searchSeq.current++;
+    setSearchOpen(false);
+    setQuery("");
+    setResults(null);
+    setSearching(false);
+    setActiveIdx(0);
+    if (searchInputRef.current) searchInputRef.current.value = "";
+  }, []);
+
+  const toggleSearch = () => {
+    if (searchOpen) {
+      exitSearch();
+      return;
+    }
+    setSearchOpen(true);
+    setTimeout(() => searchInputRef.current?.focus(), 0);
+  };
+
+  // Debounced fuzzy find over the whole session tree (scope="", limit 50).
+  // Empty query keeps the tree visible; clearing resets results.
+  useEffect(() => {
+    if (!searchOpen) return;
+    const q = query.trim();
+    if (!q) {
+      searchSeq.current++;
+      setResults(null);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const seq = ++searchSeq.current;
+    let cancelled = false;
+    const h = setTimeout(() => {
+      ChatService.SessionFuzzyFind(sessionId, "", q, SEARCH_LIMIT)
+        .then((nodes) => {
+          if (cancelled || seq !== searchSeq.current) return;
+          setResults(nodes || []);
+          setActiveIdx(0);
+        })
+        .catch(() => {
+          if (cancelled || seq !== searchSeq.current) return;
+          setResults([]);
+        })
+        .finally(() => {
+          if (!cancelled && seq === searchSeq.current) setSearching(false);
+        });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(h);
+    };
+  }, [query, searchOpen, sessionId]);
+
+  // Keep the keyboard-active row in view while arrowing through results.
+  useEffect(() => {
+    activeRowRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIdx, results]);
+
+  // Reveal a directory hit back in the tree: expand + load its ancestors so the
+  // row is visible, then select it. Files are opened in the editor instead.
+  const revealInTree = (node: FileNode) => {
+    const parts = node.path.split("/");
+    const dirs: string[] = [];
+    for (let i = 1; i < parts.length; i++) dirs.push(parts.slice(0, i).join("/"));
+    if (dirs.length > 0) {
+      setExpanded((prev) => {
+        const n = new Set(prev);
+        for (const d of dirs) n.add(d);
+        return n;
+      });
+      for (const d of dirs) {
+        if (!children[d]) void loadChildren(d);
+      }
+    }
+    setSelected(node.path);
+  };
+
+  const pickResult = (node: FileNode) => {
+    if (node.isDir) revealInTree(node);
+    else {
+      setSelected(node.path);
+      onOpenFile(node.path);
+    }
+    exitSearch();
+  };
+
+  // Keep the latest pick action reachable from the native keydown listener
+  // below without re-subscribing on every render.
+  const pickResultRef = useRef(pickResult);
+  pickResultRef.current = pickResult;
+
+  // The search input is uncontrolled + driven by NATIVE input/keydown listeners.
+  // Deliberate deviation from the usual controlled-input + onChange pattern:
+  // happy-dom (the mount-test env) drops dispatched input events on inputs that
+  // carry React text-event props (value/onChange), which would make the search
+  // untestable there; native listeners behave identically in real webviews and
+  // keep the DOM as the single source of truth for the typed text.
+  useEffect(() => {
+    const el = searchInputRef.current;
+    if (!searchOpen || !el) return;
+    const onInput = () => setQuery(el.value);
+    const onKeyDown = (e: KeyboardEvent) => {
+      const list = results || [];
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        exitSearch();
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (list.length > 0) setActiveIdx((i) => Math.min(i + 1, list.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (list.length > 0) setActiveIdx((i) => Math.max(i - 1, 0));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const node = list[activeIdx];
+        if (node) pickResultRef.current(node);
+      }
+    };
+    el.addEventListener("input", onInput);
+    el.addEventListener("keydown", onKeyDown);
+    return () => {
+      el.removeEventListener("input", onInput);
+      el.removeEventListener("keydown", onKeyDown);
+    };
+  }, [searchOpen, results, activeIdx, exitSearch]);
+
   const toggleDir = (node: FileNode) => {
     setExpanded((prev) => {
       const n = new Set(prev);
@@ -285,18 +437,70 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
       <div className="file-toolbar">
         <span className="file-root-name" title={rootName}>{rootName}</span>
         <span className="file-toolbar-acts">
+          <button
+            className="tool-btn"
+            data-testid="file-search-toggle"
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("filePanel.search")}
+            data-tooltip-place="bottom"
+            onClick={toggleSearch}
+          >
+            <Search size={14} />
+          </button>
           <button className="tool-btn" title={t("common.newFile")} onClick={() => openModal({ kind: "file", dir: "" })}><FilePlus2 size={15} /></button>
           <button className="tool-btn" title={t("common.newFolder")} onClick={() => openModal({ kind: "folder", dir: "" })}><FolderPlus size={15} /></button>
           <button className="tool-btn" title={t("common.refresh")} onClick={refresh}><RefreshCw size={14} /></button>
         </span>
       </div>
 
+      {searchOpen && (
+        <div className="file-search-row">
+          <Search size={12} />
+          <input
+            ref={searchInputRef}
+            className="file-search-input"
+            data-testid="file-search-input"
+            placeholder={t("filePanel.searchPlaceholder")}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          {searching && <span className="search-spinner" data-testid="file-search-spinner" />}
+        </div>
+      )}
+
       {error && <div className="file-error">{error}</div>}
 
       <div className="tree-body">
-        {rootLoading && <div className="tree-empty">{t("filePanel.loadingTree")}</div>}
-        {!rootLoading && rootChildren.length === 0 && <div className="tree-empty">{t("filePanel.emptyDir")}</div>}
-        {rootChildren.map((n) => renderNode(n, 0))}
+        {searchActive ? (
+          <>
+            {searching && !results && <div className="tree-empty">{t("filePanel.searchSearching")}</div>}
+            {results && results.length === 0 && (
+              <div className="tree-empty" data-testid="file-search-empty">{t("filePanel.searchNoResults")}</div>
+            )}
+            {(results || []).map((node, i) => (
+              <div
+                key={node.path}
+                ref={i === activeIdx ? (el: HTMLDivElement | null) => { activeRowRef.current = el; } : undefined}
+                className={`tree-row file-search-item ${i === activeIdx ? "sel" : ""}`}
+                data-testid="file-search-item"
+                data-path={node.path}
+                style={{ paddingLeft: 8 }}
+                onClick={() => pickResult(node)}
+                onMouseEnter={() => setActiveIdx(i)}
+              >
+                {node.isDir ? <Folder size={13} className="tree-ico-dir" /> : <FileIcon size={13} className="tree-ico-file" />}
+                <span className="tree-name" title={node.path}>{node.name}</span>
+                <span className="file-search-path">{node.path}</span>
+              </div>
+            ))}
+          </>
+        ) : (
+          <>
+            {rootLoading && <div className="tree-empty">{t("filePanel.loadingTree")}</div>}
+            {!rootLoading && rootChildren.length === 0 && <div className="tree-empty">{t("filePanel.emptyDir")}</div>}
+            {rootChildren.map((n) => renderNode(n, 0))}
+          </>
+        )}
       </div>
 
       {ctxMenu && (() => {

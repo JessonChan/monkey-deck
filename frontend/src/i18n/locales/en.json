@@ -410,7 +410,11 @@
     "newFolderTitle": "New folder",
     "namePlaceholder": "Name",
     "copyPath": "Copy path",
-    "revealInFinder": "Reveal in Finder"
+    "revealInFinder": "Reveal in Finder",
+    "search": "Search files",
+    "searchPlaceholder": "Search files…",
+    "searchSearching": "Searching…",
+    "searchNoResults": "No matching files"
   },
   "gitPanel": {
     "title": "Source Control",

@@ -410,7 +410,11 @@
     "newFolderTitle": "新建文件夹",
     "namePlaceholder": "名称",
     "copyPath": "复制路径",
-    "revealInFinder": "在 Finder 打开"
+    "revealInFinder": "在 Finder 打开",
+    "search": "搜索文件",
+    "searchPlaceholder": "搜索文件…",
+    "searchSearching": "搜索中…",
+    "searchNoResults": "无匹配文件"
   },
   "gitPanel": {
     "title": "源代码管理",
