@@ -1904,6 +1904,12 @@ func (s *ChatService) reconnectLoop(sessionID string, stop <-chan struct{}) {
 			continue
 		}
 		slog.Info("reconnect succeeded", "session", sessionID, "attempt", attempt)
+		// #126A: a drain whose send failed during the outage (ensureLive hit a
+		// failing spawn) requeued its item due-now — no schedule timer (timers
+		// only cover future items), no turn running — so nothing else would
+		// ever wake the queue. Re-drain on reconnect success to resume the
+		// auto-continue.
+		go s.drainQueue(sessionID)
 		return
 	}
 	slog.Error("reconnect exhausted retries", "session", sessionID, "attempts", s.reconnMaxAttempt)

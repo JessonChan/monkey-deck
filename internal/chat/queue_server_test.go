@@ -7,7 +7,9 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -351,4 +353,90 @@ func TestQueueTimerFiredSkipsWhenStale(t *testing.T) {
 	if fc.prompts[0] != "due" {
 		t.Fatalf("registered timer must drain the due item, got %v", fc.prompts)
 	}
+}
+
+// TestQueueDrainsAfterReconnectSuccess: a queued item whose drain send failed
+// during the outage (ensureLive hit a failing spawn) is requeued due-now — no
+// schedule timer (timers only cover future items), no running turn — so the
+// successful reconnect must re-drain it, or the queue stalls forever.
+func TestQueueDrainsAfterReconnectSuccess(t *testing.T) {
+	svc, _, sid := newReconnectTestService(t)
+	rec := captureStatuses(svc, sid)
+
+	var (
+		mu         sync.Mutex
+		chats      []*fakeChat
+		spawnCalls int32
+	)
+	svc.spawnFn = func(se *store.Session, proj *store.Project, _ string, _ bool) error {
+		n := atomic.AddInt32(&spawnCalls, 1)
+		if n == 2 {
+			// The drain's own ensureLive attempt lands here while the harness
+			// is still broken: fail it so the item is requeued due-now.
+			return errors.New("spawn harness failed")
+		}
+		chat := newFakeChat()
+		t.Cleanup(chat.release)
+		mu.Lock()
+		chats = append(chats, chat)
+		mu.Unlock()
+		if n == 1 {
+			// First harness: Prompt dies with peer-disconnected.
+			chat.promptErr = errors.New("peer disconnected before response")
+		}
+		ls := &liveSession{chat: chat, proj: proj, index: map[string]*turnEntry{}}
+		svc.mu.Lock()
+		svc.active[se.ID] = ls
+		svc.mu.Unlock()
+		svc.emitStatus(se.ID, "started", "")
+		return nil
+	}
+
+	// Park the item first (enqueue never auto-drains), then start a turn that
+	// dies peer-disconnected: the error tail drains → dequeue → SendMessage →
+	// ensureLive fails (spawn #2) → requeue; the reconnect retry (#3) spawns
+	// fine → reconnectLoop must re-drain and send the parked item.
+	if err := svc.EnqueueMessage(sid, "queued", nil); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if err := svc.SendMessage(sid, "first", nil); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		// Snapshot the chat list under mu: the spawnFn goroutine appends to
+		// chats concurrently (evaluating `chats` outside mu would race on the
+		// slice header).
+		mu.Lock()
+		snap := make([]*fakeChat, len(chats))
+		copy(snap, chats)
+		mu.Unlock()
+		if sent := promptsContain(snap, "queued"); sent {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("queued item must auto-send after reconnect succeeds; spawn calls=%d statuses=%v",
+		atomic.LoadInt32(&spawnCalls), rec.snapshot())
+}
+
+// promptsContain reports whether any recorded fakeChat Prompt equals text
+// (each fakeChat's prompts slice is guarded by its own mu).
+func promptsContain(chats []*fakeChat, text string) bool {
+	for _, c := range chats {
+		c.mu.Lock()
+		found := false
+		for _, p := range c.prompts {
+			if p == text {
+				found = true
+				break
+			}
+		}
+		c.mu.Unlock()
+		if found {
+			return true
+		}
+	}
+	return false
 }
