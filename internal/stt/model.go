@@ -67,9 +67,6 @@ var catalog = []Model{
 	{ID: "large-v3", File: "ggml-large-v3.bin", Label: "Large v3 (multilingual)", Lang: "multi", SizeBytes: 3090 << 20},
 }
 
-// Models returns the catalog (ordered small → large, English first).
-func Models() []Model { return catalog }
-
 // modelByID looks up a catalog entry; nil when unknown.
 func modelByID(id string) *Model {
 	for i := range catalog {
@@ -79,9 +76,6 @@ func modelByID(id string) *Model {
 	}
 	return nil
 }
-
-// DefaultModelID returns the effective default selection.
-func DefaultModelID() string { return defaultModelID }
 
 // modelPath returns the local file path for a model id (whether or not it
 // has been downloaded yet).

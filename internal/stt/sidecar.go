@@ -42,13 +42,11 @@ const logRingCap = 16 * 1024
 
 // sidecar is one running whisper-server process bound to a model file.
 type sidecar struct {
-	serverPath string
-	modelPath  string
-	modelID    string
-	port       int
-	cmd        *exec.Cmd
-	pgid       int
-	stderr     *stderrRing
+	modelID string
+	port    int
+	cmd     *exec.Cmd
+	pgid    int
+	stderr  *stderrRing
 
 	onExit func(pgid int) // pgid-registry unregister, called once from the watcher
 
@@ -93,14 +91,12 @@ func startSidecar(ctx context.Context, serverPath, modelPath, modelID string, he
 	cmd.SysProcAttr.Setpgid = true
 
 	sc := &sidecar{
-		serverPath: serverPath,
-		modelPath:  modelPath,
-		modelID:    modelID,
-		port:       port,
-		cmd:        cmd,
-		stderr:     newStderrRing(logRingCap),
-		onExit:     onExit,
-		done:       make(chan struct{}),
+		modelID: modelID,
+		port:    port,
+		cmd:     cmd,
+		stderr:  newStderrRing(logRingCap),
+		onExit:  onExit,
+		done:    make(chan struct{}),
 	}
 	cmd.Stderr = sc.stderr
 	if err := cmd.Start(); err != nil {
