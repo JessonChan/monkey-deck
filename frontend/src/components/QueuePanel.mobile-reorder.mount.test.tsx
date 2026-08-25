@@ -77,6 +77,10 @@ describe("QueuePanel mobile move buttons (issue #126B)", () => {
     expect(ups.length).toBe(3);
     expect(downs.length).toBe(3);
 
+    // Icon-only buttons must carry an accessible name (mocked t returns the key).
+    expect(ups[0].getAttribute("aria-label")).toBe("queue.moveUpTip");
+    expect(downs[0].getAttribute("aria-label")).toBe("queue.moveDownTip");
+
     // Move q2 up → onReorder(q2, q1).
     click(ups[1]);
     await flush();

@@ -283,6 +283,7 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                   disabled={idx === 0}
                   data-tooltip-id="md-tip"
                   data-tooltip-content={t("queue.moveUpTip")}
+                  aria-label={t("queue.moveUpTip")}
                   onClick={() => onReorder(item.id, queue[idx - 1].id)}
                 >
                   <ChevronUp size={14} />
@@ -293,6 +294,7 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                   disabled={idx === queue.length - 1}
                   data-tooltip-id="md-tip"
                   data-tooltip-content={t("queue.moveDownTip")}
+                  aria-label={t("queue.moveDownTip")}
                   onClick={() => onReorder(item.id, queue[idx + 1].id)}
                 >
                   <ChevronDown size={14} />
