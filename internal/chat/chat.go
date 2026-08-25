@@ -2488,9 +2488,17 @@ func (s *ChatService) StopSession(sessionID string) error {
 	}
 	ls.mu.Lock()
 	tc := ls.turnCancel
+	if tc != nil {
+		// Record the stop intent INSIDE this critical section, atomically with
+		// reading turnCancel: setting it after releasing ls.mu lets the turn
+		// end in between — the tail's drain then finds no marker (sends a
+		// queued item despite Stop) and the late marker lingers to wrongly
+		// suppress the NEXT auto-continue. queueMu is a leaf lock (never held
+		// while acquiring other locks), so nesting it under ls.mu is safe.
+		s.setUserStopped(sessionID)
+	}
 	ls.mu.Unlock()
 	if tc != nil {
-		s.setUserStopped(sessionID)
 		tc()
 	} else {
 		// 无在跑 turn(竞态/重复点):直接推 idle 兜底,避免前端卡在 prompting。
