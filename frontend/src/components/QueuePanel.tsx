@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { QueueItem } from "../types";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Zap, Pencil, Trash2, Check, X, Clock, GripVertical } from "lucide-react";
+import { Zap, Pencil, Trash2, Check, X, Clock, GripVertical, ChevronUp, ChevronDown } from "lucide-react";
 
 interface Props {
   queue: QueueItem[];
@@ -20,6 +20,13 @@ interface Props {
 //
 // 拖拽重排:每条左侧的 ⠿ 手柄 draggable(HTML5 drag-drop),整行作 drop target;松手时调
 // onReorder(activeId, overId),父层把 activeId 这条移到 overId 位置,drainSession 按新顺序发。
+//
+// Narrow screens (≤768px, issue #126B): HTML5 drag is unreachable on touch, so CSS
+// hides the grip and the actions row gains explicit up/down buttons — both reuse
+// onReorder (adjacent swap = move onto the neighbor's slot); Props stay unchanged.
+// Two-row layout (text row + wrapped actions row) + ≥40px tap targets all live in
+// index.css inside the ≤768px breakpoint; desktop (>768px) rendering is untouched
+// (the buttons default to display:none).
 //
 // 编辑态 textarea 用非受控(defaultValue)+ ref:保存时直接读 DOM 当前值,既避开受控组件在
 // 事件流上的边角问题,也杜绝「state 尚未同步就读值」的 stale 风险。
@@ -266,6 +273,30 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                 </span>
               ) : null}
               <div className="queue-item-actions">
+                {/* Mobile reorder (issue #126B): HTML5 drag is unreachable on touch, so the
+                    actions row gains explicit up/down buttons hidden on desktop (CSS). They
+                    reuse onReorder with the adjacent item as target — splice-based semantics
+                    make that an exact adjacent swap; disabled at list edges. */}
+                <button
+                  className="queue-btn move"
+                  data-testid="queue-move-up"
+                  disabled={idx === 0}
+                  data-tooltip-id="md-tip"
+                  data-tooltip-content={t("queue.moveUpTip")}
+                  onClick={() => onReorder(item.id, queue[idx - 1].id)}
+                >
+                  <ChevronUp size={14} />
+                </button>
+                <button
+                  className="queue-btn move"
+                  data-testid="queue-move-down"
+                  disabled={idx === queue.length - 1}
+                  data-tooltip-id="md-tip"
+                  data-tooltip-content={t("queue.moveDownTip")}
+                  onClick={() => onReorder(item.id, queue[idx + 1].id)}
+                >
+                  <ChevronDown size={14} />
+                </button>
                 <button
                   className="queue-btn schedule"
                   data-testid="queue-schedule"

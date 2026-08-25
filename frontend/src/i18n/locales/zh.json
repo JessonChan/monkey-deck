@@ -381,6 +381,8 @@
     "countdownHms": "{{h}}时{{m}}分{{s}}秒",
     "scheduleExpired": "所选时刻已过期,请选一个未来时间",
     "reorderTip": "拖拽以调整发送顺序",
+    "moveUpTip": "上移:提前这条的发送顺序",
+    "moveDownTip": "下移:推后这条的发送顺序",
     "hasScheduled": "队列中存在定时发送的消息"
   },
   "terminal": {

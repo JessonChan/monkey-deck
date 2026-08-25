@@ -1435,6 +1435,9 @@ input, textarea { font-family: inherit; }
 .queue-btn.clear:hover { color: var(--text); }
 .queue-btn.preset { color: var(--text-3); }
 .queue-btn.preset:hover { color: var(--accent-2); border-color: rgba(100, 210, 255, 0.3); }
+/* Mobile-only up/down reorder buttons (issue #126B): hidden above 768px — the
+   drag grip stays the desktop affordance; a desktop window never shows these. */
+.queue-btn.move { display: none; }
 .queue-scheduled {
   font-family: var(--mono); font-size: 10px; color: var(--text-3); flex-shrink: 0;
   white-space: nowrap;
@@ -2903,6 +2906,22 @@ input, textarea { font-family: inherit; }
   .compose-history-chip, .compose-history-badge { display: none; }
   .compose-branch, .compose-mcp, .composer-usage, .composer-count { display: none; }
   .compose-right .cfg-trigger, .compose-right .send-btn.enqueue { display: none; }
+
+  /* QueuePanel (issue #126B): the single desktop row (idx + text + badge +
+     4 buttons) is unreadable at ~370px. Items become TWO-ROW — row 1 keeps
+     idx + text + scheduled badge, the action buttons wrap onto a full-width
+     row 2 (the edit/schedule rows wrap the same way). Buttons grow to ≥40px
+     tap targets. HTML5 drag is unreachable on touch: the grip hides and the
+     desktop-hidden up/down move buttons take over reordering through the
+     same onReorder prop (component keeps one code path). */
+  .queue-panel { padding: 0 12px; }
+  .queue-item { flex-wrap: wrap; row-gap: 8px; }
+  .queue-grip { display: none; }
+  .queue-btn.move { display: inline-flex; }
+  .queue-btn { min-height: 40px; min-width: 40px; padding: 8px 12px; justify-content: center; }
+  .queue-item-actions { flex-basis: 100%; flex-wrap: wrap; }
+  .queue-item-edit { flex-wrap: wrap; }
+  .queue-schedule-error { flex-basis: 100%; }
 
   /* Header: session title + status only. Project name, terminal / model /
      branch / merge chips are desktop density on a phone. */

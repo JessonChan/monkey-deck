@@ -381,6 +381,8 @@
     "countdownHms": "{{h}}h {{m}}m {{s}}s",
     "scheduleExpired": "The picked time has already passed. Please pick a future time.",
     "reorderTip": "Drag to reorder send order",
+    "moveUpTip": "Move up: send this message earlier",
+    "moveDownTip": "Move down: send this message later",
     "hasScheduled": "Some messages are scheduled to send later"
   },
   "terminal": {
