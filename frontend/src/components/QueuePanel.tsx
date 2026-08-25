@@ -295,7 +295,7 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                     {t("queue.schedulePreset", { mins })}
                   </button>
                 ))}
-                {/* Staged-time chip (issue #130): live "remaining + clock" readout
+                {/* Staged-time chip (issue #130): live "+mins → clock" readout
                     of what the stacked presets / manual pick have staged. Its ✕
                     resets the staging in place (issue #130 wrap-up 2) — row stays
                     open, presets re-base on now, input snaps back to the default. */}
@@ -308,7 +308,7 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                   >
                     <Clock size={11} />
                     {" "}
-                    {t("queue.schedulePending", { remaining: formatRemaining(pendingAt - now, t), time: formatClock(pendingAt) })}
+                    {t("queue.schedulePending", { mins: Math.round((pendingAt - now) / 60_000), time: formatClock(pendingAt) })}
                     <button
                       className="queue-schedule-reset"
                       data-testid="queue-schedule-pending-reset"
