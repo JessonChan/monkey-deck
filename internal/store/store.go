@@ -27,8 +27,13 @@ type Message struct {
 	Kind       string `json:"kind"`
 	Content    string `json:"content"`
 	ToolCallID string `json:"toolCallId,omitempty"`
-	Seq        int64  `json:"seq"`
-	CreatedAt  int64  `json:"createdAt"`
+	// TurnID/EntryKey:incremental turn persistence 的幂等 upsert 键(0017,#125)。
+	// TurnID = 开启该 turn 的 user message id;EntryKey = timeline entry id。
+	// 空串 = 旧行(user 消息 / 迁移前的历史),不参与 upsert 去重。
+	TurnID    string `json:"turnId,omitempty"`
+	EntryKey  string `json:"entryKey,omitempty"`
+	Seq       int64  `json:"seq"`
+	CreatedAt int64  `json:"createdAt"`
 }
 
 // Project 一个项目(= 磁盘目录)。

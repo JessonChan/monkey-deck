@@ -39,6 +39,52 @@ func (s *Store) AppendMessage(ctx context.Context, sessionID, role, kind, conten
 	return m, nil
 }
 
+// UpsertTurnMessage 幂等写一条 turn 内的消息(#125,增量落库的唯一写入口)。
+// 以 (session_id, turn_id, entry_key) 为主键(partial unique index,0017):
+//   - 首次:INSERT,seq = 会话内 MAX(seq)+1(与 AppendMessage 同序);
+//   - 再次:就地 UPDATE content/role/kind/tool_call_id,seq 与 created_at 不动
+//     —— 行保持首次出现的时序位置(timeline 只追加不移位,§5.4 #5)。
+// turnID/entryKey 必须非空(空键在 partial index 之外,永远无法命中 upsert 分支);
+// 由调用方(internal/chat)保证,此处不兜底。旧行(entry_key='')不受影响。
+func (s *Store) UpsertTurnMessage(ctx context.Context, sessionID, turnID, entryKey, role, kind, content, toolCallID string) (*Message, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq),0)+1 FROM messages WHERE session_id=?`, sessionID)
+	var seq int64
+	if err := row.Scan(&seq); err != nil {
+		return nil, fmt.Errorf("next seq: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO messages(id,session_id,role,kind,content,tool_call_id,turn_id,entry_key,seq,created_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(session_id, turn_id, entry_key) WHERE entry_key != ''
+		 DO UPDATE SET role=excluded.role, kind=excluded.kind, content=excluded.content, tool_call_id=excluded.tool_call_id`,
+		uuid.NewString(), sessionID, role, kind, content, toolCallID, turnID, entryKey, seq, now()); err != nil {
+		return nil, fmt.Errorf("upsert turn message: %w", err)
+	}
+	if err := s.TouchSession(ctx, sessionID); err != nil {
+		return nil, err
+	}
+	// 读回落库后的真实行(id/seq/created_at 可能是冲突前已存在的旧值)。
+	m, err := s.getTurnMessage(ctx, sessionID, turnID, entryKey)
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// getTurnMessage 按 upsert 键取一行(UPSERT 之后读回真实行)。
+func (s *Store) getTurnMessage(ctx context.Context, sessionID, turnID, entryKey string) (*Message, error) {
+	m := &Message{}
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id,session_id,role,kind,content,tool_call_id,turn_id,entry_key,seq,created_at
+		 FROM messages WHERE session_id=? AND turn_id=? AND entry_key=?`,
+		sessionID, turnID, entryKey).
+		Scan(&m.ID, &m.SessionID, &m.Role, &m.Kind, &m.Content, &m.ToolCallID, &m.TurnID, &m.EntryKey, &m.Seq, &m.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("get turn message: %w", err)
+	}
+	return m, nil
+}
+
 // SessionHasMessages 报告某 session 是否已有消息。
 // 用于懒 spawn 判定:历史会话(有消息)只读打开,不 spawn harness(§3.x 懒 spawn)。
 func (s *Store) SessionHasMessages(ctx context.Context, sessionID string) (bool, error) {
@@ -55,7 +101,7 @@ func (s *Store) SessionHasMessages(ctx context.Context, sessionID string) (bool,
 // ListMessages 列出某 session 全部消息(按 seq 升序)。
 func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id,session_id,role,kind,content,tool_call_id,seq,created_at FROM messages WHERE session_id=? ORDER BY seq ASC`,
+		`SELECT id,session_id,role,kind,content,tool_call_id,turn_id,entry_key,seq,created_at FROM messages WHERE session_id=? ORDER BY seq ASC`,
 		sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("list messages: %w", err)
@@ -64,7 +110,7 @@ func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]Message, 
 	var out []Message
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Kind, &m.Content, &m.ToolCallID, &m.Seq, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Kind, &m.Content, &m.ToolCallID, &m.TurnID, &m.EntryKey, &m.Seq, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -99,7 +145,7 @@ func (s *Store) ListMessagesBefore(ctx context.Context, sessionID string, before
 	if limit <= 0 {
 		limit = 30
 	}
-	query := `SELECT id,session_id,role,kind,content,tool_call_id,seq,created_at FROM messages WHERE session_id=?`
+	query := `SELECT id,session_id,role,kind,content,tool_call_id,turn_id,entry_key,seq,created_at FROM messages WHERE session_id=?`
 	args := []any{sessionID}
 	if beforeSeq > 0 {
 		query += ` AND seq < ?`
@@ -116,7 +162,7 @@ func (s *Store) ListMessagesBefore(ctx context.Context, sessionID string, before
 	var desc []Message
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Kind, &m.Content, &m.ToolCallID, &m.Seq, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Kind, &m.Content, &m.ToolCallID, &m.TurnID, &m.EntryKey, &m.Seq, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		desc = append(desc, m)
