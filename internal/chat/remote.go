@@ -44,15 +44,18 @@ type RemoteInfo struct {
 // webview into an embedded remote server. Desktop builds call this before
 // app.Run(); the server-tag build does not (build-tag split, same pattern as
 // runDesktop). EventNames is the closed set of events bridged to clients.
-// Package-level on purpose: a ChatService method would be picked up by the
-// wails binding generator, which has no per-method exclusion.
-func AttachEmbeddedRemote(s *ChatService, tr *application.HTTPTransport, assets http.Handler, eventNames []string) {
+// transcriber (may be nil) backs the /api/stt endpoint with the host STT
+// backend (#131 phase 1). Package-level on purpose: a ChatService method
+// would be picked up by the wails binding generator, which has no
+// per-method exclusion.
+func AttachEmbeddedRemote(s *ChatService, tr *application.HTTPTransport, assets http.Handler, eventNames []string, transcriber remote.Transcriber) {
 	s.remoteSrv = remote.New(remote.Options{
 		Transport:  tr,
 		Assets:     assets,
 		EventNames: eventNames,
 		Token:      s.remoteTokenSnapshot,
 		Sessions:   sessionStore{svc: s},
+		Transcriber: transcriber,
 		Logger:     slog.Default(),
 	})
 }

@@ -9,15 +9,18 @@ import (
 	"net/http"
 
 	"github.com/jessonchan/monkey-deck/internal/chat"
+	"github.com/jessonchan/monkey-deck/internal/remote"
+	"github.com/jessonchan/monkey-deck/internal/stt"
 	"github.com/jessonchan/monkey-deck/internal/terminal"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // attachEmbeddedRemote wires the transport + asset instances shared with the
-// webview into the chat service's embedded remote server. Must run after
-// application.New and before app.Run (ServiceStartup starts the listener).
-func attachEmbeddedRemote(chatSvc *chat.ChatService, tr *application.HTTPTransport, assets http.Handler) {
-	chat.AttachEmbeddedRemote(chatSvc, tr, assets, remoteEventNames())
+// webview into the chat service's embedded remote server, plus the STT
+// transcriber backing /api/stt (#131). Must run after application.New and
+// before app.Run (ServiceStartup starts the listener).
+func attachEmbeddedRemote(chatSvc *chat.ChatService, tr *application.HTTPTransport, assets http.Handler, sttSvc remote.Transcriber) {
+	chat.AttachEmbeddedRemote(chatSvc, tr, assets, remoteEventNames(), sttSvc)
 }
 
 // remoteEventNames is the closed set of app-emitted events bridged to remote
@@ -36,5 +39,6 @@ func remoteEventNames() []string {
 		chat.EventHarnessCapabilities,
 		chat.EventFilesDropped,
 		chat.EventPopoutChanged,
+		stt.EventProgress,
 	}, terminal.EventData, terminal.EventExit, terminal.EventState)
 }

@@ -9,9 +9,10 @@ import (
 	"net/http"
 
 	"github.com/jessonchan/monkey-deck/internal/chat"
+	"github.com/jessonchan/monkey-deck/internal/remote"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-func attachEmbeddedRemote(_ *chat.ChatService, _ *application.HTTPTransport, _ http.Handler) {
+func attachEmbeddedRemote(_ *chat.ChatService, _ *application.HTTPTransport, _ http.Handler, _ remote.Transcriber) {
 	// Intentional no-op in server mode.
 }
