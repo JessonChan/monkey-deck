@@ -192,6 +192,11 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
   const [activeIdx, setActiveIdx] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const activeRowRef = useRef<HTMLDivElement | null>(null);
+  // IME composition tracking: manual compositionStart/End recording plus
+  // isComposing + keyCode===229, mirroring Composer/QueuePanel — the Enter
+  // that commits a CJK candidate selection must not be treated as "pick the
+  // active result" (isComposing alone is unreliable on some macOS IMEs).
+  const composingRef = useRef(false);
   // Monotonic seq: an in-flight response for an older query must not overwrite
   // a newer one (clearTimeout only cancels the pending timer, not a request
   // already on the wire).
@@ -302,6 +307,11 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
     if (!searchOpen || !el) return;
     const onInput = () => setQuery(el.value);
     const onKeyDown = (e: KeyboardEvent) => {
+      // IME composing (Chinese/Japanese/Korean candidate selection): Enter
+      // picks the candidate, arrows/Escape drive the IME — none of them may
+      // act on the result list. Triple check per the codebase convention
+      // (manual ref tracking + isComposing + deprecated keyCode 229).
+      if (composingRef.current || e.isComposing || e.keyCode === 229) return;
       const list = results || [];
       if (e.key === "Escape") {
         e.stopPropagation();
@@ -318,11 +328,17 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
         if (node) pickResultRef.current(node);
       }
     };
+    const onCompositionStart = () => { composingRef.current = true; };
+    const onCompositionEnd = () => { composingRef.current = false; };
     el.addEventListener("input", onInput);
     el.addEventListener("keydown", onKeyDown);
+    el.addEventListener("compositionstart", onCompositionStart);
+    el.addEventListener("compositionend", onCompositionEnd);
     return () => {
       el.removeEventListener("input", onInput);
       el.removeEventListener("keydown", onKeyDown);
+      el.removeEventListener("compositionstart", onCompositionStart);
+      el.removeEventListener("compositionend", onCompositionEnd);
     };
   }, [searchOpen, results, activeIdx, exitSearch]);
 
@@ -489,7 +505,8 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
                 onMouseEnter={() => setActiveIdx(i)}
               >
                 {node.isDir ? <Folder size={13} className="tree-ico-dir" /> : <FileIcon size={13} className="tree-ico-file" />}
-                <span className="tree-name" title={node.path}>{node.name}</span>
+                {/* Full path is already visible in-row via .file-search-path — no native title (§4.5). */}
+                <span className="tree-name">{node.name}</span>
                 <span className="file-search-path">{node.path}</span>
               </div>
             ))}

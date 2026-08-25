@@ -7,6 +7,7 @@
 // §5.3 invariants pinned here:
 //  - debounce 200ms coalesces rapid keystrokes into ONE backend call
 //  - seq guard: an in-flight response for an older query never overwrites a newer one
+//  - IME triple guard: the Enter committing a CJK candidate never picks a result
 
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 import { Window } from "happy-dom";
@@ -277,5 +278,74 @@ describe("FilePanel search (#132)", () => {
     await flush();
     expect(rows().length).toBe(1);
     expect((rows()[0] as HTMLElement).dataset.path).toBe("new.ts");
+  });
+
+  // ── IME triple guard (review of #132) ──
+  // Bug: the Enter that COMMITS a CJK candidate selection fires keydown on the
+  // search input; without a composition guard it picked the active result row
+  // (opening a file / exiting search mid-composition). Same class of bug as
+  // Composer/QueuePanel (see QueuePanel.ime.mount.test.tsx). Because the search
+  // input uses NATIVE listeners, the compositionstart/end → composingRef path
+  // is fully testable here (unlike React synthetic handlers in happy-dom).
+  test("IME composing: Enter does not pick a result (isComposing signal)", async () => {
+    fuzzyResult = [{ name: "a.ts", path: "src/a.ts", isDir: false }];
+    const { host } = mount(<FilePanel {...baseProps} />);
+    await flush();
+
+    const input = await openSearch(host);
+    typeInto(input, "ts");
+    await settle();
+    expect(host.querySelectorAll('[data-testid="file-search-item"]').length).toBe(1);
+
+    // Enter with isComposing=true (candidate commit on most browsers) — must NOT pick.
+    input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }));
+    await flush();
+    expect(opened).toEqual([]);
+    expect(host.querySelector('[data-testid="file-search-input"]')).not.toBeNull();
+
+    // Same Enter without composition resumes normal picking (guard didn't over-fire).
+    input.dispatchEvent(key("Enter"));
+    await flush();
+    expect(opened).toEqual(["src/a.ts"]);
+    expect(host.querySelector('[data-testid="file-search-input"]')).toBeNull();
+  });
+
+  test("IME composing: Enter does not pick a result (keyCode 229 fallback signal)", async () => {
+    fuzzyResult = [{ name: "a.ts", path: "src/a.ts", isDir: false }];
+    const { host } = mount(<FilePanel {...baseProps} />);
+    await flush();
+
+    const input = await openSearch(host);
+    typeInto(input, "ts");
+    await settle();
+
+    input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true }));
+    await flush();
+    expect(opened).toEqual([]);
+    expect(host.querySelector('[data-testid="file-search-input"]')).not.toBeNull();
+  });
+
+  test("IME composing: native composition events arm the ref guard (main signal path)", async () => {
+    fuzzyResult = [{ name: "a.ts", path: "src/a.ts", isDir: false }];
+    const { host } = mount(<FilePanel {...baseProps} />);
+    await flush();
+
+    const input = await openSearch(host);
+    typeInto(input, "ts");
+    await settle();
+
+    // compositionstart → plain Enter (no isComposing/keyCode markers, as some
+    // macOS IMEs report) must still be inert; compositionend re-arms normal Enter.
+    input.dispatchEvent(new (window as any).CompositionEvent("compositionstart", { bubbles: true }));
+    input.dispatchEvent(key("Enter"));
+    await flush();
+    expect(opened).toEqual([]);
+    expect(host.querySelector('[data-testid="file-search-input"]')).not.toBeNull();
+
+    input.dispatchEvent(new (window as any).CompositionEvent("compositionend", { bubbles: true }));
+    input.dispatchEvent(key("Enter"));
+    await flush();
+    expect(opened).toEqual(["src/a.ts"]);
+    expect(host.querySelector('[data-testid="file-search-input"]')).toBeNull();
   });
 });
