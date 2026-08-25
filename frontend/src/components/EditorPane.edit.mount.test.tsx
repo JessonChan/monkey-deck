@@ -53,9 +53,16 @@ const writes: { path: string; content: string }[] = [];
 // generated binding file for its exported function names and back every one
 // we don't override with a no-op (undefined degrades gracefully — callers use
 // `res?.field ?? []` / .catch fallbacks).
-const bindingSrc = await Bun.file(
-  new URL("../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice.ts", import.meta.url),
-).text();
+// The wails3 CLI has emitted both .ts and .js (JSDoc) bindings across versions —
+// read whichever the local `wails3 generate bindings` produced.
+const bindingUrl = (ext: string) =>
+  new URL(`../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice.${ext}`, import.meta.url);
+let bindingSrc: string;
+try {
+  bindingSrc = await Bun.file(bindingUrl("ts")).text();
+} catch {
+  bindingSrc = await Bun.file(bindingUrl("js")).text();
+}
 const chatServiceMock: Record<string, unknown> = {};
 for (const m of bindingSrc.matchAll(/^export (?:async )?function (\w+)/gm)) {
   chatServiceMock[m[1]] = async () => undefined;
