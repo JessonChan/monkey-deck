@@ -10,6 +10,8 @@
 //   - "/wails/custom.js" → browser-side WS bootstrap (the desktop webview gets
 //     a 404 for this path and the bundled runtime skips it silently, so the
 //     webview never opens a second event channel).
+//   - "/api/stt"      → POST audio → transcript JSON, bridged to the host STT
+//     backend (#131 phase 1). Auth-gated like the rest of the surface.
 //
 // Auth: cookie (browsers: fetch + WS upgrade carry same-origin cookies) or
 // "Authorization: Bearer <token>" (native clients). Only /health and /auth are
@@ -45,7 +47,10 @@ type Options struct {
 	Token      func() string // current token, read per request (regeneration applies live)
 	EventNames []string      // closed set of events bridged to remote clients
 	Sessions   SessionStore  // per-device session persistence (nil = memory only)
-	Logger     *slog.Logger
+	// Transcriber bridges POST /api/stt to the host STT backend (#131);
+	// nil serves 503. Implemented by *stt.Service.
+	Transcriber Transcriber
+	Logger      *slog.Logger
 }
 
 // Server owns the embedded HTTP listener. Zero value is not usable; use New.
@@ -107,6 +112,7 @@ func (s *Server) Start(port int) error {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 	mux.HandleFunc("/pair", s.handlePair)
+	mux.HandleFunc("/api/stt", s.handleSTT) // #131: remote STT bridge (auth-gated like the rest)
 	mux.HandleFunc("/wails/custom.js", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
 		w.WriteHeader(http.StatusOK)
