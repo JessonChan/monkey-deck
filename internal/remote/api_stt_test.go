@@ -168,8 +168,9 @@ func TestSTTValidation(t *testing.T) {
 	}
 }
 
-// TestSTTErrorMapping: backend sentinels → 503, generic failures → 500, both
-// as JSON error envelopes; nil transcriber → 503.
+// TestSTTErrorMapping: backend sentinels → 503, client-fault sentinels →
+// 413/415, generic failures → 500, all as JSON error envelopes; nil
+// transcriber → 503.
 func TestSTTErrorMapping(t *testing.T) {
 	base := startSTTServer(t, newStubTranscriber(func(_ []byte, _ string) (string, error) {
 		return "", stt.ErrNoModel
@@ -178,6 +179,23 @@ func TestSTTErrorMapping(t *testing.T) {
 		t.Fatalf("ErrNoModel = %d, want 503", resp.StatusCode)
 	} else if m := decodeSTT(t, resp); m["error"] == "" {
 		t.Fatal("503 must carry a JSON error message")
+	}
+
+	// (25MB, 32MB] gap payload: passes the HTTP-layer cap but is rejected by
+	// the backend → must surface as 413, not 500 (#24308 review).
+	base413 := startSTTServer(t, newStubTranscriber(func(_ []byte, _ string) (string, error) {
+		return "", fmt.Errorf("%w: 30000000 bytes exceeds the 26214400-byte limit", stt.ErrAudioTooLarge)
+	}))
+	if resp := postSTT(t, base413, "audio/wav", strings.NewReader("x")); resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("ErrAudioTooLarge = %d, want 413", resp.StatusCode)
+	}
+
+	// Undecodable input (e.g. a multipart part labeled video/mp4) → 415.
+	base415 := startSTTServer(t, newStubTranscriber(func(_ []byte, m string) (string, error) {
+		return "", fmt.Errorf("%w %q", stt.ErrUnsupportedAudioType, m)
+	}))
+	if resp := postSTT(t, base415, "audio/wav", strings.NewReader("x")); resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("ErrUnsupportedAudioType = %d, want 415", resp.StatusCode)
 	}
 
 	base2 := startSTTServer(t, newStubTranscriber(func(_ []byte, _ string) (string, error) {

@@ -22,8 +22,10 @@ import (
 	"github.com/jessonchan/monkey-deck/internal/stt"
 )
 
-// maxSTTBody caps the accepted audio payload (mirrors the stt package's own
-// decoded-audio cap, with multipart overhead headroom).
+// maxSTTBody caps the accepted HTTP payload. It deliberately exceeds the
+// stt package's decoded-audio cap (25 MiB) by the multipart-envelope
+// headroom: oversize AUDIO still reaches the 413 path through Transcribe's
+// ErrAudioTooLarge sentinel instead of a 500 (closed #24308 review gap).
 const maxSTTBody = 32 << 20
 
 // Transcriber bridges /api/stt to the STT backend. Implemented by
@@ -55,6 +57,10 @@ func (s *Server) handleSTT(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(terr, stt.ErrServerNotFound), errors.Is(terr, stt.ErrNoModel):
 			writeSTTError(w, http.StatusServiceUnavailable, terr.Error())
+		case errors.Is(terr, stt.ErrAudioTooLarge):
+			writeSTTError(w, http.StatusRequestEntityTooLarge, terr.Error())
+		case errors.Is(terr, stt.ErrUnsupportedAudioType):
+			writeSTTError(w, http.StatusUnsupportedMediaType, terr.Error())
 		default:
 			writeSTTError(w, http.StatusInternalServerError, terr.Error())
 		}
