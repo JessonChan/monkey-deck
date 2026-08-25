@@ -103,14 +103,14 @@ describe("execCommandCopy", () => {
     expect(doc.body.children.length).toBe(before); // no scratch textarea leaked
   });
 
-  test("passes the text through execCommand and reports its result", () => {
-    let copiedArg = "";
-    setExecCommand(() => {
-      copiedArg = "unknown"; // execCommand itself doesn't see the text; placeholder
+  test("invokes execCommand with the copy command and reports its result", () => {
+    const calls: unknown[][] = [];
+    setExecCommand((...args: unknown[]) => {
+      calls.push(args);
       return true;
     });
     expect(clipboard.execCommandCopy("sync-ok")).toBe(true);
-    expect(copiedArg).toBe("unknown");
+    expect(calls).toEqual([["copy"]]); // the legacy copy command, not cut/paste
     expect(doc.body.children.length).toBe(0);
   });
 });
