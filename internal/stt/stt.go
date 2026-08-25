@@ -52,6 +52,13 @@ var (
 	ErrNoModel = errors.New("no STT model downloaded")
 	// ErrModelInUse: delete refused because the model is the current selection.
 	ErrModelInUse = errors.New("model is selected; switch to another model before deleting")
+	// ErrAudioTooLarge: payload (or its decoded WAV) exceeds the size cap
+	// → HTTP 413.
+	ErrAudioTooLarge = errors.New("audio too large")
+	// ErrUnsupportedAudioType: not a decodable audio input (wrong MIME, or a
+	// container whisper-server cannot decode and no ffmpeg to transcode)
+	// → HTTP 415.
+	ErrUnsupportedAudioType = errors.New("unsupported audio type")
 )
 
 // Pipeline knobs.
@@ -119,6 +126,11 @@ type Service struct {
 	// discoverFn resolves the server binary (default = discoverServerLocked);
 	// tests inject a stub for deterministic "not found" paths (spawnFn pattern).
 	discoverFn func()
+	// ffmpegFn resolves the ffmpeg transcoder (default = discoverFFmpegLocked);
+	// tests inject a stub for hermetic control (a dev machine's real ffmpeg
+	// must not leak into unit tests).
+	ffmpegFn   func() string
+	ffmpegPath string // cached positive LookPath result
 }
 
 // NewService constructs the service (inert until ServiceStartup).
@@ -136,6 +148,9 @@ func (s *Service) ServiceStartup(ctx context.Context, options application.Servic
 	s.ctx = ctx
 	if s.discoverFn == nil {
 		s.discoverFn = s.discoverServerLocked
+	}
+	if s.ffmpegFn == nil {
+		s.ffmpegFn = s.discoverFFmpegLocked
 	}
 	st, err := store.New(s.cfg.DBPath)
 	if err != nil {
@@ -348,14 +363,19 @@ func (s *Service) TranscribeAudio(audioB64, mimeType string) (string, error) {
 }
 
 // Transcribe is the core pipeline (also the remote /api/stt bridge target):
-// validate → ensure a healthy sidecar on the selected model → POST the audio
-// to whisper-server /inference → return the transcript text.
+// validate → transcode containers whisper-server cannot decode (ffmpeg) →
+// ensure a healthy sidecar on the selected model → POST the audio to
+// whisper-server /inference → return the transcript text.
+//
+// Client-fault rejections carry ErrAudioTooLarge / ErrUnsupportedAudioType
+// so the remote bridge maps them to 413/415 instead of 500.
 func (s *Service) Transcribe(ctx context.Context, audio []byte, mimeType string) (string, error) {
 	if len(audio) == 0 {
 		return "", errors.New("stt: empty audio")
 	}
 	if len(audio) > maxAudioBytes {
-		return "", fmt.Errorf("stt: audio too large (%d bytes > %d)", len(audio), maxAudioBytes)
+		return "", fmt.Errorf("%w: %d bytes exceeds the %d-byte limit",
+			ErrAudioTooLarge, len(audio), maxAudioBytes)
 	}
 	mimeType = strings.TrimSpace(strings.ToLower(mimeType))
 	if mt, _, err := mime.ParseMediaType(mimeType); err == nil {
@@ -365,7 +385,14 @@ func (s *Service) Transcribe(ctx context.Context, audio []byte, mimeType string)
 		mimeType = "audio/wav"
 	}
 	if !strings.HasPrefix(mimeType, "audio/") {
-		return "", fmt.Errorf("stt: unsupported audio type %q", mimeType)
+		return "", fmt.Errorf("%w %q", ErrUnsupportedAudioType, mimeType)
+	}
+	if needsTranscode(mimeType) {
+		wav, err := s.ensureWav(ctx, mimeType, audio)
+		if err != nil {
+			return "", err
+		}
+		audio, mimeType = wav, "audio/wav"
 	}
 
 	sc, err := s.ensureSidecar(ctx)
@@ -490,8 +517,11 @@ func formFileDisposition(field, filename string) string {
 }
 
 // extForMIME maps an audio MIME type to a file extension for the multipart
-// filename (whisper-server uses it to pick the demuxer). Unknown audio types
-// fall back to .wav — the least surprising default for whisper inputs.
+// filename (whisper-server uses it to pick the demuxer). Container types the
+// engine cannot decode (webm/m4a/aac/ogg-opus) never get here — Transcribe
+// transcodes them to WAV first (or rejects them when ffmpeg is missing, with
+// OGG the lone pass-through exception: native Vorbis decode). Unknown audio
+// types fall back to .wav — the least surprising default for whisper inputs.
 func extForMIME(mt string) string {
 	switch mt {
 	case "audio/wav", "audio/x-wav", "audio/wave":
@@ -500,12 +530,8 @@ func extForMIME(mt string) string {
 		return ".mp3"
 	case "audio/flac", "audio/x-flac":
 		return ".flac"
-	case "audio/ogg", "application/ogg":
+	case "audio/ogg":
 		return ".ogg"
-	case "audio/mp4", "audio/m4a", "audio/x-m4a":
-		return ".m4a"
-	case "audio/webm":
-		return ".webm"
 	}
 	if exts, _ := mime.ExtensionsByType(mt); len(exts) > 0 {
 		return exts[0]

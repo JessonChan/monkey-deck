@@ -133,17 +133,23 @@ func TestTranscribeAudioBase64(t *testing.T) {
 }
 
 // TestTranscribeValidation: empty audio, non-audio MIME and oversize payloads
-// are rejected before anything is spawned.
+// are rejected before anything is spawned, carrying the client-fault
+// sentinels the remote bridge maps to 4xx.
 func TestTranscribeValidation(t *testing.T) {
 	svc := newTestService(t, defaultModelID)
 	if _, err := svc.Transcribe(context.Background(), nil, "audio/wav"); err == nil {
 		t.Fatal("empty audio must error")
 	}
-	if _, err := svc.Transcribe(context.Background(), []byte("x"), "text/plain"); err == nil {
-		t.Fatal("non-audio MIME must error")
+	if _, err := svc.Transcribe(context.Background(), []byte("x"), "text/plain"); !errors.Is(err, ErrUnsupportedAudioType) {
+		t.Fatalf("non-audio MIME err = %v, want ErrUnsupportedAudioType", err)
 	}
-	if _, err := svc.Transcribe(context.Background(), make([]byte, maxAudioBytes+1), "audio/wav"); err == nil {
-		t.Fatal("oversize audio must error")
+	// A multipart part labeled video/* lands here too (#24308 review): the
+	// same sentinel, not a downstream 500.
+	if _, err := svc.Transcribe(context.Background(), []byte("x"), "video/mp4"); !errors.Is(err, ErrUnsupportedAudioType) {
+		t.Fatalf("video/* MIME err = %v, want ErrUnsupportedAudioType", err)
+	}
+	if _, err := svc.Transcribe(context.Background(), make([]byte, maxAudioBytes+1), "audio/wav"); !errors.Is(err, ErrAudioTooLarge) {
+		t.Fatalf("oversize audio err = %v, want ErrAudioTooLarge", err)
 	}
 	if st := svc.STTStatus(); st.SidecarRunning {
 		t.Fatal("validation failures must not start a sidecar")
@@ -438,16 +444,16 @@ func TestConcurrentTranscribesSerialize(t *testing.T) {
 	}
 }
 
-// TestExtForMIME: the MIME→extension mapping used for the multipart filename.
+// TestExtForMIME: the MIME→extension mapping for the multipart filename.
+// Only whisper-native types reach here — webm/m4a/aac are transcoded (or
+// rejected) before the mapping is consulted.
 func TestExtForMIME(t *testing.T) {
 	cases := map[string]string{
 		"audio/wav":     ".wav",
 		"audio/x-wav":   ".wav",
 		"audio/mpeg":    ".mp3",
 		"audio/flac":    ".flac",
-		"audio/ogg":     ".ogg",
-		"audio/m4a":     ".m4a",
-		"audio/webm":    ".webm",
+		"audio/ogg":     ".ogg", // no-ffmpeg passthrough path
 		"audio/x-zebra": ".wav", // unknown audio → whisper's safest default
 	}
 	for mt, want := range cases {
