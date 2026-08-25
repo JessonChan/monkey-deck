@@ -17,6 +17,7 @@ package stt
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"os/exec"
@@ -92,19 +93,42 @@ func (s *Service) ensureWav(ctx context.Context, mimeType string, audio []byte) 
 	if err != nil {
 		return nil, fmt.Errorf("transcode %q: %w", mimeType, err)
 	}
-	if len(wav) > maxAudioBytes {
-		return nil, fmt.Errorf(
-			"%w: decoded WAV is %d bytes (limit %d) — trim the recording",
-			ErrAudioTooLarge, len(wav), maxAudioBytes)
-	}
 	return wav, nil
 }
 
-// transcodeToWav runs ffmpeg: stdin audio → 16 kHz mono pcm_s16le WAV in a
-// temp file. A real file (not pipe:1) lets ffmpeg write correct RIFF sizes.
-// A decode failure is returned as ErrUnsupportedAudioType so callers map it
-// to 415 (bad input), while infrastructure failures stay generic errors.
+// transcodeToWav runs ffmpeg: temp-file audio in → 16 kHz mono pcm_s16le
+// WAV in a temp file. BOTH sides go through real files:
+//
+//   - Input (#24311 P1): pipe:0 is not seekable, and the MP4-family
+//     demuxer must seek to the moov atom — which sits at the END of
+//     conventionally muxed m4a/mp4 (default muxing, not faststart). On a
+//     pipe, ffmpeg silently emits a zero-frame WAV and exits 0, bypassing
+//     every error sentinel (webm/fMP4 are streaming containers and happen
+//     to work, which is why the bug survived the first verification round).
+//   - Output: a real file (not pipe:1) lets ffmpeg write correct RIFF
+//     sizes.
+//
+// The product is validated, not trusted: exit 0 with a zero-frame WAV is
+// the silent-truncation signature, caught here as the last line of defense
+// (a generic error → 500, not a client 4xx — the cause is not attributable
+// to the caller). The decoded size is checked via stat BEFORE reading, so
+// an oversized decode cannot balloon host memory. A decode failure is
+// returned as ErrUnsupportedAudioType so callers map it to 415 (bad
+// input), while infrastructure failures stay generic errors.
 func transcodeToWav(ctx context.Context, ffmpeg string, audio []byte) ([]byte, error) {
+	in, err := os.CreateTemp("", "monkey-deck-stt-in-*.bin")
+	if err != nil {
+		return nil, fmt.Errorf("stt: create temp input: %w", err)
+	}
+	defer os.Remove(in.Name())
+	if _, err := in.Write(audio); err != nil {
+		in.Close()
+		return nil, fmt.Errorf("stt: write temp input: %w", err)
+	}
+	if err := in.Close(); err != nil {
+		return nil, fmt.Errorf("stt: close temp input: %w", err)
+	}
+
 	tmp, err := os.CreateTemp("", "monkey-deck-stt-*.wav")
 	if err != nil {
 		return nil, fmt.Errorf("stt: create temp wav: %w", err)
@@ -118,12 +142,11 @@ func transcodeToWav(ctx context.Context, ffmpeg string, audio []byte) ([]byte, e
 	var stderr limitedBuffer
 	cmd := exec.CommandContext(tctx, ffmpeg,
 		"-hide_banner", "-loglevel", "error",
-		"-i", "pipe:0",
+		"-i", in.Name(),
 		"-vn", "-map", "0:a:0",
 		"-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
 		"-f", "wav", "-y", tmp.Name(),
 	)
-	cmd.Stdin = bytes.NewReader(audio)
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		if tctx.Err() != nil {
@@ -132,11 +155,48 @@ func transcodeToWav(ctx context.Context, ffmpeg string, audio []byte) ([]byte, e
 		return nil, fmt.Errorf("%w: ffmpeg could not decode the audio (%v): %s",
 			ErrUnsupportedAudioType, err, stderr.String())
 	}
+	info, err := os.Stat(tmp.Name())
+	if err != nil {
+		return nil, fmt.Errorf("stt: stat transcoded wav: %w", err)
+	}
+	if info.Size() > maxAudioBytes {
+		return nil, fmt.Errorf(
+			"%w: decoded WAV is %d bytes (limit %d) — trim the recording",
+			ErrAudioTooLarge, info.Size(), maxAudioBytes)
+	}
 	wav, err := os.ReadFile(tmp.Name())
 	if err != nil {
 		return nil, fmt.Errorf("stt: read transcoded wav: %w", err)
 	}
+	if !wavHasAudioFrames(wav) {
+		return nil, fmt.Errorf(
+			"stt: ffmpeg exited successfully but the WAV has no audio frames (%d bytes) — possible silent truncation",
+			len(wav))
+	}
 	return wav, nil
+}
+
+// wavHasAudioFrames reports whether buf is a RIFF/WAVE file whose data
+// chunk carries at least one audio frame. ffmpeg can exit 0 while writing
+// a structurally valid but zero-frame WAV (the silent-truncation signature
+// behind #24311 P1), so the product is checked, not trusted.
+func wavHasAudioFrames(buf []byte) bool {
+	if len(buf) < 12 || string(buf[0:4]) != "RIFF" || string(buf[8:12]) != "WAVE" {
+		return false
+	}
+	off := 12
+	for off+8 <= len(buf) {
+		id := string(buf[off : off+4])
+		size := int(binary.LittleEndian.Uint32(buf[off+4 : off+8]))
+		if id == "data" {
+			return size > 0
+		}
+		off += 8 + size
+		if size%2 == 1 {
+			off++ // chunks are word-aligned
+		}
+	}
+	return false
 }
 
 // limitedBuffer caps captured stderr so a pathological ffmpeg cannot balloon
