@@ -633,9 +633,9 @@ export default function App() {
         const sid = selectedSessionIdRef.current;
         if (sid) { ChatService.SessionDiff(sid).then(d => setSessionDiff(d || "")).catch(() => {}); ChatService.SessionChanges(sid).then(setSessionChanges).catch(() => {}); ChatService.SessionMergeable(sid).then(m => setMergeableBySession((p) => ({ ...p, [sid]: m }))).catch(() => {}); }
       }
-        // auto-continue moved server-side (#126A): the backend drains in its own
-        // runPrompt tail at turn end (idle/error/notice) — the frontend no longer
-        // triggers on status events; it only consumes chat:queue snapshots.
+      // auto-continue moved server-side (#126A): the backend drains in its own
+      // runPrompt tail at turn end (idle/error/notice) — the frontend no longer
+      // triggers on status events; it only consumes chat:queue snapshots.
     });
     const offMeta = Events.On("chat:session-meta", (e: { data: { sessionId: string; title: string } }) => {
       const m = e.data;
