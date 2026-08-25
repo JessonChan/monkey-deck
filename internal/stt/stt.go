@@ -131,6 +131,11 @@ type Service struct {
 	// must not leak into unit tests).
 	ffmpegFn   func() string
 	ffmpegPath string // cached positive LookPath result
+
+	// pgidFile persists spawned sidecar pgids across runs; the startup sweep
+	// kills leftovers from a crashed previous run (§3.2 orphan discipline).
+	pgidFile string
+	pgidMu   sync.Mutex
 }
 
 // NewService constructs the service (inert until ServiceStartup).
@@ -143,7 +148,8 @@ func NewService(cfg *config.Config) *Service {
 }
 
 // ServiceStartup opens the store, restores persisted settings, discovers the
-// whisper-server binary. The sidecar itself starts lazily on first use.
+// whisper-server binary, and sweeps orphaned sidecars left by a previous
+// crashed run. The sidecar itself starts lazily on first use.
 func (s *Service) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
 	s.ctx = ctx
 	if s.discoverFn == nil {
@@ -169,6 +175,8 @@ func (s *Service) ServiceStartup(ctx context.Context, options application.Servic
 		dir = s.cfg.DataDir
 	}
 	s.modelsDir = filepath.Join(dir, "stt-models")
+	s.pgidFile = filepath.Join(dir, "stt-sidecar-pgids.json")
+	killLeftoverSidecars(s.pgidFile) // §3.2: no orphans from a crashed previous run
 
 	s.mu.Lock()
 	s.discoverFn()
@@ -481,7 +489,10 @@ func (s *Service) ensureSidecar(ctx context.Context) (*sidecar, error) {
 		return nil, ErrServerNotFound
 	}
 
-	sc, err := startSidecar(ctx, s.serverPath, modelPath, modelID, s.healthWait)
+	sc, err := startSidecar(ctx, s.serverPath, modelPath, modelID, s.healthWait,
+		func(pgid int) { s.registerSidecar(pgid, s.serverPath) },
+		s.unregisterSidecar,
+	)
 	if err != nil {
 		return nil, err
 	}

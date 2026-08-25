@@ -50,6 +50,8 @@ type sidecar struct {
 	pgid       int
 	stderr     *stderrRing
 
+	onExit func(pgid int) // pgid-registry unregister, called once from the watcher
+
 	shutdown atomic.Bool
 	alive    atomic.Bool
 	done     chan struct{} // closed when the watcher's Wait returned
@@ -70,7 +72,11 @@ func (sc *sidecar) isAlive() bool {
 
 // startSidecar spawns whisper-server on a free loopback port and waits until
 // /health answers. The caller receives a fully-ready sidecar or an error.
-func startSidecar(ctx context.Context, serverPath, modelPath, modelID string, healthWait time.Duration) (*sidecar, error) {
+// onSpawned (may be nil) runs right after a successful Start — before the
+// watcher can observe an exit — so the pgid registry never misses a live
+// process; onExit (may be nil) runs exactly once after the process was
+// reaped, on every exit path (stop, crash, health-timeout reap).
+func startSidecar(ctx context.Context, serverPath, modelPath, modelID string, healthWait time.Duration, onSpawned, onExit func(int)) (*sidecar, error) {
 	port, err := freePort()
 	if err != nil {
 		return nil, fmt.Errorf("stt: pick port: %w", err)
@@ -93,6 +99,7 @@ func startSidecar(ctx context.Context, serverPath, modelPath, modelID string, he
 		port:       port,
 		cmd:        cmd,
 		stderr:     newStderrRing(logRingCap),
+		onExit:     onExit,
 		done:       make(chan struct{}),
 	}
 	cmd.Stderr = sc.stderr
@@ -100,6 +107,9 @@ func startSidecar(ctx context.Context, serverPath, modelPath, modelID string, he
 		return nil, fmt.Errorf("stt: start whisper-server: %w", err)
 	}
 	sc.pgid = cmd.Process.Pid // Setpgid ⇒ pgid == main pid
+	if onSpawned != nil {
+		onSpawned(sc.pgid)
+	}
 	sc.alive.Store(true)
 
 	// Watcher owns cmd.Wait exclusively (no double-Wait races); it logs
@@ -115,6 +125,9 @@ func startSidecar(ctx context.Context, serverPath, modelPath, modelID string, he
 			slog.Warn("stt sidecar exited unexpectedly",
 				"pgid", sc.pgid, "model", sc.modelID, "err", msg,
 				"stderrTail", sc.stderr.Tail(2*1024))
+		}
+		if sc.onExit != nil {
+			sc.onExit(sc.pgid)
 		}
 		close(sc.done)
 	}()
