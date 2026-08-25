@@ -41,6 +41,11 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   const [editingId, setEditingId] = useState<string | null>(null);
   const [schedulingId, setSchedulingId] = useState<string | null>(null);
   const [scheduleError, setScheduleError] = useState<string | null>(null); // 定时提交复验过期提示
+  // Staged schedule time while the schedule row is open (issue #130): preset
+  // clicks stack on it, Save is what commits via onSchedule. null = not staged.
+  const [pendingAt, setPendingAt] = useState<number | null>(null);
+  // Set when preset stacking was clamped by the 24h cap (issue #130).
+  const [scheduleCapped, setScheduleCapped] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);   // 正被拖拽的条目 id
   const [overId, setOverId] = useState<string | null>(null);   // 拖拽悬停的目标条目 id
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -55,11 +60,14 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   // interval drives `now`; all pending checks below read `now` so the whole panel stays coherent.
   const [now, setNow] = useState(() => Date.now());
   const hasPending = queue.some((q) => q.scheduledAt > now);
+  // Also tick while the schedule row is open with a staged future time, so the
+  // staged chip counts down live (issue #130).
+  const staging = schedulingId !== null && pendingAt !== null && pendingAt > now;
   useEffect(() => {
-    if (!hasPending) return;
+    if (!hasPending && !staging) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [hasPending]);
+  }, [hasPending, staging]);
 
   if (queue.length === 0) return null;
 
@@ -85,7 +93,16 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
     }
   };
 
-  const startSchedule = (item: QueueItem) => { setSchedulingId(item.id); setEditingId(null); setScheduleError(null); };
+  // Opening the schedule row seeds the staged time from the item's existing
+  // schedule (editing a pending schedule stacks on top of it); due/unscheduled
+  // → null (presets start from "now"). Per-session staging state resets here.
+  const startSchedule = (item: QueueItem) => {
+    setSchedulingId(item.id);
+    setEditingId(null);
+    setScheduleError(null);
+    setPendingAt(item.scheduledAt > Date.now() ? item.scheduledAt : null);
+    setScheduleCapped(false);
+  };
   const cancelSchedule = () => { setSchedulingId(null); setScheduleError(null); };
   const saveSchedule = () => {
     if (!schedulingId) return;
@@ -107,12 +124,24 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
     setSchedulingId(null);
     setScheduleError(null);
   };
-  // Preset: schedule N minutes from now, then close the schedule row.
+  // Presets are ACCUMULATIVE (issue #130): each click stacks mins on top of the
+  // staged time (or now when nothing is staged), the row STAYS OPEN for more
+  // clicks / datetime fine-tuning, and only Save commits via onSchedule. The
+  // stack is capped at now+24h; clamping shows a cap notice.
+  const SCHEDULE_CAP_MS = 24 * 60 * 60_000;
   const presetSchedule = (mins: number) => {
     if (!schedulingId) return;
-    onSchedule(schedulingId, Date.now() + mins * 60_000);
-    setSchedulingId(null);
+    const base = pendingAt !== null && pendingAt > Date.now() ? pendingAt : Date.now();
+    const cap = Date.now() + SCHEDULE_CAP_MS;
+    let at = base + mins * 60_000;
+    const capped = at > cap;
+    if (capped) at = cap;
+    setPendingAt(at);
+    setScheduleCapped(capped);
     setScheduleError(null);
+    // Keep the uncontrolled datetime-local in sync with the staged value
+    // (programmatic value writes do not fire onChange — no feedback loop).
+    if (scheduleRef.current) scheduleRef.current.value = toLocalInput(at);
   };
   const SCHEDULE_PRESETS = [5, 10, 30] as const;
 
@@ -196,6 +225,14 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                 min={toLocalInput(Date.now())}
                 defaultValue={pending ? toLocalInput(item.scheduledAt) : defaultLocalInput()}
                 ref={scheduleRef}
+                // Manual datetime pick overrides the staged value (two-way link
+                // with pendingAt, issue #130) and clears stale notices.
+                onChange={(e) => {
+                  const ts = fromLocalInput(e.target.value);
+                  setPendingAt(ts > 0 ? ts : null);
+                  setScheduleCapped(false);
+                  setScheduleError(null);
+                }}
                 autoFocus
               />
               <div className="queue-item-actions">
@@ -210,6 +247,25 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                     {t("queue.schedulePreset", { mins })}
                   </button>
                 ))}
+                {/* Staged-time chip (issue #130): live "remaining + clock" readout
+                    of what the stacked presets / manual pick have staged. */}
+                {pendingAt !== null && pendingAt > now && (
+                  <span
+                    className="queue-schedule-pending"
+                    data-testid="queue-schedule-pending"
+                    data-tooltip-id="md-tip"
+                    data-tooltip-content={t("queue.schedulePendingTip")}
+                  >
+                    <Clock size={11} />
+                    {" "}
+                    {t("queue.schedulePending", { remaining: formatRemaining(pendingAt - now, t), time: formatClock(pendingAt) })}
+                  </span>
+                )}
+                {scheduleCapped && (
+                  <span className="queue-schedule-cap" data-testid="queue-schedule-cap">
+                    {t("queue.scheduleCap")}
+                  </span>
+                )}
                 <button
                   className="queue-btn save"
                   data-testid="queue-schedule-save"
