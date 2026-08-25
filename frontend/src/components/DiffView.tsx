@@ -102,7 +102,8 @@ export default function DiffView({
         <button
           className="diff-view-btn"
           onClick={() => setSplit((s) => !s)}
-          title={split ? t("diff.switchToUnified") : t("diff.switchToSplit")}
+          data-tooltip-id="md-tip"
+          data-tooltip-content={split ? t("diff.switchToUnified") : t("diff.switchToSplit")}
           data-testid="diff-view-toggle"
         >
           {split ? <Columns2 size={13} /> : <Rows2 size={13} />}
@@ -111,7 +112,8 @@ export default function DiffView({
         <button
           className="diff-view-btn"
           onClick={() => void copy(newStr)}
-          title={copied ? t("diff.copied") : failed ? t("common.copyFailed") : t("diff.copyNew")}
+          data-tooltip-id="md-tip"
+          data-tooltip-content={copied ? t("diff.copied") : failed ? t("common.copyFailed") : t("diff.copyNew")}
           data-testid="diff-view-copy"
         >
           {copied ? <Check size={13} /> : failed ? <X size={13} /> : <Copy size={13} />}
