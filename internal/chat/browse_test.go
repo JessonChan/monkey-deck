@@ -149,6 +149,39 @@ func TestBrowseDirRejectsRelativeAndMissing(t *testing.T) {
 	}
 }
 
+func TestBrowseDirCleansMessyAbsoluteInput(t *testing.T) {
+	s := newBrowseTestService(t)
+	base := t.TempDir()
+	sub := filepath.Join(base, "sub")
+	if err := os.MkdirAll(filepath.Join(sub, "inner"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Padded whitespace + redundant separators + ".." segments + trailing
+	// slash: the hard gate is that the response Path is the cleaned
+	// canonical absolute path — no traversal survives, and every entry
+	// path is itself clean and absolute.
+	messy := "  " + base + string(os.PathSeparator) + "sub" + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "sub" + string(os.PathSeparator) + "." + string(os.PathSeparator) + "  "
+	res, err := s.BrowseDir(messy)
+	if err != nil {
+		t.Fatalf("BrowseDir(messy): %v", err)
+	}
+	if res.Path != sub {
+		t.Errorf("Path = %q, want cleaned %q", res.Path, sub)
+	}
+	if res.Parent != base {
+		t.Errorf("Parent = %q, want %q", res.Parent, base)
+	}
+	for _, d := range res.Dirs {
+		if !filepath.IsAbs(d.Path) || d.Path != filepath.Clean(d.Path) {
+			t.Errorf("entry path %q not a clean absolute path", d.Path)
+		}
+	}
+	// NUL bytes must fail at the fs layer, not traverse or panic.
+	if _, err := s.BrowseDir(base + "\x00nope"); err == nil {
+		t.Error("NUL-byte path accepted, want error")
+	}
+}
+
 func TestBrowseDirFollowsDirSymlinksSkipsBroken(t *testing.T) {
 	s := newBrowseTestService(t)
 	base := t.TempDir()
