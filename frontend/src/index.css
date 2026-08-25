@@ -2564,6 +2564,51 @@ input, textarea { font-family: inherit; }
 .delete-wt-guests li { padding: 2px 0; }
 .delete-wt-actions { justify-content: flex-end; flex-wrap: wrap; }
 
+/* ─── 目录浏览器弹窗(#128:远程/PWA 客户端替代原生目录选择) ─── */
+.dir-browser-card { max-width: 400px; }
+.dir-browser-pathbar { display: flex; align-items: center; gap: 6px; }
+.dir-browser-up {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex-shrink: 0; border-radius: 6px;
+  background: var(--elev); border: 1px solid var(--sep); color: var(--text-2);
+  cursor: pointer; transition: background 0.1s, color 0.1s;
+}
+.dir-browser-up:hover { background: var(--hover); color: var(--text); }
+.dir-browser-path {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: 6px; background: var(--bg);
+  border: 1px solid var(--sep);
+  font-family: var(--mono); font-size: 11.5px; color: var(--text-2);
+}
+.dir-browser-path-spinner { flex-shrink: 0; color: var(--text-3); }
+.dir-browser-path-text {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dir-browser-list {
+  display: flex; flex-direction: column;
+  max-height: 300px; min-height: 120px; overflow-y: auto;
+  background: var(--bg); border: 1px solid var(--sep); border-radius: 8px;
+}
+.dir-browser-entry {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 7px 11px; min-height: 32px;
+  background: transparent; border: none; text-align: left; cursor: pointer;
+  transition: background 0.1s;
+}
+.dir-browser-entry:hover { background: var(--hover); }
+.dir-browser-entry-icon { display: inline-flex; color: var(--accent-2); flex-shrink: 0; }
+.dir-browser-entry-name {
+  flex: 1; min-width: 0; font-family: var(--mono); font-size: 12.5px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dir-browser-entry-chev { color: var(--text-4); flex-shrink: 0; }
+.dir-browser-state { padding: 18px 10px; font-size: 12px; color: var(--text-3); text-align: center; }
+.dir-browser-error {
+  margin: 8px; padding: 8px 10px; border-radius: 6px; font-size: 12px;
+  color: var(--red); background: rgba(255, 69, 58, 0.10);
+  border: 1px solid rgba(255, 69, 58, 0.3); word-break: break-word;
+}
+
 /* ═══ 集成终端面板 ═══ */
 .main-vertical { width: 100%; height: 100%; flex: 1; min-height: 0; }
 .terminal-panel { display: flex; flex-direction: column; width: 100%; height: 100%; background: var(--bg); min-height: 0; }
@@ -2855,6 +2900,13 @@ input, textarea { font-family: inherit; }
      .modal-overlay (shared class) — the card fills that padded box exactly. */
   .modal-overlay { padding: 10px; }
   .modal-card, .add-harness-card { max-width: calc(100vw - 20px); }
+  /* Dir browser (#128) is remote/PWA-only (never mounts on desktop), mobile
+     first: near-full-bleed sheet, ≥40px tap targets for the icon-only up
+     button and rows, and a viewport-capped list so actions stay reachable. */
+  .dir-browser-card { max-width: calc(100vw - 20px); }
+  .dir-browser-up { width: 40px; height: 40px; }
+  .dir-browser-entry { min-height: 40px; padding: 10px 12px; }
+  .dir-browser-list { max-height: min(300px, 45dvh); }
   .new-session-card { max-width: calc(100vw - 20px); max-height: calc(var(--md-vvh, 100dvh) - 20px); overflow-y: auto; }
   .settings-card {
     width: 100%; max-width: 100%;

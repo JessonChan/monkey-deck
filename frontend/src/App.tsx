@@ -22,6 +22,7 @@ import { parseLaunchAction } from "./lib/launchAction";
 import { useBackLayer } from "./hooks/useBackLayer";
 import { appBadge } from "./lib/appBadge";
 import NewSessionModal, { type NewSessionChoice } from "./components/NewSessionModal";
+import DirBrowserModal from "./components/DirBrowserModal";
 import InstallBanner from "./components/InstallBanner";
 import SettingsPanel from "./components/SettingsPanel";
 import DeleteWorktreeDialog from "./components/DeleteWorktreeDialog";
@@ -38,6 +39,7 @@ import { extractErrMsg } from "./lib/errorMsg";
 import { isMemorySaverEnabled } from "./lib/memorySaver";
 import { deleteFilePanelState } from "./lib/filePanelCache";
 import { routeDroppedFiles, type ReadImageFn } from "./lib/dropFiles";
+import { isRemoteClient } from "./lib/remote";
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 // Coarse pointer (touch) detection for the tooltip click-to-show equivalence.
 // Evaluated once at module load — a desktop window never becomes touch mid-session.
@@ -175,6 +177,9 @@ export default function App() {
   // null = no dialog pending.
   const [pendingCloseTab, setPendingCloseTab] = useState<{ sessionId: string; title: string } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false); // 统一设置中心面板(收敛语言/提示音/权限/harness)
+  // Web directory browser (#128): remote-browser/PWA replacement for the
+  // host-native PickDirectory dialog in addProject. Never opens on desktop.
+  const [dirBrowserOpen, setDirBrowserOpen] = useState(false);
   // 集成终端(per-session,与 agent ACP 通道完全分离;§1.1 agent 永远走 ACP)。
   // 终端面板开关也 per-session:session A 开着,切到 B 时 B 按自己的状态显示(各自独立)。
   const [termTabsBySession, setTermTabsBySession] = useState<Record<string, TerminalTab[]>>({});
@@ -1523,10 +1528,28 @@ export default function App() {
   }, [selectedSessionId]);
 
 
+  // Add project (#128): desktop → host-native PickDirectory dialog; remote
+  // browser/PWA → DirBrowserModal (the native dialog does nothing visible
+  // over the remote connection). Both paths end in the same AddProject call.
   const addProject = useCallback(async () => {
+    if (isRemoteClient()) {
+      setDirBrowserOpen(true);
+      return;
+    }
     try {
       const path = await ChatService.PickDirectory();
       if (!path) return;
+      await ChatService.AddProject("", path, "");
+      await refreshProjects();
+    } catch (e) {
+      setError(extractErrMsg(e));
+    }
+  }, [refreshProjects]);
+
+  // DirBrowserModal confirm: same AddProject path as the native picker.
+  const confirmAddProjectDir = useCallback(async (path: string) => {
+    setDirBrowserOpen(false);
+    try {
       await ChatService.AddProject("", path, "");
       await refreshProjects();
     } catch (e) {
@@ -2376,6 +2399,12 @@ export default function App() {
         title={pendingCloseTab.title}
         onConfirm={confirmCloseTab}
         onCancel={() => setPendingCloseTab(null)}
+      />
+    )}
+    {dirBrowserOpen && (
+      <DirBrowserModal
+        onConfirm={(p) => void confirmAddProjectDir(p)}
+        onCancel={() => setDirBrowserOpen(false)}
       />
     )}
     {settingsOpen && (

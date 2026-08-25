@@ -445,6 +445,15 @@
     "keep": "删除工作目录，保留其它对话",
     "all": "删除工作目录及所有对话"
   },
+  "dirBrowser": {
+    "title": "选择项目目录",
+    "locations": "位置",
+    "confirm": "选择此目录",
+    "confirmDisabled": "先进入要添加的目录",
+    "up": "返回上一级",
+    "empty": "没有子目录",
+    "readFailed": "读取失败：{{error}}"
+  },
   "sidePanel": {
     "files": "文件",
     "filesTitle": "文件",

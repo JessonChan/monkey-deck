@@ -445,6 +445,15 @@
     "keep": "Delete worktree, keep other conversations",
     "all": "Delete worktree and all conversations"
   },
+  "dirBrowser": {
+    "title": "Choose a project directory",
+    "locations": "Locations",
+    "confirm": "Choose this directory",
+    "confirmDisabled": "Open the directory you want to add first",
+    "up": "Go up one level",
+    "empty": "No subdirectories",
+    "readFailed": "Failed to read: {{error}}"
+  },
   "sidePanel": {
     "files": "Files",
     "filesTitle": "Files",
