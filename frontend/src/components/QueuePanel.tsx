@@ -103,7 +103,14 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
     setPendingAt(item.scheduledAt > Date.now() ? item.scheduledAt : null);
     setScheduleCapped(false);
   };
-  const cancelSchedule = () => { setSchedulingId(null); setScheduleError(null); };
+  // Closing the schedule row fully drops the staging state (issue #130 wrap-up):
+  // pendingAt/scheduleCapped must not survive cancel/save/clear — startSchedule
+  // reseeds anyway, but no staging may leak out of a closed row.
+  const resetStaging = () => {
+    setPendingAt(null);
+    setScheduleCapped(false);
+  };
+  const cancelSchedule = () => { setSchedulingId(null); setScheduleError(null); resetStaging(); };
   const saveSchedule = () => {
     if (!schedulingId) return;
     const v = scheduleRef.current?.value;
@@ -114,30 +121,44 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
       setScheduleError(t("queue.scheduleExpired"));
       return;
     }
+    // 24h cap final gate (issue #130 wrap-up): a typed over-cap value can slip
+    // past the onChange rejection in edge engines — re-verify at submit, right
+    // next to the expiry re-check above.
+    if (ts > Date.now() + SCHEDULE_CAP_MS) {
+      setScheduleCapped(true);
+      return;
+    }
     onSchedule(schedulingId, ts > 0 ? ts : Date.now());
     setSchedulingId(null);
     setScheduleError(null);
+    resetStaging();
   };
   const clearSchedule = () => {
     if (!schedulingId) return;
     onSchedule(schedulingId, Date.now());
     setSchedulingId(null);
     setScheduleError(null);
+    resetStaging();
   };
   // Presets are ACCUMULATIVE (issue #130): each click stacks mins on top of the
   // staged time (or now when nothing is staged), the row STAYS OPEN for more
-  // clicks / datetime fine-tuning, and only Save commits via onSchedule. The
-  // stack is capped at now+24h; clamping shows a cap notice.
+  // clicks / datetime fine-tuning, and only Save commits via onSchedule.
   const SCHEDULE_CAP_MS = 24 * 60 * 60_000;
+  // Over the now+24h cap the click is REJECTED (issue #130 wrap-up): the staged
+  // time does not move and a cap notice shows. A clamp would be wrong twice —
+  // it hides how much was dropped, and on an over-cap base (legacy schedule
+  // seeded beyond 24h) it would jump the staged time BACKWARD.
   const presetSchedule = (mins: number) => {
     if (!schedulingId) return;
     const base = pendingAt !== null && pendingAt > Date.now() ? pendingAt : Date.now();
-    const cap = Date.now() + SCHEDULE_CAP_MS;
-    let at = base + mins * 60_000;
-    const capped = at > cap;
-    if (capped) at = cap;
+    const at = base + mins * 60_000;
+    if (at > Date.now() + SCHEDULE_CAP_MS) {
+      setScheduleCapped(true);
+      setScheduleError(null);
+      return;
+    }
     setPendingAt(at);
-    setScheduleCapped(capped);
+    setScheduleCapped(false);
     setScheduleError(null);
     // Keep the uncontrolled datetime-local in sync with the staged value
     // (programmatic value writes do not fire onChange — no feedback loop).
@@ -223,12 +244,27 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                 data-testid="queue-schedule-input"
                 type="datetime-local"
                 min={toLocalInput(Date.now())}
+                max={toLocalInput(Date.now() + SCHEDULE_CAP_MS)}
                 defaultValue={pending ? toLocalInput(item.scheduledAt) : defaultLocalInput()}
                 ref={scheduleRef}
                 // Manual datetime pick overrides the staged value (two-way link
-                // with pendingAt, issue #130) and clears stale notices.
+                // with pendingAt, issue #130) and clears stale notices. Picks
+                // beyond now+24h are REJECTED (issue #130 wrap-up): pendingAt
+                // keeps the staged value, the input snaps back to it, and the
+                // cap notice explains why (Save re-verifies as final gate).
                 onChange={(e) => {
                   const ts = fromLocalInput(e.target.value);
+                  if (ts > Date.now() + SCHEDULE_CAP_MS) {
+                    setScheduleCapped(true);
+                    setScheduleError(null);
+                    // Programmatic value writes do not fire onChange — no loop.
+                    if (scheduleRef.current) {
+                      scheduleRef.current.value = pendingAt !== null && pendingAt > Date.now()
+                        ? toLocalInput(pendingAt)
+                        : defaultLocalInput();
+                    }
+                    return;
+                  }
                   setPendingAt(ts > 0 ? ts : null);
                   setScheduleCapped(false);
                   setScheduleError(null);

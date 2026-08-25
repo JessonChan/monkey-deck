@@ -373,7 +373,7 @@
     "schedulePresetTip": "Schedule: add {{mins}} minutes on top of the staged time (clicks stack; Save applies)",
     "schedulePending": "⏱ in {{remaining}} · {{time}}",
     "schedulePendingTip": "Time staged by stacking presets (base = the staged time or now, capped at 24h); applies only on Save",
-    "scheduleCap": "24h cap reached",
+    "scheduleCap": "Exceeds the 24h cap — ignored",
     "clearSchedule": "Now",
     "clearScheduleTip": "Clear schedule: send as soon as possible (next drain)",
     "scheduledSend": "⏰ {{time}}",
