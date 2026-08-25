@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { File as FileIcon, Copy, X, Search, ChevronUp, ChevronDown, Quote, Pencil, Save, AlertTriangle } from "lucide-react";
+import { File as FileIcon, Copy, Check, X, Search, ChevronUp, ChevronDown, Quote, Pencil, Save, AlertTriangle } from "lucide-react";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import CodeViewer from "./CodeViewer";
 import SelectionToolbar, { type SelectionAction } from "./SelectionToolbar";
@@ -482,7 +482,7 @@ export default function EditorPane({
             data-tooltip-content={copied ? t("common.copied") : failed ? t("common.copyFailed") : t("filePreview.copyTip")}
             aria-label={t("filePreview.copyTip")}
           >
-            {copied ? <span style={{ fontSize: 11 }}>✓</span> : failed ? <span style={{ fontSize: 11 }}>✗</span> : <Copy size={14} />}
+            {copied ? <Check size={14} /> : failed ? <X size={14} /> : <Copy size={14} />}
           </button>
         )}
         {!image && !editing && (
