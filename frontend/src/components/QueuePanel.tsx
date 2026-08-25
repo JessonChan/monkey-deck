@@ -111,6 +111,15 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
     setScheduleCapped(false);
   };
   const cancelSchedule = () => { setSchedulingId(null); setScheduleError(null); resetStaging(); };
+  // ✕ on the staged chip (issue #130 wrap-up 2): drop the staging IN PLACE —
+  // same visible outcome as cancel + reopen, without closing the row. The
+  // input snaps back to the default pick, notices clear, presets re-base on now.
+  const resetStagedTime = () => {
+    resetStaging();
+    setScheduleError(null);
+    // Programmatic value writes do not fire onChange — no feedback loop.
+    if (scheduleRef.current) scheduleRef.current.value = defaultLocalInput();
+  };
   const saveSchedule = () => {
     if (!schedulingId) return;
     const v = scheduleRef.current?.value;
@@ -284,7 +293,9 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                   </button>
                 ))}
                 {/* Staged-time chip (issue #130): live "remaining + clock" readout
-                    of what the stacked presets / manual pick have staged. */}
+                    of what the stacked presets / manual pick have staged. Its ✕
+                    resets the staging in place (issue #130 wrap-up 2) — row stays
+                    open, presets re-base on now, input snaps back to the default. */}
                 {pendingAt !== null && pendingAt > now && (
                   <span
                     className="queue-schedule-pending"
@@ -295,6 +306,16 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                     <Clock size={11} />
                     {" "}
                     {t("queue.schedulePending", { remaining: formatRemaining(pendingAt - now, t), time: formatClock(pendingAt) })}
+                    <button
+                      className="queue-schedule-reset"
+                      data-testid="queue-schedule-pending-reset"
+                      data-tooltip-id="md-tip"
+                      data-tooltip-content={t("queue.scheduleResetTip")}
+                      aria-label={t("queue.scheduleResetTip")}
+                      onClick={resetStagedTime}
+                    >
+                      <X size={10} />
+                    </button>
                   </span>
                 )}
                 {scheduleCapped && (

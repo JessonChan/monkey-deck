@@ -1462,6 +1462,15 @@ input, textarea { font-family: inherit; }
   font-family: var(--mono); font-size: 10px; color: var(--amber); font-weight: 600;
   flex-shrink: 0; white-space: nowrap; display: inline-flex; align-items: center; gap: 3px;
 }
+/* ✕ inside the staged chip (issue #130 wrap-up 2): resets the staging in place.
+   Borderless inline button inheriting the chip's amber; padding enlarges the hit
+   area beyond the 10px glyph. */
+.queue-schedule-pending .queue-schedule-reset {
+  display: inline-flex; align-items: center; padding: 3px; margin-left: 1px;
+  background: none; border: none; border-radius: var(--r-sm); color: inherit;
+  cursor: pointer; line-height: 1;
+}
+.queue-schedule-pending .queue-schedule-reset:hover { background: var(--hover); color: var(--text); }
 .queue-schedule-cap { color: var(--amber); font-size: 11px; flex-shrink: 0; font-weight: 600; }
 /* inline 编辑态 */
 .queue-item-edit {
@@ -2981,6 +2990,9 @@ input, textarea { font-family: inherit; }
   .queue-item-actions { flex-basis: 100%; flex-wrap: wrap; }
   .queue-item-edit { flex-wrap: wrap; }
   .queue-schedule-error, .queue-schedule-cap, .queue-schedule-pending { flex-basis: 100%; }
+  /* ✕ on the staged chip gets a touch-sized hit area too (not a .queue-btn,
+     so the 40px rule above does not reach it). */
+  .queue-schedule-pending .queue-schedule-reset { padding: 6px; }
 
   /* Header: session title + status only. Project name, terminal / model /
      branch / merge chips are desktop density on a phone. */
