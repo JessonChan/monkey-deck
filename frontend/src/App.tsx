@@ -526,6 +526,40 @@ export default function App() {
   }, []);
   drainSessionRef.current = drainSession;
 
+  // Reconcile cached session statuses with the backend snapshot (#134/#127):
+  // chat:status is push-only, so a remote client whose WS dropped mid-turn — or
+  // connected after a turn started — holds a stale "prompting"/"empty" forever.
+  // The snapshot is authoritative at pull time; live events arriving after the
+  // pull overwrite as usual (no cross-channel ordering assumptions, §5.3).
+  const syncSessionStatuses = useCallback(async () => {
+    let snap: Record<string, StatusPayload["status"]> | null = null;
+    try {
+      snap = (await ChatService.SessionStatuses()) as Record<string, StatusPayload["status"]>;
+    } catch {
+      return; // binding unavailable (app shutting down): keep cached state
+    }
+    if (!snap) return;
+    const live = snap;
+    setStatusBySession((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const [sid, st] of Object.entries(live)) {
+        if (next[sid] !== st) { next[sid] = st; changed = true; }
+      }
+      // Absent = no live harness on the backend: drop stale liveness states
+      // ("prompting" stuck after the idle event was lost to a WS gap, #134).
+      // Display states (error/notice/readonly) carry meaning without a live
+      // harness and are kept as-is.
+      for (const sid of Object.keys(next)) {
+        if (!(sid in live) && (next[sid] === "prompting" || next[sid] === "reconnecting")) {
+          next[sid] = "idle";
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+
   // 启动:加载项目 + 订阅事件。
   useEffect(() => {
     void refreshProjects();
@@ -701,6 +735,10 @@ export default function App() {
       for (const pid of Object.keys(sessionsByProjectRef.current)) {
         void refreshSessions(pid, true);
       }
+      // Status snapshot merge: chat:status events pushed while the WS was down
+      // are gone for good (no replay, §1.8) — pull the backend truth so both
+      // stuck "prompting" (#134) and missed "prompting" (#127) reconcile.
+      void syncSessionStatuses();
       // A reconnect implies a possible EVENT GAP, and the open conversation's
       // tail exists only in the desktop's memory — lists alone leave a frozen
       // partial message on the phone until manual re-entry (user report).
@@ -767,7 +805,7 @@ export default function App() {
       offDrop();
       offResync();
     };
-  }, [refreshProjects, applyEvent, refreshSessions, drainSession, isPopout, popoutMode]);
+  }, [refreshProjects, applyEvent, refreshSessions, drainSession, syncSessionStatuses, isPopout, popoutMode]);
 
   // popout 启动标记:目标 session 在本 popout 窗口 open 成功后置 true(快照 effect 据此触发)。
   // 用 state 而非 ref:快照还原 effect 依赖它——openSession 异步完成后 state 变化触发 effect 重跑。
@@ -942,6 +980,11 @@ export default function App() {
       userStoppedBySessionRef.current.delete(sessionId);
       setError(null); setNotice(null);
       await ChatService.OpenSession(sessionId);
+      // Seed the status from backend truth (#127): a remote client that
+      // connects mid-turn missed the "prompting" push — without this the
+      // composer trusts a stale "empty" and a direct send hits the busy
+      // guard. No-op on desktop (snapshot agrees with the push stream).
+      void syncSessionStatuses();
       // 从持久化的 session 用量恢复 token 占比(无 live 记录时),使重开会话不归零(§1.6)。
       const se = (pid ? sessionsByProject[pid] : undefined)?.find((x) => x.id === sessionId);
       setUsageBySession((prev) => {
@@ -1013,7 +1056,7 @@ export default function App() {
         setWorktreeKindBySession((prev) => ({ ...prev, [sessionId]: kind }));
       } catch { /* keep absent → treat as project */ }
     },
-    [messagesToItems, selectedProjectId, sessionsByProject]
+    [messagesToItems, selectedProjectId, sessionsByProject, syncSessionStatuses]
   );
   // Late-bound handle for the mount effect's remote:resync handler (declared
   // before openSession; a ref avoids both TDZ and stale-closure traps).
