@@ -48,12 +48,16 @@ mock.module("react-i18next", () => ({
 
 // Mock mermaidExport (issue #86): the real module rasterizes via canvas/Image,
 // which happy-dom can't do. The component only needs the tri-state outcome.
+// `gate` (optional promise): while pending, the mocked copy stays unresolved —
+// lets mount tests observe the busy state mid-flight, then release to resolve.
 const copyImageCalls = [];
 const copyMermaidImageMock = mock(async (svg) => {
   copyImageCalls.push(svg);
+  if (copyMermaidImageMock.gate) await copyMermaidImageMock.gate;
   return copyMermaidImageMock.outcome;
 });
 copyMermaidImageMock.outcome = "copied";
+copyMermaidImageMock.gate = null;
 mock.module("../lib/mermaidExport.ts", () => ({ copyMermaidImage: copyMermaidImageMock }));
 
 // Now import the components fresh (after mocks are registered).
@@ -443,5 +447,39 @@ describe("MermaidRenderer (component)", () => {
     expect(copyImageTip(host, "mermaid-fs-copy-image")).toBe("chat.mermaidImageCopied");
     // inline 按钮的反馈状态不受 modal 独立实例影响。
     expect(copyImageTip(host, "mermaid-copy-image")).toBe("chat.mermaidCopyImage");
+  });
+
+  test("busy guard: button disabled while copy promise pending, flips after resolve (#24328)", async () => {
+    __resetMermaidCacheForTest();
+    copyImageCalls.length = 0;
+    copyMermaidImageMock.outcome = "copied";
+    // Hold the mocked copy unresolved until released, to observe the busy state.
+    let release;
+    copyMermaidImageMock.gate = new Promise((res) => { release = res; });
+    try {
+      const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+      await flush();
+      const btn = () => host.querySelector('[data-testid="mermaid-copy-image"]');
+      // idle → enabled.
+      expect(btn().disabled).toBe(false);
+      btn().click();
+      await flush();
+      // Promise pending → imageState="busy": `disabled` is the only double-click /
+      // double-rasterize guard (MermaidRenderer.tsx) — anchor its exact value.
+      expect(btn().disabled).toBe(true);
+      expect(copyImageCalls.length).toBe(1);
+      // Re-click while disabled fires no second copy (happy-dom click() honors
+      // the disabled form-control short-circuit, matching browser spec).
+      btn().click();
+      await flush();
+      expect(copyImageCalls.length).toBe(1);
+      release();
+      await flush();
+      // Resolved → guard flips off and the tooltip announces the outcome.
+      expect(btn().disabled).toBe(false);
+      expect(copyImageTip(host, "mermaid-copy-image")).toBe("chat.mermaidImageCopied");
+    } finally {
+      copyMermaidImageMock.gate = null;
+    }
   });
 });
