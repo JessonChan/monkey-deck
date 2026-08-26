@@ -15,7 +15,7 @@ interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
   onChange: (v: string) => void;
   disabled: boolean;        // 无 session 时禁用全部交互
-  prompting: boolean;       // 一轮进行中:显示停止键 + send 提示将排队
+  prompting: boolean;       // a turn is in progress: stop slot becomes visible + send turns amber (queue-send)
   configOptions: ConfigOption[];        // agent 自报的 model/mode/effort(渲染下拉)
   onSetConfig: (configId: string, value: string) => void;  // 切换 config option(热切)
   onRefreshConfig: () => void;  // 打开 model 下拉时防抖重拉 configOptions(同步外部配置改动)
@@ -1206,11 +1206,20 @@ export default function Composer({ value, onChange, disabled, prompting, configO
             {(attachments.length > 0 || mentions.length > 0 || images.length > 0 || audios.length > 0) && (
               <span className="composer-count">{t("composer.referencesCount", { count: attachments.length + mentions.length + images.length + audios.length })}</span>
             )}
-            {prompting && (
-              <button className="send-btn stop" data-testid="stop-btn" onClick={onStop} title={t("composer.stopTip")}>
-                <Square size={15} />
-              </button>
-            )}
+            {/* Persistent stop slot (#104, plan C): rendered even when idle and hidden via
+                visibility so the compose row keeps its width — no layout shift when prompting
+                toggles. Hidden state is also unreachable: aria-hidden + tabIndex=-1 here,
+                pointer-events:none in CSS. data-testid kept on the button regardless of state. */}
+            <button
+              className={`send-btn stop${prompting ? "" : " is-hidden"}`}
+              data-testid="stop-btn"
+              onClick={onStop}
+              tabIndex={prompting ? 0 : -1}
+              aria-hidden={!prompting || undefined}
+              title={t("composer.stopTip")}
+            >
+              <Square size={15} />
+            </button>
             <button
               className="send-btn enqueue"
               data-testid="enqueue-btn"
@@ -1220,8 +1229,12 @@ export default function Composer({ value, onChange, disabled, prompting, configO
             >
               <ListPlus size={16} />
             </button>
+            {/* While prompting, send means "queue send" — it takes the same amber look as the
+                enqueue button (shared .queuing/.enqueue selector in CSS) so the two queue-ish
+                actions read as one family; idle restores the default green. The tooltip keeps
+                the existing queueSendTip/sendTip split. */}
             <button
-              className="send-btn"
+              className={`send-btn${prompting ? " queuing" : ""}`}
               data-testid="send-btn"
               onClick={() => submit()}
               disabled={disabled || empty}

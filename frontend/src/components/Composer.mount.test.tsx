@@ -983,3 +983,47 @@ describe("Composer large-paste fold-to-chip (Task #24240)", () => {
     expect(sent).toContain("log line 25");
   });
 });
+
+// Task #24339 (issue #104, plan C): persistent stop slot + amber send while prompting.
+// The stop button used to unmount when idle, so the compose row shifted by one 34px button
+// on every prompting toggle. Now it stays mounted and hidden (visibility keeps the width);
+// the hidden state must also be unreachable (aria-hidden, out of tab order, no pointer
+// events). While prompting, send means "queue send" and carries the amber queue class
+// (same palette as enqueue); idle restores the green default.
+describe("Composer persistent stop slot + send amber state (Task #24339)", () => {
+  test("idle: stop stays in the DOM but hidden and unreachable; send has no amber class", async () => {
+    const { host } = mount(<Composer value={"hello"} {...STUB_PROPS} prompting={false} />);
+    await flush();
+
+    const stop = host.querySelector('[data-testid="stop-btn"]') as HTMLElement;
+    // Resident in the DOM — that is the whole point: no layout shift on toggle.
+    expect(stop).not.toBeNull();
+    // Hidden state class (visibility:hidden + pointer-events:none in CSS)...
+    expect(stop.classList.contains("is-hidden")).toBe(true);
+    // ...plus unreachable for a11y tree / keyboard.
+    expect(stop.getAttribute("aria-hidden")).toBe("true");
+    expect(stop.tabIndex).toBe(-1);
+
+    // Send stays green when idle (no amber queue class).
+    const send = host.querySelector('[data-testid="send-btn"]') as HTMLElement;
+    expect(send.classList.contains("queuing")).toBe(false);
+  });
+
+  test("prompting: stop is visible and focusable; send carries the amber queue class", async () => {
+    const { host } = mount(<Composer value={"hello"} {...STUB_PROPS} prompting={true} />);
+    await flush();
+
+    const stop = host.querySelector('[data-testid="stop-btn"]') as HTMLElement;
+    expect(stop).not.toBeNull();
+    expect(stop.classList.contains("is-hidden")).toBe(false);
+    expect(stop.getAttribute("aria-hidden")).toBe(null);
+    expect(stop.tabIndex).toBe(0);
+
+    // Amber "queue-send" state — same look as the enqueue button (shared CSS selector).
+    const send = host.querySelector('[data-testid="send-btn"]') as HTMLElement;
+    expect(send.classList.contains("queuing")).toBe(true);
+    // The enqueue button keeps its own testid/class (untouched sibling).
+    const enqueue = host.querySelector('[data-testid="enqueue-btn"]') as HTMLElement;
+    expect(enqueue.classList.contains("enqueue")).toBe(true);
+  });
+});

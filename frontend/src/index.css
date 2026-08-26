@@ -1389,7 +1389,16 @@ input, textarea { font-family: inherit; }
 .send-btn:hover { filter: brightness(1.08); }
 .send-btn:disabled { opacity: 0.35; }
 .send-btn.stop { background: var(--red); }
-.send-btn.enqueue { background: var(--amber); color: #1a1a1a; }
+/* Idle stop slot (#104 plan C): resident but hidden — visibility keeps the 34px slot so the
+   compose row never shifts when prompting toggles; pointer-events pairs with tabIndex=-1 +
+   aria-hidden in Composer.tsx to make the hidden button unreachable (no hover/click/focus). */
+.send-btn.stop.is-hidden { visibility: hidden; pointer-events: none; }
+/* Amber queue look, shared by the enqueue button and the send button while prompting
+   (send becomes queue-send, #104). ONE selector keeps both visually identical by
+   construction; send uses .queuing (NOT .enqueue) so the ≤768px rule that hides
+   .send-btn.enqueue never hides the send button itself. */
+.send-btn.enqueue,
+.send-btn.queuing { background: var(--amber); color: #1a1a1a; }
 
 /* ─── QueuePanel(排队消息) ─── */
 .queue-panel {
