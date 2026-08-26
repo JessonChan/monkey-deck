@@ -35,6 +35,7 @@ type fakeChat struct {
 	emitHook   func(msg string) // 成功返回前回调(模拟 agent 产出一条消息,避免空 turn)
 	configSets []string         // 记录 SetConfigOption 调用("configId=value")
 	promptErr  error            // 非空则 Prompt 立即返回该错(模拟 peer 断连 / 崩溃,触发 emitError 路由)
+	errSeq     []error          // 按次序消费的 Prompt 错误(#46 重试测试):每次 Prompt 弹一个,耗尽后回落 promptErr;两者皆空走正常 block 流程
 	alive      atomic.Bool      // IsAlive 返回值(默认 true;kill 置 false 模拟 harness 死)
 	declined   atomic.Bool      // ElicitDeclined 返回值(模拟用户主动 decline elicitation 后的空 turn)
 }
@@ -56,6 +57,11 @@ func (f *fakeChat) Prompt(ctx context.Context, msg string, atts []acp.Attachment
 	f.prompts = append(f.prompts, msg)
 	f.promptAtts = append(f.promptAtts, atts)
 	err := f.promptErr
+	// #46 retry tests: per-attempt error sequence takes precedence per call.
+	if len(f.errSeq) > 0 {
+		err = f.errSeq[0]
+		f.errSeq = f.errSeq[1:]
+	}
 	f.mu.Unlock()
 	select {
 	case f.started <- struct{}{}:
