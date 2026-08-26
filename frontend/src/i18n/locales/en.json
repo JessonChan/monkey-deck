@@ -289,7 +289,9 @@
     "error": {
       "harness_disconnected": "Agent connection reset. Auto-reconnecting...",
       "harness_reconnect_failed": "Auto-reconnect failed. Send a message to retry manually.",
-      "agent_turn_incomplete": "The agent didn't finish this turn normally (often: the selected model is unavailable, refused, or a limit was hit). The connection is fine — retry, or switch the model and resend."
+      "agent_turn_incomplete": "The agent didn't finish this turn normally (often: the selected model is unavailable, refused, or a limit was hit). The connection is fine — retry, or switch the model and resend.",
+      "provider_quota_exhausted": "Provider quota exhausted — this turn was not delivered. Please try again after the quota resets.",
+      "provider_transient_error": "Provider temporarily unavailable after auto-retries. Please resend later."
     },
     "notice": {
       "harness_empty_turn": "This command produced no further output. Connection is fine — keep going."
