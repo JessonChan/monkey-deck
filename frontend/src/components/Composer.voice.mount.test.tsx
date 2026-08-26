@@ -99,12 +99,17 @@ let dictationResult: { stop: () => Promise<Blob>; cancel: () => void } | null = 
 let dictationErr: unknown = null;
 let transcript = "hello world";
 let transcribeErr: unknown = null;
+// When set, transcribeAudio parks on this promise before resolving — lets a
+// test hold the transcription in flight, advance the draft mid-flight, then
+// release (stale-closure regression below).
+let transcribeGate: Promise<void> | null = null;
 const startDictationMock = mock(async () => {
   if (dictationErr !== null) throw dictationErr;
   if (!dictationResult) throw new Error("test bug: no handle installed");
   return dictationResult;
 });
 const transcribeAudioMock = mock(async (blob: Blob) => {
+  if (transcribeGate) await transcribeGate;
   if (transcribeErr !== null) throw transcribeErr;
   expect(blob).toBeInstanceOf(Blob);
   return transcript;
@@ -191,6 +196,7 @@ describe("Composer voice dictation (#131 stage 2)", () => {
     dictationErr = null;
     transcript = "hello world";
     transcribeErr = null;
+    transcribeGate = null;
   });
 
   test("mic button always renders (errors surface on use, not by hiding the entry)", async () => {
@@ -366,5 +372,61 @@ describe("Composer voice dictation (#131 stage 2)", () => {
     await flush();
     const btn = voiceBtn(host) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
+  });
+
+  // Stale-closure regression: insertAtCursor used the `value` captured when
+  // stop was clicked; if the user keeps typing while whisper inference runs
+  // (textarea stays editable during "transcribing"), the transcript insert
+  // rewound the draft to that snapshot and silently clobbered the typing.
+  // Controlled wrapper mirrors App: value lives in wrapper state, onChange
+  // feeds back; `typed` simulates keystrokes landing mid-transcription
+  // (happy-dom cannot dispatch real input events through React's tracker).
+  test("typing during transcription survives the transcript insert (not clobbered)", async () => {
+    dictationResult = makeHandle();
+    transcript = "hello world";
+    let releaseTranscribe!: () => void;
+    transcribeGate = new Promise<void>((r) => { releaseTranscribe = r; });
+    const onChange = mock(() => {});
+
+    function Shell({ typed }: { typed: boolean }) {
+      const [v, setV] = React.useState("fix the ");
+      React.useEffect(() => { if (typed) setV("fix the bug now"); }, [typed]);
+      // STUB_PROPS first so the real onChange (setV) wins over the stub.
+      return <Composer {...STUB_PROPS} value={v} onChange={(next) => { onChange(next); setV(next); }} />;
+    }
+
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    root.render(<Shell typed={false} />);
+    await flush();
+
+    click(voiceBtn(host));
+    await flush();
+    expect(voiceBtn(host).getAttribute("data-state")).toBe("recording");
+    click(voiceBtn(host));
+    await flush();
+    expect(voiceBtn(host).getAttribute("data-state")).toBe("transcribing");
+
+    // User types while the inference is in flight → the value prop advances
+    // (typing at the end also moves the caret, like handleChange would).
+    root.render(<Shell typed={true} />);
+    await flush();
+    const taMid = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    positionCursor(taMid, taMid.value.length);
+    await flush();
+
+    releaseTranscribe();
+    await flush();
+    await flush();
+
+    const ta = host.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement;
+    // Both must survive: the mid-flight typing AND the inserted transcript.
+    expect(ta.value).toContain("bug now");
+    expect(ta.value).toContain("hello world");
+    // Anchored: caret at the (advanced) end → transcript appends after typing.
+    expect(ta.value).toBe("fix the bug now hello world");
+    expect(voiceBtn(host).getAttribute("data-state")).toBe("idle");
+    root.unmount();
   });
 });

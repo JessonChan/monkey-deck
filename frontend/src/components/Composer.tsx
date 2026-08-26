@@ -179,6 +179,14 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   // Tab path completion race guard: monotonic id; each Tab press bumps it and
   // only the latest resolution may apply (§5.3 invariant over identity, not order).
   const completeReqId = useRef(0);
+  // Mirror of the controlled value for async insert paths (dictation transcript):
+  // the toggleVoice closure captured at click time goes stale while the user
+  // keeps typing during transcription — the insert must splice into the CURRENT
+  // draft, not the snapshot from when stop was clicked (otherwise mid-flight
+  // typing is silently clobbered). Only read from event/async continuations,
+  // never during render.
+  const valueRef = useRef(value);
+  valueRef.current = value;
 
   // --- Voice dictation (#131 stage 2) ---
   // voiceState: idle → recording (mic live) → transcribing (blob in flight).
@@ -716,9 +724,13 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   // long-text fold so the textarea exists to receive focus (focusSignal
   // pattern), then restores the caret right after the transcript.
   const insertAtCursor = (text: string) => {
-    const pos = Math.min(cursorRef.current, value.length);
-    const before = value.slice(0, pos);
-    const after = value.slice(pos);
+    // Read the draft via valueRef: this runs in a promise continuation long
+    // after the toggleVoice closure was created, so the captured `value` may
+    // be stale if the user typed while transcription was in flight.
+    const cur = valueRef.current;
+    const pos = Math.min(cursorRef.current, cur.length);
+    const before = cur.slice(0, pos);
+    const after = cur.slice(pos);
     const lead = before && !/\s$/.test(before) ? " " : "";
     const trail = after && !/^\s/.test(after) ? " " : "";
     const next = before + lead + text + trail + after;
