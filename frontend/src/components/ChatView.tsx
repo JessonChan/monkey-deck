@@ -1744,10 +1744,12 @@ function AnchorRenderer(props: ComponentPropsWithoutRef<"a">) {
   return <a href={href} onClick={onClick} target="_blank" rel="noopener noreferrer" {...rest}>{children}</a>;
 }
 
-// Agent / user-markdown 渲染器(Task #15084):在 ReactMarkdown 的 p / li / td 文本节点里
-// 把文件路径识别成可点击 .path-link。code / pre / a 等保持原样(不破坏代码语义)。
-// streaming(Task #21289):仅 agent 消息流式期间为 true,透传到 PreRenderer → MermaidRenderer,
-// 让 mermaid 代码块在消息写完后再渲染。
+// Agent / user-markdown renderer (Task #15084): recognises file paths inside
+// ReactMarkdown p / li / td text nodes and turns them into clickable .path-link.
+// code / pre / a stay untouched (code semantics preserved).
+// streaming (Task #21289): true only while an agent message is streaming,
+// forwarded to PreRenderer -> MermaidRenderer so mermaid blocks render after
+// the message finishes being written.
 function AgentMarkdown({ text, onOpenFilePreview, streaming = false }: { text: string; onOpenFilePreview: (path: string, line?: number) => void; streaming?: boolean }) {
   const components = useMemo(
     () => ({
@@ -1757,6 +1759,7 @@ function AgentMarkdown({ text, onOpenFilePreview, streaming = false }: { text: s
       p: makeTextLinkifyRenderer("p", onOpenFilePreview),
       li: makeTextLinkifyRenderer("li", onOpenFilePreview),
       td: makeTextLinkifyRenderer("td", onOpenFilePreview),
+      table: TableWrapper,
     }),
     [onOpenFilePreview, streaming]
   );
@@ -1803,6 +1806,17 @@ function CodeRenderer(props: ComponentPropsWithoutRef<"code">) {
   const isBlock = Boolean(className?.includes("language-")) || String(children ?? "").includes("\n");
   if (isBlock) return <code className={className} data-block {...rest}>{children}</code>;
   return <code className="code-inline" {...rest}>{children}</code>;
+}
+
+// Stable table renderer (#136): every markdown <table> is wrapped in
+// .md-table-wrap so wide GFM tables scroll horizontally inside the bubble
+// instead of stretching the chat column (cell grid / header styles: index.css).
+function TableWrapper(props: ComponentPropsWithoutRef<"table">) {
+  return (
+    <div className="md-table-wrap">
+      <table {...props} />
+    </div>
+  );
 }
 
 function CodeBox({ language, raw }: { language: string; raw: string }) {
