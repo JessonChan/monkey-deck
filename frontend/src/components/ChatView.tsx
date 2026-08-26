@@ -21,7 +21,7 @@ import { highlightToLines } from "../lib/highlight";
 import "../hljs-theme.css";
 import { buildRows, computeLayout, computeWindow, anchorAt, restoreScroll, isAtBottom, HeightModel, TAIL_PRIOR, HEAD_PRIOR, type VRow, type Layout } from "../lib/virtualList";
 import SelectionToolbar, { type SelectionAction } from "./SelectionToolbar";
-import { SquareTerminal, Sparkles, Brain, Check, Copy, FolderOpen, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus, Quote, Paperclip, Share2, X } from "lucide-react";
+import { SquareTerminal, Sparkles, Brain, Check, Copy, FolderOpen, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus, Quote, Paperclip, Share2, X, PanelRightOpen } from "lucide-react";
 
 interface Props {
   project: Project | null;
@@ -47,6 +47,11 @@ interface Props {
   onRespondPermission: (optionId: string) => void;
   onRespondElicitation: (action: "accept" | "decline" | "cancel", content: Record<string, unknown>) => void;
   onToggleTerminal: () => void;
+  // Open the right SidePanel as the ≤768px drawer (issue #124). Mobile-only
+  // affordance: the entry button is display:none above the breakpoint (CSS),
+  // so desktop keeps its rail toggle and never fires this. Routed up to App.tsx
+  // which owns the rightDrawerOpen state.
+  onOpenSideDrawer?: () => void;
   onRefreshConfig: () => void;
   onMerge: () => void;
   queue: QueueItem[];
@@ -665,6 +670,22 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           <button className="icon-btn small" onClick={props.onToggleTerminal} data-tooltip-id="md-tip" data-tooltip-content={t("chat.toggleTerminalTip")} aria-label={t("chat.toggleTerminal")}>
             <SquareTerminal size={15} />
           </button>
+          {/* SidePanel drawer entry (issue #124): visible only at ≤768px
+              (.side-drawer-btn is display:none on desktop). Deliberately NOT
+              .icon-btn — that class is hidden on phones by the M2 rules; this
+              button is the mobile replacement for the hidden right rail toggle. */}
+          {props.onOpenSideDrawer && (
+            <button
+              className="side-drawer-btn"
+              onClick={props.onOpenSideDrawer}
+              data-testid="open-side-drawer"
+              aria-label={t("app.expandSidePanel")}
+              data-tooltip-id="md-tip"
+              data-tooltip-content={t("app.expandSidePanel")}
+            >
+              <PanelRightOpen size={17} />
+            </button>
+          )}
         </div>
       </header>
 

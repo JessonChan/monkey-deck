@@ -1986,11 +1986,26 @@ export default function App() {
   }, []);
   const closeDrawer = () => setDrawerOpen(false);
 
+  // ── M2 mobile right drawer (≤768px, issue #124) ──
+  // Mirror of the sidebar drawer for the RIGHT SidePanel (files / SCM): the
+  // #side panel lifts out of the flex flow via position:fixed (CSS) and slides
+  // in from the right, driven by this explicit state. Entry = the side-drawer
+  // button in the chat header (mobile-only, ChatView); on >768px every
+  // touchpoint below is inert (scrim display:none, button display:none).
+  const [rightDrawerOpen, setRightDrawerOpen] = useState(false);
+  const closeRightDrawer = () => setRightDrawerOpen(false);
+  // Drawers are mutually exclusive: opening one dismisses the other, so two
+  // stacked scrims can never render at once (the chat header sits under the
+  // left drawer's scrim, making the overlap unreachable in practice anyway —
+  // this is just the cheap invariant guarantee).
+  const openRightDrawer = () => { setDrawerOpen(false); setRightDrawerOpen(true); };
+
   // Android back gesture (M2 PWA): while a layer below is open, back closes
   // the TOP layer instead of exiting the app (the biggest native-feel gap —
   // no popstate/pushState existed before). All pushes are ≤768px-gated inside
   // the stack, so desktop history and behavior are untouched.
   useBackLayer(drawerOpen, closeDrawer);
+  useBackLayer(rightDrawerOpen, closeRightDrawer);
   useBackLayer(settingsOpen, () => setSettingsOpen(false));
   useBackLayer(!!newSession, () => setNewSession(null));
   useBackLayer(!!deleteWt, () => setDeleteWt(null));
@@ -2012,6 +2027,25 @@ export default function App() {
     const dx = t.clientX - s.x;
     const dy = t.clientY - s.y;
     if (dx < -60 && Math.abs(dx) > Math.abs(dy) * 2) setDrawerOpen(false);
+  };
+
+  // Swipe-RIGHT on the right drawer closes it (mirror of the swipe-left rule
+  // above: it pushes the panel off the right screen edge). Same threshold +
+  // dominant-axis guard so vertical scrolling inside the drawer (file tree,
+  // change list) never triggers it. Desktop never fires touch events — inert.
+  const sideDrawerTouch = useRef<{ x: number; y: number } | null>(null);
+  const onSideDrawerTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    sideDrawerTouch.current = { x: t.clientX, y: t.clientY };
+  };
+  const onSideDrawerTouchEnd = (e: React.TouchEvent) => {
+    const s = sideDrawerTouch.current;
+    sideDrawerTouch.current = null;
+    if (!s) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - s.x;
+    const dy = t.clientY - s.y;
+    if (dx > 60 && Math.abs(dx) > Math.abs(dy) * 2) setRightDrawerOpen(false);
   };
 
   // On-screen keyboard (mobile): the layout viewport does NOT shrink when the
@@ -2056,7 +2090,7 @@ export default function App() {
     window.history.replaceState(null, "", window.location.pathname);
     if (action === "new-session") void createSession();
     else if (action === "settings") setSettingsOpen(true);
-    else if (action === "switch-project") setDrawerOpen(true);
+    else if (action === "switch-project") { setRightDrawerOpen(false); setDrawerOpen(true); }
   }, [projects.length, isPopout, createSession]);
 
 
@@ -2072,6 +2106,7 @@ export default function App() {
       data-sidebar-collapsed={isPopout ? "popout" : (leftCollapsed ? "true" : "false")}
       data-side-collapsed={rightCollapsed ? "true" : "false"}
       data-md-drawer={drawerOpen ? "true" : "false"}
+      data-md-side-drawer={rightDrawerOpen ? "true" : "false"}
     >
       {!isPopout && (
       <Panel
@@ -2177,6 +2212,7 @@ export default function App() {
               onRespondPermission={respondPermission}
               onRespondElicitation={respondElicitation}
               onToggleTerminal={toggleTerminalPanel}
+              onOpenSideDrawer={openRightDrawer}
               mergeResult={mergeResults[selectedSessionId] || null}
               onMerge={mergeSession}
               sessionDiff={sessionDiff}
@@ -2274,6 +2310,8 @@ export default function App() {
         collapsible
         collapsedSize={0}
         panelRef={sidePanelRef}
+        onTouchStart={onSideDrawerTouchStart}
+        onTouchEnd={onSideDrawerTouchEnd}
         onResize={() => syncCollapsed(sidePanelRef, setRightCollapsed)}
       >
         {selectedSessionId && activeSession && (isPopout || !poppedSessionIds.has(selectedSessionId)) ? (
@@ -2296,28 +2334,35 @@ export default function App() {
             onDiscard={discardFiles}
             onCommit={commitSession}
             onAICommit={aiCommit}
-            onOpenDiff={(path, staged) => selectedSessionId && openDiffTab(selectedSessionId, path, staged)}
+            // Opening a file/diff from the SidePanel dismisses the mobile right
+            // drawer (mirror of "openSession closes the left drawer"): browsing
+            // is done, the user wants to see the opened tab. Desktop no-op
+            // (rightDrawerOpen is always false there; React bails on the state).
+            onOpenDiff={(path, staged) => { if (selectedSessionId) openDiffTab(selectedSessionId, path, staged); setRightDrawerOpen(false); }}
             busy={status === "prompting"}
-            onOpenFile={(path, line) => selectedSessionId && openFileTab(selectedSessionId, path, line)}
+            onOpenFile={(path, line) => { if (selectedSessionId) openFileTab(selectedSessionId, path, line); setRightDrawerOpen(false); }}
           />
         ) : (
           <div className="side-empty" />
         )}
       </Panel>
     </Group>
-    {/* Mobile drawer scrim (M2): tap-to-close behind the ≤768px sidebar drawer.
-        display:none on desktop (CSS default) and whenever the drawer is closed —
-        the >768px layout renders identically to before. */}
-    {!isPopout && (
-      <button
-        type="button"
-        className="drawer-scrim"
-        onClick={closeDrawer}
-        aria-hidden="true"
-        tabIndex={-1}
-        data-testid="drawer-scrim"
-      />
-    )}
+    {/* Mobile drawer scrim (M2): tap-to-close behind the ≤768px drawers —
+        sidebar (left) and SidePanel (right, issue #124). One scrim serves both:
+        they are mutually exclusive (openRightDrawer / open paths dismiss the
+        other), so "close both" effectively closes the open one. display:none on
+        desktop (CSS default) and whenever no drawer is open — the >768px
+        layout renders identically to before. Rendered regardless of popout so
+        a narrow popout's right drawer stays closable (left sidebar doesn't
+        exist there, data-md-drawer stays "false"). */}
+    <button
+      type="button"
+      className="drawer-scrim"
+      onClick={() => { closeDrawer(); closeRightDrawer(); }}
+      aria-hidden="true"
+      tabIndex={-1}
+      data-testid="drawer-scrim"
+    />
     {/* PWA install banner (M2): mobile-only via CSS (display:none on desktop);
         self-dismisses after install or explicit "not now" (localStorage). */}
     {!isPopout && <InstallBanner />}
@@ -2331,7 +2376,7 @@ export default function App() {
         type="button"
         className="panel-toggle left"
         onClick={() => {
-          if (mdViewport) setDrawerOpen((v) => !v);
+          if (mdViewport) { setRightDrawerOpen(false); setDrawerOpen((v) => !v); }
           else if (leftCollapsed) expandSidebar();
           else collapseSidebar();
         }}
