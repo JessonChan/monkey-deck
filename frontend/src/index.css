@@ -1173,6 +1173,25 @@ input, textarea { font-family: inherit; }
 }
 .tool-btn:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .tool-btn:disabled { opacity: 0.4; }
+/* Voice dictation button (#131): recording = red stop affordance with a soft
+   pulse so a live mic is obvious at a glance; transcribing keeps the resting
+   look with the spinner icon (clicks are guarded in the handler). */
+.voice-btn.recording {
+  background: rgba(229, 83, 75, 0.16);
+  color: #e5534b;
+  animation: voice-pulse 1.6s ease-in-out infinite;
+}
+.voice-btn.recording:hover:not(:disabled) {
+  background: rgba(229, 83, 75, 0.24);
+  color: #e5534b;
+}
+@keyframes voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 83, 75, 0.35); }
+  50% { box-shadow: 0 0 0 5px rgba(229, 83, 75, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-btn.recording { animation: none; }
+}
 .composer-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .composer-model {
   font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
@@ -2992,7 +3011,9 @@ input, textarea { font-family: inherit; }
   .compose-card > .composer-input,
   .compose-card > .composer-collapse { grid-column: 1; min-height: 36px; max-height: 140px; padding: 7px 6px; align-self: center; }
   .compose-bar { grid-column: 2; display: flex; flex-direction: column; align-items: center; gap: 6px; align-self: center; }
-  .compose-tools .tool-btn:not([data-testid="image-btn"]) { display: none; }
+  /* Voice dictation stays reachable on phones (arguably its best face —
+     typing on a touchscreen is the friction dictation removes). */
+  .compose-tools .tool-btn:not([data-testid="image-btn"]):not([data-testid="voice-btn"]) { display: none; }
   .compose-history-chip, .compose-history-badge { display: none; }
   .compose-branch, .compose-mcp, .composer-usage, .composer-count { display: none; }
   .compose-right .cfg-trigger, .compose-right .send-btn.enqueue { display: none; }

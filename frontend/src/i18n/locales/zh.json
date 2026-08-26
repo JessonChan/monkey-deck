@@ -321,6 +321,17 @@
     "attachFilesTip": "附加文件(经 ACP ResourceLink 发送)",
     "addImageTip": "添加图片(经 ACP Image 块发送 · 也可直接粘贴)",
     "addAudioTip": "添加音频(经 ACP Audio 块发送)",
+    "voiceDictateTip": "语音听写:录制麦克风声音,识别后插入到光标处",
+    "voiceStopTip": "停止录音并转写(插入到光标处)",
+    "voiceTranscribingTip": "转写中…",
+    "voiceErr": {
+      "micDenied": "麦克风不可用——请在系统设置(或浏览器站点设置)中允许 Monkey Deck 使用麦克风后重试",
+      "notReady": "语音识别未就绪——请安装 whisper.cpp(如 brew install whisper-cpp)并在设置中下载模型后重试",
+      "tooLarge": "录音过长——音频超出转写大小限制,请缩短后重试",
+      "unsupported": "该音频格式无法转写——宿主可能缺少 ffmpeg 进行格式转换",
+      "noSpeech": "没有识别到内容——请重试并多说一会儿",
+      "failed": "转写失败——请重试"
+    },
     "slashMenuTip": "输入 / 召出命令菜单",
     "slashUnknown": "命令 /{{cmd}} 不存在",
     "slashUnknownHint": "当前 agent 不认识它,直接发送可能报错或被忽略。",

@@ -321,6 +321,17 @@
     "attachFilesTip": "Attach files (sent as ACP ResourceLink)",
     "addImageTip": "Add image (sent as ACP Image block · paste also works)",
     "addAudioTip": "Add audio (sent as ACP Audio block)",
+    "voiceDictateTip": "Dictate: record from the microphone and insert the transcript at the cursor",
+    "voiceStopTip": "Stop recording and transcribe (inserts at the cursor)",
+    "voiceTranscribingTip": "Transcribing…",
+    "voiceErr": {
+      "micDenied": "Microphone unavailable — allow Microphone access for Monkey Deck in System Settings (or the browser site settings), then try again",
+      "notReady": "Speech recognition isn't ready — install whisper.cpp (e.g. brew install whisper-cpp) and download a model in settings, then try again",
+      "tooLarge": "Recording too long — the audio exceeded the transcription size limit, try a shorter take",
+      "unsupported": "This audio format can't be transcribed — the host may be missing ffmpeg for format conversion",
+      "noSpeech": "Nothing recognizable was recorded — try again and speak a bit longer",
+      "failed": "Transcription failed — try again"
+    },
     "slashMenuTip": "Type / for command menu",
     "slashUnknown": "Command /{{cmd}} doesn't exist",
     "slashUnknownHint": "The current agent doesn't recognize it; sending as-is may error or be silently ignored.",
