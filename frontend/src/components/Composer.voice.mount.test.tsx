@@ -7,6 +7,9 @@
 //   3. classified failures render a localized inline error row (voiceErr.*)
 //      without touching the draft: transcribe notReady / mic denied / empty
 //      transcript (noSpeech); × dismisses the row
+//   4. #24317 P3: zero-size blob → noSpeech row (no silent idle); fatal
+//      recorder error → stop() still resolves partial audio; dictation icon
+//      distinct from the adjacent audio-attachment mic
 //
 // Harness mirrors Composer.mount.test.tsx (happy-dom + thin radix/cmdk/i18n
 // mocks). MediaRecorder itself is covered by src/lib/sttClient.test.ts; here
@@ -327,6 +330,71 @@ describe("Composer voice dictation (#131 stage 2)", () => {
     expect(row).not.toBeNull();
     expect(row.textContent).toContain("voiceErr.noSpeech");
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // #24317 P3: stopping before the first 250ms timeslice yields a zero-size
+  // blob. That used to return to idle SILENTLY — same feedback gap as noSpeech
+  // (§4.4); now it shows the same localized hint.
+  test("zero-size blob (stopped before the first timeslice) → noSpeech row, not a silent idle", async () => {
+    dictationResult = makeHandle(""); // Blob([""]) → size 0
+    const onChange = mock(() => {});
+    const { host } = mount(<Composer value={""} {...STUB_PROPS} onChange={onChange} />);
+    await flush();
+
+    click(voiceBtn(host));
+    await flush();
+    click(voiceBtn(host));
+    await flush();
+
+    const row = host.querySelector('[data-testid="voice-error"]') as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row.textContent).toContain("voiceErr.noSpeech");
+    expect(transcribeAudioMock).not.toHaveBeenCalled(); // nothing to transcribe
+    expect(onChange).not.toHaveBeenCalled();
+    expect(voiceBtn(host).getAttribute("data-state")).toBe("idle");
+  });
+
+  // #24317 P3: a fatally-errored MediaRecorder never dispatches a stop event;
+  // startDictation's onerror guard makes stop() resolve with the chunks
+  // recorded before the error. Pin the Composer wiring on that contract: the
+  // partial audio still flows to transcription and the button returns to idle
+  // (the hang itself is pinned in src/lib/sttClient.test.ts).
+  test("fatal recorder error mid-recording → stop() resolves partial audio, flow completes", async () => {
+    dictationResult = makeHandle("partial-audio");
+    transcript = "partial words";
+    const onChange = mock(() => {});
+    const { host } = mount(<Composer value={""} {...STUB_PROPS} onChange={onChange} />);
+    await flush();
+
+    click(voiceBtn(host));
+    await flush();
+    expect(voiceBtn(host).getAttribute("data-state")).toBe("recording");
+
+    click(voiceBtn(host));
+    await flush();
+
+    const sent = transcribeAudioMock.mock.calls[0][0] as Blob;
+    expect(await sent.text()).toBe("partial-audio");
+    const last = onChange.mock.calls[onChange.mock.calls.length - 1][0] as string;
+    expect(last).toBe("partial words");
+    expect(voiceBtn(host).getAttribute("data-state")).toBe("idle");
+    expect(host.querySelector('[data-testid="voice-error"]')).toBeNull();
+  });
+
+  // #24317 P3: with audioSupported the audio-ATTACHMENT button (Mic) sits
+  // next to the dictation button. They must not render the same glyph — a
+  // regression back to Mic would make both outerHTMLs identical.
+  test("dictation icon differs from the adjacent audio-attachment mic", async () => {
+    const { host } = mount(<Composer value={""} {...STUB_PROPS} audioSupported={true} />);
+    await flush();
+    const voiceIcon = host.querySelector('[data-testid="voice-btn"] svg') as SVGElement;
+    const audioIcon = host.querySelector('[data-testid="audio-btn"] svg') as SVGElement;
+    expect(voiceIcon).not.toBeNull();
+    expect(audioIcon).not.toBeNull();
+    expect(voiceIcon.outerHTML).not.toBe(audioIcon.outerHTML); // AudioLines vs Mic
+    // Labels stay distinct too (dictation aid vs agent audio attachment).
+    expect(voiceBtn(host).getAttribute("aria-label")).toBe("composer.voiceDictateTip");
+    expect((host.querySelector('[data-testid="audio-btn"]') as HTMLElement).getAttribute("title")).toBe("composer.addAudioTip");
   });
 
   test("× dismisses the error row; Esc on the textarea dismisses too", async () => {

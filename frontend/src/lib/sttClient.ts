@@ -167,7 +167,15 @@ export async function startDictation(): Promise<DictationHandle> {
   rec.ondataavailable = (ev: BlobEvent) => {
     if (ev.data && ev.data.size > 0) chunks.push(ev.data);
   };
-  const stopped = new Promise<void>((resolve) => { rec.onstop = () => resolve(); });
+  // Resolve on stop OR fatal error: a fatally-errored MediaRecorder may never
+  // dispatch a stop event, and stop() awaiting only onstop would hang forever
+  // (phase stuck busy, tracks leaked until unmount — the OS mic indicator
+  // stays on). Chunks recorded before the error are still returned below, so
+  // the partial audio keeps flowing to transcription.
+  const stopped = new Promise<void>((resolve) => {
+    rec.onstop = () => resolve();
+    rec.onerror = () => resolve();
+  });
   const release = () => stream.getTracks().forEach((t) => t.stop());
   try {
     rec.start(250);
