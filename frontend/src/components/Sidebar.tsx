@@ -91,13 +91,34 @@ type ConfirmTarget =
   | { kind: "project"; project: Project }
   | { kind: "session"; session: Session };
 
-// 侧栏 session 列表分片渲染每页大小:本地 SQLite 全量已加载(查询本来就快),
-// 这里只控制渲染的 DOM 节点数,避免单项目几百个 session 一次性撑爆。
+// Sidebar session list pagination page size: the local SQLite full set is already loaded
+// (the query is fast anyway); this only caps rendered DOM nodes so a project with
+// hundreds of sessions doesn't blow up the tree at once.
 const SESSION_PAGE = 25;
+
+// Expanded-project persistence (issue #57): which projects the user left expanded
+// survives restarts via localStorage — same lazy-init + useEffect-writeback pattern
+// as `md:plan-open:<sessionId>` (ChatView). Stores a JSON array of project IDs;
+// corrupt / missing / non-array values fall back to the empty set (best-effort).
+const EXPANDED_KEY = "md:sidebar-expanded";
+
+function loadExpanded(): Set<string> {
+  try {
+    const raw = localStorage.getItem(EXPANDED_KEY);
+    if (!raw) return new Set();
+    const arr: unknown = JSON.parse(raw);
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.filter((v): v is string => typeof v === "string"));
+  } catch {
+    return new Set();
+  }
+}
 
 export default function Sidebar(props: Props) {
   const { t } = useTranslation();
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Lazy init from localStorage (issue #57): restore the expanded set left over
+  // from the previous run instead of always starting collapsed.
+  const [expanded, setExpanded] = useState<Set<string>>(loadExpanded);
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [confirm, setConfirm] = useState<ConfirmTarget | null>(null);
   // inline 重命名(0016):renamingId 标记哪个 session 进入编辑态;renameValue 是输入框值。
@@ -141,14 +162,23 @@ export default function Sidebar(props: Props) {
   const harnessNameById = (id: string): string =>
     props.harnesses?.find((h) => h.id === id)?.name || id;
 
-  // 拖拽排序(0007):distance=6 区分点击/拖动,避免点子按钮误触发拖。
+  // Drag reordering (0007): distance=6 tells click from drag so clicking child
+  // buttons doesn't accidentally start a drag.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  // True while a project drag is in progress: dragStart collapses everything as a
+  // transient visual state and dragEnd/cancel restores it — the persistence effect
+  // must not write the transient empty set (a crash mid-drag would wipe the
+  // user's expansion). The restore re-fires the effect with the flag back to false,
+  // so the pre-drag set is re-persisted.
+  const draggingRef = useRef(false);
   const handleDragStart = () => {
+    draggingRef.current = true;
     expandedBeforeDrag.current = new Set(expanded);
     setExpanded(new Set());
   };
   const handleDragEnd = (e: DragEndEvent) => {
-    setExpanded(expandedBeforeDrag.current); // 恢复原展开态(无论是否实际重排)
+    draggingRef.current = false;
+    setExpanded(expandedBeforeDrag.current); // restore pre-drag expansion (whether reordered or not)
     const { active, over } = e;
     if (!over || active.id === over.id) return;
     const ids = props.projects.map((p) => p.id);
@@ -157,7 +187,24 @@ export default function Sidebar(props: Props) {
     if (from < 0 || to < 0) return;
     props.onReorderProjects(arrayMove(ids, from, to));
   };
-  const handleDragCancel = () => setExpanded(expandedBeforeDrag.current);
+  const handleDragCancel = () => {
+    draggingRef.current = false;
+    setExpanded(expandedBeforeDrag.current);
+  };
+
+  // Persist the expanded set back to localStorage on every change (issue #57).
+  // Also fires once on mount (idempotent write of the just-loaded value). Stale IDs
+  // of since-removed projects are harmless (never match) and are NOT pruned here —
+  // projects load async after mount, so pruning on the mount pass would wipe the
+  // persisted state.
+  useEffect(() => {
+    if (draggingRef.current) return;
+    try {
+      localStorage.setItem(EXPANDED_KEY, JSON.stringify([...expanded]));
+    } catch {
+      // localStorage unavailable (quota / disabled) — persistence is best-effort.
+    }
+  }, [expanded]);
 
   const toggle = (id: string) =>
     setExpanded((prev) => {
