@@ -6,7 +6,7 @@ import type { ConfigOption, Mention, ImageAttachment, AudioAttachment, Usage, Sl
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
-import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, ListPlus, GitBranch, CornerUpLeft, ListChecks, ClipboardPaste, Loader2 } from "lucide-react";
+import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, AudioLines, ListPlus, GitBranch, CornerUpLeft, ListChecks, ClipboardPaste, Loader2 } from "lucide-react";
 import McpChip from "./McpChip";
 import { isRemoteClient } from "../lib/remote";
 import { startDictation, transcribeAudio, SttError, type DictationHandle, type SttErrorKind } from "../lib/sttClient";
@@ -756,7 +756,10 @@ export default function Composer({ value, onChange, disabled, prompting, configO
       dictationRef.current = null;
       try {
         const blob = await handle?.stop();
-        if (!handle || !blob || blob.size === 0) { setVoiceState("idle"); return; }
+        // Zero-size blob (stopped before the first 250ms timeslice) gets the
+        // same inline hint as an empty transcript — never a silent return to
+        // idle (§4.4 feedback consistency).
+        if (!handle || !blob || blob.size === 0) { setVoiceError("noSpeech"); setVoiceState("idle"); return; }
         const text = await transcribeAudio(blob);
         if (!text) { setVoiceError("noSpeech"); setVoiceState("idle"); return; }
         insertAtCursor(text);
@@ -1113,7 +1116,10 @@ export default function Composer({ value, onChange, disabled, prompting, configO
             {/* Voice dictation (#131): mic → MediaRecorder → host STT → insert
                 transcript at the caret. Works on all three faces (webview
                 binding / remote /api/stt). The recording state is visually
-                loud (red stop square + pulse) so a live mic is never missed. */}
+                loud (red stop square + pulse) so a live mic is never missed.
+                Idle icon is AudioLines — NOT Mic — so the button is never
+                confused with the adjacent audio-ATTACHMENT button (agent
+                capability, Mic icon, different semantics). */}
             <button
               className={`tool-btn voice-btn ${voiceState === "recording" ? "recording" : ""}`}
               data-testid="voice-btn"
@@ -1137,7 +1143,7 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                 ? <Square size={13} className="voice-stop-ico" />
                 : voiceState === "transcribing"
                   ? <Loader2 size={15} className="spin" />
-                  : <Mic size={17} />}
+                  : <AudioLines size={17} />}
             </button>
             <button
               className="tool-btn"

@@ -228,6 +228,7 @@ describe("startDictation", () => {
       state = "inactive";
       ondataavailable: ((ev: { data: Blob }) => void) | undefined;
       onstop: (() => void) | undefined;
+      onerror: (() => void) | undefined;
       constructor(_stream: unknown, public opts?: { mimeType?: string }) { FakeRecorder.last = this; }
       start() { this.state = "recording"; }
       stop() {
@@ -247,6 +248,44 @@ describe("startDictation", () => {
     expect(blob).toBeInstanceOf(Blob);
     expect(blob.type).toBe("audio/webm;codecs=opus");
     expect(await blob.text()).toBe("abc");
+    expect(trackStop).toHaveBeenCalledTimes(1); // mic released
+  });
+
+  // Fatal MediaRecorder error path (#24317 P3): a fatal error may never
+  // dispatch a stop event, and stop() awaiting only onstop would hang forever
+  // (phase stuck busy, tracks leaked). Before the fix this test times out;
+  // after it, the chunks recorded before the error still flow to transcription.
+  test("fatal onerror without onstop → stop() resolves with recorded chunks, tracks released", async () => {
+    const trackStop = mock(() => {});
+    const stream = { getTracks: () => [{ stop: trackStop }] };
+    installNavigator(async () => stream);
+
+    class FakeRecorder {
+      static last: FakeRecorder | undefined;
+      mimeType = "audio/webm;codecs=opus";
+      state = "inactive";
+      ondataavailable: ((ev: { data: Blob }) => void) | undefined;
+      onstop: (() => void) | undefined;
+      onerror: (() => void) | undefined;
+      constructor(_stream: unknown, _opts?: { mimeType?: string }) { FakeRecorder.last = this; }
+      start() { this.state = "recording"; }
+      stop() { throw new Error("cannot stop after fatal error"); } // never reached: state is inactive
+      // Fatal error mid-recording: state flips to inactive, a final chunk may
+      // land, onerror fires — onstop never does.
+      fail(chunk?: string) {
+        this.state = "inactive";
+        if (chunk !== undefined) this.ondataavailable?.({ data: new Blob([chunk], { type: this.mimeType }) });
+        this.onerror?.();
+      }
+    }
+    (globalThis as any).MediaRecorder = FakeRecorder;
+    (FakeRecorder as any).isTypeSupported = (m: string) => m === "audio/webm;codecs=opus";
+
+    const handle = await startDictation();
+    FakeRecorder.last!.fail("par"); // timeslice chunk landed, then the recorder died
+
+    const blob = await handle.stop(); // must resolve (hangs without the onerror guard)
+    expect(await blob.text()).toBe("par"); // partial audio survives
     expect(trackStop).toHaveBeenCalledTimes(1); // mic released
   });
 });
