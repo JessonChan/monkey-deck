@@ -13,6 +13,8 @@ import DiffView from "./DiffView";
 import MermaidRenderer from "./MermaidRenderer";
 import PathLinkified from "./PathLinkified";
 import CopyIconButton from "./CopyIconButton";
+import ErrorCard from "./ErrorCard";
+import type { ChatErrorView } from "../lib/errorDiag";
 import { copyTextQuiet } from "../lib/clipboard";
 import { useCopyFeedback } from "../hooks/useCopyFeedback";
 import { countDiffLines } from "../lib/diff";
@@ -33,8 +35,9 @@ interface Props {
   branch: string;  // 透传给 Composer(空则不显示)
   // Branch chip click → open new-session modal prefilled to fork off this branch (routed to App).
   onNewSessionOnBranch: (branch: string) => void;
-  error: string | null;
+  error: ChatErrorView | null;
   // notice:非异常温和提示(蓝色条,如 empty-turn:本轮无输出)。与 error(红色)分开渲染。
+  // error 是结构化视图(#46):主文案(message)+ 可选 rootCause 次要行(secondary)。
   notice: string | null;
   permission: PermissionPrompt | null;
   elicitation: ElicitationPrompt | null;
@@ -808,12 +811,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
       {/* Text-selection toolbar (Copy / Quote): scoped to .chat-body (scrollRef)
           so composer / header selections don't trigger it. See SelectionToolbar. */}
       <SelectionToolbar scope={scrollRef} actions={selectionActions} />
-      {props.error && (
-        <div className="error-bar">
-          <span className="error-bar-msg">⚠ {props.error}</span>
-          <CopyIconButton text={props.error || ""} />
-        </div>
-      )}
+      {props.error && <ErrorCard view={props.error} />}
       {props.notice && (
         <div className="notice-bar">
           <span className="notice-bar-msg">ℹ {props.notice}</span>

@@ -291,7 +291,11 @@
       "harness_reconnect_failed": "自动重连失败,请发送消息手动重试",
       "agent_turn_incomplete": "agent 这一轮未能正常结束(常见:所选模型当前不可用、被拒绝,或触上限)。连接正常——可直接重试,或在模型选择器里切换模型后再发。",
       "provider_quota_exhausted": "供应商配额已耗尽,本轮未发送成功。请等待配额重置后再试。",
-      "provider_transient_error": "供应商服务暂不可用,自动重试后仍失败。请稍后重试发送。"
+      "provider_transient_error": "供应商服务暂不可用,自动重试后仍失败。请稍后重试发送。",
+      "provider_quota_exhausted_reset": "供应商配额已耗尽,本轮未发送成功。将于 {{resetAt}} 重置,届时可再发送。",
+      "provider_transient_error_retried_one": "供应商服务暂不可用,已自动重试 {{count}} 次仍失败。请稍后重试发送。",
+      "provider_transient_error_retried_other": "供应商服务暂不可用,已自动重试 {{count}} 次仍失败。请稍后重试发送。",
+      "rootCausePrefix": "本轮发送失败:"
     },
     "notice": {
       "harness_empty_turn": "该命令本轮没有更多回复。连接正常,可继续操作。"

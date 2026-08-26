@@ -36,6 +36,8 @@ import { applyEventToItems as applyEventToItemsPure } from "./lib/streamMerge";
 import { shouldDropOnSwitch } from "./lib/sessionDrop";
 import { isNotifySoundEnabled, playNotifySound } from "./lib/notifySound";
 import { extractErrMsg } from "./lib/errorMsg";
+import { renderChatError, type ChatErrorView, type DiagL10n } from "./lib/errorDiag";
+import i18n from "./i18n";
 import { isMemorySaverEnabled } from "./lib/memorySaver";
 import { deleteFilePanelState } from "./lib/filePanelCache";
 import { routeDroppedFiles, type ReadImageFn } from "./lib/dropFiles";
@@ -45,6 +47,15 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(na
 // Evaluated once at module load — a desktop window never becomes touch mid-session.
 const coarsePointer = typeof window !== "undefined" && typeof window.matchMedia === "function"
   && window.matchMedia("(pointer: coarse)").matches;
+
+// L10n adapter for renderChatError: the same i18next singleton useTranslation
+// binds to. Error views are computed once at status-event time (as before);
+// exists() gates the fallback chain (key hit → interpolated copy).
+const errorDiagL10n: DiagL10n = {
+  t: (k, o) => i18n.t(k, o),
+  exists: (k) => i18n.exists(k),
+  language: i18n.language,
+};
 
 // readImageForDrop adapts ChatService.SessionReadImage to the ReadImageFn shape used
 // by routeDroppedFiles (worktree-relative image → {dataUrl}). Injected so the pure
@@ -136,7 +147,10 @@ export default function App() {
   const [unreadBySession, setUnreadBySession] = useState<Record<string, boolean>>({});
   const [permissionBySession, setPermissionBySession] = useState<Record<string, PermissionPrompt | null>>({});
   const [elicitationBySession, setElicitationBySession] = useState<Record<string, ElicitationPrompt | null>>({});
-  const [error, setError] = useState<string | null>(null);
+  // error:红色错误条内容(#46 步骤 3 起为结构化视图:主文案 + 可选 rootCause 次要行)。
+  const [error, setError] = useState<ChatErrorView | null>(null);
+  // Plain-message setter for the ~30 binding-failure call sites (no diagnostics).
+  const setErrorMessage = useCallback((m: string | null) => setError(m ? { message: m, secondary: null } : null), []);
   // notice:非异常的温和提示(如 empty-turn:本轮无输出,但连接正常)。与 error 分开:
   // 蓝色而非红色,语义是「提示」不是「出错」。只对当前查看的 session 显示(同 error)。
   const [notice, setNotice] = useState<string | null>(null);
@@ -567,16 +581,17 @@ export default function App() {
       }
       // 错误提示只对当前查看的 session 弹(切走时不在意别的 session 的错误条)。
       // 已弹出到独立窗口的 session:主窗口不弹错误(由 popout 窗口处理),避免双弹。
-      // 有 code 时按 code 经 i18n 翻译(harness 断连等稳定文案);否则用 detail;最后兜底。
+      // #46 步骤 3:按 code 分类插值诊断 payload(quota 显 resetAt、transient 显
+      // 重试次数 + rootCause 次要行、未知类前缀 + rootCause 原文),兜底链见 errorDiag。
       if (s.status === "error" && s.sessionId === selectedSessionIdRef.current && !poppedSessionIdsRef.current.has(s.sessionId)) {
-        setError(s.code ? t(`chat.error.${s.code}`) : (s.detail || t("app.errorFallback")));
+        setError(renderChatError(s, errorDiagL10n));
         setNotice(null); // 对称清 notice,避免旧 notice(蓝)与新 error(红)叠显
       }
       // notice(温和提示):非异常的零输出等,蓝色提示条。同 error 的 session/popup 门控。
       // code 经 i18n 翻译(chat.notice.*),detail 兜底。
       if (s.status === "notice" && s.sessionId === selectedSessionIdRef.current && !poppedSessionIdsRef.current.has(s.sessionId)) {
         setNotice(s.code ? t(`chat.notice.${s.code}`) : (s.detail || ""));
-        setError(null); // 对称清 error,避免两条叠显
+        setErrorMessage(null); // 对称清 error,避免两条叠显
       }
       // 回合结束:清掉该 session 最后 agent/thought 的 streaming 标志(去光标 + 显复制按钮);
       // 同时把残留的中间态 tool(in_progress/pending)收口到终态 —— Prompt 正常返回(idle)
@@ -919,7 +934,7 @@ export default function App() {
       // don't render the tab bar and shouldn't maintain openTabs).
       if (!isPopout) setOpenTabs((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
       setUnreadBySession((prev) => { if (!prev[sessionId]) return prev; const n = { ...prev }; delete n[sessionId]; return n; });
-      setError(null); setNotice(null);
+      setErrorMessage(null); setNotice(null);
       // OpenSession also pushes the session's authoritative queue snapshot
       // (#126A); the chat:queue subscription overwrites the local mirror — the
       // queue survives tab re-open / popout / remote reconnect.
@@ -1073,7 +1088,7 @@ export default function App() {
       }
       setNewSession({ projectId: pid, isGit, lastHarness, defaultBaseRef, recentRefs, branches, worktrees, initialBaseRef: initialBaseRef ?? "" });
     } catch (e) {
-      setError(extractErrMsg(e));
+      setErrorMessage(extractErrMsg(e));
     }
   }, [selectedProjectId]);
 
@@ -1132,7 +1147,7 @@ export default function App() {
         await openSession(se.id);
       }
     } catch (e) {
-      setError(extractErrMsg(e));
+      setErrorMessage(extractErrMsg(e));
     }
   }, [newSession, selectedProjectId, refreshSessions, openSession, selectProject]);
 
@@ -1163,17 +1178,17 @@ export default function App() {
         try {
           await ChatService.EnqueueMessage(selectedSessionId, text, buildAttachments(mentions, imgs, aus));
         } catch (e) {
-          setError(extractErrMsg(e));
+          setErrorMessage(extractErrMsg(e));
         }
         return;
       }
       // idle 直发(attachments 经 buildAttachments 构造,显式带 Kind,见模块顶部)。
-      setError(null); setNotice(null);
+      setErrorMessage(null); setNotice(null);
       setStatusBySession((prev) => ({ ...prev, [selectedSessionId]: "prompting" }));
       try {
         await ChatService.SendMessage(selectedSessionId, text, buildAttachments(mentions, imgs, aus));
       } catch (e) {
-        setError(extractErrMsg(e));
+        setErrorMessage(extractErrMsg(e));
         setStatusBySession((prev) => ({ ...prev, [selectedSessionId]: "idle" }));
       }
     },
@@ -1204,7 +1219,7 @@ export default function App() {
     try {
       await ChatService.ContinueSession(sid);
     } catch (e) {
-      setError(extractErrMsg(e));
+      setErrorMessage(extractErrMsg(e));
     }
   }, []);
 
@@ -1219,13 +1234,13 @@ export default function App() {
     if (!sid) return;
     const item = (queueBySessionRef.current[sid] || []).find((x) => x.id === id);
     if (!item) return;
-    setError(null); setNotice(null);
+    setErrorMessage(null); setNotice(null);
     setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
     try {
       await ChatService.RevokeQueueItem(sid, id);
       await ChatService.InterruptAndSend(sid, item.text, item.attachments ?? []);
     } catch (e) {
-      setError(extractErrMsg(e));
+      setErrorMessage(extractErrMsg(e));
     }
   }, []);
 
@@ -1249,7 +1264,7 @@ export default function App() {
       try {
         await ChatService.EnqueueMessage(selectedSessionId, text, buildAttachments(mentions, imgs, aus));
       } catch (e) {
-        setError(extractErrMsg(e));
+        setErrorMessage(extractErrMsg(e));
       }
     },
     [selectedSessionId]
@@ -1266,7 +1281,7 @@ export default function App() {
     try {
       await ChatService.RevokeQueueItem(sid, id);
     } catch (e) {
-      setError(extractErrMsg(e));
+      setErrorMessage(extractErrMsg(e));
       return;
     }
     setDraftBySession((prev) => {
@@ -1283,7 +1298,7 @@ export default function App() {
     try {
       await ChatService.EditQueueItem(sid, id, text);
     } catch (e) {
-      setError(extractErrMsg(e));
+      setErrorMessage(extractErrMsg(e));
     }
   }, []);
 
@@ -1297,7 +1312,7 @@ export default function App() {
     try {
       await ChatService.ScheduleQueueItem(sid, id, at);
     } catch (e) {
-      setError(extractErrMsg(e));
+      setErrorMessage(extractErrMsg(e));
     }
   }, []);
 
@@ -1310,7 +1325,7 @@ export default function App() {
     try {
       await ChatService.ReorderQueueItem(sid, activeId, overId);
     } catch (e) {
-      setError(extractErrMsg(e));
+      setErrorMessage(extractErrMsg(e));
     }
   }, []);
 
@@ -1324,7 +1339,7 @@ export default function App() {
     try {
       await ChatService.SetQueueItemRepeat(sid, id, repeatEveryMs, 0);
     } catch (e) {
-      setError(extractErrMsg(e));
+      setErrorMessage(extractErrMsg(e));
     }
   }, []);
 
@@ -1369,7 +1384,7 @@ export default function App() {
       setTermTabsBySession((prev) => ({ ...prev, [sid]: [...(prev[sid] ?? []), { id, sessionId: sid, title, status: "running" }] }));
       setActiveTermBySession((prev) => ({ ...prev, [sid]: id }));
       setTermOpenBySession((prev) => ({ ...prev, [sid]: true }));
-    } catch (e) { setError(extractErrMsg(e)); }
+    } catch (e) { setErrorMessage(extractErrMsg(e)); }
   }, []);
 
   // toggle:打开时若该 session 还没终端,自动建一个;已开 → 关。开关状态 per-session。
@@ -1464,7 +1479,7 @@ export default function App() {
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
     try { await ChatService.SetSessionConfigOption(sid, configId, value); }
-    catch (e) { setError(extractErrMsg(e)); }
+    catch (e) { setErrorMessage(extractErrMsg(e)); }
   }, []);
 
   // 打开 model 下拉时防抖重拉 configOptions(同步外部配置改动:用户在 harness 配置里新增的 provider/model)。
@@ -1477,7 +1492,7 @@ export default function App() {
       const sid = selectedSessionIdRef.current;
       if (!sid || statusRef.current === "readonly" || statusRef.current === "empty") return;
       ChatService.RefreshSessionConfig(sid).catch((e) => {
-        setError(`${t("chat.refreshConfigFailed")}: ${extractErrMsg(e)}`);
+        setErrorMessage(`${t("chat.refreshConfigFailed")}: ${extractErrMsg(e)}`);
       });
     }, 400);
   }, [t]);
@@ -1491,7 +1506,7 @@ export default function App() {
     if (!selectedSessionId) return;
     try {
       const result = await ChatService.MergeSession(selectedSessionId);
-      setError(null);
+      setErrorMessage(null);
       setMergeResults((prev) => ({ ...prev, [selectedSessionId]: result || t("app.mergeDone") }));
       const sid = selectedSessionId;
       setTimeout(() => setMergeResults((prev) => { const n = { ...prev }; delete n[sid]; return n; }), 6000);
@@ -1500,7 +1515,7 @@ export default function App() {
       try { const m = await ChatService.SessionMergeable(sid); setMergeableBySession((prev) => ({ ...prev, [sid]: m })); } catch {}
     } catch (e) {
       const msg = t("app.mergeFailed", { error: extractErrMsg(e) });
-      setError(msg);
+      setErrorMessage(msg);
       setMergeResults((prev) => ({ ...prev, [selectedSessionId]: msg }));
       const sid = selectedSessionId;
       setTimeout(() => setMergeResults((prev) => { const n = { ...prev }; delete n[sid]; return n; }), 8000);
@@ -1510,35 +1525,35 @@ export default function App() {
   // SCM 操作:暂存 / 取消暂存 / 丢弃 / 提交。每次操作后刷新文件变更列表。
   const stageFiles = useCallback(async (paths: string[]) => {
     if (!selectedSessionId) return;
-    try { await ChatService.SessionStage(selectedSessionId, paths); setError(null); }
-    catch (e) { setError(extractErrMsg(e)); }
+    try { await ChatService.SessionStage(selectedSessionId, paths); setErrorMessage(null); }
+    catch (e) { setErrorMessage(extractErrMsg(e)); }
     finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
   }, [selectedSessionId]);
   const unstageFiles = useCallback(async (paths: string[]) => {
     if (!selectedSessionId) return;
-    try { await ChatService.SessionUnstage(selectedSessionId, paths); setError(null); }
-    catch (e) { setError(extractErrMsg(e)); }
+    try { await ChatService.SessionUnstage(selectedSessionId, paths); setErrorMessage(null); }
+    catch (e) { setErrorMessage(extractErrMsg(e)); }
     finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
   }, [selectedSessionId]);
   const discardFiles = useCallback(async (paths: string[]) => {
     if (!selectedSessionId) return;
-    try { await ChatService.SessionDiscard(selectedSessionId, paths); setError(null); }
-    catch (e) { setError(extractErrMsg(e)); }
+    try { await ChatService.SessionDiscard(selectedSessionId, paths); setErrorMessage(null); }
+    catch (e) { setErrorMessage(extractErrMsg(e)); }
     finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
   }, [selectedSessionId]);
   // 提交:失败时 rethrow,让 GitPanel 保留提交信息 + 显示内联错误。
   const commitSession = useCallback(async (message: string) => {
     if (!selectedSessionId) throw new Error(t("app.noActiveSession"));
-    try { await ChatService.SessionCommit(selectedSessionId, message); setError(null); }
-    catch (e) { setError(extractErrMsg(e)); throw e; }
+    try { await ChatService.SessionCommit(selectedSessionId, message); setErrorMessage(null); }
+    catch (e) { setErrorMessage(extractErrMsg(e)); throw e; }
     finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); const m = await ChatService.SessionMergeable(selectedSessionId); setMergeableBySession((p) => ({ ...p, [selectedSessionId]: m })); } catch {} }
   }, [selectedSessionId]);
   // AI 提交:让当前 session 的 agent 自动提交。触发一轮 turn;turn 结束(idle)时
   // 已有 effect 自动刷新 sessionChanges,故无需手动 finally 刷新。
   const aiCommit = useCallback(async () => {
     if (!selectedSessionId) throw new Error(t("app.noActiveSession"));
-    try { await ChatService.SessionAICommit(selectedSessionId); setError(null); }
-    catch (e) { setError(extractErrMsg(e)); throw e; }
+    try { await ChatService.SessionAICommit(selectedSessionId); setErrorMessage(null); }
+    catch (e) { setErrorMessage(extractErrMsg(e)); throw e; }
   }, [selectedSessionId]);
 
 
@@ -1556,7 +1571,7 @@ export default function App() {
       await ChatService.AddProject("", path, "");
       await refreshProjects();
     } catch (e) {
-      setError(extractErrMsg(e));
+      setErrorMessage(extractErrMsg(e));
     }
   }, [refreshProjects]);
 
@@ -1567,7 +1582,7 @@ export default function App() {
       await ChatService.AddProject("", path, "");
       await refreshProjects();
     } catch (e) {
-      setError(extractErrMsg(e));
+      setErrorMessage(extractErrMsg(e));
     }
   }, [refreshProjects]);
 
@@ -1826,7 +1841,7 @@ export default function App() {
       }
       if (pid) await refreshSessions(pid);
     } catch (e) {
-      setError(extractErrMsg(e));
+      setErrorMessage(extractErrMsg(e));
       if (pid) await refreshSessions(pid);
     }
   }, [deleteWt, purgeSessionState, refreshSessions]);

@@ -1038,6 +1038,10 @@ input, textarea { font-family: inherit; }
   display: flex; align-items: flex-start; gap: 8px;
 }
 .error-bar-msg { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+/* ErrorCard: primary + optional secondary stacked; the secondary line carries
+   the verbatim root cause (#46) in smaller, dimmer text (次要信息小字). */
+.error-bar-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.error-bar-secondary { font-size: 11px; opacity: 0.75; white-space: pre-wrap; word-break: break-word; }
 /* notice-bar:非异常温和提示(蓝色,如 empty-turn 本轮无输出)。与 error-bar(红)区分。
    padding 与消息行(.row)一致(0 28px),左右边界对齐聊天流。 */
 .notice-bar {
