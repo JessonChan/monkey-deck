@@ -28,13 +28,13 @@ Wails3 runtime 的 Clipboard 只有 `SetText`/`Text`(`node_modules/@wailsio/runt
 - `frontend/src/lib/download.ts`:`downloadBlob` 抽取。
 - `frontend/src/lib/mermaidRenderer.ts`:`themeBackground` 导出。
 - `frontend/src/components/MermaidRenderer.tsx`:`useMermaidImageCopy` + `CopyImageButton`,inline/fullscreen 接线。
-- `frontend/src/components/MermaidRenderer.mount.test.tsx`:mock `../lib/mermaidExport.ts`(真模块依赖 canvas,hermetic 环境跑不了)+6 例(流式不显示/点击传 SVG 且 tooltip 翻 copied/downloaded/failed/fullscreen 独立实例不串扰)。
+- `frontend/src/components/MermaidRenderer.mount.test.tsx`:mock `../lib/mermaidExport.ts`(真模块依赖 canvas,hermetic 环境跑不了)+6 例(流式不显示/点击传 SVG 且 tooltip 翻 copied/downloaded/failed/fullscreen 独立实例不串扰/busy 态 disabled 防双击守卫)。**勘误(#24328,review #24327 发现)**:原始实现实为 5 例(12+5=17,commit message 与本条原均误记 12+6),busy 态——`disabled={imageState === "busy"}` 唯一防双击守卫——零覆盖;#24328 补 busy 例后 6 例属实,合计 18。
 - `frontend/src/i18n/locales/{en,zh}.json`:四键。
 
 ## 验证
 
-- 定向:`bun test --isolate src/lib/mermaidExport.test.ts src/components/MermaidRenderer.mount.test.tsx` → **38 pass / 0 fail**。
-- 全量:`bun run test`(即 `bun test --isolate`)→ **349 pass / 0 fail**(39 文件;worktree 现场跑 `wails3 task bindings` 补齐不入库的 bindings 后全绿)。
+- 定向:`bun test --isolate src/lib/mermaidExport.test.ts src/components/MermaidRenderer.mount.test.tsx` → **39 pass / 0 fail**(#24328 补 busy 例后重跑;原 38)。
+- 全量:`bun run test`(即 `bun test --isolate`)→ **350 pass / 0 fail**(39 文件;worktree 现场跑 `wails3 task bindings` 补齐不入库的 bindings 后全绿。#24328 补 busy 例后重跑;原 349)。
 - TS/构建:`bun run build` → 零 TS 错误(手动 `wails3 gen bindings` 的 .js 格式与 `wails3 task build` 的 `-ts` 严格格式**双格式**下均验证;踩坑见 2026-08-26 语音 P3 worklog);`wails3 task build` → exit 0(icon.ico 副产物已还原)。
 - Go gate:`go build ./...` + `go vet ./...` → clean(无 Go 改动)。
 - 三端(§4.7):改动为纯前端组件/纯函数 lib,无传输分支/断点/指针交互变化,三端同一代码路径。**待真机/真实引擎实测**:canvas 光栅化与 ClipboardItem 写入是 happy-dom 覆盖不了的真引擎行为——macOS WebKit(WKWebView 里 `navigator.clipboard.write` 是否被允许,决定桌面端走 copied 还是 downloaded 分支)、远程浏览器(Chromium 大概率直接 copied)、PWA(iOS Safari 手势窗口 promise 形态)。两条分支都有反馈文案,不会静默。
