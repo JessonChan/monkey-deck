@@ -46,6 +46,16 @@ mock.module("react-i18next", () => ({
   default: { useTranslation: () => ({ t: (k) => k }) },
 }));
 
+// Mock mermaidExport (issue #86): the real module rasterizes via canvas/Image,
+// which happy-dom can't do. The component only needs the tri-state outcome.
+const copyImageCalls = [];
+const copyMermaidImageMock = mock(async (svg) => {
+  copyImageCalls.push(svg);
+  return copyMermaidImageMock.outcome;
+});
+copyMermaidImageMock.outcome = "copied";
+mock.module("../lib/mermaidExport.ts", () => ({ copyMermaidImage: copyMermaidImageMock }));
+
 // Now import the components fresh (after mocks are registered).
 const { default: MermaidRenderer } = await import("./MermaidRenderer.tsx");
 const { renderMermaid, getCachedSvg, __resetMermaidCacheForTest } = await import("../lib/mermaidRenderer.ts");
@@ -368,5 +378,70 @@ describe("MermaidRenderer (component)", () => {
     expect(fsResetPct(host)).toContain("120%");
     // inline 的缩放未被 modal 影响。
     expect(resetPct(host)).toContain("120%");
+  });
+
+  // ---- issue #86: copy as image ----
+
+  const copyImageTip = (h, testId) =>
+    h.querySelector(`[data-testid="${testId}"]`)?.getAttribute("data-tooltip-content") || "";
+
+  test("copy-image button: visible in success view, hidden while streaming", async () => {
+    __resetMermaidCacheForTest();
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={true} />);
+    await flush();
+    expect(host.querySelector('[data-testid="mermaid-copy-image"]')).toBeNull();
+  });
+
+  test("copy-image click → copyMermaidImage receives the SVG, tooltip flips to copied", async () => {
+    __resetMermaidCacheForTest();
+    copyImageCalls.length = 0;
+    copyMermaidImageMock.outcome = "copied";
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    const btn = host.querySelector('[data-testid="mermaid-copy-image"]');
+    expect(btn).not.toBeNull();
+    expect(copyImageTip(host, "mermaid-copy-image")).toBe("chat.mermaidCopyImage");
+    btn.click();
+    await flush();
+    expect(copyImageCalls).toEqual([validSvg]);
+    expect(copyImageTip(host, "mermaid-copy-image")).toBe("chat.mermaidImageCopied");
+  });
+
+  test("downloaded outcome → tooltip announces the download fallback", async () => {
+    __resetMermaidCacheForTest();
+    copyMermaidImageMock.outcome = "downloaded";
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    host.querySelector('[data-testid="mermaid-copy-image"]').click();
+    await flush();
+    expect(copyImageTip(host, "mermaid-copy-image")).toBe("chat.mermaidImageDownloaded");
+  });
+
+  test("failed outcome → tooltip announces failure", async () => {
+    __resetMermaidCacheForTest();
+    copyMermaidImageMock.outcome = "failed";
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    host.querySelector('[data-testid="mermaid-copy-image"]').click();
+    await flush();
+    expect(copyImageTip(host, "mermaid-copy-image")).toBe("chat.mermaidImageCopyFailed");
+  });
+
+  test("fullscreen modal has its own copy-image button (independent feedback)", async () => {
+    __resetMermaidCacheForTest();
+    copyImageCalls.length = 0;
+    copyMermaidImageMock.outcome = "copied";
+    const { host } = mount(<MermaidRenderer code={"graph TD\n  A --> B"} streaming={false} />);
+    await flush();
+    host.querySelector('[data-testid="mermaid-fullscreen-open"]').click();
+    await flush();
+    const fsBtn = host.querySelector('[data-testid="mermaid-fs-copy-image"]');
+    expect(fsBtn).not.toBeNull();
+    fsBtn.click();
+    await flush();
+    expect(copyImageCalls).toEqual([validSvg]);
+    expect(copyImageTip(host, "mermaid-fs-copy-image")).toBe("chat.mermaidImageCopied");
+    // inline 按钮的反馈状态不受 modal 独立实例影响。
+    expect(copyImageTip(host, "mermaid-copy-image")).toBe("chat.mermaidCopyImage");
   });
 });

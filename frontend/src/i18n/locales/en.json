@@ -277,6 +277,10 @@
     "mermaidZoomOut": "Zoom out",
     "mermaidZoomReset": "Reset zoom",
     "mermaidFullscreen": "Fullscreen",
+    "mermaidCopyImage": "Copy as image",
+    "mermaidImageCopied": "Image copied",
+    "mermaidImageDownloaded": "Clipboard can't take images — PNG downloaded",
+    "mermaidImageCopyFailed": "Copy as image failed",
     "planStatus": {
       "completed": "Done",
       "in_progress": "In progress",

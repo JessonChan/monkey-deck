@@ -106,6 +106,13 @@ const darkThemeVariables = {
   // sequence / gantt 等用到 mainBsp / nodeBorder 等,留默认即可。
 };
 
+// Background fill per theme, exported for mermaidExport: keeps dark background
+// in sync with darkThemeVariables so exported PNGs match the rendered diagram.
+export const themeBackground: Record<MermaidTheme, string> = {
+  dark: darkThemeVariables.background,
+  light: "#ffffff",
+};
+
 // Cache key for a mermaid source: `${theme}:${hash}`. Shared by renderMermaid
 // (async) and getCachedSvg (sync) so the two paths agree on what "cached" means.
 function cacheKey(code: string): string {

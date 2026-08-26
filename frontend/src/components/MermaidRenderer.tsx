@@ -12,12 +12,15 @@
 // - 全屏(Task #22945):success 状态下「全屏」按钮打开 modal overlay,复用同一套 zoom 机制;
 //   Esc / 点遮罩 / 关闭按钮 三种方式关闭。zoom 逻辑抽到 useMermaidZoom + ZoomControls 共享,
 //   避免 inline 与 modal 两份效果代码漂移。
+// - 复制为图片(issue #86):success 状态下把 SVG 光栅化成 2x PNG 复制到剪贴板;剪贴板不支持
+//   图片时降级下载 PNG。实现见 lib/mermaidExport.ts,CopyImageButton 在 inline 与 fullscreen 复用。
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Code2, Copy, GitGraph as DiagramIcon, Maximize2, RefreshCw, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Check, Code2, Copy, Download, GitGraph as DiagramIcon, ImageDown, Maximize2, RefreshCw, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useCopyFeedback } from "../hooks/useCopyFeedback";
 import { renderMermaid, getCachedSvg, type MermaidRenderResult } from "../lib/mermaidRenderer";
+import { copyMermaidImage, type ImageCopyOutcome } from "../lib/mermaidExport";
 
 interface Props {
   /** Mermaid 源码(```mermaid 围栏内的原文)。 */
@@ -128,6 +131,56 @@ function useMermaidZoom(opts: {
 }
 
 type ZoomApi = ReturnType<typeof useMermaidZoom>;
+
+// Image-copy feedback lifecycle (issue #86): busy while rasterizing + writing,
+// then the tri-state outcome, auto-reset to idle after `resetMs`.
+type ImageCopyState = ImageCopyOutcome | "busy" | "idle";
+const IMAGE_FEEDBACK_MS = 2000;
+
+function useMermaidImageCopy(resetMs = IMAGE_FEEDBACK_MS) {
+  const [state, setState] = useState<ImageCopyState>("idle");
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+  const copyImage = useCallback(async (svg: string): Promise<void> => {
+    setState("busy");
+    const outcome = await copyMermaidImage(svg);
+    setState(outcome);
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setState("idle"), resetMs);
+  }, [resetMs]);
+  return { imageState: state, copyImage };
+}
+
+// CopyImageButton(issue #86):「复制为图片」——SVG → 2x PNG → 剪贴板图片;剪贴板
+// 不支持(Firefox / webview 限制)时降级下载 PNG。inline 与 fullscreen 复用。
+function CopyImageButton({ svg, testId }: { svg: string; testId: string }) {
+  const { t } = useTranslation();
+  const { imageState, copyImage } = useMermaidImageCopy();
+  const label =
+    imageState === "copied" ? t("chat.mermaidImageCopied")
+    : imageState === "downloaded" ? t("chat.mermaidImageDownloaded")
+    : imageState === "failed" ? t("chat.mermaidImageCopyFailed")
+    : t("chat.mermaidCopyImage");
+  const icon =
+    imageState === "copied" ? <Check size={12} />
+    : imageState === "failed" ? <X size={12} />
+    : imageState === "downloaded" ? <Download size={12} />
+    : imageState === "busy" ? <RefreshCw size={12} className="mermaid-spin" />
+    : <ImageDown size={12} />;
+  return (
+    <button
+      className="msg-action-btn"
+      type="button"
+      disabled={imageState === "busy"}
+      onClick={() => void copyImage(svg)}
+      data-testid={testId}
+      data-tooltip-id="md-tip"
+      data-tooltip-content={label}
+    >
+      {icon}
+    </button>
+  );
+}
 
 // ZoomControls:三个缩放按钮(缩小 / 重置 / 放大),inline 与 fullscreen 复用。
 // testIdPrefix 区分两处实例的 data-testid,避免同文档内重复 testid 让选择器误选(inline=mermaid,modal=mermaid-fs)。
@@ -287,6 +340,7 @@ export default function MermaidRenderer({ code, streaming = false }: Props) {
           {!viewSource && (
             <>
               <ZoomControls z={inlineZoom} testIdPrefix="mermaid" />
+              <CopyImageButton svg={phase.svg} testId="mermaid-copy-image" />
               <button
                 className="msg-action-btn"
                 type="button"
@@ -355,6 +409,7 @@ function MermaidFullscreen({
           </span>
           <div className="mermaid-head-actions">
             <ZoomControls z={z} testIdPrefix="mermaid-fs" />
+            <CopyImageButton svg={svg} testId="mermaid-fs-copy-image" />
             <button
               className="msg-action-btn"
               type="button"
