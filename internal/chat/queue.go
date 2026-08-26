@@ -40,6 +40,19 @@ import (
 // int64 nanosecond duration cannot overflow (same guard the frontend had).
 const queueTimerMaxDelay = 2_147_000_000 * time.Millisecond
 
+// Recurring-send bounds (#111): the repeat interval is hard-validated to
+// 1min..24h. Below 1min a runaway turn loop could hammer the harness; beyond
+// 24h a scheduled one-shot (#97, same cap) already covers the use case.
+const (
+	queueRepeatMinMs = 60 * 1000
+	queueRepeatMaxMs = 24 * 60 * 60 * 1000
+)
+
+// errQueueRepeatInterval is the stable-code rejection for SetQueueItemRepeat
+// values outside [1min, 24h] (0 = clear is always legal). The code prefix lets
+// callers/tests match on it without parsing the human message.
+var errQueueRepeatInterval = errors.New("queue_repeat_interval_invalid: interval must be between 1 minute and 24 hours")
+
 // QueueItem is the wire shape of one queued message (chat:queue event +
 // bindings). Attachments is the prompt-attachment array exactly as
 // SendMessage takes it — built once at enqueue time, reused verbatim by
@@ -50,6 +63,10 @@ type QueueItem struct {
 	Text        string           `json:"text"`
 	Attachments []acp.Attachment `json:"attachments,omitempty"`
 	ScheduledAt int64            `json:"scheduledAt"` // epoch ms; due when <= now
+	// Recurring send (#111): RepeatEveryMs > 0 re-arms the item after each
+	// successful send; SentCount counts those sends ("sent N" badge).
+	RepeatEveryMs int64 `json:"repeatEveryMs"`
+	SentCount     int64 `json:"sentCount"`
 }
 
 // QueuePayload is the chat:queue event body: a full per-session snapshot.
@@ -92,7 +109,7 @@ func unmarshalQueueAttachments(s string) []acp.Attachment {
 func wireQueueItems(rows []store.QueueItem) []QueueItem {
 	out := make([]QueueItem, len(rows))
 	for i, r := range rows {
-		out[i] = QueueItem{ID: r.ID, Text: r.Text, Attachments: unmarshalQueueAttachments(r.Attachments), ScheduledAt: r.ScheduledAt}
+		out[i] = QueueItem{ID: r.ID, Text: r.Text, Attachments: unmarshalQueueAttachments(r.Attachments), ScheduledAt: r.ScheduledAt, RepeatEveryMs: r.RepeatEveryMs, SentCount: r.SentCount}
 	}
 	return out
 }
@@ -111,7 +128,10 @@ func (s *ChatService) emitQueue(sessionID string, rows []store.QueueItem) {
 // syncQueueSnapshot pushes the persisted queue for a session (best-effort:
 // store hiccup → silent, the next mutation re-syncs). OpenSession calls it so
 // every attaching window — desktop boot, popout, tab re-open after cache
-// eviction, remote reconnect — starts from backend truth.
+// eviction, remote reconnect — starts from backend truth. It also (re)arms the
+// schedule timer: after an app restart nothing else would wake a future
+// scheduled/recurring item until unrelated activity fires a drain (#111 —
+// recurring items must keep firing across restarts).
 func (s *ChatService) syncQueueSnapshot(sessionID string) {
 	if s.st == nil {
 		return
@@ -120,6 +140,9 @@ func (s *ChatService) syncQueueSnapshot(sessionID string) {
 	if err != nil {
 		return
 	}
+	s.queueMu.Lock()
+	s.armQueueTimerLocked(sessionID, rows)
+	s.queueMu.Unlock()
 	s.emitQueue(sessionID, rows)
 }
 
@@ -325,6 +348,40 @@ func queueIndexOf(rows []store.QueueItem, id string) int {
 	return -1
 }
 
+// SetQueueItemRepeat sets, changes or clears an item's recurrence (#111):
+// repeatEveryMs 0 turns it back into a normal one-shot item; a non-zero
+// value must fall in [1min, 24h] (hard gate — outside is rejected with the
+// stable errQueueRepeatInterval code). maxSends 0 = repeat forever, N =
+// auto-clear the repeat once sentCount reaches N. The item's scheduledAt is
+// untouched — recurrence only decides what happens AFTER each successful
+// send, so the next fire time stays wherever the schedule (#97) put it.
+func (s *ChatService) SetQueueItemRepeat(sessionID, itemID string, repeatEveryMs, maxSends int64) error {
+	if repeatEveryMs != 0 && (repeatEveryMs < queueRepeatMinMs || repeatEveryMs > queueRepeatMaxMs) {
+		return fmt.Errorf("%w (got %dms)", errQueueRepeatInterval, repeatEveryMs)
+	}
+	if maxSends < 0 {
+		return fmt.Errorf("queue_repeat_max_sends_invalid: maxSends must be >= 0 (got %d)", maxSends)
+	}
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	rows, err := s.st.ListQueueItems(s.ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("list queue: %w", err)
+	}
+	idx := queueIndexOf(rows, itemID)
+	if idx < 0 {
+		return fmt.Errorf("queue item not found: %s", itemID)
+	}
+	rows[idx].RepeatEveryMs = repeatEveryMs
+	rows[idx].MaxSends = maxSends
+	if err := s.st.ReplaceQueueItems(s.ctx, sessionID, rows); err != nil {
+		return fmt.Errorf("persist queue: %w", err)
+	}
+	s.armQueueTimerLocked(sessionID, rows)
+	s.emitQueue(sessionID, rows)
+	return nil
+}
+
 // spliceQueueRows returns rows without the given index (fresh slice, no
 // aliasing surprises for later reinsertion).
 func spliceQueueRows(rows []store.QueueItem, idx int) []store.QueueItem {
@@ -377,7 +434,57 @@ func (s *ChatService) drainQueue(sessionID string) {
 	if err := s.SendMessage(sessionID, next.Text, unmarshalQueueAttachments(next.Attachments)); err != nil {
 		slog.Warn("queue drain send failed, re-queueing", "session", sessionID, "err", err)
 		s.requeueAt(sessionID, dueIdx, next)
+		return
 	}
+	// Recurring item (#111): a successful send does NOT consume it — re-arm
+	// at max(now, prev+interval) with sentCount+1 (unless maxSends caps out).
+	if next.RepeatEveryMs > 0 {
+		s.rescheduleRepeat(sessionID, dueIdx, next)
+	}
+}
+
+// rescheduleRepeat re-inserts a recurring item after its send succeeded
+// (#111). The dequeue already removed the row (dequeue-before-send,
+// exactly-once); this puts it back at its original position with:
+//   - scheduledAt = max(now, prevScheduledAt + interval) — skip-catch-up:
+//     downtime spanning several periods yields ONE send, then the schedule
+//     re-anchors to now (no back-fill);
+//   - sentCount + 1 — counts successful sends only (failed requeues keep it);
+//   - maxSends reached (sentCount would reach N) → the item stays consumed:
+//     the repeat auto-clears and the row is not re-inserted at all.
+func (s *ChatService) rescheduleRepeat(sessionID string, idx int, row store.QueueItem) {
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	sent := row.SentCount + 1
+	if row.MaxSends > 0 && sent >= row.MaxSends {
+		// Repeat budget exhausted: the dequeue already consumed the row —
+		// exactly the "auto-clear, turn back into a normal item" outcome.
+		return
+	}
+	rows, err := s.st.ListQueueItems(s.ctx, sessionID)
+	if err != nil {
+		slog.Warn("queue repeat reschedule: list", "session", sessionID, "err", err)
+		return
+	}
+	nextAt := row.ScheduledAt + row.RepeatEveryMs
+	if now := time.Now().UnixMilli(); nextAt < now {
+		nextAt = now
+	}
+	row.SentCount = sent
+	row.ScheduledAt = nextAt
+	if idx > len(rows) {
+		idx = len(rows)
+	}
+	out := make([]store.QueueItem, 0, len(rows)+1)
+	out = append(out, rows[:idx]...)
+	out = append(out, row)
+	out = append(out, rows[idx:]...)
+	if err := s.st.ReplaceQueueItems(s.ctx, sessionID, out); err != nil {
+		slog.Warn("queue repeat reschedule: persist", "session", sessionID, "err", err)
+		return
+	}
+	s.armQueueTimerLocked(sessionID, out)
+	s.emitQueue(sessionID, out)
 }
 
 // dequeueDue atomically removes and persists the first due item. Returns the
