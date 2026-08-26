@@ -30,6 +30,10 @@
 		<string>public.app-category.developer-tools</string>
 		<key>NSHighResolutionCapable</key>
 		<string>true</string>
+		<!-- Mic access for composer voice dictation (#131): getUserMedia in the
+		     webview presents this prompt; without the key macOS kills the app. -->
+		<key>NSMicrophoneUsageDescription</key>
+		<string>Monkey Deck uses the microphone to transcribe your dictation into the message composer (speech recognition runs locally via whisper.cpp).</string>
 		<key>NSHumanReadableCopyright</key>
 		<string>(c) 2026, jessonchan</string>
 	</dict>
