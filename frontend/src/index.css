@@ -617,8 +617,9 @@ input, textarea { font-family: inherit; }
 .md-table-wrap th,
 .md-table-wrap td {
   border: 1px solid var(--sep-strong);
-  padding: 4px 10px;
+  padding: 4px 8px;
   text-align: left;
+  vertical-align: top;
 }
 .md-table-wrap th {
   background: var(--elev);
