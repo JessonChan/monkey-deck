@@ -1,9 +1,10 @@
-import { useState, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Search, X, Pin, PinOff, Settings, SquareTerminal, ExternalLink, Pencil, FileText, Braces } from "lucide-react";
+import { Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Search, X, Pin, PinOff, Settings, SquareTerminal, ExternalLink, Pencil, FileText, Braces, ListChecks, Check } from "lucide-react";
+import { useCopyFeedback } from "../hooks/useCopyFeedback";
 import {
   DndContext,
   PointerSensor,
@@ -89,7 +90,11 @@ type Ctx =
 
 type ConfirmTarget =
   | { kind: "project"; project: Project }
-  | { kind: "session"; session: Session };
+  | { kind: "session"; session: Session }
+  // Batch delete (#94): the ordered selected-session list (render order),
+  // captured at confirm time so the modal body and the delete loop share one
+  // source of truth even if the live selection changes underneath.
+  | { kind: "batch"; items: { id: string; title: string }[] };
 
 // Sidebar session list pagination page size: the local SQLite full set is already loaded
 // (the query is fast anyway); this only caps rendered DOM nodes so a project with
@@ -157,6 +162,78 @@ export default function Sidebar(props: Props) {
   // model. null = no keyboard cursor (mouse-only / idle).
   const [kbdSelectIdx, setKbdSelectIdx] = useState<number | null>(null);
   const kbdActiveRef = useRef<HTMLDivElement>(null);
+
+  // ── Batch selection (#94) ──────────────────────────────────────────────────
+  // Multi-select sessions via ⌘/Ctrl+click (toggle), Shift+click (range from the
+  // last individually clicked row) and per-row checkboxes (visible while select
+  // mode is on; entered from the header ListChecks button or any modifier click).
+  // Batch actions: copy working directories (newline-joined, worktreePath ||
+  // project path — same resolution as the single-row ctx menu) and delete
+  // (confirm modal, sequential via the existing onRemoveSession flow).
+  const [selMode, setSelMode] = useState(false);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  // Anchor row for Shift+click ranges: the id last individually (toggled) clicked.
+  // Ref not state: it never drives rendering, only click-time range math.
+  const selAnchorRef = useRef<string | null>(null);
+  const { copied: selCopied, failed: selCopyFailed, copy: selCopy } = useCopyFeedback();
+
+  const exitSelMode = () => {
+    setSelMode(false);
+    setSel(new Set());
+    selAnchorRef.current = null;
+  };
+
+  const toggleSel = (id: string) => {
+    setSel((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    selAnchorRef.current = id;
+  };
+
+  // Selected sessions in sidebar render order (project order → session order):
+  // batch copy/delete act on what the user sees, in that order, regardless of
+  // the click order that built the selection.
+  const selectedSessions = (): { s: Session; projectId: string }[] => {
+    const out: { s: Session; projectId: string }[] = [];
+    for (const p of props.projects)
+      for (const s of props.sessionsByProject[p.id] ?? [])
+        if (sel.has(s.id)) out.push({ s, projectId: p.id });
+    return out;
+  };
+
+  const onBatchCopyDirs = async () => {
+    const text = selectedSessions()
+      .map(({ s, projectId }) =>
+        s.worktreePath || props.projects.find((p) => p.id === projectId)?.path || "")
+      .filter(Boolean)
+      .join("\n");
+    if (text) await selCopy(text);
+  };
+
+  const openBatchConfirm = () => {
+    const items = selectedSessions().map(({ s }) => ({
+      id: s.id,
+      title: s.customTitle || s.title || t("sidebar.sessionDraftFallback"),
+    }));
+    if (items.length === 0) return;
+    setConfirm({ kind: "batch", items });
+    setCtx(null);
+    setDeleteErr(null);
+  };
+
+  const onConfirmBatchDelete = async (items: { id: string; title: string }[]) => {
+    setDeleting(true); setDeleteErr(null);
+    try {
+      for (const it of items) await props.onRemoveSession(it.id);
+      setConfirm(null);
+      exitSelMode();
+    } catch (e) { setDeleteErr(String(e)); }
+    finally { setDeleting(false); }
+  };
+
 
   // harness ID → 显示名 查表(供 session 行 harness 图标 tooltip 用);缺省回退到 ID 本身。
   const harnessNameById = (id: string): string =>
@@ -305,7 +382,8 @@ export default function Sidebar(props: Props) {
     setTimeout(() => searchInputRef.current?.focus(), 0);
   };
 
-  // 单个 session 是否命中:空 query 全过;标题子串(本地即时)∪ 内容命中(后端回流)。
+  // Does a single session match the search: empty query passes everything;
+  // title substring (local, instant) ∪ content hits (backend LIKE, async).
   const matchSession = (s: Session) => {
     const q = searchQ.trim().toLowerCase();
     if (!q) return true;
@@ -313,6 +391,52 @@ export default function Sidebar(props: Props) {
     if (contentHits && contentHits.includes(s.id)) return true;
     return false;
   };
+
+  // Rendered session list of a project — the exact array the user sees
+  // (paginated slice, or search-filtered). Shared by the render loop, the
+  // keyboard-nav scope and Shift+click range math so all three agree (#94).
+  const projectList = (pId: string): Session[] => {
+    const projSessions = props.sessionsByProject[pId] ?? [];
+    const sessLimit = sessionLimit[pId] ?? SESSION_PAGE;
+    const visibleSessions = projSessions.slice(0, sessLimit);
+    const searching = searchProj === pId && searchQ.trim() !== "";
+    return searching ? projSessions.filter(matchSession) : visibleSessions;
+  };
+
+  // Drop selected ids that no longer exist in any project's session list
+  // (deleted via ctx menu / another window) so the batch count never lies.
+  const allSessionIds = useMemo(
+    () => new Set(Object.values(props.sessionsByProject).flat().map((s) => s.id)),
+    [props.sessionsByProject],
+  );
+  useEffect(() => {
+    setSel((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (allSessionIds.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [allSessionIds]);
+
+  // Esc leaves select mode once any ctx/confirm overlay has closed itself.
+  // Inputs keep their own Esc handling (search clear / rename cancel).
+  useEffect(() => {
+    if (!selMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const tgt = e.target as HTMLElement | null;
+      if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.isContentEditable)) return;
+      if (ctx || confirm) return;
+      e.preventDefault();
+      exitSelMode();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selMode, ctx, confirm]);
+
 
   // 菜单关闭:Esc、外部点击、窗口 resize。任一 ctx / confirm 存在即注册监听。
   useEffect(() => {
@@ -372,14 +496,8 @@ export default function Sidebar(props: Props) {
   // kbdSelectIdx indexes into this array.
   const selProjId = props.selectedProjectId;
   const selProjExpanded = selProjId ? expanded.has(selProjId) : false;
-  const kbdList: Session[] = (() => {
-    if (!selProjId || !selProjExpanded) return [];
-    const projSessions = props.sessionsByProject[selProjId] ?? [];
-    const sessLimit = sessionLimit[selProjId] ?? SESSION_PAGE;
-    const visibleSessions = projSessions.slice(0, sessLimit);
-    const searching = searchProj === selProjId && searchQ.trim() !== "";
-    return searching ? projSessions.filter(matchSession) : visibleSessions;
-  })();
+  const kbdList: Session[] =
+    !selProjId || !selProjExpanded ? [] : projectList(selProjId);
 
   // Reset the keyboard cursor when it can no longer be valid: switching the selected project
   // (kbdSelectIdx is meaningful only within the selected project's list) or when the list
@@ -441,6 +559,36 @@ export default function Sidebar(props: Props) {
     });
   };
 
+  // Modifier-aware session-row click (#94): ⌘/Ctrl toggles the row into the
+  // selection, Shift extends from the anchor row (within the project's rendered
+  // list; a cross-project anchor degrades to a plain toggle), and a plain click
+  // toggles while select mode is on — activating the session otherwise.
+  // Modifier clicks always enter select mode first, so checkboxes appear.
+  const onSessionRowClick = (e: React.MouseEvent, s: Session, projectId: string) => {
+    if (selMode || e.metaKey || e.ctrlKey || e.shiftKey) {
+      e.preventDefault();
+      setSelMode(true);
+      if (e.shiftKey && selAnchorRef.current) {
+        const list = projectList(projectId);
+        const a = list.findIndex((x) => x.id === selAnchorRef.current);
+        const b = list.findIndex((x) => x.id === s.id);
+        if (a >= 0 && b >= 0) {
+          const [lo, hi] = a < b ? [a, b] : [b, a];
+          setSel((prev) => {
+            const next = new Set(prev);
+            for (let i = lo; i <= hi; i++) next.add(list[i].id);
+            return next;
+          });
+          return;
+        }
+      }
+      toggleSel(s.id);
+      return;
+    }
+    if (props.poppedSessionIds?.has(s.id) && props.onFocusPopout) props.onFocusPopout(s.id);
+    else props.onSelectSession(s.id, projectId);
+  };
+
   return (
     <aside className="sidebar" data-testid="sidebar" onKeyDown={onSidebarKeyDown}>
       <div className="sidebar-header" onDoubleClick={onTitleDoubleClick}>
@@ -449,6 +597,16 @@ export default function Sidebar(props: Props) {
           <button className="icon-btn has-update-dot" data-testid="open-settings" onClick={props.onOpenSettings} data-tooltip-id="md-tip" data-tooltip-content={props.harnessUpdateAvailable ? t("settings.center.openTipUpdate") : t("settings.center.openTip")} data-tooltip-place="bottom">
             <Settings size={16} />
             {props.harnessUpdateAvailable && <span className="update-dot" />}
+          </button>
+          <button
+            className={`icon-btn${selMode ? " batch-on" : ""}`}
+            data-testid="batch-select-mode"
+            onClick={() => (selMode ? exitSelMode() : setSelMode(true))}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={selMode ? t("sidebar.batchSelectOn") : t("sidebar.batchSelectOff")}
+            data-tooltip-place="bottom"
+          >
+            <ListChecks size={16} />
           </button>
           <button className="icon-btn" data-testid="add-project" onClick={props.onAddProject} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.addProject")} data-tooltip-place="bottom">
             <Plus size={17} />
@@ -465,11 +623,9 @@ export default function Sidebar(props: Props) {
         {props.projects.map((p) => {
           const isOpen = expanded.has(p.id);
           const projSessions = props.sessionsByProject[p.id] ?? [];
-          const sessLimit = sessionLimit[p.id] ?? SESSION_PAGE;
-          const visibleSessions = projSessions.slice(0, sessLimit);
-          const hiddenCount = projSessions.length - visibleSessions.length;
+          const hiddenCount = Math.max(0, projSessions.length - (sessionLimit[p.id] ?? SESSION_PAGE));
           const searching = searchProj === p.id && searchQ.trim() !== "";
-          const list = searching ? projSessions.filter(matchSession) : visibleSessions;
+          const list = projectList(p.id);
           // 项目行活跃信号:折叠时显示左竖条(running=慢呼吸 / unread=静态)。展开时 session 行已有 dot/spinner,无需重复。
           const projRunning = projSessions.some((s) => props.statusBySession[s.id] === "prompting");
           const projUnread = projSessions.some((s) => props.statusBySession[s.id] !== "prompting" && props.unreadBySession[s.id]);
@@ -572,16 +728,28 @@ export default function Sidebar(props: Props) {
                       <div
                         key={s.id}
                         ref={kbdActive ? kbdActiveRef : undefined}
-                        className={`session-item-row ${props.selectedSessionId === s.id ? "active" : ""}${kbdActive ? " kbd-active" : ""}`}
+                        className={`session-item-row ${props.selectedSessionId === s.id ? "active" : ""}${kbdActive ? " kbd-active" : ""}${sel.has(s.id) ? " selected" : ""}`}
                         data-testid={`session-${s.id}`}
                         onContextMenu={(e) => openSessionMenu(e, s)}
                       >
+                        {selMode && (
+                          <button
+                            type="button"
+                            className={`session-check${sel.has(s.id) ? " checked" : ""}`}
+                            role="checkbox"
+                            aria-checked={sel.has(s.id)}
+                            aria-label={displayTitle}
+                            data-testid={`sel-${s.id}`}
+                            onClick={(e) => { e.stopPropagation(); setSelMode(true); toggleSel(s.id); }}
+                            data-tooltip-id="md-tip"
+                            data-tooltip-content={t("sidebar.batchCheckTip")}
+                          >
+                            {sel.has(s.id) && <Check size={11} />}
+                          </button>
+                        )}
                         <button
                           className="session-item-main"
-                          onClick={() => {
-                            if (props.poppedSessionIds?.has(s.id) && props.onFocusPopout) props.onFocusPopout(s.id);
-                            else props.onSelectSession(s.id, p.id);
-                          }}
+                          onClick={(e) => onSessionRowClick(e, s, p.id)}
                         >
                           <span className={`session-dot ${cls}`} data-tooltip-id="md-tip" data-tooltip-content={dotTip} />
                           <span className="session-label" {...labelTipProps}>{displayTitle}</span>
@@ -637,6 +805,46 @@ export default function Sidebar(props: Props) {
       </div>
       </SortableContext>
       </DndContext>
+
+      {selMode && sel.size > 0 && (
+        <div className="batch-bar" data-testid="batch-bar" role="toolbar" aria-label={t("sidebar.batchBarLabel")}>
+          <span className="batch-count" data-testid="batch-count">{t("sidebar.batchCount", { count: sel.size })}</span>
+          <span className="batch-acts">
+            <button
+              type="button"
+              className={`batch-btn${selCopyFailed ? " failed" : ""}`}
+              data-testid="batch-copy-dirs"
+              onClick={() => void onBatchCopyDirs()}
+              data-tooltip-id="md-tip"
+              data-tooltip-content={selCopyFailed ? t("common.copyFailed") : t("sidebar.batchCopyDirsTip")}
+            >
+              {selCopied ? <Check size={13} /> : <Copy size={13} />}
+              <span>{selCopied ? t("common.copied") : selCopyFailed ? t("common.copyFailed") : t("sidebar.batchCopyDirs")}</span>
+            </button>
+            <button
+              type="button"
+              className="batch-btn danger"
+              data-testid="batch-delete"
+              onClick={openBatchConfirm}
+              data-tooltip-id="md-tip"
+              data-tooltip-content={t("sidebar.batchDeleteTip")}
+            >
+              <Trash2 size={13} />
+              <span>{t("sidebar.batchDelete")}</span>
+            </button>
+            <button
+              type="button"
+              className="icon-btn small"
+              data-testid="batch-exit"
+              onClick={exitSelMode}
+              data-tooltip-id="md-tip"
+              data-tooltip-content={t("sidebar.batchExit")}
+            >
+              <X size={13} />
+            </button>
+          </span>
+        </div>
+      )}
 
       {ctx?.kind === "project" && (
         <div ref={menuRef} className="ctx-menu" style={{ left: ctx.x, top: ctx.y }} onMouseDown={(e) => e.stopPropagation()}>
@@ -742,6 +950,31 @@ export default function Sidebar(props: Props) {
             <div className="modal-actions">
               <button className="modal-btn ghost" onClick={() => setConfirm(null)}>{t("common.cancel")}</button>
               <button className="modal-btn danger" disabled={deleting} onClick={() => void onConfirmRemoveSession(confirm.session.id)}>{t("common.delete")}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirm?.kind === "batch" && (
+        <div className="modal-overlay" onClick={() => setConfirm(null)} onMouseDown={(e) => e.stopPropagation()}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-title">{t("sidebar.batchDeleteTitle", { count: confirm.items.length })}</div>
+            <div className="modal-del-target">
+              {confirm.items.slice(0, 3).map((it) => it.title).join(", ")}
+              {confirm.items.length > 3 ? ` · ${t("sidebar.batchMore", { count: confirm.items.length - 3 })}` : ""}
+            </div>
+            <div className="modal-del-hint">{t("sidebar.batchDeleteHint")}</div>
+            {deleteErr && <div className="modal-del-err">⚠ {deleteErr}</div>}
+            <div className="modal-actions">
+              <button className="modal-btn ghost" onClick={() => setConfirm(null)}>{t("common.cancel")}</button>
+              <button
+                className="modal-btn danger"
+                data-testid="batch-delete-confirm"
+                disabled={deleting}
+                onClick={() => void onConfirmBatchDelete(confirm.items)}
+              >
+                {t("common.delete")}
+              </button>
             </div>
           </div>
         </div>

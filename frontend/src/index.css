@@ -159,6 +159,27 @@ input, textarea { font-family: inherit; }
 
 .project-list { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
 .sidebar-empty { padding: 16px 12px; color: var(--text-3); font-size: 12px; line-height: 1.5; }
+/* Batch action bar (#94): pinned to the sidebar bottom (above project-list's
+   flex:1) whenever the selection is non-empty. wrap keeps both action buttons
+   + exit button from overflowing on narrow sidebars / mobile (≤768px). */
+.batch-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 8px 8px; padding: 6px 8px;
+  background: var(--elev); border: 1px solid var(--sep-strong); border-radius: var(--r-md);
+}
+.batch-count { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.batch-acts { display: inline-flex; align-items: center; gap: 4px; }
+.batch-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; font-weight: 500; color: var(--text-2);
+  padding: 5px 8px; border-radius: var(--r-sm);
+  transition: background 0.12s, color 0.12s;
+}
+.batch-btn:hover { background: var(--hover); color: var(--text); }
+.batch-btn.danger { color: var(--red); }
+.batch-btn.danger:hover { background: rgba(255, 69, 58, 0.12); color: var(--red); }
+.batch-btn.failed { color: var(--red); }
 
 .project-item-wrap { padding: 1px 0; }
 /* 顶部留白用首个 wrap 的 padding-top,不用滚动容器的 padding-top —— 后者会让 sticky 吸顶时停在 content edge 露出缝隙。 */
@@ -238,6 +259,23 @@ input, textarea { font-family: inherit; }
 }
 .session-item-row:hover { background: var(--hover); color: var(--text); }
 .session-item-row.active { background: var(--sel); color: var(--text); }
+/* Batch selection (#94): selected row = soft accent wash + accent inset bar;
+   stackable with .active (the currently open session). */
+.session-item-row.selected { background: var(--sel-accent); box-shadow: inset 2.5px 0 0 var(--accent); }
+.session-item-row.selected .session-label { color: var(--text); }
+/* Selection checkbox (row head, only while select mode is on; checked = solid accent + white check). */
+.session-check {
+  flex-shrink: 0; width: 15px; height: 15px; margin-left: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1.5px solid var(--sep-strong); border-radius: 4px;
+  background: transparent; color: transparent;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+.session-check:hover { border-color: var(--accent); }
+.session-check.checked { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* Batch-select entry button (header ListChecks) active state. */
+.icon-btn.batch-on { background: var(--accent-soft); color: var(--accent); }
+.icon-btn.batch-on:hover { background: var(--accent-soft); color: var(--accent); }
 /* Keyboard-nav cursor (#101): inset accent ring layered over the row (coexists with .active
    background and :hover). Accent-2 matches the rename-input border / project-active name accent. */
 .session-item-row.kbd-active { box-shadow: inset 0 0 0 1.5px var(--accent-2); }
@@ -2182,6 +2220,8 @@ input, textarea { font-family: inherit; }
   padding: 8px 10px; word-break: break-all;
 }
 .modal-del-err { font-size: 12px; color: var(--red); background: rgba(255, 69, 58, 0.10); border: 1px solid rgba(255, 69, 58, 0.3); border-radius: 6px; padding: 7px 10px; word-break: break-word; }
+/* Batch-delete confirm (#94) unrecoverable hint (muted, distinct from the error row). */
+.modal-del-hint { font-size: 11.5px; color: var(--text-3); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .modal-btn {
   font-size: 12.5px; font-weight: 500; padding: 7px 16px; border-radius: 6px;
