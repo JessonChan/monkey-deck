@@ -1,21 +1,26 @@
 package chat
 
-// prompt_error_test.go:Prompt 错误分类 + N≤3 重试 + emitError payload 的
-// service 级行为测试(#46 步骤 2)。
+// prompt_error_test.go: service-level behavior tests for Prompt error
+// classification + N≤3 retry + emitError payload (#46 step 2).
 //
-// 事实基础:docs/worklog/2026-08-26-quota-exhaustion-probe-46.md——配额耗尽以
-// session/prompt 的 JSON-RPC error response 收场(harness 活着、连接健康),
-// 一刀切 teardown+重连是三重错误(误杀健康 harness / 无意义重连 / 丢失重置时刻)。
-// 钉死三条不变量:
-//  1. 配额耗尽:不 teardown、不重连、不续发队列;error 状态携带
-//     provider_quota_exhausted + ResetAt/RootCause payload。
-//  2. 瞬态错误:同 turn 内自动重试(N≤promptRetryLimit),成功则正常 idle;
-//     耗尽后 error 状态携带 provider_transient_error + RootCause/Attempts,
-//     连接处置与既有非配额错误一致(teardown)。
-//  3. peer 断连 / 未知错误路径原样(error_code_test.go 已钉死,此处不重复)。
+// Factual basis: docs/worklog/2026-08-26-quota-exhaustion-probe-46.md — quota
+// exhaustion ends as the JSON-RPC error response of session/prompt (harness
+// alive, connection healthy), so the blanket teardown+reconnect is a triple
+// error (kills a healthy harness / reconnects pointlessly / drops the reset
+// moment). Three invariants are pinned here:
+//  1. Quota exhaustion: no teardown, no reconnect, no queue auto-drain; the
+//     error status carries provider_quota_exhausted + ResetAt/RootCause payload.
+//  2. Transient error: auto-retry within the same turn (N≤promptRetryLimit);
+//     on success the turn ends idle normally; once exhausted, the error
+//     status carries provider_transient_error + RootCause/Attempts, and the
+//     connection handling matches existing non-quota errors (teardown).
+//  3. Peer disconnect / unknown error paths are unchanged (already pinned in
+//     error_code_test.go; not repeated here).
 //
-// 注:错误注入用纯文本 error(分类是文本锚定,err.Error() 全文匹配),与
-// *RequestError 的 JSON 串含同一文本,分类结果一致——chat 包不直接 import SDK(§2.1)。
+// Note: errors are injected as plain-text errors (classification is
+// text-anchored via full-text match on err.Error()), carrying the same text
+// as the JSON string of *RequestError, so classification is identical — the
+// chat package does not import the SDK directly (§2.1).
 
 import (
 	"errors"
@@ -23,11 +28,13 @@ import (
 	"time"
 )
 
-// quotaErrText 是探针实证的配额耗尽 provider 文本(probe §A/§B 原文)。
+// quotaErrText is the provider quota-exhaustion text confirmed by the probe
+// (verbatim from probe §A/§B).
 const quotaErrText = "已达到 5 小时的使用上限。您的限额将在 2026-08-26 16:32:32 重置。"
 
-// lastPayloadOf 返回 recorder 里最后一条 status payload(线程安全;复用
-// reconnect_test.go 的 statusRecorder,避免裸 struct 被 -race 抓)。
+// lastPayloadOf returns the last status payload in the recorder (thread-safe;
+// reuses statusRecorder from reconnect_test.go so a bare struct is not caught
+// by -race).
 func lastPayloadOf(r *statusRecorder) StatusPayload {
 	ss := r.snapshot()
 	if len(ss) == 0 {
@@ -36,7 +43,8 @@ func lastPayloadOf(r *statusRecorder) StatusPayload {
 	return ss[len(ss)-1]
 }
 
-// waitFinalStatus 轮询等终态(跳过中间 prompting),断言为 want。
+// waitFinalStatus polls until a final status arrives (skipping intermediate
+// prompting) and asserts it equals want.
 func waitFinalStatus(t *testing.T, r *statusRecorder, want string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -52,16 +60,18 @@ func waitFinalStatus(t *testing.T, r *statusRecorder, want string) {
 	t.Fatalf("timeout waiting for final status %q, last = %+v", want, lastPayloadOf(r))
 }
 
-// TestRunPromptQuotaExhaustedKeepsConnection:配额耗尽必须走新分支——
-// 连接保留(isActive)、不重试(count==1)、不续发队列(排队消息原样保留)、
-// error 状态携带重置时刻与根因 payload。
+// TestRunPromptQuotaExhaustedKeepsConnection: quota exhaustion must take the
+// new branch — the connection is kept (isActive), no retry (count==1), the
+// queue is not auto-drained (the queued message is retained verbatim), and
+// the error status carries the reset moment and root cause payload.
 func TestRunPromptQuotaExhaustedKeepsConnection(t *testing.T) {
 	svc, sessionID, fc := newTestService(t)
 	svc.promptRetryBackoff = time.Millisecond // quota never retries; keep tests fast regardless
 	fc.promptErr = errors.New(quotaErrText)
 
-	// 排队一条消息:配额分支不得自动续发(每条都会撞同一堵墙,各触发
-	// harness 内部 ~33s 重试链)。
+	// Queue one message: the quota branch must not auto-drain it (every
+	// message would hit the same wall, each re-triggering the harness's
+	// internal ~33s retry chain).
 	if err := svc.EnqueueMessage(sessionID, "queued-1", nil); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -88,16 +98,18 @@ func TestRunPromptQuotaExhaustedKeepsConnection(t *testing.T) {
 		t.Fatalf("Attempts = %d, want 1 (quota must not auto-retry)", lastPayload.Attempts)
 	}
 
-	// 连接必须保留:JSON-RPC error response 到达 = harness 活着、连接健康
-	// (probe §B);teardown 会误杀健康 harness。
+	// The connection must be kept: the JSON-RPC error response means the
+	// harness is alive and the connection healthy (probe §B); teardown would
+	// kill a healthy harness.
 	if !svc.isActive(sessionID) {
 		t.Fatal("session must stay active after quota exhaustion (connection preserved)")
 	}
-	// 无自动重试。
+	// No auto-retry.
 	if got := fc.count(); got != 1 {
 		t.Fatalf("expected exactly 1 prompt attempt, got %d", got)
 	}
-	// 队列不自动续发:等一小段时间后排阧行仍在、也没有新 Prompt。
+	// Queue is not auto-drained: after a short wait the queued row is still
+	// there and no new Prompt happened.
 	time.Sleep(50 * time.Millisecond)
 	rows, err := svc.st.ListQueueItems(svc.ctx, sessionID)
 	if err != nil {
@@ -111,15 +123,17 @@ func TestRunPromptQuotaExhaustedKeepsConnection(t *testing.T) {
 	}
 }
 
-// TestRunPromptTransientRetryThenSuccess:瞬态错误在同 turn 内自动重试,
-// 第三次尝试成功 → 正常 idle(重试对前端不可见,无中间 error 状态)。
+// TestRunPromptTransientRetryThenSuccess: a transient error auto-retries
+// within the same turn; the third attempt succeeds → normal idle (retries are
+// invisible to the frontend, no intermediate error status).
 func TestRunPromptTransientRetryThenSuccess(t *testing.T) {
 	svc, sessionID, fc := newTestService(t)
 	svc.promptRetryBackoff = time.Millisecond
 	fc.errSeq = []error{
 		errors.New("AI_APICallError: 429 Too Many Requests"),
 		errors.New("rate limit reached for requests, please retry later"),
-		// 第三次:errSeq 耗尽 + promptErr 空 → 正常 block 流程(成功)。
+		// Third attempt: errSeq exhausted + promptErr empty → normal block
+		// flow (success).
 	}
 
 	rec := captureStatuses(svc, sessionID)
@@ -127,8 +141,8 @@ func TestRunPromptTransientRetryThenSuccess(t *testing.T) {
 	if err := svc.SendMessage(sessionID, "hello", nil); err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	waitStarted(t, fc, 3) // 两次失败 + 第三次进入
-	fc.release()          // 放行第三次(成功的)Prompt
+	waitStarted(t, fc, 3) // two failures + the third entering
+	fc.release()          // release the third (successful) Prompt
 
 	waitFinalStatus(t, rec, "idle")
 	if p := lastPayloadOf(rec); p.Code != "" {
@@ -139,9 +153,10 @@ func TestRunPromptTransientRetryThenSuccess(t *testing.T) {
 	}
 }
 
-// TestRunPromptTransientRetriesExhausted:瞬态错误持续失败 → 总尝试次数
-// = 1 + promptRetryLimit(N≤3);error 状态携带 provider_transient_error +
-// 根因 + 尝试次数;连接处置与既有非配额错误一致(teardown)。
+// TestRunPromptTransientRetriesExhausted: a transient error keeps failing →
+// total attempts = 1 + promptRetryLimit (N≤3); the error status carries
+// provider_transient_error + root cause + attempt count; connection handling
+// matches existing non-quota errors (teardown).
 func TestRunPromptTransientRetriesExhausted(t *testing.T) {
 	svc, sessionID, fc := newTestService(t)
 	svc.promptRetryBackoff = time.Millisecond
@@ -167,20 +182,22 @@ func TestRunPromptTransientRetriesExhausted(t *testing.T) {
 	if got := fc.count(); got != 1+promptRetryLimit {
 		t.Fatalf("expected %d total prompt attempts, got %d", 1+promptRetryLimit, got)
 	}
-	// 连接处置与其它非配额错误一致:teardown(下条消息 ensureLive 重连)。
+	// Connection handling matches other non-quota errors: teardown (the next
+	// message reconnects via ensureLive).
 	if svc.isActive(sessionID) {
 		t.Fatal("session should be torn down after transient errors survived retries")
 	}
 }
 
-// TestRunPromptQuotaDuringRetryStopsRetrying:瞬态重试途中撞上配额错误 →
-// 立即停止重试(配额不可重试)、走配额分支(连接保留)。
+// TestRunPromptQuotaDuringRetryStopsRetrying: hitting a quota error mid
+// transient-retry → retrying stops immediately (quota is not retryable) and
+// the quota branch is taken (connection kept).
 func TestRunPromptQuotaDuringRetryStopsRetrying(t *testing.T) {
 	svc, sessionID, fc := newTestService(t)
 	svc.promptRetryBackoff = time.Millisecond
 	fc.errSeq = []error{
 		errors.New("503 Service Unavailable"),
-		errors.New(quotaErrText), // 第二次:配额 → 不再重试
+		errors.New(quotaErrText), // second attempt: quota → no further retry
 	}
 
 	rec := captureStatuses(svc, sessionID)
@@ -202,8 +219,9 @@ func TestRunPromptQuotaDuringRetryStopsRetrying(t *testing.T) {
 	}
 }
 
-// TestSendAndWaitSyncQuotaKeepsConnection:同步驱动路径同样不因配额拆连接
-// (probe §C:三重错误对 sync 路径同样成立)。
+// TestSendAndWaitSyncQuotaKeepsConnection: the synchronous driver path also
+// must not tear down the connection on quota (probe §C: the triple error
+// applies to the sync path alike).
 func TestSendAndWaitSyncQuotaKeepsConnection(t *testing.T) {
 	svc, sessionID, fc := newTestService(t)
 	fc.promptErr = errors.New(quotaErrText)

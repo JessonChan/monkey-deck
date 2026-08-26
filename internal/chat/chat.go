@@ -63,14 +63,18 @@ type StatusPayload struct {
 	// error 与 notice 状态填(error:断连等真错误;notice:空 turn 等非异常温和提示,见 chat.notice.*)。
 	Code   string `json:"code,omitempty"`
 	Detail string `json:"detail,omitempty"`
-	// RootCause:从 Prompt 错误提取的人话根因(如供应商配额文本),error 状态携带
-	// 诊断时填(#46)。前端 i18n 文案可插值展示;禁止直接展示协议 JSON(§4.4)。
+	// RootCause: human-readable root cause extracted from the Prompt error
+	// (e.g. the provider's quota text); set on error status when diagnostics
+	// are attached (#46). The frontend i18n copy may interpolate it; never
+	// surface raw protocol JSON (§4.4).
 	RootCause string `json:"rootCause,omitempty"`
-	// ResetAt:配额耗尽时供应商侧的重置时刻原文(供应商本地时间,如
-	// "2026-08-26 16:32:32"),随 ErrCodeProviderQuotaExhausted 携带(#46)。
+	// ResetAt: verbatim provider-side reset moment on quota exhaustion
+	// (provider local time, e.g. "2026-08-26 16:32:32"); carried with
+	// ErrCodeProviderQuotaExhausted (#46).
 	ResetAt string `json:"resetAt,omitempty"`
-	// Attempts:本轮 Prompt 的总尝试次数(1 + 自动重试,重试上限 promptRetryLimit),
-	// error 状态携带诊断时填(#46)。
+	// Attempts: total Prompt attempts for this turn (1 + auto-retries, capped
+	// by promptRetryLimit); set on error status when diagnostics are
+	// attached (#46).
 	Attempts int `json:"attempts,omitempty"`
 }
 
@@ -88,13 +92,17 @@ const (
 	// (cancelled/refusal/max_tokens/max_turn_requests)——agent 自己没正常跑完这轮(常见:所选模型
 	// 临时不可用、被拒绝、触上限)。harness 仍活、连接是好的,只推提示、不重连;用户可重试。
 	ErrCodeAgentTurnIncomplete = "agent_turn_incomplete"
-	// ErrCodeProviderQuotaExhausted:LLM 供应商配额/用量耗尽。错误以 JSON-RPC error response
-	// 到达 = harness 进程活着、连接健康(#46 探针 §B),**不 teardown、不重连**(重 spawn 恢复
-	// 不了配额);payload 携带 ResetAt(重置时刻原文)与 RootCause。
+	// ErrCodeProviderQuotaExhausted: LLM provider quota/usage exhausted. The
+	// failure arrives as the JSON-RPC error response, i.e. the harness process
+	// is alive and the connection healthy (#46 probe §B) — NO teardown, NO
+	// reconnect (respawning cannot restore quota); the payload carries ResetAt
+	// (verbatim reset moment) and RootCause.
 	ErrCodeProviderQuotaExhausted = "provider_quota_exhausted"
-	// ErrCodeProviderTransient:瞬态供应商/网络错误(429/5xx/超时/连接抖动),已在客户端
-	// 有界自动重试(N≤promptRetryLimit)后仍失败。连接处置与其它非配额错误一致
-	// (teardown + 下条消息重连,#46 探针 §D 回归边界);payload 携带 RootCause 与 Attempts。
+	// ErrCodeProviderTransient: transient provider/network error (429/5xx/
+	// timeout/connection jitter) that still failed after the client-side
+	// bounded auto-retry (N≤promptRetryLimit). Connection handling matches
+	// other non-quota errors (teardown + reconnect on next message, #46 probe
+	// §D regression boundary); the payload carries RootCause and Attempts.
 	ErrCodeProviderTransient = "provider_transient_error"
 )
 
@@ -387,8 +395,8 @@ type ChatService struct {
 
 	// promptRetryBackoff: base backoff for the transient-error Prompt
 	// auto-retry (#46); doubles per retry, cap promptRetryLimit retries.
-	// Production default 2s (max added wait 2+4+8=14s); tests inject a short
-	// value to speed up.
+	// Production default 1s (max added wait 1+2+4=7s, per DoD "1s/2s/4s
+	// magnitude"); tests inject a short value to speed up.
 	promptRetryBackoff time.Duration
 
 	// Server-side per-session queue (#126A, queue.go): FIFO buffer of messages
@@ -417,7 +425,7 @@ func NewChatService(cfg *config.Config) *ChatService {
 		autoUpgradeCooldown:    map[string]time.Time{},
 		autoUpgradeCooldownDur: time.Hour,
 		turnFlushEvery:         time.Second,
-		promptRetryBackoff:     2 * time.Second,
+		promptRetryBackoff:     1 * time.Second,
 	}
 }
 
@@ -523,10 +531,12 @@ func (s *ChatService) emitError(sessionID, code string) {
 	s.emit(EventStatus, StatusPayload{SessionID: sessionID, Status: "error", Code: code})
 }
 
-// emitErrorDiag 推 error 状态:稳定错误码 + 从 Prompt 错误提取的结构化诊断
-// payload(根因 / 配额重置时刻 / 尝试次数,#46)。前端 i18n 文案可插值 RootCause /
-// ResetAt 渲染出比通用文案更具体、仍是人话的提示(§4.4);RootCause 已剥离协议包装,
-// 不是裸 JSON。
+// emitErrorDiag emits an error status: a stable error code plus the
+// structured diagnostic payload extracted from the Prompt error (root cause /
+// quota reset moment / attempt count, #46). The frontend i18n copy may
+// interpolate RootCause / ResetAt to render a hint that is more specific than
+// the generic copy yet still human-readable (§4.4); RootCause is already
+// stripped of protocol wrapping, not raw JSON.
 func (s *ChatService) emitErrorDiag(sessionID, code string, diag acp.PromptErrorInfo, attempts int) {
 	s.emit(EventStatus, StatusPayload{
 		SessionID: sessionID,
@@ -2144,8 +2154,12 @@ func (s *ChatService) InterruptAndSend(sessionID, text string, attachments []acp
 	return s.startTurn(ls, sessionID, text, attachments)
 }
 
-// SendAndWaitSync 同步发送并等待回复(供驱动/测试用;GUI 用异步 SendMessage)。
-// 返回 agent 文本与错误。任何失败都拆连接:调用方重试时 ensureLive 会用 Resume 重连(§5.4 #16)。
+// SendAndWaitSync sends a message synchronously and waits for the reply (for
+// drivers/tests; the GUI uses the async SendMessage). Returns the agent text
+// and error. Connection handling on failure matches runPrompt: quota
+// exhaustion keeps the connection (harness alive and healthy, #46); every
+// other failure tears it down, so the caller's retry reconnects via Resume
+// in ensureLive (§5.4 #16).
 func (s *ChatService) SendAndWaitSync(sessionID, text string, attachments []acp.Attachment) (string, error) {
 	if err := s.ensureLive(sessionID); err != nil {
 		return "", err
@@ -2186,8 +2200,9 @@ func (s *ChatService) SendAndWaitSync(sessionID, text string, attachments []acp.
 		}
 	}
 	if err != nil {
-		// 与 runPrompt 一致:配额耗尽不拆连接(harness 活着、连接健康,#46);
-		// 其余失败一律拆连接(§5.4 #16)。返回原 err 供调用方判断。
+		// Same as runPrompt: quota exhaustion keeps the connection (harness
+		// alive and healthy, #46); every other failure tears it down (§5.4 #16).
+		// Return the original err for the caller to inspect.
 		if diag := acp.DiagnosePromptError(err); diag.Class == acp.PromptErrQuotaExhausted {
 			slog.Error("prompt failed (sync): provider quota exhausted",
 				"session", sessionID, "resetAt", diag.ResetAt)
@@ -2209,16 +2224,23 @@ func (s *ChatService) SendAndWaitSync(sessionID, text string, attachments []acp.
 	return agentText, nil
 }
 
-// promptWithRetry 驱动 Prompt 并对瞬态错误做有界自动重试(#46):
+// promptWithRetry drives Prompt with bounded auto-retry on transient errors (#46):
 //
-//   - 仅 PromptErrorInfo.Class == transient(429/5xx/超时/连接抖动)重试,上限
-//     promptRetryLimit 次(N≤3,首次尝试之外),指数退避(promptRetryBackoff 起步、
-//     每次翻倍)。重试等待感知 turnCtx:用户 Stop 立即中断,返回 ctx 错误走取消收尾。
-//   - 配额耗尽 / peer 断连 / 未知错误不重试:配额重 spawn 恢复不了(重置在数小时后),
-//     断连由 §3.3 的 teardown+reconnect 兜底,未知错误语义不明不硬撞。
-//   - 重试对前端不可见(无中间 status):期间维持 prompting,与 harness 内部重试
-//     「对 client 不可见」的既有哲学一致(§3.3);仅 slog 记录。
-//   - 返回最终 stopReason / err 与总尝试次数 attempts(1 + 实际重试次数)。
+//   - Only PromptErrorInfo.Class == transient (429/5xx/timeout/connection
+//     jitter) retries, capped at promptRetryLimit retries (N≤3 beyond the
+//     first attempt), with exponential backoff (starting at promptRetryBackoff,
+//     doubling per retry). Retry waits observe turnCtx: user Stop interrupts
+//     immediately, returning the ctx error into the cancellation tail.
+//   - Quota exhaustion / peer disconnect / unknown errors never retry: quota
+//     cannot be restored by respawning (it resets hours later), disconnects
+//     are covered by §3.3 teardown+reconnect, and unknown errors are not
+//     worth blindly hammering.
+//   - Retries are invisible to the frontend (no intermediate status): the turn
+//     stays in prompting, consistent with the existing "harness-internal
+//     retries are invisible to the client" philosophy (§3.3); only slog
+//     records them.
+//   - Returns the final stopReason / err and the total attempt count (1 +
+//     actual retries).
 func (s *ChatService) promptWithRetry(ls *liveSession, sessionID string, turnCtx context.Context, text string, attachments []acp.Attachment) (acp.StopReason, error, int) {
 	attempts := 0
 	for {
@@ -2307,24 +2329,31 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 			go s.drainQueue(sessionID)
 			return
 		}
-		// 非用户取消的失败:先分类(#46 探针 §C——一刀切 teardown+重连对配额耗尽
-		// 三步全错:误杀健康 harness、无意义重连、丢掉「何时重置」的关键信息)。
+		// Non-user-cancelled failure: classify first (#46 probe §C — the
+		// blanket teardown+reconnect is wrong on all three counts for quota
+		// exhaustion: it kills a healthy harness, reconnects pointlessly, and
+		// drops the "when does it reset" information).
 		diag := acp.DiagnosePromptError(err)
 		switch diag.Class {
 		case acp.PromptErrQuotaExhausted:
-			// 供应商配额耗尽:错误以 JSON-RPC error response 到达 = harness 活着、
-			// 连接健康(probe §B),不 teardown、不重连(重 spawn 恢复不了配额);
-			// 推结构化 payload(重置时刻 + 根因)给前端转述;队列不自动续发——
-			// 每条排队消息都会撞同一堵墙(各自再触发 harness 内部 ~33s 重试链)。
+			// Provider quota exhausted: the failure arrives as the JSON-RPC
+			// error response, i.e. the harness is alive and the connection
+			// healthy (probe §B) — no teardown, no reconnect (respawning
+			// cannot restore quota). Push a structured payload (reset moment +
+			// root cause) for the frontend to relay; do NOT auto-drain the
+			// queue — every queued message would hit the same wall (each
+			// re-triggering the harness's internal ~33s retry chain).
 			slog.Error("prompt failed: provider quota exhausted",
 				"session", sessionID, "resetAt", diag.ResetAt, "attempts", attempts)
 			s.emitErrorDiag(sessionID, ErrCodeProviderQuotaExhausted, diag, attempts)
 			return
 		case acp.PromptErrTransient:
-			// 瞬态错误在 N≤3 自动重试后仍失败:连接处置与其它非配额错误保持一致
-			// (teardown + 下条消息重连,probe §D 回归边界——不稀释 §3.3 崩溃重连
-			// 语义),但错误码用真实分类而非泛化的 harness_disconnected,
-			// 并携带根因与尝试次数。
+			// Transient error that survived the N≤3 auto-retries: connection
+			// handling matches other non-quota errors (teardown + reconnect on
+			// next message, probe §D regression boundary — do not dilute the
+			// §3.3 crash-reconnect semantics), but the error code reflects the
+			// real classification instead of the generic harness_disconnected,
+			// and carries the root cause and attempt count.
 			s.teardownLive(sessionID, ls)
 			slog.Error("prompt failed: transient error survived retries",
 				"session", sessionID, "attempts", attempts, "cause", diag.RootCause)
@@ -2333,18 +2362,23 @@ func (s *ChatService) runPrompt(ls *liveSession, sessionID, text string, attachm
 			go s.drainQueue(sessionID)
 			return
 		default:
-			// peer 断 / 未知错误:harness 可能已死或不可信,一律拆连接,下条消息
-			// ensureLive 用 Resume 重连(§5.4 #16)。路径原样(probe §D 回归边界)。
+			// Peer disconnect / unknown error: the harness may be dead or
+			// untrustworthy — always tear down; the next message reconnects
+			// via Resume in ensureLive (§5.4 #16). Path unchanged (probe §D
+			// regression boundary).
 			reason := "error"
 			if acp.IsPeerDisconnected(err) {
 				reason = "peer-disconnected"
 			}
 			s.teardownLive(sessionID, ls)
 			slog.Error("prompt failed", "session", sessionID, "err", err, "reason", reason)
-			// §4.4:不把裸 error(协议 JSON/OS 错)抛给用户,改推稳定 code,前端按 code 经 i18n 翻译。
+			// §4.4: never surface the raw error (protocol JSON / OS error) to
+			// the user; push a stable code the frontend translates via i18n.
 			s.emitError(sessionID, ErrCodeHarnessDisconnected)
-			// §3.3 busy 分支自动重连:harness 断连后后台 spawn 新 harness,使 session 自愈。
-			// userStopped(cancelled)天然不触发——干净 cancel 不 teardown、harness 仍可用。
+			// §3.3 busy-branch auto-reconnect: spawn a new harness in the
+			// background so the session self-heals. userStopped (cancelled)
+			// naturally never triggers — a clean cancel does not tear down,
+			// the harness stays usable.
 			s.startReconnect(sessionID)
 			// auto-continue the queue (#126A): drain's SendMessage goes through
 			// ensureLive, which accelerates the reconnect for the queued message.

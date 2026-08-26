@@ -128,9 +128,9 @@ export interface StatusPayload {
   status: "started" | "prompting" | "idle" | "error" | "closed" | "readonly" | "notice" | "reconnecting";
   code?: string; // 稳定错误码;error 状态下前端按 code 经 i18n 翻译(对应 locales 的 chat.error.*)
   detail?: string;
-  rootCause?: string; // 从 Prompt 错误提取的人话根因(如供应商配额文本),error 状态携带诊断时填(#46)
-  resetAt?: string;   // 配额耗尽时供应商侧重置时刻原文(供应商本地时间),随 provider_quota_exhausted 携带(#46)
-  attempts?: number;  // 本轮 Prompt 总尝试次数(1 + 自动重试,上限 3),error 状态携带诊断时填(#46)
+  rootCause?: string; // Human-readable root cause extracted from the Prompt error (e.g. provider quota text); set on error status when diagnostics are attached (#46)
+  resetAt?: string;   // Verbatim provider-side reset moment on quota exhaustion (provider local time); carried with provider_quota_exhausted (#46)
+  attempts?: number;  // Total Prompt attempts for this turn (1 + auto-retries, capped at 3); set on error status when diagnostics are attached (#46)
 }
 
 // @提及的文件/目录引用,经 ACP ContentBlock::ResourceLink 发给 agent。

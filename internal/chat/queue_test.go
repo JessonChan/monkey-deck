@@ -35,7 +35,7 @@ type fakeChat struct {
 	emitHook   func(msg string) // 成功返回前回调(模拟 agent 产出一条消息,避免空 turn)
 	configSets []string         // 记录 SetConfigOption 调用("configId=value")
 	promptErr  error            // 非空则 Prompt 立即返回该错(模拟 peer 断连 / 崩溃,触发 emitError 路由)
-	errSeq     []error          // 按次序消费的 Prompt 错误(#46 重试测试):每次 Prompt 弹一个,耗尽后回落 promptErr;两者皆空走正常 block 流程
+	errSeq     []error          // per-attempt Prompt error sequence consumed in order (#46 retry tests): one popped per Prompt call; falls back to promptErr once exhausted; both empty → normal block flow
 	alive      atomic.Bool      // IsAlive 返回值(默认 true;kill 置 false 模拟 harness 死)
 	declined   atomic.Bool      // ElicitDeclined 返回值(模拟用户主动 decline elicitation 后的空 turn)
 }
