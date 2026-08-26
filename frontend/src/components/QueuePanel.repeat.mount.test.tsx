@@ -12,6 +12,11 @@
 //  4. An odd interval selects "custom" with the minutes seeded; Apply (and
 //     Enter) commits mins*60_000 after the 1~1440 gate; out-of-range values
 //     are rejected with the notice and no call.
+//  5. Custom-tier REACHABILITY (#24335 P1 fix): picking 自定义 on a PLAIN
+//     item (repeatEveryMs=0) must reveal the minutes input through the local
+//     staging flag — nothing is committed yet, so the server mirror alone can
+//     never flip the render condition. Row close drops the reveal; a preset
+//     pick after custom hides the input and commits.
 //
 // Follows the schedule mount-test scaffold (happy-dom + native prototype
 // setters; select commits via a bubbled "change", number input via "input" —
@@ -235,5 +240,93 @@ describe("QueuePanel recurring send (#111)", () => {
     await flush();
     const select = host.querySelector('[data-testid="queue-repeat-select"]') as HTMLSelectElement;
     expect(select.disabled).toBe(true);
+  });
+
+  // ─── custom-tier reachability (#24335 P1 fix) ────────────────────────────
+  // The headline path the review proved dead: a PLAIN item (repeatEveryMs=0)
+  // picks 自定义 — the minutes input must appear via the local reveal flag
+  // (nothing committed yet, so the server mirror alone can never un-hide it),
+  // then Apply commits an odd interval in minutes→ms.
+  test("plain item → pick 自定义 → minutes input appears (nothing committed) → Apply commits odd minutes", async () => {
+    const calls: Array<{ id: string; ms: number }> = [];
+    const { host } = mount(
+      <QueuePanel queue={[item("q1")]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={() => {}} onReorder={() => {}}
+        onSetRepeat={(id, ms) => calls.push({ id, ms })} />
+    );
+    await flush();
+
+    openScheduleRow(host);
+    await flush();
+    const select = host.querySelector('[data-testid="queue-repeat-select"]') as HTMLSelectElement;
+    expect(select.value).toBe("0"); // plain item → 不重复
+    // No minutes input before the tier is picked.
+    expect(host.querySelector('[data-testid="queue-repeat-custom"]')).toBeNull();
+
+    // Pick 自定义: input reveals, select DISPLAYS custom (local state, not the
+    // still-zero mirror), and no commit has happened.
+    setSelectValue(select, "custom");
+    await flush();
+    expect(select.value).toBe("custom");
+    const input = host.querySelector('[data-testid="queue-repeat-custom"]') as HTMLInputElement;
+    expect(input).not.toBeNull();
+    expect(input.value).toBe(""); // plain item → nothing to seed
+    expect(calls).toHaveLength(0);
+
+    // Odd minutes commit via Apply — the only production path to an odd interval.
+    setInputValue(input, "7");
+    await flush();
+    click(host, "queue-repeat-apply");
+    await flush();
+    expect(calls).toEqual([{ id: "q1", ms: 7 * 60_000 }]);
+  });
+
+  test("closing the schedule row drops the custom reveal — reopen shows the mirror tier again", async () => {
+    const calls: Array<{ id: string; ms: number }> = [];
+    const { host } = mount(
+      <QueuePanel queue={[item("q1")]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={() => {}} onReorder={() => {}}
+        onSetRepeat={(id, ms) => calls.push({ id, ms })} />
+    );
+    await flush();
+
+    openScheduleRow(host);
+    await flush();
+    const select = host.querySelector('[data-testid="queue-repeat-select"]') as HTMLSelectElement;
+    setSelectValue(select, "custom");
+    await flush();
+    expect(host.querySelector('[data-testid="queue-repeat-custom"]')).not.toBeNull();
+
+    // Cancel the row: the reveal must not leak into the next open (props never
+    // changed — still a plain item, so the mirror tier is 不重复 again).
+    click(host, "queue-schedule-cancel");
+    await flush();
+    expect(host.querySelector('[data-testid="queue-schedule-row"]')).toBeNull();
+    openScheduleRow(host);
+    await flush();
+    const select2 = host.querySelector('[data-testid="queue-repeat-select"]') as HTMLSelectElement;
+    expect(select2.value).toBe("0");
+    expect(host.querySelector('[data-testid="queue-repeat-custom"]')).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+
+  test("picking a preset after custom hides the minutes input and commits the preset", async () => {
+    const calls: Array<{ id: string; ms: number }> = [];
+    const { host } = mount(
+      <QueuePanel queue={[item("q1")]} onInterrupt={() => {}} onRevoke={() => {}} onEdit={() => {}} onSchedule={() => {}} onReorder={() => {}}
+        onSetRepeat={(id, ms) => calls.push({ id, ms })} />
+    );
+    await flush();
+
+    openScheduleRow(host);
+    await flush();
+    const select = host.querySelector('[data-testid="queue-repeat-select"]') as HTMLSelectElement;
+    setSelectValue(select, "custom");
+    await flush();
+    expect(host.querySelector('[data-testid="queue-repeat-custom"]')).not.toBeNull();
+
+    // Switch straight to a preset: reveal drops (input hides), preset commits.
+    setSelectValue(select, String(5 * 60_000));
+    await flush();
+    expect(calls).toEqual([{ id: "q1", ms: 5 * 60_000 }]);
+    expect(host.querySelector('[data-testid="queue-repeat-custom"]')).toBeNull();
   });
 });

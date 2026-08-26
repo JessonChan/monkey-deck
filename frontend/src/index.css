@@ -1516,9 +1516,15 @@ input, textarea { font-family: inherit; }
 }
 .queue-repeat-select:focus, .queue-repeat-custom:focus { outline: none; border-color: var(--accent-2); }
 .queue-repeat-custom { width: 64px; }
-/* inline 编辑态 */
+/* inline 编辑态(schedule 行同理复用)。Wrap allowed on desktop too (#24335 P3):
+   the schedule row in custom mode carries datetime + presets + save/cancel +
+   tier select + minutes input + Apply — in a narrow desktop window that used
+   to overflow the card horizontally (unreachable before the custom-tier fix);
+   wrapped lines stay tight via row-gap. Wide windows render identically (no
+   overflow → no wrap). */
 .queue-item-edit {
   flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0;
+  flex-wrap: wrap; row-gap: 6px;
 }
 .queue-edit-input {
   flex: 1; font-size: 13px; line-height: 1.4; color: var(--text); background: transparent;
@@ -3108,9 +3114,8 @@ input, textarea { font-family: inherit; }
   .queue-grip { display: none; }
   .queue-btn.move { display: inline-flex; }
   .queue-btn { min-height: 40px; min-width: 40px; padding: 8px 12px; justify-content: center; }
-  .queue-item-actions { flex-basis: 100%; flex-wrap: wrap; }
-  .queue-item-edit { flex-wrap: wrap; }
-  .queue-schedule-error, .queue-schedule-cap, .queue-schedule-pending { flex-basis: 100%; }
+   .queue-item-actions { flex-basis: 100%; flex-wrap: wrap; }
+   .queue-schedule-error, .queue-schedule-cap, .queue-schedule-pending { flex-basis: 100%; }
   /* Repeat tier (#111) wraps full-width on touch too, and its controls grow
      to the same 40px tap target family as the row buttons (#126B parity). */
   .queue-repeat-tier { flex-basis: 100%; flex-wrap: wrap; row-gap: 6px; }

@@ -41,9 +41,10 @@ interface Props {
 // 定时发送:同模式用 datetime-local(非受控 defaultValue + ref)。
 //
 // 循环发送(#111):schedule 编辑行加循环档 select(不重复/每5min/每30min/每1h/自定义分钟数,
-// 预设档选中即提交、自定义走 1~1440 分钟门 + Apply/Enter),调 onSetRepeat → 后端
-// SetQueueItemRepeat(1min~24h 硬校验)。循环项行内徽标(间隔人话 + 已发 N 次,与 #97 倒计时
-// 并存),徽标上的 ✕ 一键取消循环。≤768px 触控沿用 #126B(actions 行 wrap + 40px 按钮)。
+// 预设档选中即提交、自定义走本地 reveal state 显示输入框 + 1~1440 分钟门 + Apply/Enter),
+// 调 onSetRepeat → 后端 SetQueueItemRepeat(1min~24h 硬校验)。循环项行内徽标(间隔人话 +
+// 已发 N 次,与 #97 倒计时并存),徽标上的 ✕ 一键取消循环。≤768px 触控沿用 #126B(actions 行
+// wrap + 40px 按钮)。
 export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSchedule, onReorder, onSetRepeat }: Props) {
   const { t } = useTranslation();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -61,6 +62,15 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   // textarea / datetime-local pickers: read the DOM value at commit — dodges
   // the React 19 + happy-dom onChange edge documented in the schedule row).
   const [repeatError, setRepeatError] = useState<string | null>(null);
+  // Custom-tier reveal (#24335 P1): the select's display value and the minutes
+  // input's render condition CANNOT read the server mirror alone — picking
+  // 自定义 on a plain item (repeatEveryMs=0) commits nothing yet, so no
+  // chat:queue snapshot ever arrives to flip the mirror: the input would never
+  // appear, and any ticker/snapshot re-render would snap the select back to
+  // 不重复. This local staging flag bridges the reveal: applyRepeatTier("custom")
+  // sets it, preset picks and row close reset it; the mirror's own odd-interval
+  // "custom" (legacy seeding) keeps the input visible without the flag.
+  const [customTierOpen, setCustomTierOpen] = useState(false);
   const repeatCustomRef = useRef<HTMLInputElement>(null);
   const [dragId, setDragId] = useState<string | null>(null);   // 正被拖拽的条目 id
   const [overId, setOverId] = useState<string | null>(null);   // 拖拽悬停的目标条目 id
@@ -122,15 +132,17 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
     setPendingAt(item.scheduledAt > Date.now() ? item.scheduledAt : null);
     setScheduleCapped(false);
     setRepeatError(null);
+    setCustomTierOpen(false);
   };
   // Closing the schedule row fully drops the staging state (issue #130 wrap-up):
   // pendingAt/scheduleCapped must not survive cancel/save/clear — startSchedule
   // reseeds anyway, but no staging may leak out of a closed row. Same for the
-  // repeat tier's custom input + notice (#111).
+  // repeat tier's custom input + notice (#111) and its reveal flag (#24335 P1).
   const resetStaging = () => {
     setPendingAt(null);
     setScheduleCapped(false);
     setRepeatError(null);
+    setCustomTierOpen(false);
   };
   const cancelSchedule = () => { setSchedulingId(null); setScheduleError(null); resetStaging(); };
   // ✕ on the staged chip (issue #130 wrap-up 2): drop the staging IN PLACE —
@@ -202,9 +214,10 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
 
   // ─── repeat tier (#111) ───────────────────────────────────────────────────
   // Preset tiers commit immediately on select ("不重复" clears); "自定义" only
-  // reveals the minutes input, whose value commits via Apply / Enter after the
-  // 1~1440min gate (mirrors the backend's 1min~24h hard validation — the gate
-  // here keeps the notice instant instead of a binding round-trip rejection).
+  // reveals the minutes input via the local customTierOpen flag (#24335 P1),
+  // whose value commits via Apply / Enter after the 1~1440min gate (mirrors
+  // the backend's 1min~24h hard validation — the gate here keeps the notice
+  // instant instead of a binding round-trip rejection).
   const REPEAT_TIERS = [5, 30, 60] as const; // minutes
   const repeatTierOf = (ms: number): string => {
     if (ms <= 0) return "0";
@@ -213,7 +226,8 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   };
   const applyRepeatTier = (v: string) => {
     if (!schedulingId || !onSetRepeat) return;
-    if (v === "custom") return; // reveals the input; commits via applyRepeatCustom
+    if (v === "custom") { setCustomTierOpen(true); return; } // reveals the input; commits via applyRepeatCustom
+    setCustomTierOpen(false);
     onSetRepeat(schedulingId, Number(v));
     setRepeatError(null);
   };
@@ -248,6 +262,13 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
       {queue.map((item, idx) => {
         const pending = item.scheduledAt > now;
         const remaining = pending ? item.scheduledAt - now : 0;
+        // Repeat tier display (#24335 P1): the local reveal flag OR the
+        // mirror's own odd-interval verdict. Drives both the select's display
+        // value and the minutes input's render condition — a plain item that
+        // picked 自定义 must show "custom" + the input before anything is
+        // committed (the mirror only catches up after the Apply round-trip).
+        const tierValue = repeatTierOf(item.repeatEveryMs ?? 0);
+        const customVisible = customTierOpen || tierValue === "custom";
         return (
         <div
           className={`queue-item${overId === item.id ? " drag-over" : ""}`}
@@ -411,8 +432,10 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
               )}
               {/* Repeat tier (#111): recurrence select in the schedule edit row.
                   Presets (incl. 不重复) commit immediately; 自定义 reveals the
-                  minutes input (1~1440, Apply/Enter commits). Independent of
-                  Save — the tier edits recurrence, not the next-due time. */}
+                  minutes input (1~1440, Apply/Enter commits) through the local
+                  customTierOpen flag (#24335 P1) — OR'ed with the mirror's own
+                  odd-interval verdict so legacy items stay seeded. Independent
+                  of Save — the tier edits recurrence, not the next-due time. */}
               <span
                 className="queue-repeat-tier"
                 data-testid="queue-repeat-tier"
@@ -423,7 +446,7 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                 <select
                   className="queue-repeat-select"
                   data-testid="queue-repeat-select"
-                  value={repeatTierOf(item.repeatEveryMs ?? 0)}
+                  value={customVisible ? "custom" : tierValue}
                   disabled={!onSetRepeat}
                   onChange={(e) => applyRepeatTier(e.target.value)}
                 >
@@ -435,7 +458,7 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                   ))}
                   <option value="custom">{t("queue.repeatCustom")}</option>
                 </select>
-                {repeatTierOf(item.repeatEveryMs ?? 0) === "custom" && (
+                {customVisible && (
                   <>
                     <input
                       className="queue-repeat-custom"
@@ -458,7 +481,9 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                       className="queue-btn save"
                       data-testid="queue-repeat-apply"
                       onClick={applyRepeatCustom}
-                      title={t("queue.repeatApplyTip")}
+                      data-tooltip-id="md-tip"
+                      data-tooltip-content={t("queue.repeatApplyTip")}
+                      aria-label={t("queue.repeatApplyTip")}
                     >
                       <Check size={13} /> {t("queue.repeatApply")}
                     </button>
