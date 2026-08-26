@@ -8,6 +8,8 @@
 //      main → onConfirm mode=project; picking a linked worktree → mode=enter (+enterPath).
 //   3. "New worktree": base-ref selector groups Default → Recently used → All, each branch
 //      exactly once; picking one → mode=new (+baseRef).
+//   4. Every confirmed choice carries mcpServerIDs (per-session MCP selection; empty
+//      catalog → []), i.e. the field never goes missing from NewSessionChoice.
 //
 // §5.3: pin invariants ("explicit pick required"; "each item once in priority order").
 
@@ -35,6 +37,14 @@ window.React = React;
 mock.module("react-i18next", () => ({
   useTranslation: () => ({ t: (k: string) => k }),
   initReactI18next: { type: "3rd-party" },
+}));
+
+// ChatService bindings: ListMcpServers mock. The modal loads the global MCP catalog on
+// mount; without a mock the wails runtime call attempts a real fetch and rejects (caught
+// by the component). Empty catalog → no MCP section, every onConfirm carries
+// mcpServerIDs: []. Module shape must match the component's namespace import.
+mock.module("../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice", () => ({
+  ListMcpServers: async () => [],
 }));
 
 // Dynamic import is intentional: mock.module() must register BEFORE the component module is
@@ -122,7 +132,7 @@ describe("NewSessionModal workdir mode", () => {
     expect(confirmBtn.disabled).toBe(false);
     confirmBtn.dispatchEvent(click());
     await flush();
-    expect(onConfirm).toHaveBeenCalledWith({ harness: "omp", mode: "project" });
+    expect(onConfirm).toHaveBeenCalledWith({ harness: "omp", mode: "project", mcpServerIDs: [] });
   });
 
   test("existing selector groups main → linked; picking a linked worktree → enter", async () => {
@@ -158,7 +168,7 @@ describe("NewSessionModal workdir mode", () => {
     const confirmBtn = host.querySelector('[data-testid="ns-confirm"]') as HTMLButtonElement;
     confirmBtn.dispatchEvent(click());
     await flush();
-    expect(onConfirm).toHaveBeenCalledWith({ harness: "omp", mode: "enter", enterPath: "/proj/wt-b" });
+    expect(onConfirm).toHaveBeenCalledWith({ harness: "omp", mode: "enter", enterPath: "/proj/wt-b", mcpServerIDs: [] });
   });
 });
 
@@ -207,7 +217,7 @@ describe("NewSessionModal new-worktree base-ref selector", () => {
     expect(confirmBtn.disabled).toBe(false);
     confirmBtn.dispatchEvent(click());
     await flush();
-    expect(onConfirm).toHaveBeenCalledWith({ harness: "omp", mode: "new", baseRef: "develop" });
+    expect(onConfirm).toHaveBeenCalledWith({ harness: "omp", mode: "new", baseRef: "develop", mcpServerIDs: [] });
   });
 });
 
@@ -241,7 +251,7 @@ describe("NewSessionModal quick picks", () => {
     await flush();
     host.querySelector('[data-testid="ns-confirm"]')!.dispatchEvent(click());
     await flush();
-    expect(onConfirm).toHaveBeenCalledWith({ harness: "omp", mode: "enter", enterPath: "/proj/wt-a" });
+    expect(onConfirm).toHaveBeenCalledWith({ harness: "omp", mode: "enter", enterPath: "/proj/wt-a", mcpServerIDs: [] });
   });
 
   test("base-ref quick picks: main + 2 recent; click selects without opening dropdown", async () => {
@@ -273,6 +283,6 @@ describe("NewSessionModal quick picks", () => {
     await flush();
     host.querySelector('[data-testid="ns-confirm"]')!.dispatchEvent(click());
     await flush();
-    expect(onConfirm).toHaveBeenCalledWith({ harness: "omp", mode: "new", baseRef: "develop" });
+    expect(onConfirm).toHaveBeenCalledWith({ harness: "omp", mode: "new", baseRef: "develop", mcpServerIDs: [] });
   });
 });
