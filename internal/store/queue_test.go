@@ -59,6 +59,22 @@ func TestQueueReplaceListRoundtrip(t *testing.T) {
 		t.Fatalf("empty attachments should round-trip empty, got %q", got[1].Attachments)
 	}
 
+	// Recurring fields (#111) default to zero for plain rows…
+	if got[0].RepeatEveryMs != 0 || got[0].SentCount != 0 || got[0].MaxSends != 0 {
+		t.Fatalf("plain item must default repeat fields to 0, got %+v", got[0])
+	}
+	// …and round-trip when set (sent_count advances, max_sends caps).
+	items[0].RepeatEveryMs = 5 * 60_000
+	items[0].SentCount = 3
+	items[0].MaxSends = 5
+	if err := st.ReplaceQueueItems(ctx, sid, items); err != nil {
+		t.Fatalf("replace repeat: %v", err)
+	}
+	gotR, _ := st.ListQueueItems(ctx, sid)
+	if gotR[0].RepeatEveryMs != 5*60_000 || gotR[0].SentCount != 3 || gotR[0].MaxSends != 5 {
+		t.Fatalf("repeat fields mismatch: %+v", gotR[0])
+	}
+
 	// Reorder (swap) + re-replace: positions rewrite, ids keep identity.
 	swapped := []QueueItem{got[1], got[0]}
 	if err := st.ReplaceQueueItems(ctx, sid, swapped); err != nil {

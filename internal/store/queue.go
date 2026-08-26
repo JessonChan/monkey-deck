@@ -26,6 +26,13 @@ type QueueItem struct {
 	Text        string `json:"text"`
 	Attachments string `json:"attachments"`
 	ScheduledAt int64  `json:"scheduledAt"` // epoch ms; due when <= now
+	// Recurring send (#111): RepeatEveryMs > 0 re-arms the item after each
+	// successful send (skip-catch-up: next = max(now, prev+interval));
+	// SentCount counts successful repeat sends; MaxSends 0 = unlimited,
+	// N = auto-clear the repeat once SentCount reaches N.
+	RepeatEveryMs int64 `json:"repeatEveryMs"`
+	SentCount     int64 `json:"sentCount"`
+	MaxSends      int64 `json:"maxSends"`
 }
 
 // NewQueueItem builds a due-now row with a fresh id.
@@ -42,7 +49,7 @@ func NewQueueItem(text, attachmentsJSON string, scheduledAt int64) QueueItem {
 // none — never nil, so callers get a stable array shape).
 func (s *Store) ListQueueItems(ctx context.Context, sessionID string) ([]QueueItem, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, text, attachments, scheduled_at FROM queue_items WHERE session_id=? ORDER BY position`,
+		`SELECT id, text, attachments, scheduled_at, repeat_every_ms, sent_count, max_sends FROM queue_items WHERE session_id=? ORDER BY position`,
 		sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("list queue items: %w", err)
@@ -51,7 +58,7 @@ func (s *Store) ListQueueItems(ctx context.Context, sessionID string) ([]QueueIt
 	out := []QueueItem{}
 	for rows.Next() {
 		var it QueueItem
-		if err := rows.Scan(&it.ID, &it.Text, &it.Attachments, &it.ScheduledAt); err != nil {
+		if err := rows.Scan(&it.ID, &it.Text, &it.Attachments, &it.ScheduledAt, &it.RepeatEveryMs, &it.SentCount, &it.MaxSends); err != nil {
 			return nil, fmt.Errorf("scan queue item: %w", err)
 		}
 		out = append(out, it)
@@ -77,8 +84,8 @@ func (s *Store) ReplaceQueueItems(ctx context.Context, sessionID string, items [
 			it.ID = "q-" + uuid.NewString()
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO queue_items(id, session_id, text, attachments, scheduled_at, position, created_at) VALUES(?,?,?,?,?,?,?)`,
-			it.ID, sessionID, it.Text, it.Attachments, it.ScheduledAt, i, nowMs); err != nil {
+			`INSERT INTO queue_items(id, session_id, text, attachments, scheduled_at, repeat_every_ms, sent_count, max_sends, position, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+			it.ID, sessionID, it.Text, it.Attachments, it.ScheduledAt, it.RepeatEveryMs, it.SentCount, it.MaxSends, i, nowMs); err != nil {
 			return fmt.Errorf("insert queue item: %w", err)
 		}
 	}
