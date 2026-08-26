@@ -140,8 +140,12 @@ export default function DirBrowserModal({ onConfirm, onCancel }: Props) {
           {!error && !loading && !cur && roots.map((r) =>
             renderRow(r.path, rootIcon(r.name), r.name, r.path, () => void openDir(r.path), `dir-browser-root-${r.name}`)
           )}
-          {!error && !loading && cur && cur.dirs.length === 0 && <div className="dir-browser-state">{t("dirBrowser.empty")}</div>}
-          {!error && !loading && cur && cur.dirs.map((d) =>
+          {/* `?? []`: the -ts binding generation types Go's nilable slice as
+              `BrowseEntry[] | null` — BrowseDir always returns a non-nil slice,
+              but the guard keeps both binding formats (.ts strict / .js JSDoc)
+              compiling. */}
+          {!error && !loading && cur && (cur.dirs ?? []).length === 0 && <div className="dir-browser-state">{t("dirBrowser.empty")}</div>}
+          {!error && !loading && cur && (cur.dirs ?? []).map((d) =>
             renderRow(d.path, <Folder size={14} />, d.name, d.path, () => void openDir(d.path), `dir-browser-entry-${d.name}`)
           )}
         </div>
