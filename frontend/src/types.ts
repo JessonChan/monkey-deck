@@ -179,11 +179,17 @@ export interface Attachment {
 // the frontend reuses it for "send now" (InterruptAndSend).
 // scheduledAt: epoch-ms send time; default = enqueue time ("due now"). A future
 // value parks the item (backend skips it on drain, fires a one-shot timer).
+// repeatEveryMs/sentCount (#111): recurring send — >0 re-arms the item after
+// each successful send (max(now, prev+interval), skip-catch-up); sentCount
+// counts those sends. Both optional for legacy-shaped test fixtures (0/absent
+// = plain one-shot item).
 export interface QueueItem {
   id: string;
   text: string;
   attachments?: Attachment[];
   scheduledAt: number;
+  repeatEveryMs?: number;
+  sentCount?: number;
 }
 
 // chat:queue event body (#126A): full authoritative per-session queue snapshot,

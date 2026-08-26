@@ -1491,6 +1491,31 @@ input, textarea { font-family: inherit; }
 }
 .queue-schedule-pending .queue-schedule-reset:hover { background: var(--hover); color: var(--text); }
 .queue-schedule-cap { color: var(--amber); font-size: 11px; flex-shrink: 0; font-weight: 600; }
+/* Recurring badge (#111): same mono/amber family as the scheduled badge; the
+   inline ✕ is the one-click cancel (mirrors the staged chip's reset). */
+.queue-repeat-badge {
+  font-family: var(--mono); font-size: 10px; color: var(--amber); font-weight: 600;
+  flex-shrink: 0; white-space: nowrap; display: inline-flex; align-items: center; gap: 3px;
+}
+.queue-repeat-sent { color: var(--text-3); font-weight: 400; }
+.queue-repeat-badge .queue-repeat-reset {
+  display: inline-flex; align-items: center; padding: 3px; margin-left: 1px;
+  background: none; border: none; border-radius: var(--r-sm); color: inherit;
+  cursor: pointer; line-height: 1;
+}
+.queue-repeat-badge .queue-repeat-reset:hover { background: var(--hover); color: var(--text); }
+/* Repeat tier in the schedule edit row (#111): select + custom minutes input. */
+.queue-repeat-tier {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  color: var(--amber);
+}
+.queue-repeat-select, .queue-repeat-custom {
+  font-size: 12px; color: var(--text); background: var(--elev-2);
+  border: 1px solid var(--sep-strong); border-radius: var(--r-sm); padding: 4px 6px;
+  font-family: inherit;
+}
+.queue-repeat-select:focus, .queue-repeat-custom:focus { outline: none; border-color: var(--accent-2); }
+.queue-repeat-custom { width: 64px; }
 /* inline 编辑态 */
 .queue-item-edit {
   flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0;
@@ -3086,9 +3111,14 @@ input, textarea { font-family: inherit; }
   .queue-item-actions { flex-basis: 100%; flex-wrap: wrap; }
   .queue-item-edit { flex-wrap: wrap; }
   .queue-schedule-error, .queue-schedule-cap, .queue-schedule-pending { flex-basis: 100%; }
+  /* Repeat tier (#111) wraps full-width on touch too, and its controls grow
+     to the same 40px tap target family as the row buttons (#126B parity). */
+  .queue-repeat-tier { flex-basis: 100%; flex-wrap: wrap; row-gap: 6px; }
+  .queue-repeat-select, .queue-repeat-custom { min-height: 40px; }
   /* ✕ on the staged chip gets a touch-sized hit area too (not a .queue-btn,
      so the 40px rule above does not reach it). */
   .queue-schedule-pending .queue-schedule-reset { padding: 6px; }
+  .queue-repeat-badge .queue-repeat-reset { padding: 6px; }
 
   /* Header: session title + status only. Project name, terminal / model /
      branch / merge chips are desktop density on a phone. */

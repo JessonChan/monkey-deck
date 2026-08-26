@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { QueueItem } from "../types";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Zap, Pencil, Trash2, Check, X, Clock, GripVertical, ChevronUp, ChevronDown } from "lucide-react";
+import { Zap, Pencil, Trash2, Check, X, Clock, GripVertical, ChevronUp, ChevronDown, Repeat } from "lucide-react";
 
 interface Props {
   queue: QueueItem[];
@@ -11,6 +11,9 @@ interface Props {
   onEdit: (id: string, text: string) => void; // inline 编辑:改队列里这条的文本,保留在队列
   onSchedule: (id: string, scheduledAt: number) => void; // 定时发送:设/清这条的 scheduledAt(0/Date.now()=立即)
   onReorder: (activeId: string, overId: string) => void; // 拖拽重排:把 activeId 这条移到 overId 这条的位置
+  // 循环发送(#111):设/改/清(0)这条的 repeatEveryMs(1min~24h)。可选仅为兼容
+  // 既有 mount 测试的最小 props;App 侧始终接线(ChatService.SetQueueItemRepeat)。
+  onSetRepeat?: (id: string, repeatEveryMs: number) => void;
 }
 
 // QueuePanel:turn 进行中时排队消息的列表面板。
@@ -36,7 +39,12 @@ interface Props {
 // 编辑态 textarea 用非受控(defaultValue)+ ref:保存时直接读 DOM 当前值,既避开受控组件在
 // 事件流上的边角问题,也杜绝「state 尚未同步就读值」的 stale 风险。
 // 定时发送:同模式用 datetime-local(非受控 defaultValue + ref)。
-export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSchedule, onReorder }: Props) {
+//
+// 循环发送(#111):schedule 编辑行加循环档 select(不重复/每5min/每30min/每1h/自定义分钟数,
+// 预设档选中即提交、自定义走 1~1440 分钟门 + Apply/Enter),调 onSetRepeat → 后端
+// SetQueueItemRepeat(1min~24h 硬校验)。循环项行内徽标(间隔人话 + 已发 N 次,与 #97 倒计时
+// 并存),徽标上的 ✕ 一键取消循环。≤768px 触控沿用 #126B(actions 行 wrap + 40px 按钮)。
+export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSchedule, onReorder, onSetRepeat }: Props) {
   const { t } = useTranslation();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [schedulingId, setSchedulingId] = useState<string | null>(null);
@@ -46,6 +54,14 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   const [pendingAt, setPendingAt] = useState<number | null>(null);
   // Set when preset stacking was clamped by the 24h cap (issue #130).
   const [scheduleCapped, setScheduleCapped] = useState(false);
+  // Repeat tier (#111): the schedule row's recurrence select commits preset
+  // tiers immediately; "custom" reveals a minutes input (1~1440) committed by
+  // Apply/Enter. repeatError is the custom-input validation notice. The custom
+  // input is UNCONTROLLED (defaultValue + ref, same pattern as the edit
+  // textarea / datetime-local pickers: read the DOM value at commit — dodges
+  // the React 19 + happy-dom onChange edge documented in the schedule row).
+  const [repeatError, setRepeatError] = useState<string | null>(null);
+  const repeatCustomRef = useRef<HTMLInputElement>(null);
   const [dragId, setDragId] = useState<string | null>(null);   // 正被拖拽的条目 id
   const [overId, setOverId] = useState<string | null>(null);   // 拖拽悬停的目标条目 id
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -96,19 +112,25 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   // Opening the schedule row seeds the staged time from the item's existing
   // schedule (editing a pending schedule stacks on top of it); due/unscheduled
   // → null (presets start from "now"). Per-session staging state resets here.
+  // The repeat tier's custom input seeds itself from the item's interval via
+  // defaultValue on mount (#111) — an odd legacy interval selects "custom"
+  // with the minutes filled in.
   const startSchedule = (item: QueueItem) => {
     setSchedulingId(item.id);
     setEditingId(null);
     setScheduleError(null);
     setPendingAt(item.scheduledAt > Date.now() ? item.scheduledAt : null);
     setScheduleCapped(false);
+    setRepeatError(null);
   };
   // Closing the schedule row fully drops the staging state (issue #130 wrap-up):
   // pendingAt/scheduleCapped must not survive cancel/save/clear — startSchedule
-  // reseeds anyway, but no staging may leak out of a closed row.
+  // reseeds anyway, but no staging may leak out of a closed row. Same for the
+  // repeat tier's custom input + notice (#111).
   const resetStaging = () => {
     setPendingAt(null);
     setScheduleCapped(false);
+    setRepeatError(null);
   };
   const cancelSchedule = () => { setSchedulingId(null); setScheduleError(null); resetStaging(); };
   // ✕ on the staged chip (issue #130 wrap-up 2): drop the staging IN PLACE —
@@ -177,6 +199,35 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
     if (scheduleRef.current) scheduleRef.current.value = toLocalInput(at);
   };
   const SCHEDULE_PRESETS = [5, 10, 30] as const;
+
+  // ─── repeat tier (#111) ───────────────────────────────────────────────────
+  // Preset tiers commit immediately on select ("不重复" clears); "自定义" only
+  // reveals the minutes input, whose value commits via Apply / Enter after the
+  // 1~1440min gate (mirrors the backend's 1min~24h hard validation — the gate
+  // here keeps the notice instant instead of a binding round-trip rejection).
+  const REPEAT_TIERS = [5, 30, 60] as const; // minutes
+  const repeatTierOf = (ms: number): string => {
+    if (ms <= 0) return "0";
+    if ((REPEAT_TIERS as readonly number[]).includes(ms / 60_000)) return String(ms);
+    return "custom";
+  };
+  const applyRepeatTier = (v: string) => {
+    if (!schedulingId || !onSetRepeat) return;
+    if (v === "custom") return; // reveals the input; commits via applyRepeatCustom
+    onSetRepeat(schedulingId, Number(v));
+    setRepeatError(null);
+  };
+  const applyRepeatCustom = () => {
+    if (!schedulingId || !onSetRepeat) return;
+    const mins = Number.parseInt(repeatCustomRef.current?.value ?? "", 10);
+    if (!Number.isFinite(mins) || mins < 1 || mins > 1440) {
+      setRepeatError(t("queue.repeatCustomInvalid"));
+      return;
+    }
+    onSetRepeat(schedulingId, mins * 60_000);
+    setRepeatError(null);
+  };
+  const cancelRepeat = (id: string) => onSetRepeat?.(id, 0);
 
   return (
     <div className="queue-panel" data-testid="queue-panel">
@@ -358,6 +409,67 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                   {scheduleError}
                 </span>
               )}
+              {/* Repeat tier (#111): recurrence select in the schedule edit row.
+                  Presets (incl. 不重复) commit immediately; 自定义 reveals the
+                  minutes input (1~1440, Apply/Enter commits). Independent of
+                  Save — the tier edits recurrence, not the next-due time. */}
+              <span
+                className="queue-repeat-tier"
+                data-testid="queue-repeat-tier"
+                data-tooltip-id="md-tip"
+                data-tooltip-content={t("queue.repeatTip")}
+              >
+                <Repeat size={11} />
+                <select
+                  className="queue-repeat-select"
+                  data-testid="queue-repeat-select"
+                  value={repeatTierOf(item.repeatEveryMs ?? 0)}
+                  disabled={!onSetRepeat}
+                  onChange={(e) => applyRepeatTier(e.target.value)}
+                >
+                  <option value="0">{t("queue.repeatNone")}</option>
+                  {REPEAT_TIERS.map((m) => (
+                    <option key={m} value={m * 60_000}>
+                      {t("queue.repeatEvery", { interval: formatRepeatInterval(m * 60_000, t) })}
+                    </option>
+                  ))}
+                  <option value="custom">{t("queue.repeatCustom")}</option>
+                </select>
+                {repeatTierOf(item.repeatEveryMs ?? 0) === "custom" && (
+                  <>
+                    <input
+                      className="queue-repeat-custom"
+                      data-testid="queue-repeat-custom"
+                      type="number"
+                      min={1}
+                      max={1440}
+                      placeholder={t("queue.repeatCustomUnit")}
+                      defaultValue={(item.repeatEveryMs ?? 0) > 0 ? String(Math.round(item.repeatEveryMs! / 60_000)) : ""}
+                      ref={repeatCustomRef}
+                      onKeyDown={(e) => {
+                        if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return;
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          applyRepeatCustom();
+                        }
+                      }}
+                    />
+                    <button
+                      className="queue-btn save"
+                      data-testid="queue-repeat-apply"
+                      onClick={applyRepeatCustom}
+                      title={t("queue.repeatApplyTip")}
+                    >
+                      <Check size={13} /> {t("queue.repeatApply")}
+                    </button>
+                  </>
+                )}
+                {repeatError && (
+                  <span className="queue-schedule-error" data-testid="queue-repeat-error">
+                    {repeatError}
+                  </span>
+                )}
+              </span>
             </div>
           ) : (
             <>
@@ -393,6 +505,35 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                   {t("queue.scheduled", { time: formatClock(item.scheduledAt) })}
                 </span>
               ) : null}
+              {/* Recurring badge (#111): interval in human terms + "sent N×"
+                  odometer. Coexists with the #97 countdown above (a recurring
+                  item has BOTH a next-due time and an interval). The inline ✕
+                  is the one-click cancel — no need to open the schedule row. */}
+              {(item.repeatEveryMs ?? 0) > 0 && (
+                <span
+                  className="queue-repeat-badge"
+                  data-testid="queue-repeat-badge"
+                  data-tooltip-id="md-tip"
+                  data-tooltip-content={t("queue.repeatBadgeTip")}
+                >
+                  <Repeat size={11} /> {t("queue.repeatEvery", { interval: formatRepeatInterval(item.repeatEveryMs!, t) })}
+                  {(item.sentCount ?? 0) > 0 && (
+                    <span className="queue-repeat-sent" data-testid="queue-repeat-sent">
+                      {" "}{t("queue.repeatSent", { count: item.sentCount })}
+                    </span>
+                  )}
+                  <button
+                    className="queue-repeat-reset"
+                    data-testid="queue-repeat-cancel"
+                    data-tooltip-id="md-tip"
+                    data-tooltip-content={t("queue.repeatCancelTip")}
+                    aria-label={t("queue.repeatCancelTip")}
+                    onClick={() => cancelRepeat(item.id)}
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              )}
               <div className="queue-item-actions">
                 {/* Mobile reorder (issue #126B): HTML5 drag is unreachable on touch, so the
                     actions row gains explicit up/down buttons hidden on desktop (CSS). They
@@ -481,6 +622,15 @@ function formatRemaining(ms: number, t: TFunction): string {
   if (h > 0) return t("queue.countdownHms", { h, m, s });
   if (m > 0) return t("queue.countdownMs", { m, s });
   return t("queue.countdownS", { s });
+}
+
+// Format a repeat interval (ms) into a localized compact form (#111):
+// whole hours → "1小时"/"1h"; otherwise minutes → "5分钟"/"5m". Used by both
+// the tier select options and the recurring badge.
+function formatRepeatInterval(ms: number, t: TFunction): string {
+  const mins = Math.round(ms / 60_000);
+  if (mins % 60 === 0) return t("queue.repeatH", { h: mins / 60 });
+  return t("queue.repeatM", { m: mins });
 }
 
 // datetime-local 用本地时区 "YYYY-MM-DDTHH:mm"(无时区后缀)。

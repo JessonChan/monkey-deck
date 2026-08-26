@@ -60,6 +60,7 @@ interface Props {
   onEditQueue: (id: string, text: string) => void;
   onScheduleQueue: (id: string, scheduledAt: number) => void;
   onReorderQueue: (activeId: string, overId: string) => void;
+  onSetRepeatQueue: (id: string, repeatEveryMs: number) => void;
   composerValue: string;
   onComposerChange: (v: string) => void;
   attachments: string[];
@@ -832,6 +833,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           onEdit={props.onEditQueue}
           onSchedule={props.onScheduleQueue}
           onReorder={props.onReorderQueue}
+          onSetRepeat={props.onSetRepeatQueue}
         />
         <Composer
           value={props.composerValue}

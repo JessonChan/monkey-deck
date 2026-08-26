@@ -402,7 +402,20 @@
     "reorderTip": "拖拽以调整发送顺序",
     "moveUpTip": "上移:提前这条的发送顺序",
     "moveDownTip": "下移:推后这条的发送顺序",
-    "hasScheduled": "队列中存在定时发送的消息"
+    "hasScheduled": "队列中存在定时发送的消息",
+    "repeatTip": "循环:按间隔反复发送这条(每次成功发送后自动排下一轮;停机不补发)",
+    "repeatNone": "不重复",
+    "repeatEvery": "每{{interval}}",
+    "repeatCustom": "自定义",
+    "repeatCustomUnit": "分钟",
+    "repeatApply": "应用",
+    "repeatApplyTip": "应用自定义循环间隔(1~1440 分钟)",
+    "repeatCustomInvalid": "循环间隔须在 1~1440 分钟之间",
+    "repeatM": "{{m}}分钟",
+    "repeatH": "{{h}}小时",
+    "repeatSent": "已发{{count}}次",
+    "repeatCancelTip": "取消循环:变回普通消息,下次发送后即出队",
+    "repeatBadgeTip": "循环发送 —— 每次成功发送后按间隔自动排下一轮(停机跨多周期只发一次后重新计时)"
   },
   "terminal": {
     "closeTabTip": "关闭终端",

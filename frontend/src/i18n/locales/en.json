@@ -402,7 +402,20 @@
     "reorderTip": "Drag to reorder send order",
     "moveUpTip": "Move up: send this message earlier",
     "moveDownTip": "Move down: send this message later",
-    "hasScheduled": "Some messages are scheduled to send later"
+    "hasScheduled": "Some messages are scheduled to send later",
+    "repeatTip": "Repeat: resend this message on an interval (re-queued after every successful send; downtime is not back-filled)",
+    "repeatNone": "No repeat",
+    "repeatEvery": "every {{interval}}",
+    "repeatCustom": "Custom",
+    "repeatCustomUnit": "min",
+    "repeatApply": "Apply",
+    "repeatApplyTip": "Apply the custom repeat interval (1–1440 minutes)",
+    "repeatCustomInvalid": "Repeat interval must be between 1 and 1440 minutes",
+    "repeatM": "{{m}}m",
+    "repeatH": "{{h}}h",
+    "repeatSent": "sent {{count}}×",
+    "repeatCancelTip": "Cancel repeat: turns back into a normal message, dequeued after the next send",
+    "repeatBadgeTip": "Recurring send — re-queued on the interval after every successful send (downtime across periods sends once, then re-anchors)"
   },
   "terminal": {
     "closeTabTip": "Close terminal",

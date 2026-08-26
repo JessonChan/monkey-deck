@@ -1314,6 +1314,20 @@ export default function App() {
     }
   }, []);
 
+  // Recurring send (#111): SetQueueItemRepeat sets/changes/clears (0) an item's
+  // interval. The backend hard-validates 1min~24h (the panel's 1~1440min gate
+  // mirrors it client-side); re-arming after each send and the skip-catch-up
+  // cadence are backend-side. maxSends stays 0 (unlimited) — no UI tier yet.
+  const setQueueItemRepeat = useCallback(async (id: string, repeatEveryMs: number) => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid) return;
+    try {
+      await ChatService.SetQueueItemRepeat(sid, id, repeatEveryMs, 0);
+    } catch (e) {
+      setError(extractErrMsg(e));
+    }
+  }, []);
+
   const respondPermission = useCallback(
     async (optionId: string) => {
       if (!selectedSessionId) return;
@@ -2222,6 +2236,7 @@ export default function App() {
               onEditQueue={editQueueItem}
               onScheduleQueue={scheduleQueueItem}
               onReorderQueue={reorderQueue}
+              onSetRepeatQueue={setQueueItemRepeat}
               composerValue={composerValue}
               onComposerChange={onComposerChange}
               attachments={attachments}
