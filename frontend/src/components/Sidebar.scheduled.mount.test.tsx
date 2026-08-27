@@ -10,6 +10,10 @@
 //     before the next backend snapshot drops the entry).
 //  4. The alarm is an INDEPENDENT mark: a session with both a composer draft and
 //     a pending schedule shows BOTH chips (neither masks the other).
+//  5. Prominence rework (#141): the chip's exact geometry lives in CSS — here we
+//     pin the DUE-SOON behavior: a send within DUE_SOON_MS renders .is-due-soon
+//     immediately, and an entry crossing into the window flips its class via the
+//     component's one-shot wake timer (no new snapshot, no prop change).
 //
 // Same mock scaffolding as Sidebar.batch.mount.test.tsx (bindings / i18n /
 // tooltip / clipboard stubbed; no real backend calls during mount).
@@ -160,6 +164,8 @@ describe("Sidebar scheduled-send alarm (#138)", () => {
     const chip = alarmChip(host, "s1");
     expect(chip).not.toBeNull();
     expect(chip!.className).toContain("scheduled-indicator");
+    // Far-future entry sits outside the due-soon window → static chip (#141).
+    expect(chip!.className).not.toContain("is-due-soon");
     // AlarmClock lucide glyph inside the chip.
     expect(chip!.querySelector("svg")).not.toBeNull();
     // Tooltip carries the interpolated entry (mock echoes key + JSON args).
@@ -198,5 +204,33 @@ describe("Sidebar scheduled-send alarm (#138)", () => {
     });
     expect(alarmChip(host, "s3")).not.toBeNull();
     expect(host.querySelector('[data-testid="draft-s3"]')).not.toBeNull();
+  });
+
+  test("an entry inside the due-soon window gets .is-due-soon right away", async () => {
+    const soon = Date.now() + 20 * 1000;
+    const { host } = await mounted({ scheduledBySession: { s1: { count: 1, earliest: soon } } });
+    const chip = alarmChip(host, "s1");
+    expect(chip).not.toBeNull();
+    expect(chip!.className).toContain("scheduled-indicator");
+    expect(chip!.className).toContain("is-due-soon");
+  });
+
+  test("crossing into the due-soon window flips the class via the one-shot wake", async () => {
+    // 0.5s past the arming point: mounted OUTSIDE the window, then the armed
+    // timeout fires mid-test and the class flips WITHOUT any prop change or
+    // snapshot arriving — that's the whole point of the wake hook (#141).
+    const { host } = await mounted({
+      scheduledBySession: { s1: { count: 1, earliest: Date.now() + 60_000 + 500 } },
+    });
+    expect(alarmChip(host, "s1")!.className).not.toContain("is-due-soon");
+
+    const deadline = Date.now() + 3000;
+    let chip = alarmChip(host, "s1")!;
+    while (!chip.className.includes("is-due-soon")) {
+      if (Date.now() > deadline) throw new Error("wake timer never flipped .is-due-soon on");
+      await new Promise<void>((r) => setTimeout(r, 25));
+    }
+    chip = alarmChip(host, "s1")!;
+    expect(chip.className).toContain("scheduled-indicator");
   });
 });

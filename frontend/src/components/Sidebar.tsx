@@ -125,6 +125,11 @@ function loadExpanded(): Set<string> {
   }
 }
 
+// Due-soon window (#141): a scheduled-send alarm flips into its prominent pulse
+// mode once the earliest send is this close. Mirrors QueuePanel's live-countdown
+// granularity: the final minute is what "about to fire" means to a user.
+const DUE_SOON_MS = 60_000;
+
 export default function Sidebar(props: Props) {
   const { t } = useTranslation();
   // Lazy init from localStorage (issue #57): restore the expanded set left over
@@ -168,6 +173,26 @@ export default function Sidebar(props: Props) {
   // model. null = no keyboard cursor (mouse-only / idle).
   const [kbdSelectIdx, setKbdSelectIdx] = useState<number | null>(null);
   const kbdActiveRef = useRef<HTMLDivElement>(null);
+
+  // Scheduled-send due-soon wake (#141): re-render exactly when the nearest pending
+  // schedule crosses the DUE_SOON_MS threshold so the alarm chip gains .is-due-soon
+  // without waiting for a chat:queue snapshot (an idle app may see none for minutes).
+  // Same model as the backend's own one-shot schedule timers — never a polling
+  // interval. One armed timeout at a time; the fired counter feeds back into the
+  // effect deps so each firing arms the next boundary. Zero cost while no schedule
+  // is within arming distance, and timers stop once all boundaries are crossed
+  // (the drain snapshot then drops the entries entirely).
+  const [dueTick, setDueTick] = useState(0);
+  useEffect(() => {
+    let wake = Infinity;
+    for (const { earliest } of Object.values(props.scheduledBySession ?? {})) {
+      const at = earliest - DUE_SOON_MS;
+      if (at > Date.now() && at < wake) wake = at;
+    }
+    if (!isFinite(wake)) return;
+    const id = setTimeout(() => setDueTick((n) => n + 1), Math.max(0, wake - Date.now()));
+    return () => clearTimeout(id);
+  }, [props.scheduledBySession, dueTick]);
 
   // ── Batch selection (#94) ──────────────────────────────────────────────────
   // Multi-select sessions via ⌘/Ctrl+click (toggle), Shift+click (range from the
@@ -780,9 +805,19 @@ export default function Sidebar(props: Props) {
                             // Gate on "> now" too: between a schedule falling due and the
                             // next chat:queue snapshot arriving, the marker hides early
                             // instead of claiming a pending send that is about to fire.
-                            return sch && sch.earliest > Date.now() ? (
-                              <span className="scheduled-indicator" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.scheduledTip", { count: sch.count, time: formatDateTime(sch.earliest) })} data-testid={`scheduled-${s.id}`}><AlarmClock /></span>
-                            ) : null;
+                            if (!sch || sch.earliest <= Date.now()) return null;
+                            // #141: within the due-soon window the inverted chip pulses.
+                            const dueSoon = sch.earliest - Date.now() <= DUE_SOON_MS;
+                            return (
+                              <span
+                                className={`scheduled-indicator${dueSoon ? " is-due-soon" : ""}`}
+                                data-tooltip-id="md-tip"
+                                data-tooltip-content={t("sidebar.scheduledTip", { count: sch.count, time: formatDateTime(sch.earliest) })}
+                                data-testid={`scheduled-${s.id}`}
+                              >
+                                <AlarmClock />
+                              </span>
+                            );
                           })()}
                           {props.permPendingBySession[s.id] ? (
                             <span className="perm-dot" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.permPendingTip")} data-testid={`perm-dot-${s.id}`} />
