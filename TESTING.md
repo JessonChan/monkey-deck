@@ -26,38 +26,50 @@ npm run build                        # tsc + vite build,提交前自检 TS/编�
 <a id="coverage"></a>
 ## Coverage(覆盖率度量)
 
-后端测试覆盖率走**单向棘轮(ratchet)**:floor 只许涨不许跌,挡住「删测试 / 加不可测代码稀释覆盖率」的静默回归。
+覆盖率走**单向棘轮(ratchet)**:floor 只许涨不许跌,挡住「删测试 / 加不可测代码稀释覆盖率」的静默回归。度量覆盖两端:**Go 后端**(`./internal/...` 全部包)+ **前端**(`frontend/src`,bun lcov)。
 
 ### 三个 make 目标
 
 | 目标 | 干什么 | 产物 |
 |---|---|---|
-| `make cover` | 跑 `./internal/...` 全部单测(`-covermode=atomic`),末行打印总覆盖率 | `coverage.out` |
-| `make cover-html` | = `cover` + 生成 HTML 报告(浏览器打开逐行看未覆盖分支) | `coverage.html` |
-| `make cover-check` | = `cover` + floor 守门:总覆盖率 < floor 即失败(返回非零) | — |
+| `make cover` | Go:跑 `./internal/...` 全部单测(`-covermode=atomic`)并打印总覆盖率;前端:跑 `bun test --isolate --coverage`(text 摘要 + lcov) | `coverage.out` + `frontend/coverage/lcov.info` |
+| `make cover-html` | = `cover` + Go HTML 报告(浏览器逐行看未覆盖分支;bun 无 HTML reporter) | + `coverage.html` |
+| `make cover-check` | = `cover` + floor 守门:go 总覆盖率 / **分包 floor** / 前端行覆盖率,任一低于 floor 即失败 | — |
 
-产物 `coverage.out` / `coverage.html` 均已 gitignore,不入库。
+产物 `coverage.out` / `coverage.html` / `frontend/coverage/` 均已 gitignore,不入库。
 
 ### floor 守门(scripts/coverage-floor.sh)
 
-- **floor 存在 `scripts/coverage.floor`**:一行数字(当前 = `69`,落地当天实测 69.2% 向下取整,留余量抗工具链噪声)。
-- `make cover-check` 底层跑 `bash scripts/coverage-floor.sh coverage.out`:总覆盖率 ≥ floor → OK;低了 → exit 1 并提示。
-- 也可单独调用:`./scripts/coverage-floor.sh [profile]`(profile 默认 `coverage.out`)。
+floor 数据在两个文件里(数值比较走 awk,支持小数):
+
+- **`scripts/coverage.floor`** — 标量 floor,`<key> <value>` 每行一条:当前 `go 69`(总语句覆盖率,实测 69.2% 向下取整)、`frontend 64`(src 行覆盖率,实测 64.7% 向下取整)。取整留零点几 pt 余量抗工具链漂移。
+- **`scripts/coverage.floor.pkgs`** — **分包 floor**,一行 `<包> <floor>`(按包名排序):每个 `internal/` 包各自一道棘轮。profile 里出现没有 floor 行的包 = FAIL(防「加新包逃逸棘轮」);floor 行对应的包已不在 profile(删包/改名)只 WARN,不挡,`--set-pkgs` 时自然重写。
+
+脚本用法:
+
+```bash
+./scripts/coverage-floor.sh [profile]   # 全量校验(profile 默认 <repo根>/coverage.out)
+./scripts/coverage-floor.sh --set       # 标量重定基准:go + frontend 实测值写回
+./scripts/coverage-floor.sh --set-pkgs  # 分包重定基准:整份按实测重写
+COVERAGE_FLOOR=NN / COVERAGE_FLOOR_FRONTEND=NN make cover-check   # 临时换标量 floor(演练失败路径,不落盘)
+```
+
+任一校验失败 exit 1,FAIL 信息自带该族的出口(补测试,或确认无测试损失后用对应的 `--set` / `--set-pkgs` 重定基准)。
 
 ### 抬杠 / 重定基准
 
 ```bash
-# 涨了覆盖(补了测试)之后:
-make cover                                    # 确认总覆盖率已高于 floor
-bash scripts/coverage-floor.sh --set          # 把实测值写入 coverage.floor
-git add scripts/coverage.floor && git commit  # floor 与代码同一批提交
+# 补了测试、实测涨了之后:
+make cover                                    # 确认实测已高于 floor
+bash scripts/coverage-floor.sh --set          # 标量写回(单包抬杠直接手改 .pkgs 对应行)
+bash scripts/coverage-floor.sh --set-pkgs     # 或整份分包按实测重写
+git add scripts/coverage.floor scripts/coverage.floor.pkgs && git commit  # floor 与代码同批提交
 
-# 删码 / 重构导致实测下降:确认没有测试损失(测试只删不必要、不删有效断言)后,同样 --set 重定基准。
-# 临时演练失败路径:COVERAGE_FLOOR=99 make cover-check(不落盘)。
+# 删码 / 重构导致实测下降:确认没有测试损失(测试只删不必要、不删有效断言)后,同样 --set / --set-pkgs 重定基准。
 ```
 
 ### 口径说明
 
-- **只统计 `./internal/...`**:根 `package main` 没有测试文件,且其 `go:embed` 依赖 `frontend/dist` 构建产物(空目录时连构建都过不了),计入只会引入噪声。所有可测逻辑都在 `internal/` 各包(§1.7 胖后端)。
-- **前端暂不设 floor**:组件测试用 `bun test --coverage` 可手动查看,但前端改动的主验收是三端矩阵验证,不做数值守门。
-- 总覆盖率随 Go 版本可能有零点几个百分点的漂移,floor 取整留了余量;若工具链升级导致误报,按上面的重定基准流程处理并在 commit 说明。
+- **Go 只统计 `./internal/...`**:根 `package main` 没有测试文件,且其 `go:embed` 依赖 `frontend/dist` 构建产物(空目录时连构建都过不了),计入只会引入噪声。所有可测逻辑都在 `internal/` 各包(§1.7 胖后端)。分包百分比按「该包 covered statements / total statements」聚合,与 `go test -cover` 打印的包级数字一致。
+- **前端统计 `frontend/src` 行覆盖率**(lcov `LH/LF` 求和),**排除生成物 `frontend/bindings/`**(gitignore 的机器生成代码)。注意 bun 只统计测试实际加载过的文件——测试没 import 的源文件不进分母,「整文件删测试」无法完全堵死,棘轮主挡渐进稀释。
+- 覆盖率随 Go / bun 版本可能有零点几个百分点的漂移;floor 取整留了余量,若工具链升级导致误报,按上面的重定基准流程处理并在 commit 说明。
