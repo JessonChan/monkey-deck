@@ -637,6 +637,37 @@ input, textarea { font-family: inherit; }
   color: var(--text);
   font-weight: 600;
 }
+/* Column resize grips (#140): hot strip on each header cell's right edge,
+   mounted by HeadCell; a 2px accent bar surfaces on hover / while dragging.
+   Desktop-only affordance — hidden ≤768px (M2 media block), not mounted on
+   coarse-pointer devices, and touch contacts never start a drag (three
+   independent layers, ResizableTable.tsx). th is position:relative so the
+   strip hugs its own cell edge instead of an ancestor's. */
+.md-table-wrap th { position: relative; }
+.md-col-grip {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 9px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+.md-col-grip::after {
+  content: "";
+  position: absolute;
+  top: 15%;
+  bottom: 15%;
+  right: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent-2);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.md-col-grip:hover::after,
+.md-col-grip.md-col-resizing::after { opacity: 0.85; }
 
 /* LaTeX math (#135): remark-math nodes routed to KaTeX (KatexRenderer.tsx).
    Same one-hook-for-both-surfaces design as .md-table-wrap: classes anchor the
@@ -3314,6 +3345,12 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
     word-break: break-word;
     min-width: 5.5em;
   }
+  /* Column-resize grips off at ≤768px (#140, mobile-disable layer 3 of 3):
+     phones sculpture nothing — #139's block-display + min-width floor already
+      gives every column a readable size and the table itself scrolls. CSS is
+     the last line of defense if both JS layers (no coarse-pointer mount,
+     touch-contact guard) were ever bypassed on a hybrid device. */
+  .md-col-grip { display: none; }
   /* User-bubble containment (#139 P1): the user face (.row-user →
      .bubble-user-wrap column flex + align-items:flex-end → .bubble-user) sizes
      its cross axis from fit-content with no definite-width ancestor, so

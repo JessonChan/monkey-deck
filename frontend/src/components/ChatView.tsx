@@ -14,6 +14,7 @@ import DiffView from "./DiffView";
 import MermaidRenderer from "./MermaidRenderer";
 import { MathBlock, MathInline } from "./KatexRenderer";
 import PathLinkified from "./PathLinkified";
+import { HeadCell, ResizableTable, TableSessionContext } from "./ResizableTable";
 import CopyIconButton from "./CopyIconButton";
 import ErrorCard from "./ErrorCard";
 import type { ChatErrorView } from "../lib/errorDiag";
@@ -877,7 +878,7 @@ const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview, dura
     return (
       <div className="row row-user" data-testid="msg-user">
         <div className="bubble-user-wrap">
-          <UserBubble text={item.text} onOpenFilePreview={onOpenFilePreview} />
+          <UserBubble sessionId={sessionId} text={item.text} onOpenFilePreview={onOpenFilePreview} />
           <div className="msg-meta">
             {item.ts && <span className="msg-time">{formatTime(item.ts)}</span>}
             {item.text && <MessageActions text={item.text} testId="copy-user-msg" />}
@@ -893,7 +894,7 @@ const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview, dura
         <div className="avatar"><Sparkles size={15} /></div>
         <div className="bubble-agent-wrap">
           <div className="bubble-agent">
-            <AgentMarkdown text={item.text + (item.streaming ? " ▋" : "")} onOpenFilePreview={onOpenFilePreview} streaming={item.streaming} />
+            <AgentMarkdown sessionId={sessionId} text={item.text + (item.streaming ? " ▋" : "")} onOpenFilePreview={onOpenFilePreview} streaming={item.streaming} />
           </div>
           <div className="msg-meta">
             {item.ts && (
@@ -928,7 +929,7 @@ const USER_LONG_CHARS = 480;      // 字符阈值:单/双行长文本兜底
 const USER_HEAD_LINES = 4;        // 折叠预览展示前 N 行
 const USER_TAIL_LINES = 2;        // 折叠预览展示后 M 行
 
-function UserBubble({ text, onOpenFilePreview }: { text: string; onOpenFilePreview: (path: string, line?: number) => void }) {
+function UserBubble({ sessionId, text, onOpenFilePreview }: { sessionId: string; text: string; onOpenFilePreview: (path: string, line?: number) => void }) {
   const { t } = useTranslation();
   const lines = useMemo(() => text.split("\n"), [text]);
   const isLong = lines.length > USER_LONG_LINES || text.length > USER_LONG_CHARS;
@@ -1005,7 +1006,7 @@ function UserBubble({ text, onOpenFilePreview }: { text: string; onOpenFilePrevi
       ) : (
         <div className={`bubble-user-body bubble-user-${renderKind}`}>
           {renderKind === "markdown" ? (
-            <AgentMarkdown text={text} onOpenFilePreview={onOpenFilePreview} />
+            <AgentMarkdown sessionId={sessionId} text={text} onOpenFilePreview={onOpenFilePreview} />
           ) : renderKind === "mono" ? (
             <pre className="bubble-user-mono">
               <PathLinkified text={text} onOpen={onOpenFilePreview} />
@@ -1762,7 +1763,7 @@ function AnchorRenderer(props: ComponentPropsWithoutRef<"a">) {
 // math (#135 wiring 1/3): remarkMath parses $...$ / $$...$$ into
 // code.language-math hast nodes; routing to KaTeX happens in CodeRenderer /
 // PreRenderer below.
-function AgentMarkdown({ text, onOpenFilePreview, streaming = false }: { text: string; onOpenFilePreview: (path: string, line?: number) => void; streaming?: boolean }) {
+function AgentMarkdown({ sessionId, text, onOpenFilePreview, streaming = false }: { sessionId: string; text: string; onOpenFilePreview: (path: string, line?: number) => void; streaming?: boolean }) {
   const components = useMemo(
     () => ({
       code: CodeRenderer,
@@ -1771,14 +1772,21 @@ function AgentMarkdown({ text, onOpenFilePreview, streaming = false }: { text: s
       p: makeTextLinkifyRenderer("p", onOpenFilePreview),
       li: makeTextLinkifyRenderer("li", onOpenFilePreview),
       td: makeTextLinkifyRenderer("td", onOpenFilePreview),
-      table: TableWrapper,
+      // #140: ResizableTable keeps the .md-table-wrap scroll skeleton (#136)
+      // and adds column-resize plumbing; HeadCell mounts the drag grip.
+      table: ResizableTable,
+      th: HeadCell,
     }),
     [onOpenFilePreview, streaming]
   );
+  // Session scope feeds the resizer's in-session width memory (#140): every
+  // table inside this message keys saved widths by the chat session.
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} components={components}>
-      {text}
-    </ReactMarkdown>
+    <TableSessionContext.Provider value={sessionId}>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} components={components}>
+        {text}
+      </ReactMarkdown>
+    </TableSessionContext.Provider>
   );
 }
 
@@ -1825,17 +1833,6 @@ function CodeRenderer(props: ComponentPropsWithoutRef<"code">) {
   const isBlock = Boolean(className?.includes("language-")) || String(children ?? "").includes("\n");
   if (isBlock) return <code className={className} data-block {...rest}>{children}</code>;
   return <code className="code-inline" {...rest}>{children}</code>;
-}
-
-// Stable table renderer (#136): every markdown <table> is wrapped in
-// .md-table-wrap so wide GFM tables scroll horizontally inside the bubble
-// instead of stretching the chat column (cell grid / header styles: index.css).
-function TableWrapper(props: ComponentPropsWithoutRef<"table">) {
-  return (
-    <div className="md-table-wrap">
-      <table {...props} />
-    </div>
-  );
 }
 
 function CodeBox({ language, raw }: { language: string; raw: string }) {

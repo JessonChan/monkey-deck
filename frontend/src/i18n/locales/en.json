@@ -194,6 +194,7 @@
     "placeholder": "Send a message to start…",
     "loadMore": "Load more",
     "scrollToBottom": "Scroll to latest",
+    "colResizeTip": "Drag to resize column · double-click to reset",
     "readonlyHint": "Ready",
     "continueSession": "Continue session",
     "continueSessionTip": "Start the agent and resume this session",

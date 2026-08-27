@@ -194,6 +194,7 @@
     "placeholder": "发一条消息开始对话…",
     "loadMore": "加载更多",
     "scrollToBottom": "滚到最新消息",
+    "colResizeTip": "拖动调整列宽 · 双击恢复自适应",
     "readonlyHint": "就绪",
     "continueSession": "继续会话",
     "continueSessionTip": "启动 agent 接上本次会话",
