@@ -8,14 +8,17 @@
 #                                   go       total statement coverage over ./internal/...
 #                                   frontend line coverage over frontend/src (bun lcov)
 #   scripts/coverage.floor.pkgs   per-package Go floors, one "<pkg> <value>" per line,
-#                                 sorted by package (regenerate with --set-pkgs)
+#                                 sorted by package (regenerate with --set-pkgs; a value
+#                                 of "-" exempts the package from the ratchet — for
+#                                 framework-glue packages with no realistically testable
+#                                 surface; waivers survive --set-pkgs re-baselining)
 #
 # Values are compared numerically, so decimals from re-baselining are fine.
 #
 # Usage:
 #   ./scripts/coverage-floor.sh [profile]   check every floor (default profile <repo>/coverage.out)
 #   ./scripts/coverage-floor.sh --set       re-baseline scalar floors (go + frontend) from measurements
-#   ./scripts/coverage-floor.sh --set-pkgs  re-baseline per-package floors from the Go profile
+#   ./scripts/coverage-floor.sh --set-pkgs  re-baseline per-package floors (keeps "-" waivers)
 #   COVERAGE_FLOOR=NN / COVERAGE_FLOOR_FRONTEND=NN   temporary scalar overrides, not persisted
 #
 # Re-baselining (after confirmed no test loss, e.g. code deletion) is also the
@@ -25,7 +28,7 @@
 # tests and its go:embed needs frontend/dist; all testable logic lives in internal/).
 # Frontend coverage comes from `bun test --coverage --coverage-reporter=lcov` over frontend/src;
 # generated frontend/bindings are excluded from the total (machine-generated, gitignored).
-# Artifacts coverage.out / coverage.html / frontend/coverage/ are gitignored.
+# Artifacts coverage.out / frontend/coverage/ are gitignored.
 #
 # Depends on: go (cover toolchain), awk (numeric compare, no bc). Called by `make cover-check`.
 set -euo pipefail
@@ -96,11 +99,20 @@ if [[ "$mode" == "set" ]]; then
 	echo "coverage-floor: floor 已更新: go=${total}% frontend=${fe_set}%($floor_file)"
 	exit 0
 fi
-
 # ── Mode: --set-pkgs — re-baseline per-package floors (profile only) ────────────
+
 if [[ "$mode" == "set-pkgs" ]]; then
-	awk '{print $2, $1}' <<<"$pkg_lines" | sort -k1,1 >"$pkgs_file"
-	echo "coverage-floor: 分包 floor 已按实测重定基准(${pkg_count} 包 → $pkgs_file)"
+	# Re-measure every package; "-" waiver lines carry over untouched.
+	tmp="$(mktemp "$pkgs_file.XXXXXX")"
+	while read -r pct dir; do
+		v="$pct"
+		if [[ -f "$pkgs_file" ]] && awk -v d="$dir" '$1==d && $2=="-" {found=1} END{exit !found}' "$pkgs_file"; then
+			v="-"
+		fi
+		printf '%s %s\n' "$dir" "$v" >>"$tmp"
+	done <<<"$pkg_lines"
+	sort -k1,1 -o "$pkgs_file" "$tmp" && rm -f "$tmp"
+	echo "coverage-floor: 分包 floor 已按实测重定基准(${pkg_count} 包 → $pkgs_file;'-' 豁免行原样保留)"
 	exit 0
 fi
 
@@ -147,12 +159,16 @@ if [[ ! -f "$pkgs_file" ]]; then
 	exit 1
 fi
 pkg_fail=0
+exempt=0
 while read -r pct dir; do
 	[[ -n "$dir" ]] || continue
 	f="$(awk -v d="$dir" '$1==d {print $2}' "$pkgs_file")"
 	if [[ -z "$f" ]]; then
 		echo "coverage-floor: FAIL $dir(${pct}%)无 floor 行 —— 新包也受棘轮约束:bash scripts/coverage-floor.sh --set-pkgs 重新生成,或手工补一行" >&2
 		pkg_fail=1
+	elif [[ "$f" == "-" ]]; then
+		exempt=$((exempt + 1))
+		echo "coverage-floor: EXEMPT $dir(${pct}%)——豁免行 '-',不受棘轮约束(测无可测的框架胶水包)"
 	elif ! num_ok "$f"; then
 		echo "coverage-floor: FAIL $pkgs_file 行非法: '$dir $f'" >&2
 		pkg_fail=1
@@ -170,7 +186,11 @@ while read -r dir v; do
 	fi
 done <"$pkgs_file"
 if [[ $pkg_fail -eq 0 ]]; then
-	echo "coverage-floor: OK 分包 floor ${pkg_count}/${pkg_count}(${pkgs_file#$root/})"
+	if [[ $exempt -gt 0 ]]; then
+		echo "coverage-floor: OK 分包 floor $((pkg_count - exempt))/${pkg_count}(${exempt} 包豁免;${pkgs_file#$root/})"
+	else
+		echo "coverage-floor: OK 分包 floor ${pkg_count}/${pkg_count}(${pkgs_file#$root/})"
+	fi
 fi
 fail=$((fail || pkg_fail))
 

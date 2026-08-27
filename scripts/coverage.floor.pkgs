@@ -11,5 +11,5 @@ internal/store 67
 internal/terminal 83
 internal/titlegen 94
 internal/ui 82
-internal/update 5
+internal/update -
 internal/worktree 76
