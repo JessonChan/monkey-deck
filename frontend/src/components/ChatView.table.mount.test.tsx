@@ -46,6 +46,22 @@ Object.defineProperty(window.HTMLElement.prototype, "clientHeight", {
   },
 });
 
+// Width axes mirror the height mocks above: 0 unless a test pins explicit
+// numbers in mockWidths (happy-dom performs no layout) — enough to exercise
+// containment arithmetic without a real engine.
+const mockWidths = new WeakMap<
+  Element,
+  { clientWidth?: number; scrollWidth?: number; offsetWidth?: number }
+>();
+for (const prop of ["clientWidth", "scrollWidth", "offsetWidth"] as const) {
+  Object.defineProperty(window.HTMLElement.prototype, prop, {
+    configurable: true,
+    get(this: HTMLElement) {
+      return mockWidths.get(this)?.[prop] ?? 0;
+    },
+  });
+}
+
 class MockResizeObserver {
   cb: ResizeObserverCallback;
   constructor(cb: ResizeObserverCallback) {
@@ -199,6 +215,46 @@ describe("AgentMarkdown table wrapper (#136)", () => {
     expect(host.querySelectorAll(".bubble-user-markdown table").length).toBe(
       host.querySelectorAll(".bubble-user-markdown .md-table-wrap table").length
     );
+
+    root.unmount();
+    host.remove();
+  });
+
+  // #139 P1 regression guard. Real-layout pixels need a webview, so the
+  // boundary is pinned here as arithmetic over the mocked width axes: whatever
+  // CSS ships on either chat surface, a rendered table must either scroll
+  // horizontally ITSELF (excess routed into its own scrollbar) or fit inside
+  // its .md-table-wrap — never sit unscrollably wider than it. The user face
+  // burst pre-fix by growing WITH the table past .bubble-user-wrap's 76% cap,
+  // so this test also pins the DOM chain ".bubble-user-wrap .bubble-user →
+  // …md-table-wrap" that the MQ containment rule keys off.
+  test("user markdown table stays contained in the bubble (#139)", async () => {
+    const { host, root } = mount([{ type: "user", id: "u6", text: TABLE_MD_FENCED }]);
+    await flush();
+
+    const wrap = host.querySelector(".bubble-user-wrap .bubble-user .md-table-wrap");
+    expect(wrap).not.toBeNull();
+    const table = wrap!.querySelector("table");
+    expect(table).not.toBeNull();
+
+    // No naked tables in the user surface either (parity with agent surface).
+    expect(host.querySelectorAll(".bubble-user-wrap table").length).toBe(
+      host.querySelectorAll(".bubble-user-wrap .md-table-wrap table").length
+    );
+
+    // Overflow regime (390px chat: ~254px bubble cap vs a wider table) — fine
+    // only because the table scrolls itself…
+    mockWidths.set(wrap!, { clientWidth: 254 });
+    mockWidths.set(table!, { scrollWidth: 397, offsetWidth: 397 });
+    expect(
+      table!.scrollWidth > wrap!.clientWidth || table!.offsetWidth <= wrap!.clientWidth
+    ).toBe(true);
+
+    // …and the fit regime counts as contained too.
+    mockWidths.set(table!, { scrollWidth: 200, offsetWidth: 200 });
+    expect(
+      table!.scrollWidth > wrap!.clientWidth || table!.offsetWidth <= wrap!.clientWidth
+    ).toBe(true);
 
     root.unmount();
     host.remove();

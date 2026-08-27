@@ -3303,6 +3303,16 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
     word-break: break-word;
     min-width: 5.5em;
   }
+  /* User-bubble containment (#139 P1): the user face (.row-user →
+     .bubble-user-wrap column flex + align-items:flex-end → .bubble-user) sizes
+     its cross axis from fit-content with no definite-width ancestor, so
+     percentage max-width:100% is ignored during intrinsic sizing and a wide
+     table's max-content inflates the whole bubble past the 76% wrap cap.
+     Stretching only table-bearing bubbles gives .bubble-user a definite cross
+     size; max-width:100% + overflow-x above then route the excess into the
+     table's own horizontal swipe. :has keeps short-text bubbles untouched (M2
+     hard rule); the agent face already gets width from flex:1 + min-width:0. */
+  .bubble-user-wrap .bubble-user:has(.md-table-wrap) { align-self: stretch; }
 }
 
 /* ─── App-root error boundary fallback (see AppErrorBoundary.tsx) ─── */
