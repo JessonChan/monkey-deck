@@ -2,8 +2,9 @@
 //
 // Pins the row-marker contract end-to-end from the prop the App derives out of
 // authoritative chat:queue snapshots down to what a user can see/click:
-//  1. A future earliest-scheduledAt renders the amber .scheduled-indicator chip
-//     (AlarmClock glyph, tooltip keyed sidebar.scheduledTip) on that session row.
+//  1. A future entry renders the amber .scheduled-indicator chip (AlarmClock
+//     glyph, tooltip keyed sidebar.scheduledTip) on that session row, with the
+//     entry's {count, earliest} interpolated into the tip (#24916: "N pending").
 //  2. Absent/empty prop → no chip anywhere; rows fall back to .session-time.
 //  3. A past timestamp never renders the chip (the "> now" gate hides it early,
 //     before the next backend snapshot drops the entry).
@@ -40,11 +41,17 @@ mock.module("../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chat
   SearchSessionContent: async () => [],
 }));
 mock.module("react-tooltip", () => ({ Tooltip: () => null, default: () => null }));
-mock.module("react-i18next", () => ({
-  useTranslation: () => ({ t: (k: string) => k }),
-  initReactI18next: { type: "3rd-party" },
-  default: { useTranslation: () => ({ t: (k: string) => k }) },
-}));
+mock.module("react-i18next", () => {
+  // Echo the key, appending any interpolation args as JSON so tests can pin
+  // which values the component feeds a tooltip (count/time for #24916).
+  const t = (k: string, opts?: Record<string, unknown>) =>
+    opts && Object.keys(opts).length ? `${k} ${JSON.stringify(opts)}` : k;
+  return {
+    useTranslation: () => ({ t }),
+    initReactI18next: { type: "3rd-party" },
+    default: { useTranslation: () => ({ t }) },
+  };
+});
 mock.module("../lib/clipboard", () => ({
   copyText: async () => true,
   copyTextQuiet: () => {},
@@ -146,17 +153,19 @@ describe("Sidebar scheduled-send alarm (#138)", () => {
     while (document.body.firstChild) document.body.removeChild(document.body.firstChild);
   });
 
-  test("future earliest scheduledAt renders the alarm chip with its glyph", async () => {
+  test("future scheduled entry renders the alarm chip with its glyph", async () => {
     const future = Date.now() + 60 * 60_000;
-    const { host } = await mounted({ scheduledBySession: { s1: future } });
+    const { host } = await mounted({ scheduledBySession: { s1: { count: 2, earliest: future } } });
 
     const chip = alarmChip(host, "s1");
     expect(chip).not.toBeNull();
     expect(chip!.className).toContain("scheduled-indicator");
     // AlarmClock lucide glyph inside the chip.
     expect(chip!.querySelector("svg")).not.toBeNull();
-    // Tooltip keyed to the sidebar tip (i18n mock echoes the key verbatim).
-    expect(chip!.getAttribute("data-tooltip-content")).toContain("sidebar.scheduledTip");
+    // Tooltip carries the interpolated entry (mock echoes key + JSON args).
+    const tip = chip!.getAttribute("data-tooltip-content")!;
+    expect(tip).toContain("sidebar.scheduledTip");
+    expect(tip).toContain('"count":2');
 
     // Other rows without schedules stay plain. The alarm is an INDEPENDENT mark,
     // so even the scheduled row's tail keeps its session-time fallback — the chip
@@ -176,7 +185,7 @@ describe("Sidebar scheduled-send alarm (#138)", () => {
 
   test("a past timestamp never renders the chip (> now gate)", async () => {
     const past = Date.now() - 60_000;
-    const { host } = await mounted({ scheduledBySession: { s2: past } });
+    const { host } = await mounted({ scheduledBySession: { s2: { count: 3, earliest: past } } });
     expect(alarmChip(host, "s2")).toBeNull();
     expect(host.querySelectorAll(".scheduled-indicator").length).toBe(0);
   });
@@ -185,7 +194,7 @@ describe("Sidebar scheduled-send alarm (#138)", () => {
     const future = Date.now() + 5 * 60_000;
     const { host } = await mounted({
       draftBySession: { s3: "pending text" },
-      scheduledBySession: { s3: future },
+      scheduledBySession: { s3: { count: 1, earliest: future } },
     });
     expect(alarmChip(host, "s3")).not.toBeNull();
     expect(host.querySelector('[data-testid="draft-s3"]')).not.toBeNull();

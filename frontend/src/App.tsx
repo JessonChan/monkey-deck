@@ -373,18 +373,26 @@ export default function App() {
     () => Object.fromEntries(Object.entries(permissionBySession).filter(([, v]) => v).map(([k]) => [k, true])) as Record<string, boolean>,
     [permissionBySession]
   );
-  // Scheduled-send alarm (#138): sessionId -> earliest FUTURE scheduledAt across
-  // queued items, derived from the authoritative chat:queue snapshots the backend
-  // pushes on every queue mutation. No local ticking: a due item is drained by the
-  // backend's one-shot schedule timer and that dequeue broadcasts a fresh snapshot,
-  // which drops the entry by itself.
+  // Scheduled-send alarm (#138): sessionId -> { count, earliest } over FUTURE
+  // scheduledAt entries among queued items, derived from the authoritative
+  // chat:queue snapshots the backend pushes on every queue mutation. No local
+  // ticking: a due item is drained by the backend's one-shot schedule timer and
+  // that dequeue broadcasts a fresh snapshot, which drops the entry by itself.
+  // The count feeds the sidebar tooltip ("N pending"); without it the marker
+  // could only claim the earliest item and hide multi-item queues' bulk.
   const scheduledBySession = useMemo(() => {
     const now = Date.now();
-    const out: Record<string, number> = {};
+    const out: Record<string, { count: number; earliest: number }> = {};
     for (const [sid, q] of Object.entries(queueBySession)) {
       let min = Infinity;
-      for (const it of q) if (it.scheduledAt > now && it.scheduledAt < min) min = it.scheduledAt;
-      if (min !== Infinity) out[sid] = min;
+      let n = 0;
+      for (const it of q) {
+        if (it.scheduledAt > now) {
+          n++;
+          if (it.scheduledAt < min) min = it.scheduledAt;
+        }
+      }
+      if (n > 0) out[sid] = { count: n, earliest: min };
     }
     return out;
   }, [queueBySession]);

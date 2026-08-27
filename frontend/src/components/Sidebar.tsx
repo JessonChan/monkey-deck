@@ -39,11 +39,12 @@ interface Props {
   unreadBySession: Record<string, boolean>;
   permPendingBySession: Record<string, boolean>;
   draftBySession?: Record<string, string>;
-  // Scheduled-send alarm (#138): sessionId -> earliest future scheduledAt among
-  // queued items, derived in App from authoritative chat:queue snapshots. Once an
-  // item falls due the backend drain dequeues it, the next snapshot drops the
-  // entry, and this marker clears itself — no local ticking involved.
-  scheduledBySession?: Record<string, number>;
+  // Scheduled-send alarm (#138): sessionId -> { count, earliest } over FUTURE
+  // scheduledAt entries among queued items, derived in App from authoritative
+  // chat:queue snapshots. Once an item falls due the backend drain dequeues it,
+  // the next snapshot drops the entry, and this marker clears itself — no local
+  // ticking involved. count feeds the tooltip ("N pending"), earliest its time.
+  scheduledBySession?: Record<string, { count: number; earliest: number }>;
   hasTermBySession?: Record<string, boolean>;
   // 已知 harness 列表(供 session 行 harness 图标的 tooltip 用 ID → 显示名查表;
   // session.harness 仅 ID,显示名「Oh My Pi / OpenCode」更友好)。
@@ -775,12 +776,12 @@ export default function Sidebar(props: Props) {
                             </span>
                           )}
                           {(() => {
-                            const at = props.scheduledBySession?.[s.id];
+                            const sch = props.scheduledBySession?.[s.id];
                             // Gate on "> now" too: between a schedule falling due and the
                             // next chat:queue snapshot arriving, the marker hides early
                             // instead of claiming a pending send that is about to fire.
-                            return at && at > Date.now() ? (
-                              <span className="scheduled-indicator" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.scheduledTip", { time: formatDateTime(at) })} data-testid={`scheduled-${s.id}`}><AlarmClock /></span>
+                            return sch && sch.earliest > Date.now() ? (
+                              <span className="scheduled-indicator" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.scheduledTip", { count: sch.count, time: formatDateTime(sch.earliest) })} data-testid={`scheduled-${s.id}`}><AlarmClock /></span>
                             ) : null;
                           })()}
                           {props.permPendingBySession[s.id] ? (
