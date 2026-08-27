@@ -1,4 +1,4 @@
-.PHONY: all bindings dev dev-frontend build build-frontend app package run test test-integration clean server icons fmt vet tidy
+.PHONY: all bindings dev dev-frontend build build-frontend app package run test test-integration cover cover-html cover-check clean server icons fmt vet tidy
 
 # monkey-deck Makefile(AGENTS.md §0.5)
 WAILS3 ?= wails3
@@ -44,6 +44,20 @@ test:
 ## 集成测试:启动真 opencode,需本机已装 opencode + 配好 model
 test-integration:
 	go test -tags=integration -run TestIntegration -v ./internal/... -timeout 180s
+
+## 覆盖率:跑 internal 全部单测写 coverage.out,末行打印总覆盖率(棘轮口径见 TESTING.md #coverage)
+## 只统计 ./internal/...:根 package main 无测试文件,且 go:embed 依赖 frontend/dist(空目录会构建失败),计入只会引入噪声
+cover:
+	go test ./internal/... -covermode=atomic -coverprofile=coverage.out
+	go tool cover -func=coverage.out | tail -1
+
+## 覆盖率 HTML 报告:coverage.out → coverage.html(浏览器打开逐行看未覆盖分支)
+cover-html: cover
+	go tool cover -html=coverage.out -o coverage.html
+
+## 覆盖率守门:总覆盖率 < scripts/coverage.floor 即失败;涨覆盖后 scripts/coverage-floor.sh --set 抬杠
+cover-check: cover
+	bash scripts/coverage-floor.sh coverage.out
 
 ## 构建 server 模式(纯 HTTP,无 GUI,便于自动化验证)
 server:
