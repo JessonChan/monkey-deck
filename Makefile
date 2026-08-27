@@ -45,17 +45,23 @@ test:
 test-integration:
 	go test -tags=integration -run TestIntegration -v ./internal/... -timeout 180s
 
-## 覆盖率:跑 internal 全部单测写 coverage.out,末行打印总覆盖率(棘轮口径见 TESTING.md #coverage)
-## 只统计 ./internal/...:根 package main 无测试文件,且 go:embed 依赖 frontend/dist(空目录会构建失败),计入只会引入噪声
+## Coverage: Go unit tests over ./internal/... (atomic mode, coverage.out) + frontend
+## line coverage via bun lcov (frontend/coverage/lcov.info). Root package main is out of
+## scope: no tests, and its go:embed needs frontend/dist (fails on an empty checkout).
+## Ratchet details: TESTING.md (#coverage). Gate = scripts/coverage-floor.sh:
+## go total + frontend total + per-package floors (scripts/coverage.floor{,.pkgs}).
 cover:
 	go test ./internal/... -covermode=atomic -coverprofile=coverage.out
 	go tool cover -func=coverage.out | tail -1
+	rm -f frontend/coverage/lcov.info frontend/coverage/.lcov.info.*.tmp
+	cd frontend && bun test --isolate --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage
 
-## 覆盖率 HTML 报告:coverage.out → coverage.html(浏览器打开逐行看未覆盖分支)
+## Coverage HTML report (Go only; bun has no HTML reporter): coverage.out → coverage.html
 cover-html: cover
 	go tool cover -html=coverage.out -o coverage.html
 
-## 覆盖率守门:总覆盖率 < scripts/coverage.floor 即失败;涨覆盖后 scripts/coverage-floor.sh --set 抬杠
+## Coverage gate: fails when any measured value < its floor (go total / per-package /
+## frontend). Raise floors after adding coverage: --set (scalars) / --set-pkgs (per-package).
 cover-check: cover
 	bash scripts/coverage-floor.sh coverage.out
 

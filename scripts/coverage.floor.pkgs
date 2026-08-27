@@ -1,0 +1,15 @@
+internal/acp 58
+internal/chat 65
+internal/config 86
+internal/fsview 89
+internal/harness 85
+internal/mcp 82
+internal/permissions 92
+internal/remote 74
+internal/shellenv 81
+internal/store 67
+internal/terminal 83
+internal/titlegen 94
+internal/ui 82
+internal/update 5
+internal/worktree 76
