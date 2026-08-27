@@ -373,6 +373,21 @@ export default function App() {
     () => Object.fromEntries(Object.entries(permissionBySession).filter(([, v]) => v).map(([k]) => [k, true])) as Record<string, boolean>,
     [permissionBySession]
   );
+  // Scheduled-send alarm (#138): sessionId -> earliest FUTURE scheduledAt across
+  // queued items, derived from the authoritative chat:queue snapshots the backend
+  // pushes on every queue mutation. No local ticking: a due item is drained by the
+  // backend's one-shot schedule timer and that dequeue broadcasts a fresh snapshot,
+  // which drops the entry by itself.
+  const scheduledBySession = useMemo(() => {
+    const now = Date.now();
+    const out: Record<string, number> = {};
+    for (const [sid, q] of Object.entries(queueBySession)) {
+      let min = Infinity;
+      for (const it of q) if (it.scheduledAt > now && it.scheduledAt < min) min = it.scheduledAt;
+      if (min !== Infinity) out[sid] = min;
+    }
+    return out;
+  }, [queueBySession]);
   const hasMore = (selectedSessionId ? hasMoreBySession[selectedSessionId] : undefined) ?? false;
   const loadingMore = (selectedSessionId ? loadingMoreBySession[selectedSessionId] : undefined) ?? false;
   const queue = (selectedSessionId ? queueBySession[selectedSessionId] : undefined) ?? [];
@@ -2161,6 +2176,7 @@ export default function App() {
           permPendingBySession={permPendingBySession}
           draftBySession={draftBySession}
           hasTermBySession={hasTermBySession}
+          scheduledBySession={scheduledBySession}
           onRemoveProject={removeProject}
           onRemoveSession={removeSession}
           onTogglePin={toggleSessionPin}

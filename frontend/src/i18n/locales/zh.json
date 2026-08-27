@@ -66,6 +66,7 @@
     "generatingTip": "正在生成…",
     "unreadTip": "有未读回复，点击查看",
     "draftTip": "草稿: {{text}}",
+    "scheduledTip": "定时发送：最早一条将于 {{time}} 自动发送",
     "noMatch": "无匹配的会话",
     "copyWorkdir": "复制工作目录",
     "revealInFinder": "在 Finder 打开",

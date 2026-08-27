@@ -355,6 +355,11 @@ input, textarea { font-family: inherit; }
    with and without a draft render at identical height. Soft accent chip + Pencil glyph. */
 .draft-indicator { display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; flex-shrink: 0; border-radius: 50%; color: var(--accent-2); background: rgba(100, 210, 255, 0.16); }
 .draft-indicator svg { width: 8px; height: 8px; display: block; }
+/* Scheduled-send alarm (#138): same 12px circular chip family as .draft-indicator,
+   amber to match the queue panel's scheduled-send language (.queue-scheduled.future).
+   Rendered as an independent mark so it never displaces perm/unread/draft signals. */
+.scheduled-indicator { display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; flex-shrink: 0; border-radius: 50%; color: var(--amber); background: rgba(255, 214, 10, 0.16); }
+.scheduled-indicator svg { width: 8px; height: 8px; display: block; }
 .session-dot.error { background: var(--red); }
 /* Reconnecting (background auto-reconnect, §3.3): amber = degraded transient,
    distinct from error red / idle green / generating green. */
