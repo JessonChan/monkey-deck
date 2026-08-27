@@ -3280,6 +3280,29 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
     margin-right: 23px; /* balance the shadow space so the trio centers */
     animation: st-dots-bounce 1s ease-in-out infinite;
   }
+  /* Markdown tables on phones (#139): a narrow viewport crushes auto-layout
+     columns into near-vertical slivers while the table still fits the bubble
+     width, so the #136 wrap never gets to scroll. Block-displaying the table
+     sizes it from content instead: the cell min-width floor keeps every
+     column readable, width:max-content grows past the bubble when content
+     demands it, and max-width:100% + overflow-x route the excess into a
+     horizontal swipe on the table itself. Rows stay aligned: one <table> is
+     one column grid regardless of layout algorithm. This replaces the issue
+     draft's table-layout:fixed, which ignores min-width in some engines
+     (measured: fixed split 6 cols to ~40px despite a 5.5em floor) and forces
+     even columns onto tables that hug content fine — the max/min-content
+     pairing here is the field-proven GitHub markdown-table pattern. */
+  .md-table-wrap table {
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .md-table-wrap th,
+  .md-table-wrap td {
+    word-break: break-word;
+    min-width: 5.5em;
+  }
 }
 
 /* ─── App-root error boundary fallback (see AppErrorBoundary.tsx) ─── */
