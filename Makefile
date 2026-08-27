@@ -1,4 +1,4 @@
-.PHONY: all bindings dev dev-frontend build build-frontend app package run test test-integration cover cover-html cover-check clean server icons fmt vet tidy
+.PHONY: all bindings dev dev-frontend build build-frontend app package run test test-integration cover cover-check clean server icons fmt vet tidy
 
 # monkey-deck Makefile(AGENTS.md §0.5)
 WAILS3 ?= wails3
@@ -56,12 +56,10 @@ cover: bindings
 	rm -f frontend/coverage/lcov.info frontend/coverage/.lcov.info.*.tmp
 	cd frontend && bun test --isolate --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage
 
-## Coverage HTML report (Go only; bun has no HTML reporter): coverage.out → coverage.html
-cover-html: cover
-	go tool cover -html=coverage.out -o coverage.html
 
-## Coverage gate: fails when any measured value < its floor (go total / per-package /
-## frontend). Raise floors after adding coverage: --set (scalars) / --set-pkgs (per-package).
+## Coverage gate (pinned name): `cover` + floor check (go total / per-package / frontend).
+## Raise floors after adding coverage: --set (scalars) / --set-pkgs (per-package, keeps '-'
+## waivers). Ad-hoc HTML report, no target: go tool cover -html=coverage.out -o coverage.html
 cover-check: cover
 	bash scripts/coverage-floor.sh coverage.out
 

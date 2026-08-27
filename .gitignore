@@ -12,7 +12,6 @@ references/
 *.test
 *.out
 coverage.out
-coverage.html
 frontend/coverage/
 
 # 前端构建产物(node_modules 永不入库;lockfile 必须入库)
