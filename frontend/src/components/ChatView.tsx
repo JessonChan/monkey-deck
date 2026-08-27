@@ -2,6 +2,7 @@ import React, { forwardRef, memo, useCallback, useEffect, useImperativeHandle, u
 import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { ChatItem, ConfigOption, PermissionPrompt, ElicitationPrompt, StatusPayload, QueueItem, Mention, ImageAttachment, AudioAttachment, PlanEntry, LivePlan, Usage, SlashCommand } from "../types";
@@ -11,6 +12,7 @@ import Collapsible from "./Collapsible";
 import CollapsibleText from "./CollapsibleText";
 import DiffView from "./DiffView";
 import MermaidRenderer from "./MermaidRenderer";
+import { MathBlock, MathInline } from "./KatexRenderer";
 import PathLinkified from "./PathLinkified";
 import CopyIconButton from "./CopyIconButton";
 import ErrorCard from "./ErrorCard";
@@ -1711,13 +1713,20 @@ function PlanTimeline({ entries, prompting, isOpen, onToggle }: { entries: PlanE
   );
 }
 
-// PreRenderer:ReactMarkdown 的 <pre> 渲染器。代码块 → CodeBox;
-// ```mermaid 围栏 → MermaidRenderer(Task #21289)。
-// streaming=true 时 MermaidRenderer 内部会跳过渲染、先显示源码,避免不完整语法反复渲染失败。
+// PreRenderer: ReactMarkdown's <pre> renderer (#135 wiring 2/3).
+// - ```mermaid fences -> MermaidRenderer (Task #21289); streaming=true makes it
+//   show source until the fence closes, so broken half-written diagrams don't
+//   thrash the render loop.
+// - Math blocks ($$..$$ via remark-math) AND ```math fences both arrive here as
+//   <code.language-math> — one shared route to MathBlock covers both shapes.
+// - Everything else -> CodeBox (highlight.js).
 function PreRenderer(props: ComponentPropsWithoutRef<"pre"> & { streaming?: boolean }) {
   const codeEl = extractCodeChild(props.children);
   const language = codeEl?.language || "code";
   const raw = codeEl?.text || "";
+  if (language === "math") {
+    return <MathBlock code={raw} />;
+  }
   if (isMermaidLanguage(language)) {
     return <MermaidRenderer code={raw} streaming={props.streaming} />;
   }
@@ -1750,6 +1759,9 @@ function AnchorRenderer(props: ComponentPropsWithoutRef<"a">) {
 // streaming (Task #21289): true only while an agent message is streaming,
 // forwarded to PreRenderer -> MermaidRenderer so mermaid blocks render after
 // the message finishes being written.
+// math (#135 wiring 1/3): remarkMath parses $...$ / $$...$$ into
+// code.language-math hast nodes; routing to KaTeX happens in CodeRenderer /
+// PreRenderer below.
 function AgentMarkdown({ text, onOpenFilePreview, streaming = false }: { text: string; onOpenFilePreview: (path: string, line?: number) => void; streaming?: boolean }) {
   const components = useMemo(
     () => ({
@@ -1764,7 +1776,7 @@ function AgentMarkdown({ text, onOpenFilePreview, streaming = false }: { text: s
     [onOpenFilePreview, streaming]
   );
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} components={components}>
       {text}
     </ReactMarkdown>
   );
@@ -1801,8 +1813,15 @@ function linkifyReactChildren(children: React.ReactNode, onOpenFilePreview: (pat
   return children;
 }
 
+// Inline math (#135 wiring 3/3): remark-math emits <code.language-math.math-inline>
+// for `$...$`; route it to KaTeX BEFORE the generic isBlock check (its className
+// contains "language-" and would otherwise be treated as a code block). Block math
+// never reaches this renderer — PreRenderer intercepts <pre>-wrapped variants.
 function CodeRenderer(props: ComponentPropsWithoutRef<"code">) {
   const { className, children, ...rest } = props;
+  if (className?.includes("math-inline")) {
+    return <MathInline code={String(children ?? "")} />;
+  }
   const isBlock = Boolean(className?.includes("language-")) || String(children ?? "").includes("\n");
   if (isBlock) return <code className={className} data-block {...rest}>{children}</code>;
   return <code className="code-inline" {...rest}>{children}</code>;
