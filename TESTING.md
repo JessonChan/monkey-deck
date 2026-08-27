@@ -44,7 +44,7 @@ npm run build                        # tsc + vite build,提交前自检 TS/编�
 floor 数据在两个文件里(数值比较走 awk,支持小数):
 
 - **`scripts/coverage.floor`** — 标量 floor,`<key> <value>` 每行一条:当前 `go 69`(总语句覆盖率,实测 69.2% 向下取整)、`frontend 64`(src 行覆盖率,实测 64.7% 向下取整)。取整留零点几 pt 余量抗工具链漂移。
-- **`scripts/coverage.floor.pkgs`** — **分包 floor**,一行 `<包> <floor>`(按包名排序):每个 `internal/` 包各自一道棘轮。floor 值写 `-` = **豁免**(该包不受棘轮约束,只打 EXEMPT 提示)——留给测无可测的框架胶水包(当前仅 `internal/update`:wails updater + GitHub Releases 网络胶水,单测只够到 shouldAutoCheck)。没有 floor 行的包由脚本按**默认 floor 40** 校验(#26761:不 FAIL 也不逃逸——新包仍受棘轮约束,打 DEFAULT 提示;手工补一行或 `--set-pkgs` 可钉死更紧的值);floor 行对应的包已不在 profile(删包/改名)只 WARN,不挡,`--set-pkgs` 时自然重写。
+- **`scripts/coverage.floor.pkgs`** — **分包 floor**,一行 `<包> <floor>`(按包名排序):每个 `internal/` 包各自一道棘轮。floor 值写 `-` = **豁免**(该包不受棘轮约束,只打 EXEMPT 提示)——留给测无可测的框架胶水包(当前仅 `internal/update`:wails updater + GitHub Releases 网络胶水,单测只够到 shouldAutoCheck)。**表里只放偏离默认值的行(#26762)**:当前 5 行 = 核心四包紧 floor + `internal/update -` 豁免,其余包**不写行**、由脚本按**默认 floor 40** 校验(#26761:不 FAIL 也不逃逸——新包仍受棘轮约束,打 DEFAULT 提示;要钉死更紧的值就手工补一行,或 `--set-pkgs` 整份重写);floor 行对应的包已不在 profile(删包/改名)只 WARN,不挡,`--set-pkgs` 时自然重写。
   **校准策略(#26760)**:只有**核心四包**(`internal/acp` / `chat` / `harness` / `store`,纯逻辑的 ACP 主干)保留贴实测的紧 floor;**其余包一律默认 40**——这些包的实测值随机器 / Go 工具链 / 平台漂移(如 `internal/terminal` 的 pty 覆盖),贴实测的紧 floor 在 fresh clone 上稳定误爆。40 仍挡粗放稀释,聚合稀释由 go 总 floor 兜底。⚠ `--set-pkgs` 会把整份重写回贴实测的紧 floor(含把默认 40 抬高),仅在确有意图时使用;单包抬杠直接手改对应行。
 
 脚本用法:
