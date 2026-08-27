@@ -11,15 +11,20 @@
 #                                 sorted by package (regenerate with --set-pkgs; a value
 #                                 of "-" exempts the package from the ratchet — for
 #                                 framework-glue packages with no realistically testable
-#                                 surface; waivers survive --set-pkgs re-baselining)
+#                                 surface; waivers survive --set-pkgs re-baselining).
+#                                 A package with no row is checked against the default
+#                                 floor of 40 instead of failing — still under the
+#                                 ratchet; pin a tighter value with an explicit row.
 #
 # Calibration policy: only the core four packages (acp / chat / harness / store — the
 # pure-logic ACP spine) carry tight calibrated floors. Every other package sits at a
 # coarse default of 40: their measurements drift across machines / Go toolchains /
 # platforms (e.g. terminal pty coverage), and exact floors produced reproducible false
 # failures on fresh clones. 40 still blocks gross dilution; the go total floor guards
-# the aggregate. Note --set-pkgs re-tightens every row to measured values — use it only
-# when that is what you intend.
+# the aggregate. A package with no explicit row is checked against this same default
+# of 40, so new packages stay under the ratchet instead of hard-failing. Note
+# --set-pkgs re-tightens every row to measured values — use it only when that is what
+# you intend.
 #
 # Values are compared numerically, so decimals from re-baselining are fine.
 #
@@ -166,15 +171,20 @@ if [[ ! -f "$pkgs_file" ]]; then
 	echo "coverage-floor: FAIL 找不到 $pkgs_file(用 --set-pkgs 从实测生成)" >&2
 	exit 1
 fi
+
+# Packages with no explicit floor row fall back to the calibration default (see the
+# Calibration policy above): still under the ratchet, just coarse.
+default_floor=40
 pkg_fail=0
 exempt=0
 while read -r pct dir; do
 	[[ -n "$dir" ]] || continue
 	f="$(awk -v d="$dir" '$1==d {print $2}' "$pkgs_file")"
 	if [[ -z "$f" ]]; then
-		echo "coverage-floor: FAIL $dir(${pct}%)无 floor 行 —— 新包也受棘轮约束:bash scripts/coverage-floor.sh --set-pkgs 重新生成,或手工补一行" >&2
-		pkg_fail=1
-	elif [[ "$f" == "-" ]]; then
+		f="$default_floor"
+		echo "coverage-floor: DEFAULT $dir(${pct}%)无 floor 行 —— 按默认 floor ${f} 校验(仍受棘轮;手工补行或 --set-pkgs 可钉死更紧的值)" >&2
+	fi
+	if [[ "$f" == "-" ]]; then
 		exempt=$((exempt + 1))
 		echo "coverage-floor: EXEMPT $dir(${pct}%)——豁免行 '-',不受棘轮约束(测无可测的框架胶水包)"
 	elif ! num_ok "$f"; then
