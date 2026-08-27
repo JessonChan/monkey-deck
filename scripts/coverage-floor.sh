@@ -13,6 +13,14 @@
 #                                 framework-glue packages with no realistically testable
 #                                 surface; waivers survive --set-pkgs re-baselining)
 #
+# Calibration policy: only the core four packages (acp / chat / harness / store — the
+# pure-logic ACP spine) carry tight calibrated floors. Every other package sits at a
+# coarse default of 40: their measurements drift across machines / Go toolchains /
+# platforms (e.g. terminal pty coverage), and exact floors produced reproducible false
+# failures on fresh clones. 40 still blocks gross dilution; the go total floor guards
+# the aggregate. Note --set-pkgs re-tightens every row to measured values — use it only
+# when that is what you intend.
+#
 # Values are compared numerically, so decimals from re-baselining are fine.
 #
 # Usage:
