@@ -6,10 +6,9 @@ import type { ConfigOption, Mention, ImageAttachment, AudioAttachment, Usage, Sl
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import { lookupModelPricing, estimateSwitchCost } from "../lib/modelPricing";
-import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, AudioLines, ListPlus, GitBranch, CornerUpLeft, ListChecks, ClipboardPaste, Loader2 } from "lucide-react";
+import { Paperclip, X, Slash, Square, ArrowUp, File, Folder, ChevronDown, ChevronUp, ChevronRight, ImageIcon, Mic, ListPlus, GitBranch, CornerUpLeft, ListChecks, ClipboardPaste } from "lucide-react";
 import McpChip from "./McpChip";
 import { isRemoteClient } from "../lib/remote";
-import { startDictation, transcribeAudio, SttError, type DictationHandle, type SttErrorKind } from "../lib/sttClient";
 
 interface Props {
   value: string;            // 受控文本(由 App 持有,支持「撤回编辑」回填)
@@ -179,29 +178,6 @@ export default function Composer({ value, onChange, disabled, prompting, configO
   // Tab path completion race guard: monotonic id; each Tab press bumps it and
   // only the latest resolution may apply (§5.3 invariant over identity, not order).
   const completeReqId = useRef(0);
-  // Mirror of the controlled value for async insert paths (dictation transcript):
-  // the toggleVoice closure captured at click time goes stale while the user
-  // keeps typing during transcription — the insert must splice into the CURRENT
-  // draft, not the snapshot from when stop was clicked (otherwise mid-flight
-  // typing is silently clobbered). Only read from event/async continuations,
-  // never during render.
-  const valueRef = useRef(value);
-  valueRef.current = value;
-
-  // --- Voice dictation (#131 stage 2) ---
-  // voiceState: idle → recording (mic live) → transcribing (blob in flight).
-  // dictationRef holds the open mic session. voicePhaseRef is the synchronous
-  // re-entry invariant ("busy" spans every async transition): state closures
-  // go stale mid-transition, so rapid double-clicks must be guarded by a ref,
-  // not by reading voiceState (§5.3 invariant over shape assumptions). Errors
-  // are classified SttErrorKinds rendered as a localized inline row (§4.4).
-  const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing">("idle");
-  const [voiceError, setVoiceError] = useState<SttErrorKind | null>(null);
-  const dictationRef = useRef<DictationHandle | null>(null);
-  const voicePhaseRef = useRef<"idle" | "busy" | "recording">("idle");
-  // Release the mic when the composer unmounts (session closed / app quit) —
-  // a live track keeps the OS mic indicator on.
-  useEffect(() => () => { dictationRef.current?.cancel(); dictationRef.current = null; }, []);
 
   // --- 长文本折叠(展示态)---
   // isLong:超过行/字符阈值即为长文本;collapsed:是否折叠成紧凑预览块。
@@ -511,8 +487,6 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     }
     // 未知命令提示:Esc 关闭(编辑也会清,这里兜底键盘流)
     if (slashWarn && e.key === "Escape") { e.preventDefault(); setSlashWarn(null); return; }
-    // Dictation error row: Esc dismisses (same keyboard flow as slash-warn).
-    if (voiceError && e.key === "Escape") { e.preventDefault(); setVoiceError(null); return; }
     // @ mention menu: ↑↓ move selection, ← go up one dir level (drill state only),
     // → drill into the highlighted directory, Enter/Tab commit the highlighted item as a
     // mention (files AND directories both reference — dir navigation is via ← / →).
@@ -718,72 +692,6 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     } catch { /* 取消静默 */ }
   };
 
-  // --- Voice dictation (#131 stage 2) ---
-  // Insert text at the caret (not append): smart single-space padding on both
-  // sides keeps prose readable when landing mid-word/mid-line. Expands the
-  // long-text fold so the textarea exists to receive focus (focusSignal
-  // pattern), then restores the caret right after the transcript.
-  const insertAtCursor = (text: string) => {
-    // Read the draft via valueRef: this runs in a promise continuation long
-    // after the toggleVoice closure was created, so the captured `value` may
-    // be stale if the user typed while transcription was in flight.
-    const cur = valueRef.current;
-    const pos = Math.min(cursorRef.current, cur.length);
-    const before = cur.slice(0, pos);
-    const after = cur.slice(pos);
-    const lead = before && !/\s$/.test(before) ? " " : "";
-    const trail = after && !/^\s/.test(after) ? " " : "";
-    const next = before + lead + text + trail + after;
-    cursorRef.current = pos + lead.length + text.length;
-    setCollapsed(false);
-    onChange(next);
-    requestAnimationFrame(() => {
-      const el = ref.current;
-      if (el) { el.focus(); el.selectionStart = el.selectionEnd = cursorRef.current; }
-    });
-  };
-
-  // Mic button: idle → start recording; recording → stop + transcribe + insert
-  // at caret. Failures (mic denied, backend not ready, …) surface as a
-  // localized inline row instead of blocking the composer (§3.4-style
-  // someone-is-present degradation).
-  const toggleVoice = async () => {
-    if (disabled || voicePhaseRef.current === "busy") return;
-    if (voicePhaseRef.current === "recording") {
-      voicePhaseRef.current = "busy";
-      setVoiceState("transcribing");
-      const handle = dictationRef.current;
-      dictationRef.current = null;
-      try {
-        const blob = await handle?.stop();
-        // Zero-size blob (stopped before the first 250ms timeslice) gets the
-        // same inline hint as an empty transcript — never a silent return to
-        // idle (§4.4 feedback consistency).
-        if (!handle || !blob || blob.size === 0) { setVoiceError("noSpeech"); setVoiceState("idle"); return; }
-        const text = await transcribeAudio(blob);
-        if (!text) { setVoiceError("noSpeech"); setVoiceState("idle"); return; }
-        insertAtCursor(text);
-        setVoiceState("idle");
-      } catch (e) {
-        setVoiceError(e instanceof SttError ? e.kind : "failed");
-        setVoiceState("idle");
-      } finally {
-        voicePhaseRef.current = "idle";
-      }
-      return;
-    }
-    voicePhaseRef.current = "busy";
-    setVoiceError(null);
-    try {
-      dictationRef.current = await startDictation();
-      voicePhaseRef.current = "recording";
-      setVoiceState("recording");
-    } catch (e) {
-      voicePhaseRef.current = "idle";
-      setVoiceError(e instanceof SttError ? e.kind : "failed");
-    }
-  };
-
   return (
     <div className="composer" data-testid="composer">
       {slashOpen && (
@@ -847,16 +755,6 @@ export default function Composer({ value, onChange, disabled, prompting, configO
               {t("composer.sendAsPlain")}
             </button>
             <button className="slash-warn-x" onClick={() => setSlashWarn(null)} title={t("common.dismiss")}><X size={13} /></button>
-          </span>
-        </div>
-      )}
-      {voiceError && (
-        <div className="slash-warn voice-error" data-testid="voice-error" role="alert">
-          <span className="slash-warn-msg">
-            <span className="slash-warn-hint">{t(`composer.voiceErr.${voiceError}`)}</span>
-          </span>
-          <span className="slash-warn-actions">
-            <button className="slash-warn-x" data-testid="voice-error-dismiss" onClick={() => setVoiceError(null)} title={t("common.dismiss")}><X size={13} /></button>
           </span>
         </div>
       )}
@@ -1113,38 +1011,6 @@ export default function Composer({ value, onChange, disabled, prompting, configO
                 <Mic size={17} />
               </button>
             )}
-            {/* Voice dictation (#131): mic → MediaRecorder → host STT → insert
-                transcript at the caret. Works on all three faces (webview
-                binding / remote /api/stt). The recording state is visually
-                loud (red stop square + pulse) so a live mic is never missed.
-                Idle icon is AudioLines — NOT Mic — so the button is never
-                confused with the adjacent audio-ATTACHMENT button (agent
-                capability, Mic icon, different semantics). */}
-            <button
-              className={`tool-btn voice-btn ${voiceState === "recording" ? "recording" : ""}`}
-              data-testid="voice-btn"
-              data-state={voiceState}
-              onClick={() => { void toggleVoice(); }}
-              disabled={disabled}
-              aria-label={
-                voiceState === "recording" ? t("composer.voiceStopTip")
-                : voiceState === "transcribing" ? t("composer.voiceTranscribingTip")
-                : t("composer.voiceDictateTip")
-              }
-              data-tooltip-id="md-tip"
-              data-tooltip-content={
-                voiceState === "recording" ? t("composer.voiceStopTip")
-                : voiceState === "transcribing" ? t("composer.voiceTranscribingTip")
-                : t("composer.voiceDictateTip")
-              }
-              data-tooltip-place="top"
-            >
-              {voiceState === "recording"
-                ? <Square size={13} className="voice-stop-ico" />
-                : voiceState === "transcribing"
-                  ? <Loader2 size={15} className="spin" />
-                  : <AudioLines size={17} />}
-            </button>
             <button
               className="tool-btn"
               onClick={() => { onChange(value.startsWith("/") ? value : "/" + value); requestAnimationFrame(() => ref.current?.focus()); }}

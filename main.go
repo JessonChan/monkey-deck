@@ -9,7 +9,6 @@ import (
 
 	"github.com/jessonchan/monkey-deck/internal/chat"
 	"github.com/jessonchan/monkey-deck/internal/config"
-	"github.com/jessonchan/monkey-deck/internal/stt"
 	"github.com/jessonchan/monkey-deck/internal/terminal"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -49,7 +48,6 @@ func main() {
 	assetHandler := application.AssetFileServerFS(assets)
 	chatSvc := chat.NewChatService(cfg)
 	termSvc := terminal.NewTerminalService()
-	sttSvc := stt.NewService(cfg) // #131 phase 1: host STT backend (lazy sidecar)
 
 	app := application.New(application.Options{
 		Name:        config.AppName,
@@ -57,7 +55,6 @@ func main() {
 		Services: []application.Service{
 			application.NewService(chatSvc),
 			application.NewService(termSvc),
-			application.NewService(sttSvc),
 		},
 		Assets: application.AssetOptions{
 			Handler: assetHandler,
@@ -73,9 +70,8 @@ func main() {
 
 	// Embedded remote server (§1.8): desktop builds wire it here; server-tag
 	// builds no-op (they serve HTTP themselves). Must precede app.Run so that
-	// ServiceStartup can start the listener when enabled. The STT service is
-	// passed along so /api/stt can bridge remote clients to the same backend.
-	attachEmbeddedRemote(chatSvc, tr, assetHandler, sttSvc)
+	// ServiceStartup can start the listener when enabled.
+	attachEmbeddedRemote(chatSvc, tr, assetHandler)
 
 	// 桌面 GUI 装配(应用更新 / 菜单 / 主窗口 + 状态记忆):desktop 构建里见 desktop.go,
 	// server 模式(-tags server)下走 server.go 的 no-op —— 后者 app.Run() 直接起 HTTP 服务
