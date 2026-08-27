@@ -45,12 +45,12 @@ test:
 test-integration:
 	go test -tags=integration -run TestIntegration -v ./internal/... -timeout 180s
 
-## Coverage: Go unit tests over ./internal/... (atomic mode, coverage.out) + frontend
-## line coverage via bun lcov (frontend/coverage/lcov.info). Root package main is out of
-## scope: no tests, and its go:embed needs frontend/dist (fails on an empty checkout).
-## Ratchet details: TESTING.md (#coverage). Gate = scripts/coverage-floor.sh:
-## go total + frontend total + per-package floors (scripts/coverage.floor{,.pkgs}).
-cover:
+## Coverage targets are pinned: `cover` measures, `cover-check` gates. Do not rename.
+## `cover` self-provisions generated bindings: frontend/bindings/ is gitignored and bun
+## test / tsc cannot resolve it on a fresh clone (the gate used to die mid-run with
+## "Cannot find module .../bindings/..." — same prerequisite dev/build already declare).
+cover: bindings
+	@test -d frontend/node_modules || { echo "coverage: 缺 frontend/node_modules —— 先执行: (cd frontend && bun install)"; exit 1; }
 	go test ./internal/... -covermode=atomic -coverprofile=coverage.out
 	go tool cover -func=coverage.out | tail -1
 	rm -f frontend/coverage/lcov.info frontend/coverage/.lcov.info.*.tmp
