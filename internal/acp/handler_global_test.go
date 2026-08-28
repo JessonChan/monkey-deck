@@ -95,58 +95,87 @@ func TestRequestPermissionGlobalEmitsExactMatchRule(t *testing.T) {
 }
 
 // TestRequestPermissionGlobalFSShapePath 验证 fs 类请求(无命令、有路径)经 onRespond("global")
-// 固化出的规则带 PathPattern(首个 location 原值),与 permissions.ExactMatchRule 形状一致。
+// 固化出的规则形状,与 permissions.ExactMatchRule 一致:write/edit 取首个 location 绝对路径,
+// read 泛化为 basename(#143:跨项目同名文件放行,写仍精确到路径)。
 func TestRequestPermissionGlobalFSShapePath(t *testing.T) {
-	promptCh := make(chan string, 4)
-	var (
-		gotRule permissions.Rule
-		emitted bool
-	)
-	h := NewHandler("/tmp/proj", nil, func(p PermissionPrompt) {
-		select {
-		case promptCh <- p.ID:
-		default:
-		}
-	}, nil, 0)
-	h.SetPermissionRecovery(0, "allow")
-	h.OnGlobalRule = func(r permissions.Rule) { gotRule = r; emitted = true }
-
-	kind := acp.ToolKind("edit")
-	req := acp.RequestPermissionRequest{
-		ToolCall: acp.ToolCallUpdate{Kind: &kind, Locations: []acp.ToolCallLocation{{Path: "/foo/bar.go"}}},
-		Options: []acp.PermissionOption{
-			{Kind: acp.PermissionOptionKindAllowOnce, OptionId: "allow", Name: "Allow"},
+	cases := []struct {
+		name string
+		kind acp.ToolKind
+		path string
+		want permissions.Rule
+	}{
+		{
+			name: "write 取绝对路径",
+			kind: acp.ToolKind("edit"),
+			path: "/foo/bar.go",
+			want: permissions.Rule{
+				ToolName:    "edit",
+				ActionType:  permissions.ActionWrite,
+				PathPattern: "/foo/bar.go",
+				Level:       permissions.LevelAllow,
+				Enabled:     true,
+			},
+		},
+		{
+			name: "read 泛化 basename",
+			kind: acp.ToolKind("read"),
+			path: "/projA/src/notes.md",
+			want: permissions.Rule{
+				ToolName:    "read",
+				ActionType:  permissions.ActionRead,
+				PathPattern: "notes.md",
+				Level:       permissions.LevelAllow,
+				Enabled:     true,
+			},
 		},
 	}
-	done := make(chan struct{})
-	go func() {
-		_, _ = h.RequestPermission(context.Background(), req)
-		close(done)
-	}()
-	var promptID string
-	select {
-	case promptID = <-promptCh:
-	case <-time.After(2 * time.Second):
-		t.Fatal("OnPermission 未被调用")
-	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			promptCh := make(chan string, 4)
+			var (
+				gotRule permissions.Rule
+				emitted bool
+			)
+			h := NewHandler("/tmp/proj", nil, func(p PermissionPrompt) {
+				select {
+				case promptCh <- p.ID:
+				default:
+				}
+			}, nil, 0)
+			h.SetPermissionRecovery(0, "allow")
+			h.OnGlobalRule = func(r permissions.Rule) { gotRule = r; emitted = true }
 
-	if !h.RespondPermission(promptID, "global") {
-		t.Fatal("RespondPermission(\"global\") 应命中待裁决项")
-	}
-	<-done
+			kind := c.kind
+			req := acp.RequestPermissionRequest{
+				ToolCall: acp.ToolCallUpdate{Kind: &kind, Locations: []acp.ToolCallLocation{{Path: c.path}}},
+				Options: []acp.PermissionOption{
+					{Kind: acp.PermissionOptionKindAllowOnce, OptionId: "allow", Name: "Allow"},
+				},
+			}
+			done := make(chan struct{})
+			go func() {
+				_, _ = h.RequestPermission(context.Background(), req)
+				close(done)
+			}()
+			var promptID string
+			select {
+			case promptID = <-promptCh:
+			case <-time.After(2 * time.Second):
+				t.Fatal("OnPermission 未被调用")
+			}
 
-	if !emitted {
-		t.Fatal("OnGlobalRule 未被调用")
-	}
-	wantRule := permissions.Rule{
-		ToolName:    "edit",
-		ActionType:  permissions.ActionWrite,
-		PathPattern: "/foo/bar.go",
-		Level:       permissions.LevelAllow,
-		Enabled:     true,
-	}
-	if gotRule != wantRule {
-		t.Fatalf("fs 规则形状错误: got %+v, want %+v", gotRule, wantRule)
+			if !h.RespondPermission(promptID, "global") {
+				t.Fatal("RespondPermission(\"global\") 应命中待裁决项")
+			}
+			<-done
+
+			if !emitted {
+				t.Fatal("OnGlobalRule 未被调用")
+			}
+			if gotRule != c.want {
+				t.Fatalf("fs 规则形状错误: got %+v, want %+v", gotRule, c.want)
+			}
+		})
 	}
 }
 

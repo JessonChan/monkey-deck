@@ -244,9 +244,19 @@ func TestExactMatchRuleShape(t *testing.T) {
 			want: Rule{ToolName: "edit", ActionType: ActionWrite, PathPattern: "/foo/bar.go", Level: LevelAllow, Enabled: true},
 		},
 		{
-			name: "read 多 location 取首个(集合取近似)",
+			name: "read 固化 basename(跨项目同名泛化)",
+			req:  MatchRequest{ToolKind: "read", Locations: []string{"/projA/src/notes.md"}},
+			want: Rule{ToolName: "read", ActionType: ActionRead, PathPattern: "notes.md", Level: LevelAllow, Enabled: true},
+		},
+		{
+			name: "read 纯文件名 location 原样(basename 幂等)",
+			req:  MatchRequest{ToolKind: "read", Locations: []string{"notes.md"}},
+			want: Rule{ToolName: "read", ActionType: ActionRead, PathPattern: "notes.md", Level: LevelAllow, Enabled: true},
+		},
+		{
+			name: "read 多 location 取首个 basename(集合取近似)",
 			req:  MatchRequest{ToolKind: "read", Locations: []string{"/a", "/b"}},
-			want: Rule{ToolName: "read", ActionType: ActionRead, PathPattern: "/a", Level: LevelAllow, Enabled: true},
+			want: Rule{ToolName: "read", ActionType: ActionRead, PathPattern: "a", Level: LevelAllow, Enabled: true},
 		},
 		{
 			name: "无命令无路径仅工具+动作",
@@ -280,6 +290,38 @@ func TestExactMatchRuleReproducesRequest(t *testing.T) {
 		// 不同工具同名命令也不命中(工具是主判别项)
 		if got := e.Decide(MatchRequest{ToolKind: "bash", RawInput: map[string]any{"command": "git status"}}, LevelAsk); got != LevelAsk {
 			t.Fatalf("不同工具不应命中, got %s", got)
+		}
+		// 变体命令(git status → git status -s)不算全等 → 再弹(锚定的意义)
+		if got := e.Decide(MatchRequest{ToolKind: "execute", RawInput: map[string]any{"command": "git status -s"}}, LevelAsk); got != LevelAsk {
+			t.Fatalf("变体命令不应命中, got %s", got)
+		}
+	})
+
+	// 硬性场景(#143):read 全局允许泛化为 basename,跨项目同名文件命中自动放行。
+	t.Run("read basename 跨项目同名命中", func(t *testing.T) {
+		rule := ExactMatchRule(MatchRequest{ToolKind: "read", Locations: []string{"/projA/src/notes.md"}})
+		e := NewEngine([]Rule{rule})
+		if got := e.Decide(MatchRequest{ToolKind: "read", Locations: []string{"/projB/notes.md"}}, LevelAsk); got != LevelAllow {
+			t.Fatalf("跨项目同名 read 应 allow, got %s", got)
+		}
+		if got := e.Decide(MatchRequest{ToolKind: "read", Locations: []string{"/anywhere/deep/notes.md"}}, LevelAsk); got != LevelAllow {
+			t.Fatalf("任意目录同名 read 应 allow, got %s", got)
+		}
+		// 不同文件名不命中 → 再弹
+		if got := e.Decide(MatchRequest{ToolKind: "read", Locations: []string{"/projB/other.md"}}, LevelAsk); got != LevelAsk {
+			t.Fatalf("不同文件名不应命中, got %s", got)
+		}
+	})
+
+	// 硬性场景(#143):write 保持绝对路径精确,跨项目同名文件不命中(写有副作用)。
+	t.Run("write 精确路径跨项目不命中", func(t *testing.T) {
+		rule := ExactMatchRule(MatchRequest{ToolKind: "edit", Locations: []string{"/projA/notes.md"}})
+		e := NewEngine([]Rule{rule})
+		if got := e.Decide(MatchRequest{ToolKind: "edit", Locations: []string{"/projB/notes.md"}}, LevelAsk); got != LevelAsk {
+			t.Fatalf("跨项目同名 write 不应命中, got %s", got)
+		}
+		if got := e.Decide(MatchRequest{ToolKind: "edit", Locations: []string{"/projA/notes.md"}}, LevelAsk); got != LevelAllow {
+			t.Fatalf("同路径 write 应 allow, got %s", got)
 		}
 	})
 

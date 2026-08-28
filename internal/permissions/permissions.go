@@ -32,7 +32,7 @@ const (
 
 // 动作分组(由 ToolKind 派生,§3.4「按动作类型 read/write/exec」)。
 const (
-	ActionRead = "read" // read/search/think/fetch
+	ActionRead  = "read"  // read/search/think/fetch
 	ActionWrite = "write" // edit/delete/move
 	ActionExec  = "exec"  // execute
 	ActionOther = "other" // switch_mode/other/未知
@@ -56,9 +56,9 @@ type Rule struct {
 
 // MatchRequest 一次权限判定的输入(从 acp.RequestPermissionRequest 提取)。
 type MatchRequest struct {
-	ToolKind  string         // req.ToolCall.Kind
-	Locations []string       // req.ToolCall.Locations[].Path(已展平)
-	RawInput  any            // req.ToolCall.RawInput(用于抽命令)
+	ToolKind  string   // req.ToolCall.Kind
+	Locations []string // req.ToolCall.Locations[].Path(已展平)
+	RawInput  any      // req.ToolCall.RawInput(用于抽命令)
 }
 
 // Engine 规则匹配器(不可变快照,便于并发读)。零值可用(无规则 → 一律 fallback)。
@@ -252,22 +252,31 @@ func normalizeLevel(s string) string {
 	}
 }
 
-// ExactMatchRule 根据一次权限请求构造「准确匹配」的 allow 规则(§3.4「全局允许」决策用)。
+// ExactMatchRule builds an "exact match" allow rule from one permission request
+// (§3.4 "allow globally" decision).
 //
-// 用户在前端选「全局允许」(onRespond("global"))时,把当前请求的标识固化成一条
-// level=allow 的规则,使后续「同工具 + 同命令」或「同工具 + 同路径」的请求被规则引擎
-// 自动放行——跨 session / 跨 project 全局生效(区别于 session/project 仅内存记忆、随
-// session 生灭)。规则经 service 持久化进 DB,刷新全部活跃 session 的规则快照后即刻生效。
+// When the user picks "allow globally" in the frontend (onRespond("global")), the current
+// request's identity is frozen into a level=allow rule so later "same tool + same command"
+// or "same tool + same path" requests are auto-allowed by the rule engine — globally across
+// sessions/projects (unlike session/project memory, which is in-memory only and dies with
+// the session). The rule is persisted to the DB via the service and takes effect immediately
+// after all live sessions' rule snapshots are refreshed.
 //
-// 标识选取(「准确匹配」= 复现当前请求所需的全部非空约束,AND 语义):
-//   - ToolName = req.ToolKind(精确工具,主判别项;不同 kind 不会误命中)
-//   - ActionType = ActionOfKind(ToolKind)(与 kind 一致,供分组/展示)
-//   - 有命令(exec 类):CommandPattern = ^转义命令$(锚定 + 转义元字符,严格全等)
-//   - 无命令有路径(fs 类):PathPattern = 首个 location 原值(引擎按「任一 location 命中」
-//     判定,当前请求含该路径 → 自身可复现;多路径请求只能取其一,见下方注释)
-//   - 无命令无路径:仅按工具+动作匹配(可表达的最窄「同工具」语义)
+// Identity selection ("exact match" = every non-empty constraint needed to reproduce the
+// current request, AND semantics):
+//   - ToolName = req.ToolKind (exact tool, primary discriminator; different kinds never match)
+//   - ActionType = ActionOfKind(ToolKind) (consistent with kind, for grouping/display)
+//   - With command (exec kinds): CommandPattern = ^escaped command$ (anchored + escaped,
+//     strict full equality)
+//   - No command with paths (fs kinds): PathPattern from the first location. Read actions
+//     generalize to the basename ("read once by name → same-named files anywhere allowed";
+//     reads are side-effect free so name-level generalization matches user intuition).
+//     Write actions stay the absolute path (side-effectful; a same-named file in another
+//     project must not be silently allowed). The engine's matchPath already matches
+//     basename for "/"-free patterns, so no engine change is needed.
+//   - No command no path: tool + action only (the narrowest expressible "same tool" scope)
 //
-// 纯逻辑、无副作用,单测直接验证输入→规则形状(§5.1)。
+// Pure logic, no side effects; unit tests verify the request → rule shape directly (§5.1).
 func ExactMatchRule(req MatchRequest) Rule {
 	rule := Rule{
 		ToolName:   req.ToolKind,
@@ -276,14 +285,22 @@ func ExactMatchRule(req MatchRequest) Rule {
 		Enabled:    true,
 	}
 	if cmd := ExtractCommand(req.RawInput); cmd != "" {
-		// 锚定 + 转义:命令作为正则全等匹配,避免元字符/前缀误命中。
+		// Anchored + escaped: the command is matched as a full-equality regex, avoiding
+		// meta-character or prefix false hits.
 		rule.CommandPattern = "^" + regexp.QuoteMeta(cmd) + "$"
 		return rule
 	}
 	if len(req.Locations) > 0 {
-		// 取首个 location:引擎 matchPaths 对「任一 location 命中」算命中,当前请求必含
-		// 该路径故自身可复现。多路径请求的完整集合无法用单条 glob 表达(取首个为最佳近似)。
-		rule.PathPattern = req.Locations[0]
+		// Take the first location: the engine counts "any location hit" as a hit, so the
+		// current request necessarily contains it and reproduces itself. A multi-path
+		// request's full set cannot be expressed as a single glob (first is the best
+		// approximation). Read generalizes to the basename — a "/"-free pattern makes the
+		// engine match same-named files in any directory; write keeps the absolute path.
+		if rule.ActionType == ActionRead {
+			rule.PathPattern = filepath.Base(req.Locations[0])
+		} else {
+			rule.PathPattern = req.Locations[0]
+		}
 		return rule
 	}
 	return rule
