@@ -205,7 +205,8 @@ export default function Sidebar(props: Props) {
   // ── Batch selection (#94) ──────────────────────────────────────────────────
   // Multi-select sessions via ⌘/Ctrl+click (toggle), Shift+click (range from the
   // last individually clicked row) and per-row checkboxes (visible while select
-  // mode is on; entered from the header ListChecks button or any modifier click).
+  // mode is on; entered from the per-project select-all button (project row,
+  // next to search; #155) or any modifier click).
   // Batch actions: copy working directories (newline-joined, worktreePath ||
   // project path — same resolution as the single-row ctx menu) and delete
   // (confirm modal, sequential via the existing onRemoveSession flow).
@@ -469,6 +470,28 @@ export default function Sidebar(props: Props) {
     }
     return tagFiltered.slice(0, sessLimit);
   };
+  // Select-all for one project (#155): fold every currently visible session of
+  // that project into the selection and turn select mode on. "Visible" is the
+  // same rendered array shared with keyboard-nav and Shift+click range math
+  // (projectList): under an active search/tag filter that is the filtered
+  // result set; otherwise the paginated slice (pagination caps rendering, not
+  // intent — "load more" then select-all again unions the tail). Nothing
+  // visible → no-op, never an error (#155 ③). A collapsed project is expanded
+  // so the promised checkboxes are actually rendered (same auto-expand the
+  // neighbouring search button does). The click-order anchor is deliberately
+  // NOT touched: select-all is not an individual toggle click, so the anchor
+  // keeps its documented meaning for Shift+click ranges (#155 ④).
+  const selectAllProject = (pId: string) => {
+    const list = projectList(pId);
+    if (list.length === 0) return;
+    if (!expanded.has(pId)) setExpanded((prev) => new Set(prev).add(pId));
+    setSelMode(true);
+    setSel((prev) => {
+      const next = new Set(prev);
+      for (const s of list) next.add(s.id);
+      return next;
+    });
+  };
 
   // Drop selected ids that no longer exist in any project's session list
   // (deleted via ctx menu / another window) so the batch count never lies.
@@ -677,16 +700,6 @@ export default function Sidebar(props: Props) {
             <Settings size={16} />
             {props.harnessUpdateAvailable && <span className="update-dot" />}
           </button>
-          <button
-            className={`icon-btn${selMode ? " batch-on" : ""}`}
-            data-testid="batch-select-mode"
-            onClick={() => (selMode ? exitSelMode() : setSelMode(true))}
-            data-tooltip-id="md-tip"
-            data-tooltip-content={selMode ? t("sidebar.batchSelectOn") : t("sidebar.batchSelectOff")}
-            data-tooltip-place="bottom"
-          >
-            <ListChecks size={16} />
-          </button>
           <button className="icon-btn" data-testid="add-project" onClick={props.onAddProject} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.addProject")} data-tooltip-place="bottom">
             <Plus size={17} />
           </button>
@@ -727,6 +740,9 @@ export default function Sidebar(props: Props) {
                 </button>
                 <button className="icon-btn small" onClick={() => toggleSearch(p.id)} data-tooltip-id="md-tip" data-tooltip-content={searchProj === p.id ? t("sidebar.searchOn") : t("sidebar.searchOff")} data-tooltip-place="bottom" data-testid={`search-sessions-${p.id}`}>
                   <Search size={12} />
+                </button>
+                <button className="icon-btn small" onClick={() => selectAllProject(p.id)} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.batchSelectAll")} data-tooltip-place="bottom" data-testid={`select-all-sessions-${p.id}`}>
+                  <ListChecks size={13} />
                 </button>
                 <button className="icon-btn small" onClick={() => props.onCreateSession(p.id)} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.newSession")} data-testid={`new-session-${p.id}`}>
                   <Plus size={13} />

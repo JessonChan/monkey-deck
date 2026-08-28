@@ -32,11 +32,17 @@ mock.module("../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chat
   SearchSessionContent: async () => [],
 }));
 mock.module("react-tooltip", () => ({ Tooltip: () => null, default: () => null }));
-mock.module("react-i18next", () => ({
-  useTranslation: () => ({ t: (k: string) => k }),
-  initReactI18next: { type: "3rd-party" },
-  default: { useTranslation: () => ({ t: (k: string) => k }) },
-}));
+mock.module("react-i18next", () => {
+  // Echo the key, appending interpolation args so count assertions can pin the
+  // exact batch-bar payload (e.g. {"count":2} after a filtered select-all).
+  const t = (k: string, opts?: Record<string, unknown>) =>
+    opts && Object.keys(opts).length ? `${k} ${JSON.stringify(opts)}` : k;
+  return {
+    useTranslation: () => ({ t }),
+    initReactI18next: { type: "3rd-party" },
+    default: { useTranslation: () => ({ t }) },
+  };
+});
 
 // Clipboard mock: capture the last copied text so the batch-copy test can
 // assert the exact newline-joined payload (render order, worktreePath ||
@@ -64,7 +70,7 @@ const proj = (id: string, name: string) => ({
   updatedAt: 1,
 });
 
-const sess = (id: string, projectId: string, worktreePath = "") => ({
+const sess = (id: string, projectId: string, worktreePath = "", tags: string[] = []) => ({
   id,
   projectId,
   acpSession: "",
@@ -88,8 +94,8 @@ const sess = (id: string, projectId: string, worktreePath = "") => ({
   updatedAt: 1,
   promptedAt: 1,
   pinned: false,
+  tags,
 });
-
 // Recorded interactions: activated sessions, removed sessions (in order).
 let activated: [string, string][] = [];
 let removed: string[] = [];
@@ -117,14 +123,6 @@ const baseProps = () => ({
   onReorderProjects: () => {},
   onOpenSettings: () => {},
 });
-
-function mount() {
-  const host = document.createElement("div");
-  document.body.appendChild(host);
-  const root = createRoot(host);
-  root.render(<Sidebar {...(baseProps() as never)} />);
-  return { host, root };
-}
 
 async function flush() {
   for (let i = 0; i < 8; i++) {
@@ -154,11 +152,19 @@ const isChecked = (host: HTMLElement, id: string): boolean =>
   checkbox(host, id)?.getAttribute("aria-checked") === "true";
 
 // Mount with the given projects expanded so their session rows render.
-async function mounted(expanded: string[] = ["p1"]) {
+// `sessions` overrides the default sessionsByProject (select-all filter tests).
+async function mounted(
+  expanded: string[] = ["p1"],
+  sessions?: Record<string, ReturnType<typeof sess>[]>,
+) {
   localStorage.setItem(EXPANDED_KEY, JSON.stringify(expanded));
-  const m = mount();
+  const props = { ...baseProps(), ...(sessions ? { sessionsByProject: sessions } : {}) };
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  root.render(<Sidebar {...(props as never)} />);
   await flush();
-  return m;
+  return { host, root };
 }
 
 describe("Sidebar batch selection (#94)", () => {
@@ -169,18 +175,25 @@ describe("Sidebar batch selection (#94)", () => {
     lastCopied = "";
   });
 
-  test("header button enters select mode (checkboxes appear); Esc exits and clears", async () => {
+  test("project-row select-all enters select mode with that project's visible sessions; Esc exits and clears", async () => {
     const { host, root } = await mounted();
     expect(checkbox(host, "s1")).toBeNull(); // no checkboxes before select mode
 
-    host.querySelector('[data-testid="batch-select-mode"]')!.dispatchEvent(click());
+    host.querySelector('[data-testid="select-all-sessions-p1"]')!.dispatchEvent(click());
     await flush();
-    expect(checkbox(host, "s1")).not.toBeNull();
-    expect(checkbox(host, "s4")).toBeNull(); // p2 collapsed — its rows aren't rendered
+    expect(isChecked(host, "s1")).toBe(true);
+    expect(isChecked(host, "s2")).toBe(true);
+    expect(isChecked(host, "s3")).toBe(true);
+    expect(activated).toEqual([]); // selection, never activation
+    // Exactly the visible set: p2 is collapsed, its lone session untouched.
+    expect(host.querySelector('[data-testid="session-s4"]')).toBeNull();
+    expect(host.querySelector('[data-testid="batch-count"]')!.textContent)
+      .toBe('sidebar.batchCount {"count":3}');
 
     window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
     await flush();
     expect(checkbox(host, "s1")).toBeNull();
+    expect(host.querySelector('[data-testid="batch-bar"]')).toBeNull();
 
     root.unmount();
   });
@@ -226,7 +239,8 @@ describe("Sidebar batch selection (#94)", () => {
     expect(isChecked(host, "s2")).toBe(true);
     expect(isChecked(host, "s3")).toBe(true);
     expect(activated).toEqual([]);
-    expect(host.querySelector('[data-testid="batch-count"]')!.textContent).toBe("sidebar.batchCount");
+    expect(host.querySelector('[data-testid="batch-count"]')!.textContent)
+      .toBe('sidebar.batchCount {"count":3}');
 
     // Shift works upwards too: anchor stays at s3, shift-click s2 keeps s2..s3.
     rowMain(host, "s1")!.dispatchEvent(click({ meta: true })); // deselect s1
@@ -240,18 +254,22 @@ describe("Sidebar batch selection (#94)", () => {
     const { host, root } = await mounted();
     expect(host.querySelector('[data-testid="batch-bar"]')).toBeNull();
 
-    host.querySelector('[data-testid="batch-select-mode"]')!.dispatchEvent(click());
+    host.querySelector('[data-testid="select-all-sessions-p1"]')!.dispatchEvent(click());
     await flush();
-    checkbox(host, "s2")!.dispatchEvent(click());
-    await flush();
-
     expect(isChecked(host, "s2")).toBe(true);
     expect(host.querySelector('[data-testid="batch-bar"]')).not.toBeNull();
 
     checkbox(host, "s2")!.dispatchEvent(click());
     await flush();
     expect(isChecked(host, "s2")).toBe(false);
-    // Selection empty → the action bar hides even though select mode is still on.
+    expect(host.querySelector('[data-testid="batch-count"]')!.textContent)
+      .toBe('sidebar.batchCount {"count":2}');
+
+    // Deselect the rest: empty selection → the action bar hides even though
+    // select mode is still on.
+    checkbox(host, "s1")!.dispatchEvent(click());
+    checkbox(host, "s3")!.dispatchEvent(click());
+    await flush();
     expect(host.querySelector('[data-testid="batch-bar"]')).toBeNull();
 
     root.unmount();
@@ -298,6 +316,83 @@ describe("Sidebar batch selection (#94)", () => {
     expect(host.querySelector('[data-testid="batch-delete-confirm"]')).toBeNull();
     expect(host.querySelector('[data-testid="batch-bar"]')).toBeNull();
     expect(checkbox(host, "s3")).toBeNull();
+
+    root.unmount();
+  });
+  test("select-all under an active tag filter selects only the filtered set (#155)", async () => {
+    const { host, root } = await mounted(["p1"], {
+      p1: [sess("s1", "p1", "", ["api"]), sess("s2", "p1"), sess("s3", "p1", "", ["api"])],
+      p2: [sess("s4", "p2")],
+    });
+
+    host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-api"]')!.dispatchEvent(click());
+    await flush();
+    expect(host.querySelector('[data-testid="session-s2"]')).toBeNull(); // filter hides untagged
+
+    host.querySelector('[data-testid="select-all-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
+    expect(isChecked(host, "s1")).toBe(true);
+    expect(isChecked(host, "s3")).toBe(true);
+    // Count equals the visible (filtered) count, not the project's full set.
+    expect(host.querySelector('[data-testid="batch-count"]')!.textContent)
+      .toBe('sidebar.batchCount {"count":2}');
+
+    // Lift the filter: the previously hidden session was never selected.
+    host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-api"]')!.dispatchEvent(click());
+    await flush();
+    expect(isChecked(host, "s2")).toBe(false);
+    expect(isChecked(host, "s1")).toBe(true);
+
+    root.unmount();
+  });
+
+  test("select-all unions into an existing selection across projects", async () => {
+    const { host, root } = await mounted(["p1", "p2"]);
+
+    host.querySelector('[data-testid="select-all-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
+    host.querySelector('[data-testid="select-all-sessions-p2"]')!.dispatchEvent(click());
+    await flush();
+
+    expect(isChecked(host, "s1")).toBe(true);
+    expect(isChecked(host, "s4")).toBe(true);
+    expect(host.querySelector('[data-testid="batch-count"]')!.textContent)
+      .toBe('sidebar.batchCount {"count":4}');
+
+    root.unmount();
+  });
+
+  test("select-all on a collapsed project expands it so checkboxes render", async () => {
+    const { host, root } = await mounted(["p1"]);
+    expect(host.querySelector('[data-testid="session-s4"]')).toBeNull(); // collapsed
+
+    host.querySelector('[data-testid="select-all-sessions-p2"]')!.dispatchEvent(click());
+    await flush();
+    // The project opened up and its visible sessions are checked.
+    expect(host.querySelector('[data-testid="session-s4"]')).not.toBeNull();
+    expect(isChecked(host, "s4")).toBe(true);
+    // Select mode is on everywhere (p1 rows render checkboxes) but p1 stays unselected.
+    expect(checkbox(host, "s1")).not.toBeNull();
+    expect(isChecked(host, "s1")).toBe(false);
+
+    root.unmount();
+  });
+
+  test("select-all on a project with no sessions is a no-op (#155 ③)", async () => {
+    const { host, root } = await mounted(["p1"], {
+      p1: [sess("s1", "p1")],
+      p2: [],
+    });
+
+    const btn = host.querySelector<HTMLElement>('[data-testid="select-all-sessions-p2"]');
+    expect(btn).not.toBeNull();
+    btn!.dispatchEvent(click());
+    await flush();
+
+    // No selection, no select mode, no batch bar, no crash.
+    expect(host.querySelector('[data-testid="batch-bar"]')).toBeNull();
+    expect(checkbox(host, "s1")).toBeNull();
+    expect(activated).toEqual([]);
 
     root.unmount();
   });
