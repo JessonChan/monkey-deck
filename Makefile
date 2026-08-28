@@ -1,4 +1,4 @@
-.PHONY: all bindings dev dev-frontend build build-frontend app package run test test-integration cover cover-check clean server icons fmt vet tidy
+.PHONY: all bindings dev dev-frontend build build-frontend app package run test test-integration cover cover-check review-stats clean server icons fmt vet tidy
 
 # monkey-deck Makefile(AGENTS.md §0.5)
 WAILS3 ?= wails3
@@ -62,6 +62,10 @@ cover: bindings
 ## waivers). Ad-hoc HTML report, no target: go tool cover -html=coverage.out -o coverage.html
 cover-check: cover
 	bash scripts/coverage-floor.sh coverage.out
+
+## Review-record stats over docs/worklog (ARGS passthrough, e.g. ARGS=--by-severity)
+review-stats:
+	bash scripts/review-stats.sh $(ARGS)
 
 ## 构建 server 模式(纯 HTTP,无 GUI,便于自动化验证)
 server:
