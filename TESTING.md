@@ -79,15 +79,19 @@ git add scripts/coverage.floor scripts/coverage.floor.pkgs && git commit  # floo
 
 ## review 统计(scripts/review-stats.sh)
 
-AI dev team 的 review 记录沉淀在 `docs/worklog/`(文件名含 `review` 的工作日志,一个 review 一条),`scripts/review-stats.sh` 把它们聚合成三个视角:
+AI dev team 的 review 记录沉淀在 `docs/worklog/`(文件名含 `review` 的工作日志,一个 review 一条),`scripts/review-stats.sh` 把它们聚合成四个视角:
 
 ```bash
 make review-stats                        # 周趋势(ISO 周,首末活动周之间的空周补 0)
+make review-stats ARGS=--overview        # 总览:分类漏斗(语料→候选→记录)+ 周趋势/by-issue 头条数
 make review-stats ARGS=--by-issue        # 按锚点 issue 分组:计数降序 + 首末日期 + P1/P2/P3 并集
 make review-stats ARGS=--by-severity     # P1/P2/P3 分级:提及该级的 review 记录数与占比
-./scripts/review-stats.sh --by-severity  # 也可直接跑脚本(--help 看用法,未知参数退出 2)
+make review-stats ARGS=--check           # 口径守卫:所有视角 total 必须一致,漂移退出 1
+./scripts/review-stats.sh --check        # 也可直接跑脚本(--help 看用法,未知参数退出 2)
 ```
 
 - **分类不变量**:文件名带日期前缀 + 含 `review`(先剥 `preview`——它内嵌 `review` 子串),且携带结论 marker(结论标题/裸结论行)或旧格式 H1 verdict token;review 缺口修复跟进(落地记录风格,无结论 marker)不计入。
+- **计数口径已钉死(2026-08-28,#26764/#26767)**:总览 / 周趋势 / by-issue / by-severity 聚合的是 pass 1 产出的**同一份记录集**,四处 total 恒等;`--overview` 用分类漏斗把口径摆在明面(corpus=全部 worklog 文件数 → candidates=文件名命中数 → records=携结论标记数,excluded=无 marker 的候选,即 fix 跟进/实现日志);`--check` 逐视角实跑并解析各自上报的 total 互相印证,任一聚合程序被改坏导致单视角漂移即 FAIL——它守护的是消费方看到的输出,不只是共享 TSV。
 - **P1/P2/P3 分级是「记录级提及面」不是逐条 finding 计数**:整文件按词边界扫 `P1/P2/P3` token(`P12`/`XP1` 不算,`P3-a`/`P2/P3` 算),一条记录内同级只计一次。review 记录的 finding 排版异构(标题/加粗 bullet/散文/复审转述),逐条计数不可靠;`--by-issue` 里该锚点的分级是其全部记录的并集。无任何 P token 的记录占大头是常态(隐式结论的 review 不带分级词)。
 - 时间轴 = 文件名日期前缀(git commit 日期受 merge 顺序漂移);锚点 = H1 第一个 `#NNN`。ISO 周为纯 awk 实现(Hinnant 算法),无 GNU/BSD date 分歧。
+- **零记录是显式路径**:空语料 / 纯非 review 语料下四个视角都打 "no review records found" 退出 0;`--by-issue` 的提示由格式化阶段输出(聚合阶段打印会穿 sort 渲染成假行,已修)。
