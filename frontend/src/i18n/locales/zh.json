@@ -215,6 +215,10 @@
     "permAllowProject": "本项目允许",
     "permAllowGlobal": "全局允许",
     "permDeny": "本次拒绝",
+    "permGlobalHintExec": "全局允许将按命令原文精确记忆:",
+    "permGlobalHintWrite": "全局允许将按精确路径记忆:",
+    "permGlobalHintRead": "全局允许将按文件名记忆,任意目录下同名文件都会放行:",
+    "permGlobalHintGeneric": "全局允许将按当前工具与动作记忆。",
     "permActionRead": "读取",
     "permActionWrite": "写入",
     "permActionExec": "执行命令",
@@ -671,7 +675,13 @@
       "enableTip": "启用 / 禁用此规则",
       "moveUp": "提高优先级",
       "moveDown": "降低优先级",
-      "delete": "删除规则"
+      "delete": "删除规则",
+      "shapeCommand": "命令原文",
+      "shapeCommandTip": "按命令原文全等匹配——「全局允许」对执行类生成的形态",
+      "shapeFilename": "文件名",
+      "shapeFilenameTip": "任意目录下同名文件都命中——「全局允许」对读取类生成的形态",
+      "shapePath": "精确路径",
+      "shapePathTip": "仅该路径命中——「全局允许」对写入类生成的形态"
     },
     "mcp": {
       "desc": "全局注册的 MCP 服务器。每次新建会话时勾选要连接的。配置存本地(SQLite);可导入 opencode / OMP 配置批量添加。",

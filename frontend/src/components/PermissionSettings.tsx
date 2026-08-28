@@ -168,6 +168,15 @@ function RuleRow({
   onMove: (id: string, dir: -1 | 1) => void;
 }) {
   const { t } = useTranslation();
+  // 规则形状标源(#143,纯展示):命令原文(^…$)/ 文件名(无 /)/ 精确路径(含 / 非 glob)。
+  // 只标注「全局允许」生成的三种形态,其余(通配、自写 glob)不标。
+  const shape = rule.commandPattern.startsWith("^") && rule.commandPattern.endsWith("$") && rule.commandPattern.length > 2
+    ? { key: "settings.perm.shapeCommand", tip: "settings.perm.shapeCommandTip", testid: "perm-shape-command" }
+    : rule.pathPattern && !rule.pathPattern.includes("/")
+      ? { key: "settings.perm.shapeFilename", tip: "settings.perm.shapeFilenameTip", testid: "perm-shape-filename" }
+      : rule.pathPattern && rule.pathPattern.includes("/") && !/[*?[]/.test(rule.pathPattern)
+        ? { key: "settings.perm.shapePath", tip: "settings.perm.shapePathTip", testid: "perm-shape-path" }
+        : null;
   const levelOpt = LEVEL_OPTIONS.find((l) => l.value === rule.level) || LEVEL_OPTIONS[1];
   return (
     <div className={`perm-rule ${rule.enabled ? "" : "disabled"}`} data-testid="perm-rule">
@@ -182,6 +191,16 @@ function RuleRow({
       />
       <div className="perm-rule-main">
         <div className="perm-rule-row">
+          {shape && (
+            <span
+              className="perm-shape"
+              data-testid={shape.testid}
+              data-tooltip-id="md-tip"
+              data-tooltip-content={t(shape.tip)}
+            >
+              {t(shape.key)}
+            </span>
+          )}
           <label className="perm-field">
             <span className="perm-field-label">{t("settings.perm.tool")}</span>
             <input

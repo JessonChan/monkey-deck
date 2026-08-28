@@ -1602,6 +1602,12 @@ function shortPath(p: string): string {
   return `…/${base}`;
 }
 
+// 取路径 basename(全局允许·读取的预览值用;兼容 / 与 \ 分隔)。
+function baseName(p: string): string {
+  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return i >= 0 ? p.slice(i + 1) : p;
+}
+
 // 统计文本中非空行数(用于 grep/glob 结果项数)。
 function countNonEmpty(text: string): number {
   let n = 0;
@@ -1621,6 +1627,22 @@ function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRes
           : prompt.actionType === "other"
             ? t("chat.permActionOther")
             : "";
+  // 「全局允许」明示(#143):按动作分叉说明将记住什么 + 预览值。
+  // 预览取决策上下文(后端 buildPermissionPrompt 已从 ToolCall RawInput/Locations 提取);
+  // 命令优先(与后端 ExactMatchRule 的分支顺序一致),取不到回退通用文案。
+  const globalHint = (() => {
+    if (prompt.command) {
+      return { key: "chat.permGlobalHintExec", preview: prompt.command };
+    }
+    const loc = prompt.locations && prompt.locations.length > 0 ? prompt.locations[0] : "";
+    if (loc && prompt.actionType === "read") {
+      return { key: "chat.permGlobalHintRead", preview: baseName(loc) };
+    }
+    if (loc && prompt.actionType === "write") {
+      return { key: "chat.permGlobalHintWrite", preview: loc };
+    }
+    return { key: "chat.permGlobalHintGeneric", preview: "" };
+  })();
   return (
     <div className="permission-card" data-testid="permission-card">
       <div className="permission-head">
@@ -1649,6 +1671,10 @@ function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRes
           )}
         </div>
       )}
+      <div className="permission-global-hint" data-testid="perm-global-hint">
+        <span>{t(globalHint.key)}</span>
+        {globalHint.preview && <code data-testid="perm-global-preview">{globalHint.preview}</code>}
+      </div>
       <div className="permission-actions">
         <button className="perm-btn perm-allow" data-testid="perm-once" onClick={() => onRespond("once")}>{t("chat.permAllowOnce")}</button>
         <button className="perm-btn perm-allow" data-testid="perm-session" onClick={() => onRespond("session")}>{t("chat.permAllowSession")}</button>

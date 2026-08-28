@@ -215,6 +215,10 @@
     "permAllowProject": "Allow for this project",
     "permAllowGlobal": "Allow globally",
     "permDeny": "Deny this time",
+    "permGlobalHintExec": "Allow globally will remember this exact command:",
+    "permGlobalHintWrite": "Allow globally will remember this exact path:",
+    "permGlobalHintRead": "Allow globally will remember the file name — same-named files in any directory will be allowed:",
+    "permGlobalHintGeneric": "Allow globally will remember this tool and action.",
     "permActionRead": "Read",
     "permActionWrite": "Write",
     "permActionExec": "Run command",
@@ -671,7 +675,13 @@
       "enableTip": "Enable / disable this rule",
       "moveUp": "Higher priority",
       "moveDown": "Lower priority",
-      "delete": "Delete rule"
+      "delete": "Delete rule",
+      "shapeCommand": "Exact command",
+      "shapeCommandTip": "Full-equality match on the command text — the shape \"Allow globally\" creates for exec",
+      "shapeFilename": "File name",
+      "shapeFilenameTip": "Same-named files in any directory match — the shape \"Allow globally\" creates for reads",
+      "shapePath": "Exact path",
+      "shapePathTip": "Only this exact path matches — the shape \"Allow globally\" creates for writes"
     },
     "mcp": {
       "desc": "MCP servers registered globally. Pick which to connect per session in the new-chat dialog. Stored locally (SQLite); import an opencode / OMP config to bulk-add.",
