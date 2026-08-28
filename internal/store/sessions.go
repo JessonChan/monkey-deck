@@ -11,21 +11,22 @@ import (
 )
 
 // sessionColumns / scanSession:统一 session 的列与扫描,避免多处 SELECT/Scan 漂移(§1.5)。
-const sessionColumns = `id,project_id,acp_session_id,title,custom_title,model,harness,worktree_path,branch,base_ref,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,config_options_cache,tags`
+const sessionColumns = `id,project_id,acp_session_id,title,custom_title,model,harness,worktree_path,branch,base_ref,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,config_options_cache,tags,commands_cache`
 
 func scanSession(r interface {
 	Scan(dest ...any) error
 }, se *Session) error {
-	var tags string
+	var tags, commandsCache string
 	err := r.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.CustomTitle, &se.Model, &se.Harness,
 		&se.WorktreePath, &se.Branch, &se.BaseRef,
 		&se.UsedTokens, &se.SizeTokens, &se.Cost,
 		&se.CachedReadTokens, &se.CachedWriteTokens, &se.InputTokens, &se.OutputTokens, &se.ThoughtTokens, &se.TotalTokens,
-		&se.CreatedAt, &se.UpdatedAt, &se.PromptedAt, &se.Pinned, &se.ConfigOptionsCache, &tags)
+		&se.CreatedAt, &se.UpdatedAt, &se.PromptedAt, &se.Pinned, &se.ConfigOptionsCache, &tags, &commandsCache)
 	if err != nil {
 		return err
 	}
 	se.Tags = decodeTags(tags)
+	se.CommandsCache = commandsCache
 	return nil
 }
 
@@ -164,6 +165,19 @@ func (s *Store) UpdateSessionConfigOptionsCache(ctx context.Context, id, cacheJS
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE sessions SET config_options_cache=?, updated_at=? WHERE id=?`,
 		cacheJSON, now(), id)
+	return err
+}
+
+// UpdateSessionCommandsCache replaces the persisted slash command table (#152).
+// cacheJSON is the JSON of the flattened []acp.SlashCommand. Full-table replace
+// semantics: the empty list is a legitimate write (JSON []); the zero value
+// (empty string) means the harness has not advertised a table for it yet. Cache maintenance is
+// not content activity, so updated_at stays untouched (same rationale as tags 0021;
+// a mid-turn re-advertisement must not churn the sidebar secondary sort).
+func (s *Store) UpdateSessionCommandsCache(ctx context.Context, id, cacheJSON string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET commands_cache=? WHERE id=?`,
+		cacheJSON, id)
 	return err
 }
 

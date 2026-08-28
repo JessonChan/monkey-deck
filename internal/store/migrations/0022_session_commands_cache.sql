@@ -1,0 +1,13 @@
+-- schema v22 (#152): persist each session's harness-advertised slash command table
+-- (ACP available_commands_update) as the flattened []acp.SlashCommand JSON. Read-only
+-- state (lazy spawn: session reopened without a live harness) renders the slash menu
+-- from this cache instead of showing nothing.
+--
+-- Write policy: every available_commands_update REPLACES the whole table, including
+-- the empty list (a harness clearing its commands is legitimate state, not the absence
+-- of a cache — '' means "never seeded", '[]' means "seeded, zero commands").
+-- Staleness: the cache is a best-effort snapshot, NOT a source of truth. If the app
+-- or harness is upgraded and command shapes change, the next spawn re-advertises the
+-- full table and overwrites whatever is stored; nothing reads the cache while a live
+-- session is streaming its own events. No version stamp, no TTL.
+ALTER TABLE sessions ADD COLUMN commands_cache TEXT NOT NULL DEFAULT '';

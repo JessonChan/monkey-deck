@@ -90,6 +90,11 @@ type Session struct {
 	// back as []string. Pure organizational metadata, never a sort key; writes
 	// go through NormalizeTags (trim / dedupe / cap 5) first.
 	Tags []string `json:"tags"`
+	// CommandsCache:persisted harness-advertised slash command table (#152). JSON of the
+	// flattened []acp.SlashCommand; '' = never seeded, '[]' = seeded but zero commands.
+	// Written on every available_commands_update (full-table replace, empty allowed) by the
+	// handler via the service callback; read back for the lazy-spawn read-only slash menu.
+	CommandsCache string `json:"commandsCache,omitempty"`
 }
 
 // New 打开(或创建)SQLite 并跑迁移。dbPath 为空时用内存库(测试用)。
