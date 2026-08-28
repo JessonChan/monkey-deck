@@ -1677,6 +1677,14 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 	// mu-guarded assignment is race-free with the handler's read-side snapshots.
 	chat.Handler.SetGlobalRule(s.persistGlobalPermissionRule)
 	chat.Handler.SetElicitationResolved(onElicitationResolved)
+	// Register the slash-command-table persistence callback (#152): every
+	// available_commands_update lands straight in sessions.commands_cache from the
+	// ACP reader goroutine (handler-direct, empty table overwrites too). The handler
+	// emits the ACP session id; pin the DB session id in the closure instead — same
+	// id alignment onPermission/onElicitation do.
+	chat.Handler.SetCommandsCache(func(_ string, cmds []acp.SlashCommand) {
+		s.persistCommandsCache(se.ID, cmds)
+	})
 
 	s.mu.Lock()
 	s.active[se.ID] = ls
@@ -2462,6 +2470,29 @@ func (s *ChatService) persistConfigCache(sessionID string, opts []acp.ConfigOpti
 	}
 }
 
+// persistCommandsCache serializes the flattened slash command table and writes it to
+// the DB (#152). Registered as the handler's OnCommandsCache callback — available_commands_update
+// events land here straight from the ACP reader goroutine (handler-direct write, no frontend
+// round-trip; handleEvent does NOT also write this, which would double-write). Full-table
+// replace semantics: an EMPTY table is a legitimate write (a harness clearing its commands),
+// unlike persistConfigCache where empty is skipped. Runs on the ACP reader goroutine; the
+// handler already recovers panics, and a write failure only logs (cache is best-effort).
+func (s *ChatService) persistCommandsCache(sessionID string, cmds []acp.SlashCommand) {
+	// flattenUpdate always yields a non-nil slice, but guard the zero value: marshal(nil)
+	// would store JSON null and lose the seeded-empty state on the read side.
+	if cmds == nil {
+		cmds = []acp.SlashCommand{}
+	}
+	b, err := json.Marshal(cmds)
+	if err != nil {
+		slog.Warn("marshal commands cache", "err", err)
+		return
+	}
+	if err := s.st.UpdateSessionCommandsCache(s.ctx, sessionID, string(b)); err != nil {
+		slog.Warn("persist commands cache", "err", err)
+	}
+}
+
 // handleEvent processes one SessionUpdate: merges it into the timeline by a stable
 // key and forwards it to the frontend (§5.4 #11/#12).
 //
@@ -2745,6 +2776,24 @@ func (s *ChatService) GetSessionCachedConfigOptions(sessionID string) ([]acp.Con
 		return nil, nil // 损坏的缓存静默忽略,前端走空(下次 spawn 会覆盖)
 	}
 	return opts, nil
+}
+
+// GetSessionCachedCommands 返回 session 持久化的 slash 命令表快照(#152,懒 spawn 只读态
+// 渲染 slash 菜单用)。语义与 GetSessionCachedConfigOptions 同构:空串 = 从未上报过(harness
+// 还没广告过命令表)→ nil;JSON [] = 已上报但零命令 → 空切片;损坏 → nil(下次 spawn 会覆盖)。
+func (s *ChatService) GetSessionCachedCommands(sessionID string) ([]acp.SlashCommand, error) {
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if se == nil || se.CommandsCache == "" {
+		return nil, nil
+	}
+	var cmds []acp.SlashCommand
+	if err := json.Unmarshal([]byte(se.CommandsCache), &cmds); err != nil {
+		return nil, nil // 损坏的缓存静默忽略,前端走空(下次 spawn 会覆盖)
+	}
+	return cmds, nil
 }
 
 // RefreshSessionConfig 重新拉取 session 的最新 configOptions(同步外部配置改动)。
