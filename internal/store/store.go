@@ -60,13 +60,13 @@ type Session struct {
 	// falling back to Title. Empty = no custom title (use Title).
 	CustomTitle string `json:"customTitle"`
 	Model       string `json:"model"`
-	Harness    string `json:"harness"` // 使用的 harness(omp/opencode),新建会话时选择
+	Harness     string `json:"harness"` // 使用的 harness(omp/opencode),新建会话时选择
 	// session 的 git worktree(并行隔离用,§1.4)。空 = 非 git 项目或未建,直接用项目目录。
 	WorktreePath string `json:"worktreePath"`
 	Branch       string `json:"branch"`
 	// BaseRef 基线分支(新建 worktree 时的起点 + 合并时的终点),空=非 worktree 或旧 session。
 	// 显式基线,绝不裸用 HEAD(§1.4 todo/worktree-base-ref-selection.md)。
-	BaseRef      string `json:"baseRef"`
+	BaseRef string `json:"baseRef"`
 	// token 用量(最后一次 SessionUsageUpdate 的快照,使重开会话能恢复占比,§1.6)。
 	UsedTokens int64   `json:"usedTokens"`
 	SizeTokens int64   `json:"sizeTokens"`
@@ -82,10 +82,14 @@ type Session struct {
 	// ConfigOptionsCache:持久化的 config options 快照(懒 spawn:只读态渲染 ModelSelect 用)。
 	// JSON 序列化的扁平化 []acp.ConfigOption。spawn/config_option_update/set_config_option 时回写。
 	ConfigOptionsCache string `json:"configOptionsCache,omitempty"`
-	CreatedAt  int64   `json:"createdAt"`
-	UpdatedAt  int64   `json:"updatedAt"`
-	PromptedAt int64   `json:"promptedAt"` // 用户最后一次发消息的时刻,专用于侧栏排序(后台活动不刷新它)
-	Pinned     bool    `json:"pinned"`     // 置顶(0008):置顶后恒在项目会话列表顶部;排序见 ListSessions
+	CreatedAt          int64  `json:"createdAt"`
+	UpdatedAt          int64  `json:"updatedAt"`
+	PromptedAt         int64  `json:"promptedAt"` // 用户最后一次发消息的时刻,专用于侧栏排序(后台活动不刷新它)
+	Pinned             bool   `json:"pinned"`     // 置顶(0008):置顶后恒在项目会话列表顶部;排序见 ListSessions
+	// Tags user labels (0021, #150 MVP): stored as a JSON string array, read
+	// back as []string. Pure organizational metadata, never a sort key; writes
+	// go through NormalizeTags (trim / dedupe / cap 5) first.
+	Tags []string `json:"tags"`
 }
 
 // New 打开(或创建)SQLite 并跑迁移。dbPath 为空时用内存库(测试用)。

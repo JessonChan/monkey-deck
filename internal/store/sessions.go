@@ -3,22 +3,73 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/google/uuid"
+	"strings"
 )
 
 // sessionColumns / scanSession:统一 session 的列与扫描,避免多处 SELECT/Scan 漂移(§1.5)。
-const sessionColumns = `id,project_id,acp_session_id,title,custom_title,model,harness,worktree_path,branch,base_ref,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,config_options_cache`
+const sessionColumns = `id,project_id,acp_session_id,title,custom_title,model,harness,worktree_path,branch,base_ref,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,config_options_cache,tags`
 
-func scanSession(r interface{
+func scanSession(r interface {
 	Scan(dest ...any) error
 }, se *Session) error {
-	return r.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.CustomTitle, &se.Model, &se.Harness,
+	var tags string
+	err := r.Scan(&se.ID, &se.ProjectID, &se.ACPSession, &se.Title, &se.CustomTitle, &se.Model, &se.Harness,
 		&se.WorktreePath, &se.Branch, &se.BaseRef,
 		&se.UsedTokens, &se.SizeTokens, &se.Cost,
 		&se.CachedReadTokens, &se.CachedWriteTokens, &se.InputTokens, &se.OutputTokens, &se.ThoughtTokens, &se.TotalTokens,
-		&se.CreatedAt, &se.UpdatedAt, &se.PromptedAt, &se.Pinned, &se.ConfigOptionsCache)
+		&se.CreatedAt, &se.UpdatedAt, &se.PromptedAt, &se.Pinned, &se.ConfigOptionsCache, &tags)
+	if err != nil {
+		return err
+	}
+	se.Tags = decodeTags(tags)
+	return nil
+}
+
+// MaxSessionTags caps the per-session tag set (#150 MVP).
+const MaxSessionTags = 5
+
+// NormalizeTags applies the write-layer rules (#150): trim each entry, drop
+// empties, dedupe case-sensitively (exact match, idempotent), cap at
+// MaxSessionTags preserving first-seen order.
+func NormalizeTags(tags []string) []string {
+	out := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, t := range tags {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+		if len(out) == MaxSessionTags {
+			break
+		}
+	}
+	return out
+}
+
+// decodeTags parses the sessions.tags JSON column. Corrupt or empty values
+// degrade to an empty slice rather than failing the whole session read (a
+// broken row must never blank the sidebar).
+func decodeTags(raw string) []string {
+	if raw == "" {
+		return []string{}
+	}
+	var tags []string
+	if err := json.Unmarshal([]byte(raw), &tags); err != nil {
+		return []string{}
+	}
+	if tags == nil {
+		return []string{}
+	}
+	return tags
 }
 
 // --- Sessions ---
@@ -45,6 +96,19 @@ func (s *Store) CreateSession(ctx context.Context, projectID, title, model, harn
 		return nil, fmt.Errorf("create session: %w", err)
 	}
 	return sess, nil
+}
+
+// UpdateSessionTags replaces the session's tag set (0021). Input is normalized
+// (trim / dedupe / cap 5) before persisting as a JSON array; an empty result
+// clears all tags. Tag edits are not content activity → updated_at untouched
+// (same rationale as pinned 0008 / custom_title 0016).
+func (s *Store) UpdateSessionTags(ctx context.Context, id string, tags []string) error {
+	b, err := json.Marshal(NormalizeTags(tags))
+	if err != nil {
+		return fmt.Errorf("marshal tags: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE sessions SET tags=? WHERE id=?`, string(b), id)
+	return err
 }
 
 // UpdateSessionACP 记录 opencode 返回的 session id(Resume 用,§1.4)。
