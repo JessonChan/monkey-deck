@@ -104,6 +104,11 @@ const (
 	// other non-quota errors (teardown + reconnect on next message, #46 probe
 	// §D regression boundary); the payload carries RootCause and Attempts.
 	ErrCodeProviderTransient = "provider_transient_error"
+	// ErrCodeElicitationUnrenderable(#158):elicitation form 扁平化后无可渲染字段
+	// (fields==0),handler 已直接 Decline 给 harness。推 notice(非异常,连接正常,
+	// 前端蓝色提示条)让用户知道该命令为何没有弹输入表单、直接空转结束。
+	// Detail 留空:code 驱动 i18n(chat.notice.*),同 empty-turn 不变量。
+	ErrCodeElicitationUnrenderable = "elicitation_unrenderable"
 )
 
 // promptRetryLimit caps the transient-error Prompt auto-retry (#46): at most
@@ -1677,6 +1682,12 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 	// mu-guarded assignment is race-free with the handler's read-side snapshots.
 	chat.Handler.SetGlobalRule(s.persistGlobalPermissionRule)
 	chat.Handler.SetElicitationResolved(onElicitationResolved)
+	// #158:elicitation form 无法渲染(fields==0)时 handler 直接 Decline,这里向该
+	// session 推可见 notice。Setter 形式:ACP reader goroutine 此时已启动,
+	// 同 SetElicitationResolved 的 mu 对齐写。
+	chat.Handler.SetElicitationUnrenderable(func() {
+		s.emit(EventStatus, StatusPayload{SessionID: se.ID, Status: "notice", Code: ErrCodeElicitationUnrenderable})
+	})
 	// Register the slash-command-table persistence callback (#152): every
 	// available_commands_update lands straight in sessions.commands_cache from the
 	// ACP reader goroutine (handler-direct, empty table overwrites too). The handler

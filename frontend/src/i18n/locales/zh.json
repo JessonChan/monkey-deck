@@ -324,7 +324,8 @@
       "rootCausePrefix": "本轮发送失败:"
     },
     "notice": {
-      "harness_empty_turn": "该命令本轮没有更多回复。连接正常,可继续操作。"
+      "harness_empty_turn": "该命令本轮没有更多回复。连接正常,可继续操作。",
+      "elicitation_unrenderable": "表单不可渲染,已自动婉拒。"
     }
   },
   "selectionToolbar": {

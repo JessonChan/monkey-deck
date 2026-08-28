@@ -4,7 +4,10 @@ package acp
 // 覆盖 omp 实际发的两种 form(select = string+enum、confirm = boolean)+ decline/cancel 路径。
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -268,5 +271,159 @@ func TestUnstableCreateElicitationCtxCancel(t *testing.T) {
 	// 取消后对该 id 的 RespondElicitation 应失败(已被 ctx 路径清掉)。
 	if h.RespondElicitation("any-id-after-cancel", ElicitationResponse{Action: "accept"}) {
 		t.Fatal("RespondElicitation should fail after ctx cancel (entry removed)")
+	}
+}
+
+// #158 shape (a): a map without "type" but with a non-empty enum synthesizes a
+// string select; every option survives (non-string items fmt.Sprint-ed, not
+// dropped) so the select stays answerable.
+func TestElicitFieldsEnumOnlyMapSynthesizesSelect(t *testing.T) {
+	schema := acp.UnstableElicitationSchema{
+		Properties: map[string]any{
+			"mode": map[string]any{
+				"title": "Mode",
+				"enum":  []any{"fast", "ulw", 3},
+			},
+		},
+		Required: []string{"mode"},
+	}
+	fields, err := elicitFields(schema)
+	if err != nil {
+		t.Fatalf("elicitFields: %v", err)
+	}
+	if len(fields) != 1 {
+		t.Fatalf("want 1 field, got %d: %+v", len(fields), fields)
+	}
+	f := fields[0]
+	if f.Name != "mode" || f.Type != "string" {
+		t.Fatalf("field = %+v, want name=mode type=string (synthesized select)", f)
+	}
+	want := []string{"fast", "ulw", "3"}
+	if len(f.Enum) != len(want) {
+		t.Fatalf("enum = %v, want %v (all options must survive)", f.Enum, want)
+	}
+	for i := range want {
+		if f.Enum[i] != want[i] {
+			t.Fatalf("enum[%d] = %q, want %q", i, f.Enum[i], want[i])
+		}
+	}
+	if f.Title != "Mode" {
+		t.Fatalf("title = %q, want Mode", f.Title)
+	}
+	if !f.Required {
+		t.Fatal("should be required")
+	}
+}
+
+// #158 shape (b): the property itself is a bare option array — synthesize a
+// string select named after the property key, every option fmt.Sprint-ed to a
+// string (numbers/booleans included).
+func TestElicitFieldsBareArraySynthesizesSelect(t *testing.T) {
+	schema := acp.UnstableElicitationSchema{
+		Properties: map[string]any{
+			"choice": []any{"alpha", 42, true},
+		},
+	}
+	fields, err := elicitFields(schema)
+	if err != nil {
+		t.Fatalf("elicitFields: %v", err)
+	}
+	if len(fields) != 1 {
+		t.Fatalf("want 1 field, got %d: %+v", len(fields), fields)
+	}
+	f := fields[0]
+	if f.Name != "choice" || f.Type != "string" {
+		t.Fatalf("field = %+v, want name=choice type=string (synthesized select)", f)
+	}
+	want := []string{"alpha", "42", "true"}
+	if len(f.Enum) != len(want) {
+		t.Fatalf("enum = %v, want %v", f.Enum, want)
+	}
+	for i := range want {
+		if f.Enum[i] != want[i] {
+			t.Fatalf("enum[%d] = %q, want %q (non-string items must be fmt.Sprint-ed)", i, f.Enum[i], want[i])
+		}
+	}
+}
+
+// #158: shapes that cannot render (empty enum, bare scalar, null) stay
+// unrenderable — each alone drives fields==0 and thus the visible-decline path.
+func TestElicitFieldsUnrenderableShapes(t *testing.T) {
+	cases := map[string]any{
+		"empty_enum":  map[string]any{"enum": []any{}},
+		"bare_scalar": "just a string",
+		"null":        nil,
+	}
+	for name, prop := range cases {
+		schema := acp.UnstableElicitationSchema{Properties: map[string]any{"x": prop}}
+		if _, err := elicitFields(schema); err == nil {
+			t.Fatalf("%s: want error (no renderable fields), got nil", name)
+		}
+	}
+}
+
+// #158 / G-2: the schema dump must truncate — small schemas verbatim, oversized
+// ones cut at the limit with a visible marker (never a full-schema log flood).
+func TestSchemaDumpTruncates(t *testing.T) {
+	if got := schemaDump(map[string]any{"a": "b"}, schemaDumpLimit); got != `{"a":"b"}` {
+		t.Fatalf("small schema should marshal verbatim, got %q", got)
+	}
+	big := map[string]any{"blob": strings.Repeat("y", 4*schemaDumpLimit)}
+	got := schemaDump(big, schemaDumpLimit)
+	if len(got) > schemaDumpLimit+16 {
+		t.Fatalf("dump = %d bytes, want <= %d (+marker)", len(got), schemaDumpLimit)
+	}
+	if !strings.HasSuffix(got, "(truncated)") {
+		t.Fatalf("oversized dump must carry the truncation marker, got tail %q", got[max(0, len(got)-20):])
+	}
+}
+
+// #158 fields==0 end to end: the callback response stays Decline (the harness
+// degrades gracefully), the service notice callback fires (the frontend shows
+// why no form appeared), and the warn log's schema dump stays bounded (G-2:
+// no full-schema flood).
+func TestUnstableCreateElicitationUnrenderableDeclinesWithNotice(t *testing.T) {
+	noticed := make(chan struct{}, 1)
+	h := NewHandler("/tmp/proj", nil, nil, nil, 0)
+	h.OnElicitationUnrenderable = func() { noticed <- struct{}{} }
+
+	// Capture the default slog logger to assert the dump truncation.
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(prev)
+
+	// One unrenderable 8KB prop (bare scalar): fields==0, and the marshaled
+	// schema far exceeds the 2KB dump limit.
+	schema := acp.UnstableElicitationSchema{
+		Properties: map[string]any{
+			"junk": strings.Repeat("x", 8192),
+		},
+	}
+	resp, err := h.UnstableCreateElicitation(context.Background(), acp.UnstableCreateElicitationRequest{
+		Form: &acp.UnstableCreateElicitationForm{
+			Mode:            "form",
+			Message:         "unrenderable",
+			RequestedSchema: schema,
+		},
+	})
+	if err != nil {
+		t.Fatalf("UnstableCreateElicitation: %v", err)
+	}
+	if resp.Decline == nil {
+		t.Fatalf("want Decline response, got %+v", resp)
+	}
+	select {
+	case <-noticed:
+	case <-time.After(time.Second):
+		t.Fatal("OnElicitationUnrenderable not invoked (frontend notice would never show)")
+	}
+
+	logs := buf.String()
+	if !strings.Contains(logs, "(truncated)") {
+		t.Fatalf("oversized schema must be logged truncated, logs = %s", logs)
+	}
+	if len(logs) > schemaDumpLimit+512 {
+		t.Fatalf("warn output = %d bytes, dump must stay bounded near the %d limit", len(logs), schemaDumpLimit)
 	}
 }

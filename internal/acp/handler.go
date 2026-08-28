@@ -207,6 +207,11 @@ type Handler struct {
 	// 卡片(否则卡片最多残留 permTTL=5min,期间点击后端报 no pending,前端无反馈)。
 	// 用户正常响应(RespondElicitation)不触发本回调 —— 前端已乐观清卡。
 	OnElicitationResolved func(id string)
+	// OnElicitationUnrenderable(#158):elicitation form 扁平化后无可渲染字段
+	// (fields==0)时,handler 直接 Decline 给 harness;本回调让 service 向该 session
+	// 前端推一条可见 notice(chat.notice.* i18n),否则用户只看到命令静默空转、
+	// 不知发生了什么。nil = 不通知(handler 单测默认)。
+	OnElicitationUnrenderable func()
 	// OnGlobalRule:用户选「全局允许」(RespondPermission 传 "global")时回调 service,
 	// 把由当前请求固化出的「准确匹配」allow 规则(permissions.ExactMatchRule)交由 service
 	// 持久化进 DB + 刷新全部活跃 session 的规则快照(跨 session/project 全局生效,§3.4)。
