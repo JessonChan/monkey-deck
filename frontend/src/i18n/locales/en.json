@@ -40,7 +40,8 @@
     "closeTabTip": "Close tab ({{title}})",
     "moveToWindow": "Move tab to new window",
     "sessionTooltip": "{{title}} · {{project}}",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "limitTip": "Up to {{limit}} tabs — close some to open more"
   },
   "closeTab": {
     "title": "Chat is still generating",

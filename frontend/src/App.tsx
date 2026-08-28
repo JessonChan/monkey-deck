@@ -6,7 +6,7 @@ import * as TerminalService from "../bindings/github.com/jessonchan/monkey-deck/
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { ChatItem, ConfigOption, PermissionPrompt, ElicitationPrompt, SessionEvent, StatusPayload, QueueItem, QueuePayload, Mention, ImageAttachment, AudioAttachment, Attachment, PlanEntry, LivePlan, Usage, SlashCommand } from "./types";
 import Sidebar from "./components/Sidebar";
-import TabBar from "./components/TabBar";
+import TabBar, { TAB_LIMIT } from "./components/TabBar";
 import ChatView, { type ChatViewHandle } from "./components/ChatView";
 import { Sparkles } from "lucide-react";
 import SidePanel from "./components/SidePanel";
@@ -119,6 +119,9 @@ export default function App() {
   // source, don't derive from heuristics. Popout windows never show the tab bar, so they don't
   // maintain this state.
   const [openTabs, setOpenTabs] = useState<string[]>([]);
+  // 50-tab cap hint (#156): bumped on every rejected tab open; TabBar flashes a transient
+  // inline hint (1.5s self-dismiss) per bump.
+  const [tabLimitHintSeq, setTabLimitHintSeq] = useState(0);
   // popout 模式:本窗口是某 session 的独立窗口(由后端 OpenSessionWindow 创建,URL 带 #popout=<sid>)。
   // popout 模式下隐藏 Sidebar、启动时直接 openSession 目标 session、不处理 poppedSessionIds 过滤
   // (它是主窗口专属:主窗口对已 popout 的 session 视而不见,避免权限/状态/声音双弹)。
@@ -232,10 +235,29 @@ export default function App() {
   const selectedSessionIdRef = useRef<string | null>(null);
   const chatViewRef = useRef<ChatViewHandle>(null);
   selectedSessionIdRef.current = selectedSessionId;
-  // openTabs 的 ref:closeTab 需读「邻居」选下一个 tab,用 ref 读最新值避免把它进依赖
-  // (每次 tab 增减都重建 closeTab 会牵连 TabBar 整树重渲染)。与 selectedSessionIdRef 同理。
+  // openTabs ref: closeTab reads the "neighbor" tab through the ref's latest value instead of
+  // adding it to effect deps (re-creating closeTab on every tab add/remove would re-render the
+  // whole TabBar tree). Same rationale as selectedSessionIdRef below.
   const openTabsRef = useRef<string[]>([]);
   openTabsRef.current = openTabs;
+  // Register a session as an open tab in the main window. Every tab-creation entry routes here:
+  // openSession (the open-a-session choke point: sidebar click, tab click, popout boot, resync)
+  // and the popout-close restore (#156 keeps both under the same cap). At TAB_LIMIT the strip
+  // cannot scroll — tabs compress to a 34px dot+close form — so the overflow request is rejected
+  // and surfaces as a transient hint in the TabBar. The updater re-checks prev, so the cap holds
+  // even if openTabsRef is momentarily stale (same-tick double open); the ref check only decides
+  // whether the hint fires.
+  const registerTab = useCallback(
+    (sessionId: string) => {
+      if (isPopout) return;
+      const prevTabs = openTabsRef.current;
+      if (!prevTabs.includes(sessionId) && prevTabs.length >= TAB_LIMIT) {
+        setTabLimitHintSeq((s) => s + 1);
+      }
+      setOpenTabs((prev) => (prev.includes(sessionId) || prev.length >= TAB_LIMIT ? prev : [...prev, sessionId]));
+    },
+    [isPopout]
+  );
   // activeFileTabBySession 的 ref:⌘W handler 读它判断「先关 file/diff tab 还是关 session tab」,
   // 不进 effect 依赖(避免每次切 file tab 都重订阅 keydown)。与 selectedSessionIdRef 同理。
   const activeFileTabBySessionRef = useRef(activeFileTabBySession);
@@ -841,10 +863,10 @@ export default function App() {
       // the same "bring it back to main" restore path the popout feature had before tabs existed.
       // The main window resumes rendering/handling it (poppedSessionIds just dropped it above);
       // re-registering it as a tab makes that visible instead of leaving the user to hunt the sidebar.
-      if (!popped) setOpenTabs((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
+      if (!popped) registerTab(sessionId);
     });
     return () => { offPopout(); };
-  }, [isPopout]);
+  }, [isPopout, registerTab]);
 
   // 主窗口 boot 对账:覆盖「主窗口重启但 popout 窗口仍开着」的场景。
   // sessionsByProject 就绪后,对每个 session 查后端是否已 popout,同步进 poppedSessionIds。
@@ -955,10 +977,10 @@ export default function App() {
       if (projectId && projectId !== selectedProjectId) setSelectedProjectId(projectId);
       setSelectedSessionId(sessionId);
       // Multi-tab: register this session as an open tab in the main window. openSession is the
-      // single choke point for "open a session" (sidebar click, tab click, popout boot), so
-      // registering here means every entry path auto-tracks the tab. Skip popout windows (they
-      // don't render the tab bar and shouldn't maintain openTabs).
-      if (!isPopout) setOpenTabs((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
+      // open-a-session choke point (sidebar click, tab click, popout boot, resync re-open), so
+      // every open path auto-tracks the tab. registerTab is a no-op in popout windows (they don't
+      // render the tab bar) and enforces the TAB_LIMIT cap (#156).
+      registerTab(sessionId);
       setUnreadBySession((prev) => { if (!prev[sessionId]) return prev; const n = { ...prev }; delete n[sessionId]; return n; });
       setErrorMessage(null); setNotice(null);
       // OpenSession also pushes the session's authoritative queue snapshot
@@ -2266,6 +2288,7 @@ export default function App() {
             onSelect={(id) => void openSession(id, projectIdOf(id))}
             onClose={closeTab}
             onPopout={(id) => void popoutSession(id)}
+            limitHintSeq={tabLimitHintSeq}
           />
         )}
         {selectedSessionId && fileTabs.length > 0 && (
