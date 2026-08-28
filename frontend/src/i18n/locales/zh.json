@@ -86,6 +86,7 @@
     "tagFilterActive": "点击取消过滤",
     "tagFilterIdle": "只看「{{tag}}」",
     "originalTitleTip": "原标题:{{title}}",
+    "renamedTip": "用户重命名",
     "copySessionId": "复制会话 ID",
     "deleteSession": "删除会话",
     "exportChat": "导出会话",

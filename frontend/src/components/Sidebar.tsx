@@ -866,6 +866,18 @@ export default function Sidebar(props: Props) {
                           onClick={(e) => onSessionRowClick(e, s, p.id)}
                         >
                           <span className={`session-dot ${cls}`} data-tooltip-id="md-tip" data-tooltip-content={dotTip} />
+                          {/* #154: user-renamed marker, ahead of the title — quiet pencil so a
+                              custom_title stays distinguishable from the auto title at a glance. */}
+                          {s.customTitle && (
+                            <span
+                              className="session-renamed"
+                              data-tooltip-id="md-tip"
+                              data-tooltip-content={t("sidebar.renamedTip")}
+                              data-testid={`renamed-${s.id}`}
+                            >
+                              <Pencil size={10} />
+                            </span>
+                          )}
                           <span className="session-label" {...labelTipProps}>{displayTitle}</span>
                           {props.poppedSessionIds?.has(s.id) && (
                             <span className="session-popout-mark" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.popoutTip")} data-testid={`popout-${s.id}`}>

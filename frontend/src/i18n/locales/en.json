@@ -86,6 +86,7 @@
     "tagFilterActive": "Click to clear filter",
     "tagFilterIdle": "Show only “{{tag}}”",
     "originalTitleTip": "Original title: {{title}}",
+    "renamedTip": "Renamed by user",
     "copySessionId": "Copy session ID",
     "deleteSession": "Delete chat",
     "exportChat": "Export chat",
