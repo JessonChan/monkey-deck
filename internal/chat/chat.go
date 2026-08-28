@@ -706,6 +706,19 @@ func (s *ChatService) UpdateSessionCustomTitle(sessionID, customTitle string) er
 	return s.st.UpdateSessionCustomTitle(s.ctx, sessionID, customTitle)
 }
 
+// UpdateSessionTags replaces a session's tag set (0021 / #150 MVP). The store
+// layer normalizes the input (trim, drop empties, dedupe, cap 5); an empty
+// result clears all tags. Returns the normalized set actually persisted so the
+// frontend's optimistic update mirrors the DB instead of drifting (e.g. cap
+// truncation). Tag edits are not content activity → updated_at untouched.
+func (s *ChatService) UpdateSessionTags(sessionID string, tags []string) ([]string, error) {
+	normalized := store.NormalizeTags(tags)
+	if err := s.st.UpdateSessionTags(s.ctx, sessionID, normalized); err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
 // CreateSession 新建 session。harness 指定使用的 agent(omp/opencode,空=omp 默认);
 // useWorktree=true 时为 git 项目建独立 worktree+分支(并行隔离),否则直接用项目目录(§1.4)。
 // baseRef:worktree 的基线分支(本地分支名,如 main/develop);useWorktree=true 时必填——
