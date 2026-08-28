@@ -225,6 +225,9 @@ export default function App() {
   // config options 缓存 seed 标记:懒 spawn 只读态用持久化缓存渲染 ModelSelect,仅首次打开 seed
   // (活跃 session 的 config_option 事件会覆盖;切走再切回不重读 DB,保留内存中的直播值)。
   const configSeededRef = useRef<Set<string>>(new Set());
+  // slash 命令表缓存 seed 标记(#152):懒 spawn 只读态用持久化缓存渲染 slash 菜单,仅首次
+  // 打开 seed(活跃 session 的 available_commands 事件会覆盖;切走再切回不重读 DB)。
+  const commandsSeededRef = useRef<Set<string>>(new Set());
   // 选中 session 的 ref:仅用于 status 事件的「错误只弹当前查看会话」过滤,不进 effect 依赖(避免每次切换都重订阅)。
   const selectedSessionIdRef = useRef<string | null>(null);
   const chatViewRef = useRef<ChatViewHandle>(null);
@@ -1011,6 +1014,18 @@ export default function App() {
           }
         } catch { /* 无缓存或读取失败:静默,等 spawn 推送 */ }
       }
+      // 懒 spawn slash 命令表缓存 seed(#152):只读态(懒 spawn 未活跃)用持久化缓存渲染
+      // slash 菜单,避免命令列表为空。仅首次打开 seed;活跃 session 的 available_commands
+      // 事件会整表覆盖(spawn 后推送最新全量)。长度>0 才写:空表/读失败静默走空,等事件。
+      if (!commandsSeededRef.current.has(sessionId)) {
+        commandsSeededRef.current.add(sessionId);
+        try {
+          const cached = await ChatService.GetSessionCachedCommands(sessionId);
+          if (cached && cached.length > 0) {
+            setCommandsBySession((prev) => (prev[sessionId] ? prev : { ...prev, [sessionId]: cached }));
+          }
+        } catch { /* 无缓存或读取失败:静默,等 spawn 推送 */ }
+      }
       try {
         const diff = await ChatService.SessionDiff(sessionId);
         setSessionDiff(diff || "");
@@ -1678,6 +1693,7 @@ export default function App() {
     loadedSessionsRef.current.delete(sessionId);
     historySeededRef.current.delete(sessionId);
     configSeededRef.current.delete(sessionId);
+    commandsSeededRef.current.delete(sessionId);
     // Also drop from the tab strip so deleted/purged sessions don't linger as phantom tabs.
     setOpenTabs((prev) => (prev.includes(sessionId) ? prev.filter((id) => id !== sessionId) : prev));
   }, []);
