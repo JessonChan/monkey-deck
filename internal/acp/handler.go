@@ -212,6 +212,12 @@ type Handler struct {
 	// 持久化进 DB + 刷新全部活跃 session 的规则快照(跨 session/project 全局生效,§3.4)。
 	// nil = 不持久化(handler 单测默认 nil,只验内存记忆 + 规则形状)。
 	OnGlobalRule func(permissions.Rule)
+	// OnCommandsCache(#152):harness 每次上报 available_commands_update 时回调 service,
+	// 把拍平的 []SlashCommand 全表持久化进 DB(sessions.commands_cache),供只读态(懒 spawn
+	// 未活跃)渲染 slash 菜单。整表替换语义:空表也是合法写(harness 清空命令)。写点在 handler
+	// 直落 service,不经前端回写 —— 避免「事件到前端→前端再调 binding」的双写/竞态。
+	// nil = 不持久化(handler 单测默认 nil)。
+	OnCommandsCache func(sessionID string, cmds []SlashCommand)
 
 	mu      sync.Mutex
 	pending map[string]*pendingPermission // id → 待裁决
@@ -602,6 +608,40 @@ func (h *Handler) SetGlobalRule(cb func(permissions.Rule)) {
 	h.mu.Unlock()
 }
 
+// emitCommandsCache hands a flattened available_commands_update table to the service
+// for DB persistence (#152). Full-table replace semantics: cmds may be empty (a harness
+// clearing its commands is legitimate state and must overwrite, unlike config options
+// where empty is skipped). When OnCommandsCache is nil (handler unit-test default),
+// this is a no-op.
+//
+// Concurrency + panic safety: same contract as emitGlobalRule — the callback is assigned
+// by service during session setup after the ACP reader goroutine is live, so snapshot the
+// pointer under mu and invoke outside the lock; recover so a panic in the service callback
+// (persistCommandsCache) cannot bubble up and tear down the connection.
+func (h *Handler) emitCommandsCache(sessionID string, cmds []SlashCommand) {
+	h.mu.Lock()
+	cb := h.OnCommandsCache
+	h.mu.Unlock()
+	if cb == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("commands cache emit panic recovered", "session", sessionID, "panic", r)
+		}
+	}()
+	cb(sessionID, cmds)
+}
+
+// SetCommandsCache sets the slash-command-table persistence callback (#152). Service
+// assigns it during session setup; mu-guarded write stays race-free with emitCommandsCache's
+// read-side snapshot (same rationale as SetGlobalRule).
+func (h *Handler) SetCommandsCache(cb func(sessionID string, cmds []SlashCommand)) {
+	h.mu.Lock()
+	h.OnCommandsCache = cb
+	h.mu.Unlock()
+}
+
 // SetProjectAllowExternal 由 service 在 session 启动时调用,把项目级记忆(DB)加载进 handler,
 // 使「本项目曾允许外部目录」的 session 命中即自动放行。
 func (h *Handler) SetProjectAllowExternal(allow bool) {
@@ -720,6 +760,12 @@ func (h *Handler) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 				h.lastCost = *e.Cost
 			}
 			h.usageMu.Unlock()
+		}
+		// Slash command table persistence (#152): full-table replace straight from the
+		// handler (no frontend round-trip). Empty tables overwrite too — a harness
+		// clearing its commands is legitimate state. Recovers panics internally.
+		if e.Kind == "available_commands" {
+			h.emitCommandsCache(e.SessionID, e.Commands)
 		}
 		h.OnEvent(e)
 	}
