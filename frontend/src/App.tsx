@@ -1963,6 +1963,27 @@ export default function App() {
     []
   );
 
+  // 标签赋值(#150):写 tags,后端归一化(trim/去重/上限)后回传权威集合,
+  // 就地替换本地字段 —— 乐观更新镜像 DB,不会漂移(如第 6 个标签被截断)。
+  // 与重命名同理:不动排序键,无需重排;菜单保持打开时可连续增删。
+  const setSessionTags = useCallback(
+    async (sessionId: string, tags: string[]) => {
+      const normalized = await ChatService.UpdateSessionTags(sessionId, tags);
+      setSessionsByProject((prev) => {
+        const next: Record<string, Session[]> = {};
+        for (const [pid, list] of Object.entries(prev)) {
+          const idx = list.findIndex((s) => s.id === sessionId);
+          if (idx < 0) { next[pid] = list; continue; }
+          const arr = [...list];
+          arr[idx] = { ...arr[idx], tags: normalized };
+          next[pid] = arr;
+        }
+        return next;
+      });
+    },
+    []
+  );
+
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) || null,
@@ -2188,6 +2209,7 @@ export default function App() {
           onRemoveProject={removeProject}
           onRemoveSession={removeSession}
           onTogglePin={toggleSessionPin}
+          onSetSessionTags={setSessionTags}
           onRenameSession={renameSession}
           statusBySession={statusBySession}
           activityBySession={activityBySession}

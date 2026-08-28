@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { AlarmClock, Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Search, X, Pin, PinOff, Settings, SquareTerminal, ExternalLink, Pencil, FileText, Braces, ListChecks, Check } from "lucide-react";
+import { AlarmClock, Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Search, X, Pin, PinOff, Settings, SquareTerminal, ExternalLink, Pencil, FileText, Braces, ListChecks, Check, Tag } from "lucide-react";
 import { useCopyFeedback } from "../hooks/useCopyFeedback";
 import {
   DndContext,
@@ -18,6 +18,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { timeAgo, formatDateTime, sanitizeFileName } from "../utils";
 import { copyTextQuiet } from "../lib/clipboard";
 import { downloadText } from "../lib/download";
+import { tagColor, collectTags } from "../lib/tagColor";
 import HarnessIcon from "./HarnessIcon";
 
 interface Props {
@@ -32,6 +33,10 @@ interface Props {
   onRemoveProject: (id: string) => void;
   onRemoveSession: (sessionId: string) => void;
   onTogglePin: (sessionId: string, pinned: boolean) => void;
+  // Assign/replace a session's tag set (#150): writes via UpdateSessionTags
+  // (backend normalizes trim/dedupe/cap) then optimistic local field update.
+  // Adding from the ctx submenu appends to the live set; removing filters one out.
+  onSetSessionTags: (sessionId: string, tags: string[]) => void;
   // 用户右键重命名(0016):写 custom_title(空串=清除,回退到 auto title)。后端落库后乐观更新本地。
   onRenameSession: (sessionId: string, customTitle: string) => void;
   statusBySession: Record<string, string>;
@@ -161,6 +166,9 @@ export default function Sidebar(props: Props) {
   const [searchQ, setSearchQ] = useState("");
   const [contentHits, setContentHits] = useState<string[] | null>(null); // null=未发起内容搜索
   const [contentLoading, setContentLoading] = useState(false);
+  // 标签过滤(#150):tagFilter[projectId] = 该项目当前激活的单选标签(无 key=未过滤)。
+  // 与搜索 AND 叠加,过滤态 per-project 互不干扰(照 searchProj 模式)。
+  const [tagFilter, setTagFilter] = useState<Record<string, string>>({});
   const searchInputRef = useRef<HTMLInputElement>(null);
   // 拖拽时自动折叠所有项目:展开项虽 disabled 仍占满高度(含 session 列表),拖动需跨越整段 → 距离过长 + 碰撞失准。
   // 开始时记录并全折叠,结束/取消时恢复原展开态,不打断用户原本在看的项目。
@@ -413,6 +421,26 @@ export default function Sidebar(props: Props) {
     setTimeout(() => searchInputRef.current?.focus(), 0);
   };
 
+  // 单选切换某项目的激活标签(#150):再点同一枚 chip 取消过滤;换 chip 即换过滤键。
+  const toggleTagFilter = (pId: string, tag: string) => {
+    setTagFilter((prev) => {
+      const next = { ...prev };
+      if (next[pId] === tag) delete next[pId];
+      else next[pId] = tag;
+      return next;
+    });
+  };
+
+  // ctx 菜单里取该 session 的「活」数据:ctx.session 是打开菜单那一刻的快照,
+  // 标签增删后乐观更新的是 sessionsByProject,快照会过期 → 每次渲染/动作前现查。
+  const liveSession = (id: string): Session | null => {
+    for (const list of Object.values(props.sessionsByProject)) {
+      const hit = list.find((s) => s.id === id);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
   // Does a single session match the search: empty query passes everything;
   // title substring (local, instant) ∪ content hits (backend LIKE, async).
   const matchSession = (s: Session) => {
@@ -424,14 +452,22 @@ export default function Sidebar(props: Props) {
   };
 
   // Rendered session list of a project — the exact array the user sees
-  // (paginated slice, or search-filtered). Shared by the render loop, the
+  // (paginated slice, or tag/search-filtered). Shared by the render loop, the
   // keyboard-nav scope and Shift+click range math so all three agree (#94).
+  // 标签过滤与搜索 AND 叠加(#150):两者任一激活即绕过分页(与搜索行为一致),
+  // 标签先收窄集合,搜索再在结果上做标题∪内容过滤。
   const projectList = (pId: string): Session[] => {
     const projSessions = props.sessionsByProject[pId] ?? [];
+    const activeTag = tagFilter[pId];
+    const tagFiltered = activeTag
+      ? projSessions.filter((s) => (s.tags ?? []).includes(activeTag))
+      : projSessions;
     const sessLimit = sessionLimit[pId] ?? SESSION_PAGE;
-    const visibleSessions = projSessions.slice(0, sessLimit);
     const searching = searchProj === pId && searchQ.trim() !== "";
-    return searching ? projSessions.filter(matchSession) : visibleSessions;
+    if (searching || activeTag) {
+      return searching ? tagFiltered.filter(matchSession) : tagFiltered;
+    }
+    return tagFiltered.slice(0, sessLimit);
   };
 
   // Drop selected ids that no longer exist in any project's session list
@@ -521,6 +557,18 @@ export default function Sidebar(props: Props) {
     }, 200);
     return () => clearTimeout(h);
   }, [searchProj, searchQ]);
+
+  // Session search input: uncontrolled + native "input" listener (FilePanel
+  // precedent). React synthetic onChange from dispatched events is unreliable
+  // in the test DOM; the native path reaches setSearchQ in both happy-dom and
+  // real webviews. Re-bound per open search row (the row remounts per project).
+  useEffect(() => {
+    const el = searchInputRef.current;
+    if (!el) return;
+    const onInput = () => setSearchQ(el.value);
+    el.addEventListener("input", onInput);
+    return () => el.removeEventListener("input", onInput);
+  }, [searchProj]);
 
   // Keyboard-nav scope: the rendered session list of the currently-selected project, computed
   // identically to the per-project `list` in the render loop (visible slice, or search-filtered).
@@ -656,6 +704,9 @@ export default function Sidebar(props: Props) {
           const projSessions = props.sessionsByProject[p.id] ?? [];
           const hiddenCount = Math.max(0, projSessions.length - (sessionLimit[p.id] ?? SESSION_PAGE));
           const searching = searchProj === p.id && searchQ.trim() !== "";
+          // 该项目内出现过的全部标签(首次出现序)+ 当前激活的单选过滤键(#150)。
+          const projTags = collectTags(projSessions);
+          const activeTag = tagFilter[p.id];
           const list = projectList(p.id);
           // 项目行活跃信号:折叠时显示左竖条(running=慢呼吸 / unread=静态)。展开时 session 行已有 dot/spinner,无需重复。
           const projRunning = projSessions.some((s) => props.statusBySession[s.id] === "prompting");
@@ -691,16 +742,32 @@ export default function Sidebar(props: Props) {
                         className="session-search-input"
                         data-testid={`session-search-${p.id}`}
                         placeholder={t("sidebar.searchPlaceholder")}
-                        value={searchQ}
-                        onChange={(e) => setSearchQ(e.target.value)}
                         onKeyDown={(e) => { if (e.key === "Escape") toggleSearch(p.id); }}
                       />
                       {contentLoading && <span className="search-spinner" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.searchingContent")} />}
                       {searchQ && (
-                        <button className="icon-btn small" data-tooltip-id="md-tip" data-tooltip-content={t("common.clear")} onClick={() => setSearchQ("")}>
+                        <button className="icon-btn small" data-tooltip-id="md-tip" data-tooltip-content={t("common.clear")} onClick={() => { setSearchQ(""); if (searchInputRef.current) searchInputRef.current.value = ""; }}>
                           <X size={11} />
                         </button>
                       )}
+                    </div>
+                  )}
+                  {projTags.length > 0 && (
+                    <div className="session-tags-row" data-testid={`tag-row-${p.id}`}>
+                      {projTags.map((tag) => (
+                        <button
+                          key={tag}
+                          className={`session-tag-filter${activeTag === tag ? " active" : ""}`}
+                          style={{ background: tagColor(tag) }}
+                          onClick={() => toggleTagFilter(p.id, tag)}
+                          data-testid={`tagfilter-${p.id}-${tag}`}
+                          data-tooltip-id="md-tip"
+                          data-tooltip-content={activeTag === tag ? t("sidebar.tagFilterActive") : t("sidebar.tagFilterIdle", { tag })}
+                          data-tooltip-place="bottom"
+                        >
+                          {tag}
+                        </button>
+                      ))}
                     </div>
                   )}
                   {list.map((s, i) => {
@@ -790,6 +857,18 @@ export default function Sidebar(props: Props) {
                             </span>
                           )}
                           <HarnessIcon harnessId={s.harness} size={12} className="session-harness-icon" tooltip={t("sidebar.harnessTip", { name: harnessNameById(s.harness) })} />
+                          {(s.tags ?? []).map((tag) => (
+                            <span
+                              key={tag}
+                              className="session-tag-chip"
+                              style={{ background: tagColor(tag) }}
+                              data-testid={`tagchip-${s.id}-${tag}`}
+                              data-tooltip-id="md-tip"
+                              data-tooltip-content={tag}
+                            >
+                              {tag}
+                            </span>
+                          ))}
                           {s.pinned && (
                             <span className="session-pin" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.pinnedTip")} data-testid={`pin-${s.id}`}>
                               <Pin size={11} />
@@ -835,10 +914,10 @@ export default function Sidebar(props: Props) {
                       </div>
                     );
                   })}
-                  {searching && list.length === 0 && (
+                  {(searching || activeTag) && list.length === 0 && (
                     <div className="session-search-empty">{t("sidebar.noMatch")}</div>
                   )}
-                  {!searching && hiddenCount > 0 && (
+                  {!searching && !activeTag && hiddenCount > 0 && (
                     <button
                       className="session-more-btn"
                       data-testid={`load-more-sessions-${p.id}`}
@@ -945,6 +1024,56 @@ export default function Sidebar(props: Props) {
           >
             <Pencil size={13} /> {t("sidebar.rename")}
           </button>
+          {/* 标签 ›(#150):hover 展开的二级菜单。已有标签打勾 → 点击移除;
+              输入框 Enter → 追加新标签(后端 NormalizeTags 兜底 trim/去重/上限)。
+              数据一律读 liveSession(ctx 打开后的乐观更新直接反映,菜单不关,可连续增删)。 */}
+          <div className="ctx-item ctx-has-sub" data-testid={`tags-menu-${ctx.session.id}`}>
+            <Tag size={13} /> {t("sidebar.tags")}
+            <div className="ctx-submenu">
+              {(() => {
+                const live = liveSession(ctx.session.id) ?? ctx.session;
+                const tags = live.tags ?? [];
+                return (
+                  <>
+                    {tags.length === 0 && (
+                      <div className="ctx-submenu-empty" data-testid={`tags-empty-${ctx.session.id}`}>{t("sidebar.tagsEmpty")}</div>
+                    )}
+                    {tags.map((tag) => (
+                      <button
+                        key={tag}
+                        className="ctx-item ctx-tag-item"
+                        data-testid={`tag-remove-${ctx.session.id}-${tag}`}
+                        data-tooltip-id="md-tip"
+                        data-tooltip-content={t("sidebar.tagRemoveTip")}
+                        data-tooltip-place="right"
+                        onClick={() => props.onSetSessionTags(live.id, tags.filter((x) => x !== tag))}
+                      >
+                        <span className="ctx-tag-dot" style={{ background: tagColor(tag) }} />
+                        <span className="ctx-tag-name">{tag}</span>
+                        <Check size={12} className="ctx-tag-check" />
+                      </button>
+                    ))}
+                    <div className="ctx-sep" />
+                    <input
+                      className="ctx-tag-input"
+                      data-testid={`tag-new-input-${ctx.session.id}`}
+                      placeholder={t("sidebar.tagNewPlaceholder")}
+                      onKeyDown={(e) => {
+                        if (e.key !== "Enter") return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const val = e.currentTarget.value.trim();
+                        if (!val) return;
+                        const cur = liveSession(ctx.session.id)?.tags ?? [];
+                        props.onSetSessionTags(ctx.session.id, [...cur, val]);
+                        e.currentTarget.value = "";
+                      }}
+                    />
+                  </>
+                );
+              })()}
+            </div>
+          </div>
           <button className="ctx-item" onClick={() => { copyTextQuiet(ctx.session.id); closeCtx(); }}>
             <Copy size={13} /> {t("sidebar.copySessionId")}
           </button>
