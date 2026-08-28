@@ -20,11 +20,18 @@
 #             Informational only; implicit-verdict reviews still count.
 #   severities — distinct P1/P2/P3 levels present anywhere in the record file
 #             (whole-file scan, word-boundary validated: "P12"/"XP1" do not match,
-#             "P3-a"/"P2/P3" do). Token presence per record, NOT a per-finding
-#             count — review write-up formats are heterogeneous (finding slots
-#             appear as headings, bold bullets, prose, re-review discussion), so
-#             counting slots would be fragile; the stable invariant is level
-#             presence (same informational-only philosophy as verdict).
+#             "P3-a"/"P2/P3" do). Token presence per record — feeds the record
+#             caliber views (--by-issue level union, --by-severity).
+#   findings — per-finding counts, one TSV column per level (p1/p2/p3). Per
+#             line, a multiplier annotation expands the count ("P3×4" /
+#             "2×P1" = N findings; both directions occur in the corpus, ×
+#             being the only separator seen); bare repeats of the same level
+#             on one line are the same finding restated and count once
+#             (line-level dedup). The line is the dedup unit by design: a
+#             tally restated across H1 / conclusion / body lines counts
+#             again, and "无 P1" negations or subscripted siblings
+#             ("P3-a/P3-b") sharing one line are known distortions — read
+#             findings totals as ordered magnitude, not exact issue counts.
 #
 # Pass 1 also emits one trailing "#stats<TAB>nscan<TAB>ncand<TAB>nrec" meta line —
 # corpus size / filename matches / classified records. Every aggregation skips it;
@@ -32,22 +39,29 @@
 #
 # Counting caliber (pinned): every view — overview total, weekly trend, by-issue,
 # by-severity — aggregates the exact same record set produced by pass 1, so all
-# reported totals must agree. --overview states the numbers in one place; --check
-# enforces the agreement and exits non-zero on drift.
+# reported record totals must agree. Findings numbers (per-finding P1/P2/P3)
+# carry the same cross-view agreement between the weekly trend and --overview.
+# --overview states the numbers in one place; --check enforces the agreement and
+# exits non-zero on drift.
 #
 # Usage:
 #   ./scripts/review-stats.sh             weekly trend, one row per ISO-8601 week
 #                                         (empty weeks between first/last activity
-#                                         shown as 0, so gaps stay visible)
+#                                         shown as 0, so gaps stay visible); each
+#                                         row carries per-finding P1/P2/P3 counts
+#                                         plus the review count "(n篇)"
 #   ./scripts/review-stats.sh --overview  counting-caliber summary: classification
-#                                         funnel (corpus → candidates → records)
-#                                         plus the weekly/by-issue headline counts
+#                                         funnel (corpus → candidates → records),
+#                                         the weekly/by-issue headline counts and
+#                                         the per-finding severity line
 #   ./scripts/review-stats.sh --by-issue  per-anchor breakdown, count desc
 #   ./scripts/review-stats.sh --by-severity
 #                                       P1/P2/P3 grading distribution: how many
 #                                       review records mention each level
 #   ./scripts/review-stats.sh --check     cross-view caliber guard: all views must
-#                                         report the same record total
+#                                         report the same record total, and the
+#                                         findings numbers must agree across the
+#                                         weekly trend and --overview
 #
 # ISO weeks are computed in pure awk (Monday-based, week 1 contains the first
 # Thursday; labeled via the Thursday of the week so boundary cases collapse away) —
@@ -77,7 +91,7 @@ esac
 shopt -s nullglob
 files=("$root"/docs/worklog/*.md)
 
-# ── Pass 1: extract review records → TSV "date<TAB>anchor<TAB>verdict<TAB>sev" ──
+# ── Pass 1: extract review records → TSV "date<TAB>anchor<TAB>verdict<TAB>sev<TAB>p1<TAB>p2<TAB>p3" ──
 # Empty corpus: `set -u` + `"${files[@]}"` on an empty array is an unbound-variable
 # crash on stock bash 3.2, and awk with no file args would block reading stdin —
 # take the zero-record path instead.
@@ -86,16 +100,82 @@ if (( ${#files[@]} == 0 )); then
 else
 	records="$(awk '
 	function basename(f,   n, a) { n = split(f, a, "/"); return a[n] }
+	function isalnum(c) { return index("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", c) > 0 }
+	function ltrim(s) { while (length(s) > 0 && (substr(s, 1, 1) == " " || substr(s, 1, 1) == "\t")) s = substr(s, 2); return s }
+	function rtrim(s) { while (length(s) > 0 && (substr(s, length(s), 1) == " " || substr(s, length(s), 1) == "\t")) s = substr(s, 1, length(s) - 1); return s }
+	function endstok(s,   t) {
+		# Boundary-valid P token ending s, else "". String ops only: running a
+		# regex on a substr()-cut piece trips bwk-awk "towc: multibyte
+		# conversion failure" under some locales (worklog 26766) — so the
+		# boundary check is an index() lookup, and a cut continuation byte
+		# simply fails the alnum test, which is the correct boundary verdict.
+		s = rtrim(s)
+		if (length(s) < 2) return ""
+		t = substr(s, length(s) - 1)
+		if (t != "P1" && t != "P2" && t != "P3") return ""
+		if (length(s) > 2 && isalnum(substr(s, length(s) - 2, 1))) return ""
+		return t
+	}
+	function startstok(s,   t) {
+		s = ltrim(s)
+		if (length(s) < 2) return ""
+		t = substr(s, 1, 2)
+		if (t != "P1" && t != "P2" && t != "P3") return ""
+		if (length(s) > 2 && isalnum(substr(s, 3, 1))) return ""
+		return t
+	}
+	function leaddigits(s,   c, i, n) {
+		s = ltrim(s); n = ""
+		for (i = 1; i <= length(s); i++) {
+			c = substr(s, i, 1)
+			if (index("0123456789", c) == 0) break
+			n = n c
+		}
+		return n + 0
+	}
+	function traildigits(s,   c, n) {
+		s = rtrim(s); n = ""
+		while (length(s) > 0) {
+			c = substr(s, length(s), 1)
+			if (index("0123456789", c) == 0) break
+			n = c n
+			s = substr(s, 1, length(s) - 1)
+		}
+		return n + 0
+	}
+	function scan_mul(line,   j, num, tok) {
+		# Sum the ×N multiplier annotations per level, both directions observed
+		# in the corpus ("P2×2" and "2×P3"; × U+00D7 is the only separator
+		# seen). Split on × and validate each side of every boundary with the
+		# string-op helpers above — never a regex on a derived piece. A bare
+		# occurrence later in the line adds nothing extra (line-level dedup:
+		# the same finding restated), which is why scan_sev only consumes the
+		# sum.
+		delete mul
+		np = split(line, pc, /×/)
+		for (j = 2; j <= np; j++) {
+			num = leaddigits(pc[j])
+			if (num > 0 && (tok = endstok(pc[j - 1])) != "") mul[tok] += num
+			num = traildigits(pc[j - 1])
+			if (num > 0 && (tok = startstok(pc[j])) != "") mul[tok] += num
+		}
+	}
 	function scan_sev(line,   i, tok) {
 		# Boundary check folded into one whole-line regex per token. Do NOT
 		# extract neighbor chars and regex them: applying a regex to a
 		# substr()-extracted piece trips bwk-awk "towc: multibyte conversion
 		# failure" under some locales (regex-on-line is safe — the verdict and
-		# anchor rules above run on full lines with CJK text). Presence-only,
-		# so overlapping matches are irrelevant.
+		# anchor rules above run on full lines with CJK text).
+		scan_mul(line)
 		for (i = 1; i <= 3; i++) {
 			tok = "P" i
-			if (line ~ "(^|[^A-Za-z0-9])" tok "($|[^A-Za-z0-9])") has[tok] = 1
+			if (line ~ "(^|[^A-Za-z0-9])" tok "($|[^A-Za-z0-9])") {
+				has[tok] = 1
+				# Per-finding caliber: multiplier annotations expand the
+				# count, bare repeats on one line are the same finding and
+				# count once.
+				cnt[tok] += (mul[tok] > 0) ? mul[tok] : 1
+			}
 		}
 	}
 	function sevstr(   s) {
@@ -106,8 +186,8 @@ else
 		return (s == "") ? "-" : s
 	}
 	FNR == 1 {
-		if (pending && sawcon) { print date "\t" anchor "\t" verdict "\t" sevstr(); nrec++ }
-		date = ""; anchor = "-"; verdict = ""; incon = 0; sawcon = 0; delete has
+		if (pending && sawcon) { print date "\t" anchor "\t" verdict "\t" sevstr() "\t" cnt["P1"] + 0 "\t" cnt["P2"] + 0 "\t" cnt["P3"] + 0; nrec++ }
+		date = ""; anchor = "-"; verdict = ""; incon = 0; sawcon = 0; delete has; delete cnt
 		base = basename(FILENAME)
 		nscan++
 		if (match(base, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/))
@@ -141,11 +221,12 @@ else
 		verdict = substr($0, RSTART, RLENGTH)
 	}
 	# Severity grading: every line of a candidate record is scanned for P1/P2/P3
-	# tokens; boundaries checked in scan_sev. pending files that fail the record
-	# classification still scan harmlessly (they are never printed).
+	# tokens (presence into has, per-finding counts into cnt); boundaries checked
+	# in scan_sev. pending files that fail the record classification still scan
+	# harmlessly (they are never printed).
 	pending { scan_sev($0) }
 	END {
-		if (pending && sawcon) { print date "\t" anchor "\t" verdict "\t" sevstr(); nrec++ }
+		if (pending && sawcon) { print date "\t" anchor "\t" verdict "\t" sevstr() "\t" cnt["P1"] + 0 "\t" cnt["P2"] + 0 "\t" cnt["P3"] + 0; nrec++ }
 		# Funnel meta line: corpus / filename matches / classified records.
 		print "#stats\t" nscan + 0 "\t" ncand + 0 "\t" nrec + 0
 	}
@@ -194,6 +275,7 @@ prog_weekly="$agg_common"'
 		if (gmin == 0 || m < gmin) gmin = m
 		if (m > gmax) gmax = m
 		cnt[m]++; total++
+		wp1[m] += $5; wp2[m] += $6; wp3[m] += $7   # per-finding sums, one column per level
 		if (fmin == "" || $1 < fmin) fmin = $1
 		if ($1 > fmax) fmax = $1
 	}
@@ -201,7 +283,7 @@ prog_weekly="$agg_common"'
 		if (!total) { print "no review records found"; exit 0 }
 		for (m = gmin; m <= gmax; m += 7) {
 			c = cnt[m] + 0
-			printf "%s  %4d  %s\n", iso_label(m), c, bar(c)
+			printf "%s  P1 %d/P2 %d/P3 %d(%d篇)  %s\n", iso_label(m), wp1[m] + 0, wp2[m] + 0, wp3[m] + 0, c, bar(c)
 		}
 		printf "\ntotal %d reviews · %s → %s · %d ISO weeks · avg %.1f/week\n",
 			total, fmin, fmax, (gmax - gmin) / 7 + 1, total / ((gmax - gmin) / 7 + 1)
@@ -280,6 +362,8 @@ prog_overview="$agg_common"'
 	$1 == "#stats" { ns = $2 + 0; nc = $3 + 0; nr = $4 + 0; next }
 	{
 		total++
+		f1 += $5; f2 += $6; f3 += $7
+		if ($4 == "-") { un++ }   # records with no graded finding — the ungraded bucket
 		if (fmin == "" || $1 < fmin) fmin = $1
 		if ($1 > fmax) fmax = $1
 		d = dnum($1); m = d - iso_wd(d) + 1
@@ -305,6 +389,7 @@ prog_overview="$agg_common"'
 		if (unanch) printf " · %d unanchored", unanch
 		if (atop != "") printf " · max #%s=%d", atop, amax
 		printf "\n"
+		printf "findings    P1 %d/P2 %d/P3 %d · 未分级 %d/总 %d\n", f1, f2, f3, un, f1 + f2 + f3 + un
 		printf "\ntotal %d reviews\n", total
 	}
 '
@@ -330,8 +415,11 @@ mode_check() {
 	# REPORTS, and fail loudly on drift. This tests what a consumer actually
 	# sees (not just the shared TSV), so an edit to any single aggregation
 	# cannot silently change one view's numbers without the others.
+	# Findings numbers (per-finding P1/P2/P3) get the same treatment: the
+	# weekly and overview views must report identical per-level sums, and the
+	# overview findings line must decompose as P1+P2+P3+ungraded == total.
 	local w b s o tsv meta nscan ncand nrec
-	local wt ws bt bs st ot fail=0
+	local wt ws wp1 wp2 wp3 bt bs st ot op1 op2 op3 oun oft fail=0
 	w="$(mode_weekly)"
 	b="$(mode_by_issue)"
 	s="$(mode_by_severity)"
@@ -342,11 +430,27 @@ mode_check() {
 	read -r nscan ncand nrec <<<"${meta:-0 0 0}"
 
 	wt="$(awk '$1 == "total" { t = $2 + 0 } END { print t + 0 }' <<<"$w")"
-	ws="$(awk '/^[0-9][0-9][0-9][0-9]-W/ { s += $2 } END { print s + 0 }' <<<"$w")"
+	ws="$(awk '$1 ~ /^[0-9][0-9][0-9][0-9]-W[0-9][0-9]$/ && match($0, /\([0-9]+/) { s += substr($0, RSTART + 1, RLENGTH - 1) } END { print s + 0 }' <<<"$w")"
+	wkl() {
+		# "P1 <n>/"-style slot on a week row: ASCII-bounded match, so the digit
+		# slice after the 3-char "P1 " prefix is locale-safe. Note -v takes a
+		# single name=value argument in bwk-awk.
+		awk -v "lvl=$1" '$1 ~ /^[0-9][0-9][0-9][0-9]-W[0-9][0-9]$/ && match($0, lvl " [0-9]+") { s += substr($0, RSTART + 3, RLENGTH - 3) } END { print s + 0 }' <<<"$w"
+	}
+	wp1="$(wkl P1)"; wp2="$(wkl P2)"; wp3="$(wkl P3)"
 	bt="$(awk '$1 == "total" { t = $2 + 0 } END { print t + 0 }' <<<"$b")"
 	bs="$(awk '$1 ~ /^#/ || $1 == "-" { s += $2 } END { print s + 0 }' <<<"$b")"
 	st="$(awk '$1 == "total" { t = $2 + 0 } END { print t + 0 }' <<<"$s")"
 	ot="$(awk '$1 == "total" { t = $2 + 0 } END { print t + 0 }' <<<"$o")"
+	ovf="$(awk '$1 == "findings" { print }' <<<"$o")"
+	op1="$(awk 'match($0, /P1 [0-9]+/) { print substr($0, RSTART + 3, RLENGTH - 3) }' <<<"$ovf")"
+	op2="$(awk 'match($0, /P2 [0-9]+/) { print substr($0, RSTART + 3, RLENGTH - 3) }' <<<"$ovf")"
+	op3="$(awk 'match($0, /P3 [0-9]+/) { print substr($0, RSTART + 3, RLENGTH - 3) }' <<<"$ovf")"
+	oft="$(awk 'match($0, /[0-9]+$/) { print substr($0, RSTART, RLENGTH) }' <<<"$ovf")"
+	# 未分级 n: the digits between the CJK label and "/总". Walk back over the
+	# trailing ASCII digit run of the matched region — no regex on a derived
+	# piece (bwk-awk towc trap), and the walk only ever touches ASCII.
+	oun="$(awk 'match($0, /未分级 [0-9]+/) { i = RSTART + RLENGTH - 1; d = ""; while (i >= 1 && index("0123456789", substr($0, i, 1)) > 0) { d = substr($0, i, 1) d; i-- } print d + 0 }' <<<"$ovf")"
 
 	ck() {
 		if [[ "$2" != "$3" ]]; then
@@ -372,6 +476,10 @@ mode_check() {
 	ck "by-issue anchor sum" "$tsv" "$bs"
 	ck "by-severity total" "$tsv" "$st"
 	ck "overview total" "$tsv" "$ot"
+	ck "findings P1" "${op1:-0}" "${wp1:-0}"
+	ck "findings P2" "${op2:-0}" "${wp2:-0}"
+	ck "findings P3" "${op3:-0}" "${wp3:-0}"
+	ck "findings parts" "${oft:-0}" "$(( ${op1:-0} + ${op2:-0} + ${op3:-0} + ${oun:-0} ))"
 
 	if (( fail )); then
 		echo "check FAILED — counting caliber drifted between views"
