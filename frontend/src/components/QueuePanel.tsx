@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { QueueItem } from "../types";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Zap, Pencil, Trash2, Check, X, Clock, GripVertical, ChevronUp, ChevronDown, Repeat } from "lucide-react";
+import { Zap, Pencil, Trash2, Check, X, Clock, GripVertical, ChevronUp, ChevronDown, Repeat, RotateCcw } from "lucide-react";
 
 interface Props {
   queue: QueueItem[];
@@ -76,9 +76,15 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   const [overId, setOverId] = useState<string | null>(null);   // 拖拽悬停的目标条目 id
   const editRef = useRef<HTMLTextAreaElement>(null);
   const scheduleRef = useRef<HTMLInputElement>(null);
-  // IME 合成追踪:compositionStart/End 手动记录,配合 isComposing + keyCode===229 三重保险,
-  // 彻底防中文输入法选词确认的 Enter 被误判为保存(部分 macOS IME 下 isComposing 不可靠)。仿 Composer。
+  // IME composition tracking: compositionStart/End recorded manually, combined
+  // with isComposing + keyCode===229 as triple insurance against an IME
+  // word-confirmation Enter being misread as save (isComposing is unreliable
+  // under some macOS IMEs). Mirrors Composer.
   const composingRef = useRef(false);
+  // Budget-aware list scroll cap (#146): .queue-panel measures, .queue-list
+  // receives the max-height. See the effect below.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   // Live countdown for scheduled (future) items (Task #24245 / issue #97): re-render once per
   // second so the "time remaining" badge ticks down. Armed only while at least one pending item
@@ -89,12 +95,57 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   // Also tick while the schedule row is open with a staged future time, so the
   // staged chip counts down live (issue #130).
   const staging = schedulingId !== null && pendingAt !== null && pendingAt > now;
+  // A future time is staged -> the chip row and the explicit Reset button both
+  // show (#144/#145). Reset sits at the END of the actions row (#146) so its
+  // conditional render never shifts the preset buttons — the layout invariant
+  // (preset getBoundingClientRect constant across consecutive clicks).
+  const stagedVisible = pendingAt !== null && pendingAt > now;
   useEffect(() => {
     if (!hasPending && !staging) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [hasPending, staging]);
 
+  // List scroll cap (#146) — reuses the #151 composer budget mechanism (measure
+  // the viewport, never hardcode): budget = viewport below the chat-body's top
+  // edge minus everything in the footer EXCEPT the list's own box (mirror of
+  // Composer.composerInputBudget's `other` subtraction, with the list in the
+  // excluded role). The list gets ≤40% of that budget; the composer's 52px
+  // floor keeps priority (clampComposerHeight floors it independently — the
+  // list cap never fights it, extreme tiers fall back to the .chat-footer
+  // scroll). Idempotent by construction: the subtraction removes the list's own
+  // occupancy, so re-fires settle on the same value instead of looping.
+  const hasItems = queue.length > 0;
+  useEffect(() => {
+    if (!hasItems) return;
+    const apply = () => {
+      const panel = panelRef.current;
+      const list = listRef.current;
+      if (!panel || !list) return;
+      const footer = panel.closest<HTMLElement>(".chat-footer");
+      const body = footer?.parentElement?.querySelector<HTMLElement>(".chat-body");
+      if (!footer || !body) return; // bare mount (tests) — uncapped
+      const avail = window.innerHeight - body.getBoundingClientRect().top;
+      const fixed = Math.max(footer.scrollHeight - list.offsetHeight, 0);
+      list.style.maxHeight = `${Math.max(Math.round((avail - fixed) * 0.4), 0)}px`;
+    };
+    apply();
+    window.addEventListener("resize", apply);
+    // Same RO target as Composer (#151): the queue panel — its box always moves
+    // (items enter/leave, staged rows appear) even once the footer's 60vh cap
+    // freezes the footer's border-box. Guarded: happy-dom has no ResizeObserver.
+    let ro: ResizeObserver | undefined;
+    // No measurement context (.chat-footer ancestor) → nothing to observe,
+    // matching Composer's bare-mount behavior.
+    if (typeof ResizeObserver === "function" && panelRef.current?.closest(".chat-footer")) {
+      ro = new ResizeObserver(apply);
+      ro.observe(panelRef.current);
+    }
+    return () => {
+      window.removeEventListener("resize", apply);
+      ro?.disconnect();
+    };
+  }, [hasItems]);
   if (queue.length === 0) return null;
 
   const startEdit = (item: QueueItem) => { setEditingId(item.id); setSchedulingId(null); };
@@ -210,7 +261,7 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
     // (programmatic value writes do not fire onChange — no feedback loop).
     if (scheduleRef.current) scheduleRef.current.value = toLocalInput(at);
   };
-  const SCHEDULE_PRESETS = [5, 10, 30] as const;
+  const SCHEDULE_PRESETS = [5, 10, 30, 60] as const;
 
   // ─── repeat tier (#111) ───────────────────────────────────────────────────
   // Preset tiers commit immediately on select ("不重复" clears); "自定义" only
@@ -244,7 +295,7 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   const cancelRepeat = (id: string) => onSetRepeat?.(id, 0);
 
   return (
-    <div className="queue-panel" data-testid="queue-panel">
+    <div className="queue-panel" data-testid="queue-panel" ref={panelRef}>
       <div className="queue-header">
         <span className="queue-title">{t("queue.title", { count: queue.length })}</span>
         <span className="queue-hint">{t("queue.hint")}</span>
@@ -259,6 +310,9 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
           </span>
         )}
       </div>
+      {/* Scroll container (#146): header stays pinned, items scroll internally
+          under the JS-set max-height (budget-aware cap, effect above). */}
+      <div className="queue-list" data-testid="queue-list" ref={listRef}>
       {queue.map((item, idx) => {
         const pending = item.scheduledAt > now;
         const remaining = pending ? item.scheduledAt - now : 0;
@@ -367,32 +421,6 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                     {t("queue.schedulePreset", { mins })}
                   </button>
                 ))}
-                {/* Staged-time chip (issue #130): live "+mins → clock" readout
-                    of what the stacked presets / manual pick have staged. Its ✕
-                    resets the staging in place (issue #130 wrap-up 2) — row stays
-                    open, presets re-base on now, input snaps back to the default. */}
-                {pendingAt !== null && pendingAt > now && (
-                  <span
-                    className="queue-schedule-pending"
-                    data-testid="queue-schedule-pending"
-                    data-tooltip-id="md-tip"
-                    data-tooltip-content={t("queue.schedulePendingTip")}
-                  >
-                    <Clock size={11} />
-                    {" "}
-                    {t("queue.schedulePending", { mins: Math.round((pendingAt - now) / 60_000), time: formatClock(pendingAt) })}
-                    <button
-                      className="queue-schedule-reset"
-                      data-testid="queue-schedule-pending-reset"
-                      data-tooltip-id="md-tip"
-                      data-tooltip-content={t("queue.scheduleResetTip")}
-                      aria-label={t("queue.scheduleResetTip")}
-                      onClick={resetStagedTime}
-                    >
-                      <X size={10} />
-                    </button>
-                  </span>
-                )}
                 {scheduleCapped && (
                   <span className="queue-schedule-cap" data-testid="queue-schedule-cap">
                     {t("queue.scheduleCap")}
@@ -424,7 +452,56 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                     {t("queue.clearSchedule")}
                   </button>
                 )}
+                {/* Explicit Reset at the row END (#145/#146, issue #130 wrap-up 2):
+                    same handler as the chip's ✕ — drops the staged accumulation
+                    back to the baseline without touching the item's schedule or
+                    closing the row. Icon-only (the row is width-scarce with four
+                    presets); the tooltip explains. LAST child on purpose: its
+                    conditional render never shifts anything rendered before it. */}
+                {stagedVisible && (
+                  <button
+                    className="queue-btn reset"
+                    data-testid="queue-schedule-reset"
+                    data-tooltip-id="md-tip"
+                    data-tooltip-content={t("queue.scheduleResetTip")}
+                    aria-label={t("queue.scheduleResetTip")}
+                    onClick={resetStagedTime}
+                  >
+                    <RotateCcw size={12} />
+                  </button>
+                )}
               </div>
+              {/* Staged-time chip in its OWN row (#144, issue #130): the live
+                  "+mins → clock" readout sits OUTSIDE .queue-item-actions so
+                  preset clicks never reflow the row's buttons — layout
+                  invariant: preset getBoundingClientRect stays constant across
+                  consecutive clicks. Its ✕ resets the staging in place (issue
+                  #130 wrap-up 2) — row stays open, presets re-base on now,
+                  input snaps back to the default. */}
+              {stagedVisible && (
+                <div className="queue-schedule-staged-row" data-testid="queue-schedule-staged-row">
+                  <span
+                    className="queue-schedule-pending"
+                    data-testid="queue-schedule-pending"
+                    data-tooltip-id="md-tip"
+                    data-tooltip-content={t("queue.schedulePendingTip")}
+                  >
+                    <Clock size={11} />
+                    {" "}
+                    {t("queue.schedulePending", { mins: Math.round((pendingAt - now) / 60_000), time: formatClock(pendingAt) })}
+                    <button
+                      className="queue-schedule-reset"
+                      data-testid="queue-schedule-pending-reset"
+                      data-tooltip-id="md-tip"
+                      data-tooltip-content={t("queue.scheduleResetTip")}
+                      aria-label={t("queue.scheduleResetTip")}
+                      onClick={resetStagedTime}
+                    >
+                      <X size={10} />
+                    </button>
+                  </span>
+                </div>
+              )}
               {scheduleError && (
                 <span className="queue-schedule-error" data-testid="queue-schedule-error">
                   {scheduleError}
@@ -624,6 +701,7 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
         </div>
         );
       })}
+      </div>
     </div>
   );
 }

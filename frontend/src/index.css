@@ -1536,6 +1536,14 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
   max-width: 1080px; margin: 0 auto 6px; padding: 0 28px; width: 100%;
   display: flex; flex-direction: column; gap: 5px;
 }
+/* Scroll container for the items (#146): the header stays pinned, the list
+   scrolls internally under a JS-set max-height (budget-aware cap — #151
+   mechanism, see QueuePanel.tsx). Bare mounts (tests) leave maxHeight at none
+   -> no cap, no visual change. */
+.queue-list {
+  display: flex; flex-direction: column; gap: 5px;
+  min-height: 0; overflow-y: auto;
+}
 .queue-header {
   display: flex; align-items: center; gap: 8px;
   font-size: 11px; color: var(--text-3); padding: 2px 2px 0;
@@ -1593,6 +1601,8 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
 .queue-btn.clear { color: var(--text-3); }
 .queue-btn.clear:hover { color: var(--text); }
 .queue-btn.preset { color: var(--text-3); }
+.queue-btn.reset { padding: 4px 6px; }
+.queue-btn.reset:hover { color: var(--amber); }
 .queue-btn.preset:hover { color: var(--accent-2); border-color: rgba(100, 210, 255, 0.3); }
 /* Mobile-only up/down reorder buttons (issue #126B): hidden above 768px — the
    drag grip stays the desktop affordance; a desktop window never shows these. */
@@ -1620,6 +1630,13 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
 .queue-schedule-pending {
   font-family: var(--mono); font-size: 10px; color: var(--amber); font-weight: 600;
   flex-shrink: 0; white-space: nowrap; display: inline-flex; align-items: center; gap: 3px;
+}
+/* Staged-schedule row (#144): the chip lives OUTSIDE .queue-item-actions so
+   preset clicks never reflow the row's buttons — layout invariant: preset
+   getBoundingClientRect stays constant across consecutive clicks. Own full
+   line at every width (flex-basis:100% forces the wrap under .queue-item-edit). */
+.queue-schedule-staged-row {
+  flex-basis: 100%; display: flex; align-items: center; min-width: 0;
 }
 /* ✕ inside the staged chip (issue #130 wrap-up 2): resets the staging in place.
    Borderless inline button inheriting the chip's amber; padding enlarges the hit
@@ -3262,7 +3279,10 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
   .queue-btn.move { display: inline-flex; }
   .queue-btn { min-height: 40px; min-width: 40px; padding: 8px 12px; justify-content: center; }
    .queue-item-actions { flex-basis: 100%; flex-wrap: wrap; }
-   .queue-schedule-error, .queue-schedule-cap, .queue-schedule-pending { flex-basis: 100%; }
+   /* The staged chip left the actions row (#144): its own .queue-schedule-staged-row
+      is already full-width at every width, so only the in-row notices keep the
+      flex-basis:100% treatment here. */
+   .queue-schedule-error, .queue-schedule-cap { flex-basis: 100%; }
   /* Repeat tier (#111) wraps full-width on touch too, and its controls grow
      to the same 40px tap target family as the row buttons (#126B parity). */
   .queue-repeat-tier { flex-basis: 100%; flex-wrap: wrap; row-gap: 6px; }
