@@ -76,3 +76,18 @@ git add scripts/coverage.floor scripts/coverage.floor.pkgs && git commit  # floo
 - **前端统计 `frontend/src` 行覆盖率**(lcov `LH/LF` 求和),**排除生成物 `frontend/bindings/`**(gitignore 的机器生成代码)。注意 bun 只统计测试实际加载过的文件——测试没 import 的源文件不进分母,「整文件删测试」无法完全堵死,棘轮主挡渐进稀释。
 - 覆盖率随 Go / bun 版本可能有零点几个百分点的漂移;floor 取整留了余量,若工具链升级导致误报,按上面的重定基准流程处理并在 commit 说明。
 - **fresh clone 起步**:`(cd frontend && bun install)` + `make cover-check` 即可——cover 会自动 `wails3 generate bindings`(需要 wails3 在 PATH,与其他 make 目标同一前提)。守门不依赖任何本地残留状态:profile / lcov / bindings 全部现算或现生成。
+
+## review 统计(scripts/review-stats.sh)
+
+AI dev team 的 review 记录沉淀在 `docs/worklog/`(文件名含 `review` 的工作日志,一个 review 一条),`scripts/review-stats.sh` 把它们聚合成三个视角:
+
+```bash
+make review-stats                        # 周趋势(ISO 周,首末活动周之间的空周补 0)
+make review-stats ARGS=--by-issue        # 按锚点 issue 分组:计数降序 + 首末日期 + P1/P2/P3 并集
+make review-stats ARGS=--by-severity     # P1/P2/P3 分级:提及该级的 review 记录数与占比
+./scripts/review-stats.sh --by-severity  # 也可直接跑脚本(--help 看用法,未知参数退出 2)
+```
+
+- **分类不变量**:文件名带日期前缀 + 含 `review`(先剥 `preview`——它内嵌 `review` 子串),且携带结论 marker(结论标题/裸结论行)或旧格式 H1 verdict token;review 缺口修复跟进(落地记录风格,无结论 marker)不计入。
+- **P1/P2/P3 分级是「记录级提及面」不是逐条 finding 计数**:整文件按词边界扫 `P1/P2/P3` token(`P12`/`XP1` 不算,`P3-a`/`P2/P3` 算),一条记录内同级只计一次。review 记录的 finding 排版异构(标题/加粗 bullet/散文/复审转述),逐条计数不可靠;`--by-issue` 里该锚点的分级是其全部记录的并集。无任何 P token 的记录占大头是常态(隐式结论的 review 不带分级词)。
+- 时间轴 = 文件名日期前缀(git commit 日期受 merge 顺序漂移);锚点 = H1 第一个 `#NNN`。ISO 周为纯 awk 实现(Hinnant 算法),无 GNU/BSD date 分歧。
