@@ -61,7 +61,13 @@ shopt -s nullglob
 files=("$root"/docs/worklog/*.md)
 
 # ── Pass 1: extract review records → TSV "date<TAB>anchor<TAB>verdict<TAB>sev" ──
-records="$(awk '
+# Empty corpus: `set -u` + `"${files[@]}"` on an empty array is an unbound-variable
+# crash on stock bash 3.2, and awk with no file args would block reading stdin —
+# take the zero-record path instead.
+if (( ${#files[@]} == 0 )); then
+	records=""
+else
+	records="$(awk '
 	function basename(f,   n, a) { n = split(f, a, "/"); return a[n] }
 	function scan_sev(line,   i, tok) {
 		# Boundary check folded into one whole-line regex per token. Do NOT
@@ -121,7 +127,7 @@ records="$(awk '
 	pending { scan_sev($0) }
 	END { if (pending && sawcon) print date "\t" anchor "\t" verdict "\t" sevstr() }
 ' "${files[@]}")"
-
+fi
 # ── Pass 2: aggregate ────────────────────────────────────────────────────────────
 # Day arithmetic (Hinnant civil-date algorithms; 1970-01-01 = day 0). Years in
 # play are >= 1970, so int() truncation equals floor division everywhere.
@@ -188,7 +194,9 @@ elif [[ "$mode" == "by-issue" ]]; then
 			total++
 		}
 		END {
-			if (!total) { print "no review records found"; exit 0 }
+			# Zero records: print nothing here — a message line would flow
+			# through sort into the format stage and render as a fake row.
+			# The format stage owns the zero-record message instead.
 			for (i in cnt) {
 				s = ""
 				if (uset[i ",P1"]) s = "P1"
@@ -198,12 +206,16 @@ elif [[ "$mode" == "by-issue" ]]; then
 				printf "%6d\t%s\t%s\t%s\t%s\n", cnt[i], i, fmin[i], fmax[i], s
 			}
 		}
-	' | sort -k1,1nr -k2,2n | awk -F '\t' -v total="$(printf '%s' "$records" | grep -c . || true)" '
+	' | sort -k1,1nr -k2,2n | awk -F '\t' '
 		{
 			label = ($2 == "-") ? "-" : "#" $2
 			printf "%-9s %4d   %s → %s%s\n", label, $1, $3, $4, ($5 == "-") ? "" : "  [" $5 "]"
+			tsum += $1
 		}
-		END { printf "\ntotal %d reviews across %d anchors\n", total, NR }
+		END {
+			if (NR == 0) { print "no review records found" }
+			else { printf "\ntotal %d reviews across %d anchors\n", tsum, NR }
+		}
 	'
 else
 	# --by-severity: records mentioning each P-level. Presence per record —
