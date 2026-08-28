@@ -413,6 +413,10 @@ input, textarea { font-family: inherit; }
   position: fixed; z-index: 60; min-width: 168px; background: var(--elev-2);
   border: 1px solid var(--sep-strong); border-radius: var(--r-sm);
   box-shadow: var(--shadow-pop); padding: 4px; animation: fadeIn 0.12s ease;
+  /* #28001: the tabbar hangs its ctx menu inside the .tabbar drag region; the custom property
+     inherits, so items compute "drag" and the Wails runtime turns any ≥1px drift during a
+     press into a native window drag (click lost). Inert for menus outside drag regions. */
+  --wails-draggable: no-drag;
 }
 .ctx-item {
   display: flex; align-items: center; gap: 8px; width: 100%;
@@ -2986,7 +2990,8 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
    compresses as more tabs are added — the browser tab-bar strategy. flex: 0 1 auto = "don't grow,
    can shrink, natural size basis". min-width 34 is the dot+close form: once the strip can no
    longer give every tab title space (TabBar unmounts titles below tabs.length × 47px of available
-   width), the .narrow padding below tightens so dot(7)+gap(6)+close(16)+padding(4) = 34px. */
+   width), the .narrow padding below tightens (dot 7 + gap 6 + close 16 + padding 4 = 33; the
+   min-width floor brings it to 34). */
 .tabbar-tab {
   display: inline-flex; align-items: center; gap: 6px; height: 25px;
   flex: 0 1 auto; min-width: 34px; max-width: 190px;
@@ -2999,7 +3004,7 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
 .tabbar-tab.active { background: var(--sel); color: var(--text); }
 .tabbar-tab .session-dot { flex-shrink: 0; }
 /* Narrow (34px) form (#156): title + unread dot are unmounted (React side), leaving status dot
-   + close; padding tightens so the tab really fits 34px (dot 7 + gap 6 + close 16 + padding 4). */
+   + close; padding tightens (dot 7 + gap 6 + close 16 + padding 4 = 33, floored at min-width 34). */
 .tabbar-tab.narrow { padding: 0 2px; }
 /* Title takes the shrinking load: as the tab compresses, the ellipsis title gives way first
    (the dot + close button keep their fixed sizes via flex-shrink: 0). */
