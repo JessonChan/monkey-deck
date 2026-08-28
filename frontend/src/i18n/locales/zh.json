@@ -40,7 +40,8 @@
     "closeTabTip": "关闭标签页({{title}})",
     "moveToWindow": "移到独立窗口",
     "sessionTooltip": "{{title}} · {{project}}",
-    "generating": "生成中…"
+    "generating": "生成中…",
+    "limitTip": "最多 {{limit}} 个标签页，请先关闭一些"
   },
   "closeTab": {
     "title": "对话正在生成中",
