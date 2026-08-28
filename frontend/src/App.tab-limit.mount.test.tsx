@@ -8,14 +8,14 @@
 //     rendered tabs (the updater re-checks prev, so the cap holds).
 //  2. Hint: the rejected open bumps tabLimitHintSeq → TabBar renders the
 //     transient inline hint.
-//  3. Self-dismiss: the hint disappears after 1.5s (fake timers).
+//  3. Self-dismiss: the hint disappears after LIMIT_HINT_MS (real wall time).
 //  4. Re-opening an EXISTING tab at the cap is not a rejection (no new hint).
 //
 // NOTE: App (and the binding modules it transitively imports) is imported
 // dynamically AFTER mock.module registration on purpose — a static import would
 // evaluate the real binding modules before the mocks replace them (same
 // scaffolding as App.commands-seed.mount.test.tsx).
-import { describe, test, expect, mock, vi } from "bun:test";
+import { describe, test, expect, mock } from "bun:test";
 import { Window } from "happy-dom";
 import React from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -116,7 +116,7 @@ mock.module("react-i18next", () => ({
 
 // ---- imports AFTER mocks (see NOTE at top) ----
 const { default: App } = await import("./App.tsx");
-const { TAB_LIMIT } = await import("./components/TabBar.tsx");
+const { TAB_LIMIT, LIMIT_HINT_MS } = await import("./components/TabBar.tsx");
 
 const delay = (ms: number) => {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -165,12 +165,9 @@ describe("App 50-tab cap (#156)", () => {
     expect(hint()).not.toBeNull();
     expect(hint()!.textContent).toBe("tabbar.limitTip");
 
-    // Hint self-dismisses after 1.5s (TabBar-owned timer under fake timers).
-    vi.useFakeTimers();
-    vi.advanceTimersByTime(1500);
-    for (let i = 0; i < 20; i++) await Promise.resolve();
-    await delay(5);
-    vi.useRealTimers();
+    // Hint self-dismisses after LIMIT_HINT_MS (TabBar-owned real timer; asserted against
+    // actual wall time — awaiting a real setTimeout while bun fake timers are active hangs).
+    await delay(LIMIT_HINT_MS + 100);
     expect(hint()).toBeNull();
 
     // Re-opening an EXISTING tab at the cap: not a rejection — no new hint, count unchanged.

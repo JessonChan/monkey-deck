@@ -8,14 +8,15 @@
 //    the tab keeps status dot + close, takes the `narrow` class, and the tab root
 //    carries a tooltip whose content is the RAW title (the title stays reachable).
 //  - limitHintSeq bump shows the transient limit hint; it self-dismisses after
-//    1.5s (fake timers); re-showing requires a NEW bump (seq change), not a prop
+//    LIMIT_HINT_MS (real wall time — bun's fake timers gate the real macrotask
+//    queue); re-showing requires a NEW bump (seq change), not a prop
 //    re-render with the same value.
 
-import { describe, test, expect, mock, vi } from "bun:test";
+import { describe, test, expect, mock } from "bun:test";
 import { Window } from "happy-dom";
 import React from "react";
 import { createRoot, type Root } from "react-dom/client";
-import TabBar, { TAB_LIMIT, type TabBarTab } from "./TabBar";
+import TabBar, { TAB_LIMIT, LIMIT_HINT_MS, type TabBarTab } from "./TabBar";
 
 // ---- happy-dom setup ----
 const win = new Window();
@@ -70,12 +71,6 @@ const delay = (ms: number) => {
 async function flush() {
   for (let i = 0; i < 10; i++) await delay(2);
 }
-// Drain without touching the (fake) setTimeout: microtasks + one real macrotask
-// so React's scheduler task gets processed while mock timers are enabled.
-async function drainDuringFakeTimers() {
-  for (let i = 0; i < 20; i++) await Promise.resolve();
-  await delay(5);
-}
 
 const makeTabs = (n: number): TabBarTab[] =>
   Array.from({ length: n }, (_, i) => ({
@@ -129,7 +124,7 @@ describe("TabBar (#156 Chrome-style shrink)", () => {
     root.unmount();
   });
 
-  test("limit hint: shows on seq bump, self-dismisses after 1.5s (fake timers), needs new bump to re-show", async () => {
+  test("limit hint: shows on seq bump, self-dismisses after LIMIT_HINT_MS, needs new bump to re-show", async () => {
     const { container, root } = render(
       <TabBar tabs={makeTabs(1)} activeId="T1" onSelect={() => {}} onClose={() => {}} onPopout={() => {}} limitHintSeq={0} />,
     );
@@ -144,11 +139,9 @@ describe("TabBar (#156 Chrome-style shrink)", () => {
     expect(hint()).not.toBeNull();
     expect(hint()!.textContent).toBe("tabbar.limitTip");
 
-    // 1.5s later the hint is gone (component-owned timer, fake-timer driven).
-    vi.useFakeTimers();
-    vi.advanceTimersByTime(1500);
-    await drainDuringFakeTimers();
-    vi.useRealTimers();
+    // LIMIT_HINT_MS later the hint is gone (component-owned real timer; asserted against
+    // actual wall time — awaiting a real setTimeout while bun fake timers are active hangs).
+    await delay(LIMIT_HINT_MS + 100);
     expect(hint()).toBeNull();
 
     // Same seq re-render must NOT re-show (bump-driven, not render-driven).

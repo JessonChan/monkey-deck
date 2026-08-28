@@ -56,7 +56,10 @@ export interface TabBarProps {
 // left (dot 7 + gap 6 + zero-width title + gap 6 + close 16 + padding 12 = 47): all tabs drop
 // their titles and take the 34px dot+close form.
 const WIDE_MIN = 47;
-const LIMIT_HINT_MS = 1500;
+// Exported for tests: self-dismiss is a real component timer, and bun's fake timers gate the
+// real macrotask queue (awaiting a real setTimeout while faked never resolves), so tests
+// assert dismissal against actual wall time (LIMIT_HINT_MS + margin) instead of fake clocks.
+export const LIMIT_HINT_MS = 1500;
 
 export default function TabBar(props: TabBarProps) {
   const { t } = useTranslation();
