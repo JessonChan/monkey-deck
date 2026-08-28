@@ -41,15 +41,25 @@
 # by-severity — aggregates the exact same record set produced by pass 1, so all
 # reported record totals must agree. Findings numbers (per-finding P1/P2/P3)
 # carry the same cross-view agreement between the weekly trend and --overview.
-# --overview states the numbers in one place; --check enforces the agreement and
-# exits non-zero on drift.
+# The findings headline line — "findings    P1 a/P2 b/P3 c · 未分级 n篇/总 N篇=记录数"
+# — reports per-finding counts for the graded levels while 未分级/总 carry 篇
+# (record) units: 总N篇 IS the record total, not the findings sum. --overview
+# prints it once and the default weekly view repeats it byte-identical as its
+# first line; --check enforces the agreement and exits non-zero on drift.
+#
+# Gate status: informational only. Nothing in the build / test / coverage / CI
+# chain invokes this script, and no acceptance gate consumes its output or exit
+# code — --check's exit 1 is a caliber-drift alarm for the human reading the
+# numbers, not a gate input.
 #
 # Usage:
 #   ./scripts/review-stats.sh             weekly trend, one row per ISO-8601 week
 #                                         (empty weeks between first/last activity
-#                                         shown as 0, so gaps stay visible); each
-#                                         row carries per-finding P1/P2/P3 counts
-#                                         plus the review count "(n篇)"
+#                                         shown as 0, so gaps stay visible); the
+#                                         first line is the corpus-wide findings
+#                                         headline (shared with --overview), each
+#                                         week row carries per-finding P1/P2/P3
+#                                         counts plus the review count "(n篇)"
 #   ./scripts/review-stats.sh --overview  counting-caliber summary: classification
 #                                         funnel (corpus → candidates → records),
 #                                         the weekly/by-issue headline counts and
@@ -59,9 +69,11 @@
 #                                       P1/P2/P3 grading distribution: how many
 #                                       review records mention each level
 #   ./scripts/review-stats.sh --check     cross-view caliber guard: all views must
-#                                         report the same record total, and the
+#                                         report the same record total, the
 #                                         findings numbers must agree across the
-#                                         weekly trend and --overview
+#                                         weekly trend and --overview, and the
+#                                         findings line's 总N篇 must equal the
+#                                         record total
 #
 # ISO weeks are computed in pure awk (Monday-based, week 1 contains the first
 # Thursday; labeled via the Thursday of the week so boundary cases collapse away) —
@@ -267,6 +279,11 @@ agg_common='
 # Every aggregation starts by dropping the pass-1 funnel meta line: records
 # share the output with it, and counting it would inflate every view by one.
 meta_skip='$1 == "#stats" { next }'
+# The findings headline line, printed byte-identical by --overview and as the
+# default weekly view's first row — one printf, two insertions, zero drift.
+# P1/P2/P3 are per-finding counts; 未分级/总 carry 篇 (record) units with 总
+# pinned to the record total ("=记录数"), not the findings sum.
+findings_line='printf "findings    P1 %d/P2 %d/P3 %d · 未分级 %d篇/总 %d篇=记录数\n", f1, f2, f3, un, total'
 
 prog_weekly="$agg_common"'
 	'"$meta_skip"'
@@ -276,11 +293,14 @@ prog_weekly="$agg_common"'
 		if (m > gmax) gmax = m
 		cnt[m]++; total++
 		wp1[m] += $5; wp2[m] += $6; wp3[m] += $7   # per-finding sums, one column per level
+		f1 += $5; f2 += $6; f3 += $7               # corpus-wide sums for the headline line
+		if ($4 == "-") un++                        # records with zero graded findings
 		if (fmin == "" || $1 < fmin) fmin = $1
 		if ($1 > fmax) fmax = $1
 	}
 	END {
 		if (!total) { print "no review records found"; exit 0 }
+		'"$findings_line"'
 		for (m = gmin; m <= gmax; m += 7) {
 			c = cnt[m] + 0
 			printf "%s  P1 %d/P2 %d/P3 %d(%d篇)  %s\n", iso_label(m), wp1[m] + 0, wp2[m] + 0, wp3[m] + 0, c, bar(c)
@@ -389,7 +409,7 @@ prog_overview="$agg_common"'
 		if (unanch) printf " · %d unanchored", unanch
 		if (atop != "") printf " · max #%s=%d", atop, amax
 		printf "\n"
-		printf "findings    P1 %d/P2 %d/P3 %d · 未分级 %d/总 %d\n", f1, f2, f3, un, f1 + f2 + f3 + un
+		'"$findings_line"'
 		printf "\ntotal %d reviews\n", total
 	}
 '
@@ -416,10 +436,12 @@ mode_check() {
 	# sees (not just the shared TSV), so an edit to any single aggregation
 	# cannot silently change one view's numbers without the others.
 	# Findings numbers (per-finding P1/P2/P3) get the same treatment: the
-	# weekly and overview views must report identical per-level sums, and the
-	# overview findings line must decompose as P1+P2+P3+ungraded == total.
+	# weekly and overview views must report identical per-level sums, the
+	# default view's headline line must equal --overview's findings line
+	# byte-for-byte, and that line's 总N篇 must equal the record total (总 is
+	# record-caliber, never the findings sum; 未分级 cannot exceed it).
 	local w b s o tsv meta nscan ncand nrec
-	local wt ws wp1 wp2 wp3 bt bs st ot op1 op2 op3 oun oft fail=0
+	local wt ws wp1 wp2 wp3 bt bs st ot op1 op2 op3 oun oft wvf fail=0
 	w="$(mode_weekly)"
 	b="$(mode_by_issue)"
 	s="$(mode_by_severity)"
@@ -443,13 +465,18 @@ mode_check() {
 	st="$(awk '$1 == "total" { t = $2 + 0 } END { print t + 0 }' <<<"$s")"
 	ot="$(awk '$1 == "total" { t = $2 + 0 } END { print t + 0 }' <<<"$o")"
 	ovf="$(awk '$1 == "findings" { print }' <<<"$o")"
+	# The default view's first line IS the findings headline — parse it too,
+	# so a broken corpus-sum accumulation in the weekly aggregation cannot
+	# drift it away from --overview's line unnoticed.
+	wvf="$(awk '$1 == "findings" { print }' <<<"$w")"
 	op1="$(awk 'match($0, /P1 [0-9]+/) { print substr($0, RSTART + 3, RLENGTH - 3) }' <<<"$ovf")"
 	op2="$(awk 'match($0, /P2 [0-9]+/) { print substr($0, RSTART + 3, RLENGTH - 3) }' <<<"$ovf")"
 	op3="$(awk 'match($0, /P3 [0-9]+/) { print substr($0, RSTART + 3, RLENGTH - 3) }' <<<"$ovf")"
-	oft="$(awk 'match($0, /[0-9]+$/) { print substr($0, RSTART, RLENGTH) }' <<<"$ovf")"
-	# 未分级 n: the digits between the CJK label and "/总". Walk back over the
-	# trailing ASCII digit run of the matched region — no regex on a derived
-	# piece (bwk-awk towc trap), and the walk only ever touches ASCII.
+	# 总 N: anchored on the CJK label (the line ends with "=记录数", so a
+	# tail-digit match would find nothing); 未分级 n likewise. Both walk back
+	# over the trailing ASCII digit run of the matched region — no regex on a
+	# derived piece (bwk-awk towc trap); the walk only ever touches ASCII.
+	oft="$(awk 'match($0, /总 [0-9]+/) { i = RSTART + RLENGTH - 1; d = ""; while (i >= 1 && index("0123456789", substr($0, i, 1)) > 0) { d = substr($0, i, 1) d; i-- } print d + 0 }' <<<"$ovf")"
 	oun="$(awk 'match($0, /未分级 [0-9]+/) { i = RSTART + RLENGTH - 1; d = ""; while (i >= 1 && index("0123456789", substr($0, i, 1)) > 0) { d = substr($0, i, 1) d; i-- } print d + 0 }' <<<"$ovf")"
 
 	ck() {
@@ -479,7 +506,14 @@ mode_check() {
 	ck "findings P1" "${op1:-0}" "${wp1:-0}"
 	ck "findings P2" "${op2:-0}" "${wp2:-0}"
 	ck "findings P3" "${op3:-0}" "${wp3:-0}"
-	ck "findings parts" "${oft:-0}" "$(( ${op1:-0} + ${op2:-0} + ${op3:-0} + ${oun:-0} ))"
+	ck "weekly headline" "$ovf" "$wvf"
+	ck "findings total=recs" "$tsv" "${oft:-0}"
+	if (( ${oun:-0} <= ${oft:-0} )); then
+		printf 'ok  %-20s %s <= %s\n' "ungraded<=total" "${oun:-0}" "${oft:-0}"
+	else
+		printf 'FAIL %-20s %s <= %s\n' "ungraded<=total" "${oun:-0}" "${oft:-0}"
+		fail=1
+	fi
 
 	if (( fail )); then
 		echo "check FAILED — counting caliber drifted between views"

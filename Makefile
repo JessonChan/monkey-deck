@@ -63,7 +63,8 @@ cover: bindings
 cover-check: cover
 	bash scripts/coverage-floor.sh coverage.out
 
-## Review-record stats over docs/worklog (ARGS passthrough, e.g. ARGS=--by-severity)
+## Review-record stats over docs/worklog (ARGS passthrough, e.g. ARGS=--by-severity).
+## Informational only — never a gate: nothing in build/test/cover/CI invokes it.
 review-stats:
 	bash scripts/review-stats.sh $(ARGS)
 
