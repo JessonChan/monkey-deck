@@ -162,6 +162,56 @@ const MOBILE_INPUT_ATTRS = coarsePointer
   ? { autoCapitalize: "off", autoCorrect: "off", spellCheck: false, enterKeyHint: "send" } as const
   : {};
 
+// Composer textarea height bounds: 52px floor keeps the empty composer usable
+// (matches .composer-input min-height); 220px is the legacy growth cap — the
+// viewport budget can only shrink the cap, never exceed it.
+const COMPOSER_INPUT_MIN_H = 52;
+const COMPOSER_INPUT_MAX_H = 220;
+
+// Pure budget clamp for autoGrow (unit-tested): the textarea grows to its natural
+// scrollHeight, capped by the smaller of the legacy 220px cap and the viewport
+// budget; never below the 52px floor even when the budget goes negative (extreme
+// window tiers — the .chat-footer max-height fallback scrolls instead).
+export function clampComposerHeight(scrollHeight: number, budget: number): number {
+  const cap = Math.max(COMPOSER_INPUT_MIN_H, Math.min(COMPOSER_INPUT_MAX_H, budget));
+  return Math.min(scrollHeight, cap);
+}
+
+// Viewport budget for the textarea: distance from the chat-body's top edge to the
+// viewport bottom (= viewport minus header and anything stacked above the scroll
+// area), minus everything inside the footer except the textarea's current height
+// (QueuePanel, att-chips, compose-bar, paddings — all measured, none hardcoded).
+// The flex column pins the footer to the viewport bottom (chat-body flex-grows),
+// so the footer's own rect is useless as a space measure — the footer can grow up
+// to the body's top edge as the body shrinks (flex-basis 0). Footer content is
+// linear in the textarea height, so budget = avail - (footerContent - curH) is exact.
+// Transient bars between body and footer (notice/error) are not subtracted; they
+// overestimate the budget by their height for their lifetime — the .chat-footer
+// max-height fallback covers that residue. Falls back to the legacy cap when no
+// footer ancestor exists (bare test mounts / detached nodes).
+function composerInputBudget(el: HTMLTextAreaElement): number {
+  const footer = el.closest<HTMLElement>(".chat-footer");
+  if (!footer) return COMPOSER_INPUT_MAX_H;
+  const body = footer.parentElement?.querySelector<HTMLElement>(".chat-body");
+  if (!body) return COMPOSER_INPUT_MAX_H;
+  const avail = window.innerHeight - body.getBoundingClientRect().top;
+  // scrollHeight (not offsetHeight): when the .chat-footer max-height cap binds,
+  // offsetHeight is clamped to the cap and would understate the real base, while
+  // scrollHeight still reports the full content (base + textarea) — the budget
+  // stays exact in both regimes.
+  const other = Math.max(footer.scrollHeight - el.offsetHeight, 0);
+  return avail - other;
+}
+
+const autoGrow = (el: HTMLTextAreaElement) => {
+  // Budget must be measured BEFORE height:auto — it subtracts the textarea's
+  // current height from the footer's current height, consistent only while the
+  // current inline height is still in effect.
+  const budget = composerInputBudget(el);
+  el.style.height = "auto";
+  el.style.height = clampComposerHeight(el.scrollHeight, budget) + "px";
+};
+
 export default function Composer({ value, onChange, disabled, prompting, configOptions, commands, elicitation, onRespondElicitation, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, audios, onAudiosChange, audioSupported, usage, branch, onNewSessionOnBranch, onSend, onEnqueue, onStop, focusSignal = 0 }: Props) {
   const { t } = useTranslation();
   const [slashOpen, setSlashOpen] = useState(false);
@@ -289,11 +339,34 @@ export default function Composer({ value, onChange, disabled, prompting, configO
     setSlashIdx(0);
   }, [slashQuery, filtered.length]);
 
-  const autoGrow = (el: HTMLTextAreaElement) => {
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 220) + "px";
+useEffect(() => { if (ref.current) autoGrow(ref.current); }, [value, collapsed]);
+
+// Re-clamp when the budget context changes: window resize (viewport) and queue
+// growth (QueuePanel items entering/leaving without touching Composer props).
+// Deliberately NOT observing the textarea itself — our own height writes perturb
+// the footer, but the recompute is idempotent (same measurements -> same budget ->
+// same height -> no style write), so an observation settles after one extra fire
+// instead of looping. The observed element is the queue panel, not the footer:
+// once the .chat-footer max-height cap binds, the footer's border-box stops
+// changing while its content keeps growing, so a footer observer would go silent
+// exactly when re-clamping matters; the panel's own box always moves. Re-runs on
+// [collapsed] so the observer re-attaches when the textarea remounts after a
+// fold/unfold (ref is null while collapsed).
+useEffect(() => {
+  const rerun = () => { const el = ref.current; if (el) autoGrow(el); };
+  window.addEventListener("resize", rerun);
+  const footer = ref.current?.closest(".chat-footer") ?? null;
+  const target = footer?.querySelector(".queue-panel") ?? footer;
+  let ro: ResizeObserver | undefined;
+  if (target && typeof ResizeObserver === "function") {
+    ro = new ResizeObserver(rerun);
+    ro.observe(target);
+  }
+  return () => {
+    window.removeEventListener("resize", rerun);
+    ro?.disconnect();
   };
-  useEffect(() => { if (ref.current) autoGrow(ref.current); }, [value, collapsed]);
+}, [collapsed]);
 
   // Imperative focus via focusSignal (quote-to-composer). Expand the long-text
   // preview first (the textarea isn't mounted while collapsed → ref is null),

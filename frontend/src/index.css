@@ -1198,7 +1198,23 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
 .copy-icon-btn:hover { opacity: 1; background: rgba(127,127,127,0.15); }
 @keyframes slideDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 
-.chat-footer { border-top: 1px solid var(--sep); padding: 9px 0 13px; background: var(--bg); }
+.chat-footer {
+  border-top: 1px solid var(--sep); padding: 9px 0 13px; background: var(--bg);
+  /* Backstop (#151): extreme tiers (long input + many queue items at tiny window
+     heights) can still overflow the viewport even with the composer's budget clamp
+     (Composer.tsx autoGrow). Cap the footer and let it scroll internally so the
+     send/stop buttons stay reachable. The clamp handles the normal case; this
+     covers the rest. */
+  max-height: 60vh; overflow-y: auto;
+}
+/* Popover escape (#151): .slash-popover / .mention-popover anchor ABOVE the
+   composer (position:absolute; bottom:100% on .composer), so overflow-y:auto
+   clips them exactly when it matters (long input -> open menu). While a popover
+   is open, release overflow so the menu paints outside the footer box (max-height
+   stays; tradeoff: the footer itself cannot scroll while a menu is open — menu
+   visibility wins). :has() ships in WKWebView (Safari 15.4+) / WebView2 / modern
+   Chromium + Firefox; already used in this file (.md-table-wrap rule). */
+.chat-footer:has(.slash-popover) { overflow: visible; }
 
 /* ─── Composer(原生精致) ─── */
 .composer { max-width: 1080px; margin: 0 auto; padding: 0 28px 4px; position: relative; }
