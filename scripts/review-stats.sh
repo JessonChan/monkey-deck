@@ -18,12 +18,22 @@
 #   verdict — first verdict keyword on the H1, else first inside the conclusion
 #             region (PASS / APPROVE / REQUEST[ _-]CHANGES / BLOCKED / 通过).
 #             Informational only; implicit-verdict reviews still count.
+#   severities — distinct P1/P2/P3 levels present anywhere in the record's file
+#             (whole-file scan, word-boundary validated: "P12"/"XP1" don't match,
+#             "P3-a"/"P2/P3" do). Token presence per record, NOT a per-finding
+#             count — review write-up formats are heterogeneous (finding slots
+#             appear as headings, bold bullets, prose, re-review discussion), so
+#             counting slots would be fragile; the stable invariant is level
+#             presence (same informational-only philosophy as verdict).
 #
 # Usage:
 #   ./scripts/review-stats.sh             weekly trend, one row per ISO-8601 week
 #                                         (empty weeks between first/last activity
 #                                         shown as 0, so gaps stay visible)
 #   ./scripts/review-stats.sh --by-issue  per-anchor breakdown, count desc
+#   ./scripts/review-stats.sh --by-severity
+#                                       P1/P2/P3 grading distribution: how many
+#                                       review records mention each level
 #
 # ISO weeks are computed in pure awk (Monday-based, week 1 contains the first
 # Thursday; labeled via the week's Thursday so boundary cases collapse away) —
@@ -36,12 +46,13 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mode="weekly"
 
 usage() {
-	echo "usage: $0 [--by-issue]" >&2
+	echo "usage: $0 [--by-issue] [--by-severity]" >&2
 }
 
 case "${1:-}" in
 "") ;;
 --by-issue) mode="by-issue" ;;
+--by-severity) mode="by-severity" ;;
 -h|--help) usage; exit 0 ;;
 *) usage; exit 2 ;;
 esac
@@ -49,12 +60,31 @@ esac
 shopt -s nullglob
 files=("$root"/docs/worklog/*.md)
 
-# ── Pass 1: extract review records → TSV lines "date<TAB>anchor<TAB>verdict" ────
+# ── Pass 1: extract review records → TSV "date<TAB>anchor<TAB>verdict<TAB>sev" ──
 records="$(awk '
 	function basename(f,   n, a) { n = split(f, a, "/"); return a[n] }
+	function scan_sev(line,   i, tok) {
+		# Boundary check folded into one whole-line regex per token. Do NOT
+		# extract neighbor chars and regex them: applying a regex to a
+		# substr()-extracted piece trips bwk-awk "towc: multibyte conversion
+		# failure" under some locales (regex-on-line is safe — the verdict and
+		# anchor rules above run on full lines with CJK text). Presence-only,
+		# so overlapping matches are irrelevant.
+		for (i = 1; i <= 3; i++) {
+			tok = "P" i
+			if (line ~ "(^|[^A-Za-z0-9])" tok "($|[^A-Za-z0-9])") has[tok] = 1
+		}
+	}
+	function sevstr(   s) {
+		s = ""
+		if (has["P1"]) s = "P1"
+		if (has["P2"]) s = s ((s == "") ? "" : ",") "P2"
+		if (has["P3"]) s = s ((s == "") ? "" : ",") "P3"
+		return (s == "") ? "-" : s
+	}
 	FNR == 1 {
-		if (pending && sawcon) { print date "\t" anchor "\t" verdict; pending = 0 }
-		date = ""; anchor = "-"; verdict = ""; incon = 0; sawcon = 0
+		if (pending && sawcon) { print date "\t" anchor "\t" verdict "\t" sevstr(); pending = 0 }
+		date = ""; anchor = "-"; verdict = ""; incon = 0; sawcon = 0; delete has
 		base = basename(FILENAME)
 		if (match(base, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/))
 			date = substr(base, RSTART, RLENGTH)
@@ -85,7 +115,11 @@ records="$(awk '
 	incon && verdict == "" && match($0, /PASS|APPROVE|REQUEST[ _-]?CHANGES|BLOCKED|通过/) {
 		verdict = substr($0, RSTART, RLENGTH)
 	}
-	END { if (pending && sawcon) print date "\t" anchor "\t" verdict }
+	# Severity grading: every line of a candidate record is scanned for P1/P2/P3
+	# tokens; boundaries checked in scan_sev. pending files that fail the record
+	# classification still scan harmlessly (they are never printed).
+	pending { scan_sev($0) }
+	END { if (pending && sawcon) print date "\t" anchor "\t" verdict "\t" sevstr() }
 ' "${files[@]}")"
 
 # ── Pass 2: aggregate ────────────────────────────────────────────────────────────
@@ -139,23 +173,56 @@ if [[ "$mode" == "weekly" ]]; then
 				total, fmin, fmax, (gmax - gmin) / 7 + 1, total / ((gmax - gmin) / 7 + 1)
 		}
 	'
-else
+elif [[ "$mode" == "by-issue" ]]; then
 	printf '%s' "$records" | awk -F '\t' "$agg_common"'
 		{
 			cnt[$2]++
 			if (!($2 in fmin) || $1 < fmin[$2]) fmin[$2] = $1
 			if ($1 > fmax[$2]) fmax[$2] = $1
+			# Union of severity levels across the records of this anchor ($4 =
+			# comma list or "-"); keyed as anchor+level (POSIX awk has no 2D arrays).
+			if ($4 != "-") {
+				ns = split($4, lv, ",")
+				for (li = 1; li <= ns; li++) uset[$2 "," lv[li]] = 1
+			}
 			total++
 		}
 		END {
 			if (!total) { print "no review records found"; exit 0 }
-			for (i in cnt) printf "%6d\t%s\t%s\t%s\n", cnt[i], i, fmin[i], fmax[i]
+			for (i in cnt) {
+				s = ""
+				if (uset[i ",P1"]) s = "P1"
+				if (uset[i ",P2"]) s = s ((s == "") ? "" : ",") "P2"
+				if (uset[i ",P3"]) s = s ((s == "") ? "" : ",") "P3"
+				if (s == "") s = "-"
+				printf "%6d\t%s\t%s\t%s\t%s\n", cnt[i], i, fmin[i], fmax[i], s
+			}
 		}
 	' | sort -k1,1nr -k2,2n | awk -F '\t' -v total="$(printf '%s' "$records" | grep -c . || true)" '
 		{
 			label = ($2 == "-") ? "-" : "#" $2
-			printf "%-9s %4d   %s → %s\n", label, $1, $3, $4
+			printf "%-9s %4d   %s → %s%s\n", label, $1, $3, $4, ($5 == "-") ? "" : "  [" $5 "]"
 		}
 		END { printf "\ntotal %d reviews across %d anchors\n", total, NR }
+	'
+else
+	# --by-severity: records mentioning each P-level. Presence per record —
+	# one record that found three P3s counts once, same as one P3 (see header).
+	printf '%s' "$records" | awk -F '\t' '
+		{
+			total++
+			if ($4 == "-") { none++ }
+			else { ns = split($4, lv, ","); for (li = 1; li <= ns; li++) cnt[lv[li]]++ }
+		}
+		END {
+			if (!total) { print "no review records found"; exit 0 }
+			print "P1/P2/P3 grading — review records mentioning each level"
+			for (k = 1; k <= 3; k++) {
+				l = "P" k; c = cnt[l] + 0
+				printf "%-3s %4d/%-4d %5.1f%%\n", l, c, total, c * 100 / total
+			}
+			printf "%-3s %4d/%-4d %5.1f%%\n", "-", none + 0, total, none * 100 / total
+			printf "\ntotal %d review records\n", total
+		}
 	'
 fi
