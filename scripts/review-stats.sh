@@ -325,9 +325,65 @@ mode_by_severity() {
 	printf '%s' "$records" | awk -F '\t' "$prog_by_severity"
 }
 
+mode_check() {
+	# Cross-view caliber guard: run every view, parse the totals each one
+	# REPORTS, and fail loudly on drift. This tests what a consumer actually
+	# sees (not just the shared TSV), so an edit to any single aggregation
+	# cannot silently change one view's numbers without the others.
+	local w b s o tsv meta nscan ncand nrec
+	local wt ws bt bs st ot fail=0
+	w="$(mode_weekly)"
+	b="$(mode_by_issue)"
+	s="$(mode_by_severity)"
+	o="$(mode_overview)"
+
+	tsv="$(printf '%s' "$records" | awk -F '\t' '$1 != "#stats"' | grep -c . || true)"
+	meta="$(printf '%s' "$records" | awk -F '\t' '$1 == "#stats" { print $2 + 0, $3 + 0, $4 + 0 }')"
+	read -r nscan ncand nrec <<<"${meta:-0 0 0}"
+
+	wt="$(awk '$1 == "total" { t = $2 + 0 } END { print t + 0 }' <<<"$w")"
+	ws="$(awk '/^[0-9][0-9][0-9][0-9]-W/ { s += $2 } END { print s + 0 }' <<<"$w")"
+	bt="$(awk '$1 == "total" { t = $2 + 0 } END { print t + 0 }' <<<"$b")"
+	bs="$(awk '$1 ~ /^#/ || $1 == "-" { s += $2 } END { print s + 0 }' <<<"$b")"
+	st="$(awk '$1 == "total" { t = $2 + 0 } END { print t + 0 }' <<<"$s")"
+	ot="$(awk '$1 == "total" { t = $2 + 0 } END { print t + 0 }' <<<"$o")"
+
+	ck() {
+		if [[ "$2" != "$3" ]]; then
+			printf 'FAIL %-20s %s (expected %s)\n' "$1" "$3" "$2"
+			fail=1
+		else
+			printf 'ok  %-20s %s\n' "$1" "$2"
+		fi
+	}
+
+	echo "caliber check — every view must count the same record set"
+	ck "tsv records" "$tsv" "$tsv"
+	ck "funnel nrec" "$tsv" "$nrec"
+	if (( nscan >= ncand && ncand >= nrec )); then
+		printf 'ok  %-20s %s >= %s >= %s\n' "funnel ordering" "$nscan" "$ncand" "$nrec"
+	else
+		printf 'FAIL %-20s %s >= %s >= %s\n' "funnel ordering" "$nscan" "$ncand" "$nrec"
+		fail=1
+	fi
+	ck "weekly total" "$tsv" "$wt"
+	ck "weekly bucket sum" "$tsv" "$ws"
+	ck "by-issue total" "$tsv" "$bt"
+	ck "by-issue anchor sum" "$tsv" "$bs"
+	ck "by-severity total" "$tsv" "$st"
+	ck "overview total" "$tsv" "$ot"
+
+	if (( fail )); then
+		echo "check FAILED — counting caliber drifted between views"
+		exit 1
+	fi
+	echo "check ok"
+}
+
 case "$mode" in
 weekly) mode_weekly ;;
 overview) mode_overview ;;
 by-issue) mode_by_issue ;;
 by-severity) mode_by_severity ;;
+check) mode_check ;;
 esac
