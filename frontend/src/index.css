@@ -385,12 +385,13 @@ input, textarea { font-family: inherit; }
    language (.queue-scheduled.future). Rendered as an independent mark so it never
    displaces perm/unread/draft signals.
    #141 took the chip to a 14px square with solid amber fill + dark glyph;
-   #162 inverts the colorway back — amber glyph on the soft amber tint (the
-   draft-indicator family), so a row full of scheduled marks stays quiet while
-   the 3px-square silhouette and size keep it distinct from the round dot
-   marks. Within DUE_SOON_MS of the earliest send the chip gains .is-due-soon
-   and pulses (reuses perm-pulse keyframes). */
-.scheduled-indicator { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex-shrink: 0; border-radius: 3px; color: var(--amber); background: rgba(255, 214, 10, 0.16); }
+   #162 settles the colorway at the spec'd fixed values — amber glyph on the
+   soft amber tint (0.12, the draft-indicator family) and back to a circular
+   50% silhouette, so a row full of scheduled marks stays quiet. The fixed
+   14px / 10px glyph geometry is load-bearing: rows render at identical height
+   with or without the chip. Within DUE_SOON_MS of the earliest send the chip
+   gains .is-due-soon and pulses (reuses perm-pulse keyframes). */
+.scheduled-indicator { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex-shrink: 0; border-radius: 50%; color: var(--amber); background: rgba(255, 214, 10, 0.12); }
 .scheduled-indicator svg { width: 10px; height: 10px; display: block; }
 .scheduled-indicator.is-due-soon { animation: perm-pulse 1.1s ease-in-out infinite; }
 .session-dot.error { background: var(--red); }

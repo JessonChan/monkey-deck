@@ -21,6 +21,7 @@
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 import { Window } from "happy-dom";
 import React from "react";
+import { readFileSync } from "node:fs";
 import { createRoot } from "react-dom/client";
 
 // ---- happy-dom setup ----
@@ -232,5 +233,38 @@ describe("Sidebar scheduled-send alarm (#138)", () => {
     }
     chip = alarmChip(host, "s1")!;
     expect(chip.className).toContain("scheduled-indicator");
+  });
+
+  test("colorway + geometry pinned to the #162 spec values, computed from the real stylesheet", async () => {
+    // happy-dom resolves class rules only when the sheet is in the document:
+    // inject the REAL index.css, then read computed values off a live chip —
+    // no duplicated fixture values, the assertions read the shipped CSS.
+    const style = document.createElement("style");
+    style.textContent = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+    document.head.appendChild(style);
+    try {
+      const future = Date.now() + 60 * 60_000;
+      const { host } = await mounted({ scheduledBySession: { s1: { count: 2, earliest: future } } });
+      const chip = alarmChip(host, "s1");
+      expect(chip).not.toBeNull();
+      const cs = getComputedStyle(chip!);
+      // color: var(--amber) → #ffd60a (accept either computed form).
+      expect(["#ffd60a", "rgb(255, 214, 10)"]).toContain(cs.color);
+      // background: the exact spec'd tint (0.12, draft-indicator family).
+      expect(cs.backgroundColor).toBe("rgba(255, 214, 10, 0.12)");
+      // border-radius: 50% — back to the circular silhouette (#162).
+      expect(cs.borderRadius).toBe("50%");
+      // Fixed 14px box — the row-height invariant (rows with/without the chip match).
+      expect(cs.width).toBe("14px");
+      expect(cs.height).toBe("14px");
+      // Glyph stays at 10px.
+      const svg = chip!.querySelector("svg");
+      expect(svg).not.toBeNull();
+      const scs = getComputedStyle(svg!);
+      expect(scs.width).toBe("10px");
+      expect(scs.height).toBe("10px");
+    } finally {
+      style.remove();
+    }
   });
 });
