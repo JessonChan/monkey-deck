@@ -390,10 +390,13 @@ input, textarea { font-family: inherit; }
    50% silhouette, so a row full of scheduled marks stays quiet. The fixed
    14px / 10px glyph geometry is load-bearing: rows render at identical height
    with or without the chip. Within DUE_SOON_MS of the earliest send the chip
-   gains .is-due-soon and pulses (reuses perm-pulse keyframes). */
+   gains .is-due-soon and pulses via the dedicated alarm-pulse keyframes
+   (#28407): ~1/10 of perm-pulse's amplitude, a calm breathing signal rather
+   than the perm-dot's attention-grabbing throb. */
 .scheduled-indicator { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex-shrink: 0; border-radius: 50%; color: var(--amber); background: rgba(255, 214, 10, 0.12); }
 .scheduled-indicator svg { width: 10px; height: 10px; display: block; }
-.scheduled-indicator.is-due-soon { animation: perm-pulse 1.1s ease-in-out infinite; }
+.scheduled-indicator.is-due-soon { animation: alarm-pulse 1.6s ease-in-out alternate infinite; }
+@keyframes alarm-pulse { from { opacity: 1; transform: scale(1); } to { opacity: 0.94; transform: scale(0.98); } }
 .session-dot.error { background: var(--red); }
 /* Reconnecting (background auto-reconnect, §3.3): amber = degraded transient,
    distinct from error red / idle green / generating green. */

@@ -267,4 +267,45 @@ describe("Sidebar scheduled-send alarm (#138)", () => {
       style.remove();
     }
   });
+
+  test("due-soon pulse binds the dedicated alarm-pulse keyframes, not perm-pulse (#28407)", async () => {
+    // Mount a live due-soon chip, then retrieve the rule it selects from the
+    // REAL injected stylesheet — happy-dom does not decompose the `animation`
+    // shorthand into computed longhands (probed: every animation-* longhand
+    // reads back empty), so stylesheet rule retrieval is the pinning mechanism.
+    const style = document.createElement("style");
+    style.textContent = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+    document.head.appendChild(style);
+    try {
+      const soon = Date.now() + 20 * 1000;
+      const { host } = await mounted({ scheduledBySession: { s1: { count: 1, earliest: soon } } });
+      const chip = alarmChip(host, "s1");
+      expect(chip!.className).toContain("is-due-soon");
+      const rules: CSSRule[] = [];
+      for (const sheet of Array.from(document.styleSheets)) {
+        for (let i = 0; i < sheet.cssRules.length; i++) rules.push(sheet.cssRules[i]);
+      }
+      // The rule this very chip's class list selects…
+      const dueSoon = rules.find((r) => (r as CSSStyleRule).selectorText === ".scheduled-indicator.is-due-soon");
+      expect(dueSoon).toBeDefined();
+      // …binds the calm dedicated pulse (1.6s alternate) and no longer the
+      // perm-dot keyframes (old reference eliminated, clean cutover).
+      const body = (dueSoon as CSSStyleRule).cssText;
+      expect(body).toMatch(/animation:\s*alarm-pulse\b/);
+      expect(body).not.toMatch(/perm-pulse/);
+      expect(body).toMatch(/1\.6s/);
+      expect(body).toMatch(/alternate/);
+      // Keyframes ship with the spec'd ~1/10-amplitude endpoints (happy-dom
+      // normalizes from/to → 0%/100%).
+      const kf = rules.find((r) => /@keyframes\s+alarm-pulse\s*\{/.test(r.cssText));
+      expect(kf).toBeDefined();
+      const ktext = kf!.cssText;
+      expect(ktext).toMatch(/0%\s*\{[^}]*\bopacity:\s*1\s*;/);
+      expect(ktext).toMatch(/0%\s*\{[^}]*\bscale\(1\)/);
+      expect(ktext).toMatch(/100%\s*\{[^}]*\bopacity:\s*0\.94/);
+      expect(ktext).toMatch(/100%\s*\{[^}]*\bscale\(0\.98\)/);
+    } finally {
+      style.remove();
+    }
+  });
 });
