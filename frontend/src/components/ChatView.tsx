@@ -24,6 +24,7 @@ import { relativeToRoot } from "../lib/dropFiles";
 import { hasPanelFilePayload, readPanelFilePayload } from "../lib/panelDrop";
 import { countDiffLines } from "../lib/diff";
 import { unifiedToOldNew } from "../lib/unified";
+import { extractFilePath, formatHuman, isRecord, pickStr, summarizeToolPayload, type TranslateFn } from "../lib/toolPayload";
 import { highlightToLines } from "../lib/highlight";
 import "../hljs-theme.css";
 import { buildRows, computeLayout, computeWindow, anchorAt, restoreScroll, isAtBottom, HeightModel, TAIL_PRIOR, HEAD_PRIOR, type VRow, type Layout } from "../lib/virtualList";
@@ -1260,7 +1261,7 @@ function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
   const parts = extractEditParts(item.rawInput);
   const hasDiff = !!(parts.oldStr && parts.newStr); // 真 diff(old/new 两段)
   const plainText = parts.plain; // 非 diff 的纯内容
-  const outputR = item.status === "failed" && item.rawOutput != null ? extractToolText(item.rawOutput) : null;
+  const outputR = item.status === "failed" && item.rawOutput != null ? extractToolText(item.rawOutput, t) : null;
   // 折叠态复制:失败时复制 output,否则复制写入内容 / diff 新文本。
   const summaryCopyText = outputR?.text || plainText || parts.newStr || "";
 
@@ -1320,6 +1321,7 @@ function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
         <div className="file-section">
           <div className="file-section-head"><span className="file-section-label">{t("chat.output")}</span></div>
           <CollapsibleText text={outputR.text} preClassName="file-content-pre" lineUnit={t("collapsibleText.lineUnit")} testId="edit-output" copyable onPath={onOpenFilePreview} />
+          {outputR.fallback && <RawPayloadDisclosure raw={item.rawOutput} testId="edit-raw-output" />}
         </div>
       )}
     </Collapsible>
@@ -1335,7 +1337,7 @@ function ReadToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
   const stLabel = stInfo.key ? t(stInfo.key) : (item.status || t("chat.toolStatus.unknown"));
   const running = item.status === "pending" || item.status === "in_progress";
   const path = extractFilePath(item.rawInput) || extractFilePath(item.rawOutput);
-  const outputR = item.rawOutput != null ? extractToolText(item.rawOutput) : null;
+  const outputR = item.rawOutput != null ? extractToolText(item.rawOutput, t) : null;
 
   return (
     <Collapsible
@@ -1370,7 +1372,10 @@ function ReadToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
             testId="read-content"
             onPath={onOpenFilePreview}
           />
+          {outputR.fallback && <RawPayloadDisclosure raw={item.rawOutput} testId="read-raw-output" />}
         </div>
+      ) : running ? (
+        <ToolRunningHint />
       ) : (
         <div className="file-empty">{t("chat.noContent")}</div>
       )}
@@ -1388,7 +1393,7 @@ function SearchToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, {
   const running = item.status === "pending" || item.status === "in_progress";
   const pattern = extractSearchPattern(item.rawInput);
   const scope = extractFilePath(item.rawInput);
-  const outputR = item.rawOutput != null ? extractToolText(item.rawOutput) : null;
+  const outputR = item.rawOutput != null ? extractToolText(item.rawOutput, t) : null;
   const matchCount = outputR?.text ? countNonEmpty(outputR.text) : 0;
 
   return (
@@ -1431,6 +1436,7 @@ function SearchToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, {
             testId="search-results"
             onPath={onOpenFilePreview}
           />
+          {outputR.fallback && <RawPayloadDisclosure raw={item.rawOutput} testId="search-raw-output" />}
         </div>
       ) : (
         <div className="file-empty">{running ? t("chat.searching") : t("chat.noMatch")}</div>
@@ -1439,13 +1445,43 @@ function SearchToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, {
   );
 }
 
+// Raw payload disclosure (#109): when a tool payload falls back to a summary
+// (no known text key matched), the human summary stays front and center while
+// the machine payload hides behind a collapsed <details> — still inspectable
+// for debugging, but never the first thing the user sees (§4.4).
+function RawPayloadDisclosure({ raw, testId }: { raw: unknown; testId?: string }) {
+  const { t } = useTranslation();
+  let json: string;
+  try { json = JSON.stringify(raw, null, 2) ?? String(raw); } catch { json = String(raw); }
+  return (
+    <details className="tool-raw">
+      <summary className="tool-raw-summary" data-testid={testId}>{t("chat.rawData")}</summary>
+      <pre className="tool-raw-pre">{json}</pre>
+    </details>
+  );
+}
+
+// Running placeholder (#109): pending / in_progress tools whose payload only
+// has a fallback shape (partial record, no text yet) show a spinner + hint
+// instead of an incomplete machine dump; the summary and raw disclosure land
+// once the tool completes and the payload is whole.
+function ToolRunningHint() {
+  const { t } = useTranslation();
+  return (
+    <div className="tool-running-hint" data-testid="tool-running-hint">
+      <span className="thought-spinner" />
+      <span>{t("chat.toolRunning")}</span>
+    </div>
+  );
+}
+
 function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { type: "tool" }>; onOpenFilePreview: (path: string, line?: number) => void }) {
   const { t } = useTranslation();
   const stInfo = TOOL_STATUS_MAP[item.status] || { key: null, cls: "tc-unknown" };
   const stLabel = stInfo.key ? t(stInfo.key) : (item.status || t("chat.toolStatus.unknown"));
   const running = item.status === "pending" || item.status === "in_progress";
-  const inputR = item.rawInput != null ? extractToolText(item.rawInput) : null;
-  const outputR = item.rawOutput != null ? extractToolText(item.rawOutput) : null;
+  const inputR = item.rawInput != null ? extractToolText(item.rawInput, t) : null;
+  const outputR = item.rawOutput != null ? extractToolText(item.rawOutput, t) : null;
   const inFb = useCopyFeedback();
   const outFb = useCopyFeedback();
   return (
@@ -1477,9 +1513,11 @@ function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, 
           <pre className={inputR.fallback ? "tool-pre" : "tool-pre tool-term"}>
             <PathLinkified text={inputR.text} onOpen={onOpenFilePreview} />
           </pre>
+          {inputR.fallback && <RawPayloadDisclosure raw={item.rawInput} testId="generic-raw-input" />}
         </div>
       )}
-      {outputR && (
+      {outputR && running && outputR.fallback && <ToolRunningHint />}
+      {outputR && !(running && outputR.fallback) && (
         <div className="tool-section">
           <div className="tool-section-head">
             <span className="tool-section-label">
@@ -1497,6 +1535,7 @@ function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, 
           <pre className={outputR.fallback ? "tool-pre" : "tool-pre tool-term"}>
             <PathLinkified text={outputR.text} onOpen={onOpenFilePreview} />
           </pre>
+          {outputR.fallback && <RawPayloadDisclosure raw={item.rawOutput} testId="generic-raw-output" />}
         </div>
       )}
     </Collapsible>
@@ -1512,7 +1551,7 @@ function BashToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
   const stLabel = stInfo.key ? t(stInfo.key) : (item.status || t("chat.toolStatus.unknown"));
   const running = item.status === "pending" || item.status === "in_progress";
   const command = extractBashCommand(item.rawInput);
-  const outputR = item.rawOutput != null ? extractToolText(item.rawOutput) : null;
+  const outputR = item.rawOutput != null ? extractToolText(item.rawOutput, t) : null;
   const { copied: copiedCmd, failed: failedCmd, copy: copyCmd } = useCopyFeedback();
   return (
     <Collapsible
@@ -1546,7 +1585,8 @@ function BashToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
           <pre className="bash-cmd-pre" data-testid="bash-cmd-pre">{command}</pre>
         </div>
       )}
-      {outputR && outputR.text && (
+      {outputR && running && outputR.fallback && <ToolRunningHint />}
+      {outputR && outputR.text && !(running && outputR.fallback) && (
         <div className="bash-out">
           <CollapsibleText
             text={outputR.text}
@@ -1558,6 +1598,7 @@ function BashToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
             onPath={onOpenFilePreview}
           />
           {outputR.truncated && <div className="bash-out-note">{t("chat.outputTruncated")}</div>}
+          {outputR.fallback && <RawPayloadDisclosure raw={item.rawOutput} testId="bash-raw-output" />}
         </div>
       )}
     </Collapsible>
@@ -1582,19 +1623,6 @@ function extractBashCommand(raw: unknown): string {
   const argv = raw.argv;
   if (Array.isArray(argv) && argv.length > 0) {
     return argv.map((a) => (typeof a === "string" ? a : String(a))).join(" ");
-  }
-  return "";
-}
-
-// 从工具 rawInput/rawOutput 抽出文件路径(兼容各 harness 的字段命名,§4.4 不裸露 JSON)。
-// 仅处理对象(record);字符串可能是文件正文(read_file 的 rawOutput),对它跑正则会误匹配,
-// 故字符串一律返回空(路径徽章缺失不影响 diff/内容展示)。
-// 优先级:path / file / filepath / fileName / filePath / dir。第一个非空字符串胜出。
-function extractFilePath(raw: unknown): string {
-  if (!isRecord(raw)) return "";
-  for (const k of ["path", "file", "filepath", "filePath", "fileName", "filename", "dir", "directory", "cwd"]) {
-    const v = raw[k];
-    if (typeof v === "string" && v.trim()) return v;
   }
   return "";
 }
@@ -1641,15 +1669,6 @@ function extractEditParts(raw: unknown): { oldStr?: string; newStr?: string; pla
   // write_file / new file: content only → plain text (no full-green background).
   if (content) return { plain: content, kind: "content", added: 0, removed: 0 };
   return empty;
-}
-
-// 从 raw 中按候选键取首个非空字符串值。
-function pickStr(raw: Record<string, unknown>, keys: string[]): string {
-  for (const k of keys) {
-    const v = raw[k];
-    if (typeof v === "string" && v.length > 0) return v;
-  }
-  return "";
 }
 
 // 统计 diff 增删行数已抽到 lib/diff.ts(供 GitPanel diff 阅读器复用)。
@@ -1988,37 +2007,18 @@ function formatTime(ts?: number): string {
   return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${hm}`;
 }
 function pad2(n: number): string { return n < 10 ? `0${n}` : String(n); }
-// 把结构化数据转成人可读文本,绝不把 {…} / JSON 原样给用户(AGENTS.md §4.4)。
-// string 原样;record 渲染成「键: 值」逐行;数组逐项;嵌套对象/数组用紧凑单行兜底。
-function formatHuman(v: unknown): string {
-  if (v == null) return "";
-  if (typeof v === "string") return v;
-  if (typeof v === "number" || typeof v === "boolean") return String(v);
-  if (Array.isArray(v)) return v.map(formatHuman).filter(Boolean).join("\n");
-  if (isRecord(v)) {
-    const lines: string[] = [];
-    for (const [k, val] of Object.entries(v)) {
-      if (val == null || val === "") continue;
-      if (typeof val === "string" || typeof val === "number" || typeof val === "boolean") lines.push(`${k}: ${val}`);
-      else lines.push(`${k}: ${formatInline(val)}`);
-    }
-    return lines.join("\n");
-  }
-  return String(v);
-}
-function formatInline(v: unknown): string {
-  if (typeof v === "string") return v;
-  if (Array.isArray(v)) return v.map(formatInline).join(", ");
-  try { return JSON.stringify(v); } catch { return String(v); }
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> { return !!v && typeof v === "object"; }
-
 // 从工具的 input/output 提取「人类可读的主要文本」+ exit/truncated 元信息。
-// opencode 的工具结果常是 {output, metadata:{exit,output,truncated}} 或 {command/content/...},
-// 直接 JSON 不直观;这里抽出主文本干净展示,找不到才回退 JSON。
-function extractToolText(raw: unknown): { text: string; exit?: number; truncated?: boolean; fallback: boolean } {
+// opencode 的工具结果常是 {output, metadata:{exit,output,truncated}} 或 {command/content/...}。
+// 已知 key 都未命中(partial in_progress 载荷、未知 harness 结构)时,不再把结构化载荷
+// 直接抛给用户(#109):先 summarizeToolPayload 出人话摘要,最后才 formatHuman 兜底;
+// 原始载荷由渲染层的 RawPayloadDisclosure 折叠展示。formatHuman/formatInline/isRecord
+// 已抽到 lib/toolPayload.ts(formatInline 递归扁平化,永不 JSON.stringify)。
+function extractToolText(raw: unknown, t: TranslateFn): { text: string; exit?: number; truncated?: boolean; fallback: boolean } {
   if (typeof raw === "string") return { text: raw, fallback: false };
+  // Arrays are payloads too (glob/grep lists, record arrays): route them through
+  // summarize for the count+preview / path-lines treatment instead of dumping
+  // every item. isRecord excludes arrays, so they must not take the record path.
+  if (Array.isArray(raw)) return { text: summarizeToolPayload(raw, t) ?? formatHuman(raw), fallback: true };
   if (!isRecord(raw)) return { text: formatHuman(raw), fallback: true };
   const meta = isRecord(raw.metadata) ? raw.metadata : undefined;
   const exit = typeof meta?.exit === "number" ? meta.exit : (typeof raw.exit === "number" ? raw.exit : undefined);
@@ -2028,5 +2028,5 @@ function extractToolText(raw: unknown): { text: string; exit?: number; truncated
     if (typeof v === "string" && v.trim()) return { text: v, exit, truncated, fallback: false };
   }
   if (typeof meta?.output === "string" && meta.output.trim()) return { text: meta.output, exit, truncated, fallback: false };
-  return { text: formatHuman(raw), exit, truncated, fallback: true };
+  return { text: summarizeToolPayload(raw, t) ?? formatHuman(raw), exit, truncated, fallback: true };
 }

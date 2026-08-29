@@ -927,6 +927,26 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
   color: var(--text-2); max-height: 280px; overflow-y: auto; user-select: text;
 }
 .tool-term { color: var(--text); border-color: var(--sep-strong); background: #131316; }
+/* Fallback summary companions (#109): running placeholder + collapsed raw payload. */
+.tool-running-hint {
+  display: flex; align-items: center; gap: 7px; margin: 9px 0 0;
+  font-size: 11.5px; color: var(--text-3); font-family: var(--mono); user-select: none;
+}
+.tool-raw { margin: 6px 0 0; }
+.tool-raw-summary {
+  font-size: 10.5px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em;
+  cursor: pointer; user-select: none; list-style: none;
+}
+.tool-raw-summary::-webkit-details-marker { display: none; }
+.tool-raw-summary::before { content: "▸"; margin-right: 5px; font-size: 9px; }
+.tool-raw[open] .tool-raw-summary::before { content: "▾"; }
+.tool-raw-summary:hover { color: var(--text-2); }
+.tool-raw-pre {
+  font-family: var(--mono); font-size: 11px; background: #161617;
+  border: 1px solid var(--sep); border-radius: var(--r-sm);
+  padding: 9px 12px; margin: 6px 0 0; max-height: 240px; overflow: auto;
+  white-space: pre; color: var(--text-3); user-select: text;
+}
 
 /* ─── 执行计划时间线(ACP plan_update,整表替换) ─── */
 .plan-timeline { max-width: 1080px; margin: 4px auto; padding: 0 28px; width: 100%; }
