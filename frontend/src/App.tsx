@@ -28,7 +28,7 @@ import SettingsPanel from "./components/SettingsPanel";
 import DeleteWorktreeDialog from "./components/DeleteWorktreeDialog";
 import CloseTabDialog from "./components/CloseTabDialog";
 import type { Harness } from "../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { Group, Panel, Separator, useDefaultLayout, usePanelRef, type PanelImperativeHandle } from "react-resizable-panels";
+import { Group, Panel, Separator, useDefaultLayout, usePanelRef, type LayoutStorage, type PanelImperativeHandle } from "react-resizable-panels";
 import { Tooltip } from "react-tooltip";
 import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin } from "lucide-react";
 import type { FileChange, BranchInfo, WorktreeInfo } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
@@ -76,6 +76,37 @@ function parsePopoutHash(): string | null {
   const m = h.match(/[#&]popout=([^&]+)/);
   return m ? decodeURIComponent(m[1]) : null;
 }
+
+// Collapsed-state persistence for the three-pane layout (#157): main window
+// only. Key literal is "md:panel-collapsed" (lowercase, colon-separated); value
+// is JSON { left: boolean, right: boolean }. Popout windows neither read nor
+// write it — their panel defaults are fixed (right collapsed, no left sidebar).
+const PANEL_COLLAPSED_KEY = "md:panel-collapsed";
+
+type PanelCollapsed = { left: boolean; right: boolean };
+
+// readPanelCollapsed safely parses the persisted collapsed state; any absence
+// or corruption (non-JSON, wrong shape) falls back to all-expanded.
+function readPanelCollapsed(): PanelCollapsed {
+  try {
+    const raw = localStorage.getItem(PANEL_COLLAPSED_KEY);
+    if (!raw) return { left: false, right: false };
+    const v: unknown = JSON.parse(raw);
+    if (v !== null && typeof v === "object"
+      && typeof (v as PanelCollapsed).left === "boolean"
+      && typeof (v as PanelCollapsed).right === "boolean") {
+      return { left: (v as PanelCollapsed).left, right: (v as PanelCollapsed).right };
+    }
+  } catch { /* corrupted value: fall through to defaults */ }
+  return { left: false, right: false };
+}
+
+// No-op LayoutStorage (#157): popout windows share localStorage with the main
+// window (same webview origin) but their panel structure differs (no sidebar
+// panel), so persisting their layout would corrupt the main window's saved
+// layout. Reads return null (defaultLayout stays undefined) and writes are
+// discarded — the layout persistence hook is effectively detached.
+const NOOP_LAYOUT_STORAGE: LayoutStorage = { getItem: () => null, setItem: () => {} };
 
 // 按 session 隔离的状态:切走再切回时,进行中的流式输出 / 用量 / 状态 / 权限都保留在各自缓存里,
 // 不会因「切走→事件被丢弃→切回只剩 DB 已落库内容」而丢失正在输出的内容。
@@ -2035,10 +2066,16 @@ export default function App() {
   // 终端 cwd = session worktree(或项目目录)。ref 在此赋值(createTerminal 在上方定义,引用 ref 而非 termCwd 变量,绕开声明顺序)。
   termCwdRef.current = activeSession?.worktreePath || selectedProject?.path || "";
 
-  // 三栏布局尺寸持久化:用户拖拽过的分隔位置存 localStorage,重开恢复。
+  // Three-pane layout persistence: separator positions dragged by the user are
+  // saved to localStorage and restored on reopen. Popout windows are fully
+  // detached (#157): they pass a no-op storage, so their layout is never read
+  // (defaultLayout stays undefined) nor written (saves discarded) — popout keeps
+  // its fixed defaults (right collapsed, no left sidebar) and cannot corrupt the
+  // main window's saved layout, which uses a different panel structure.
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "monkey-deck-layout",
     onlySaveAfterUserInteractions: true,
+    storage: isPopout ? NOOP_LAYOUT_STORAGE : undefined,
   });
 
   // 左右面板可收起/展开:用 react-resizable-panels 的 collapsible + 命令式 API,
@@ -2070,12 +2107,32 @@ export default function App() {
       }
     };
     window.addEventListener("resize", onResize);
-    // popout 模式:首次挂载直接收起右侧面板(给对话区最大面积)。
+    // Popout: collapse the right panel on first mount (max chat area).
     if (isPopout) sidePanelRef.current?.collapse();
-    else onResize(); // 主窗口:首次挂载检查窄屏
+    else {
+      onResize(); // main window: initial narrow-window check (unchanged, #157)
+      // Restore persisted collapsed state (#157): reuse the existing
+      // mount-time imperative collapse() path (same as the popout branch).
+      // Known limitation, deliberately accepted (see the M2 drawer note
+      // below): the library's deferred initial layout can silently override
+      // a mount-time collapse on phones — no new mechanism is introduced
+      // for that; desktop windows restore reliably.
+      const saved = readPanelCollapsed();
+      if (saved.left) sidebarPanelRef.current?.collapse();
+      if (saved.right) sidePanelRef.current?.collapse();
+    }
     return () => window.removeEventListener("resize", onResize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPopout]);
+
+  // Persist collapsed state on change (#157): main window only; popout neither
+  // reads nor writes md:panel-collapsed. Best-effort like the other md:* keys.
+  useEffect(() => {
+    if (isPopout) return;
+    try {
+      localStorage.setItem(PANEL_COLLAPSED_KEY, JSON.stringify({ left: leftCollapsed, right: rightCollapsed }));
+    } catch { /* localStorage unavailable (quota / disabled) */ }
+  }, [isPopout, leftCollapsed, rightCollapsed]);
 
   // ── M2 mobile drawer (≤768px) ──
   // The sidebar drawer is driven by EXPLICIT state, not the panel library's
