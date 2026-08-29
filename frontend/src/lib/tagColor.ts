@@ -27,8 +27,10 @@ export function tagColor(name: string): string {
 }
 
 // Union of tags across a project's sessions, first-seen order — feeds the
-// per-project filter chip row.
-export function collectTags(sessions: { tags?: string[] }[]): string[] {
+// per-project filter chip row. `null` is a real wire shape: Go's nil slice
+// (e.g. CreateSession's fresh in-memory Session) marshals to JSON null, and the
+// generated binding model types it `string[] | null` (store/models.ts).
+export function collectTags(sessions: { tags?: string[] | null }[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const s of sessions) {
