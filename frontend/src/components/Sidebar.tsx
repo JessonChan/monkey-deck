@@ -166,9 +166,11 @@ export default function Sidebar(props: Props) {
   const [searchQ, setSearchQ] = useState("");
   const [contentHits, setContentHits] = useState<string[] | null>(null); // null=未发起内容搜索
   const [contentLoading, setContentLoading] = useState(false);
-  // 标签过滤(#150):tagFilter[projectId] = 该项目当前激活的单选标签(无 key=未过滤)。
-  // 与搜索 AND 叠加,过滤态 per-project 互不干扰(照 searchProj 模式)。
-  const [tagFilter, setTagFilter] = useState<Record<string, string>>({});
+  // Tag filter (#150/#160c): tagFilter[projectId] = the project's selected
+  // filter tags (no key = unfiltered). OR semantics — a session passes when
+  // ANY of its tags is selected; an empty selection never filters. ANDs with
+  // search, per-project independent (mirrors searchProj).
+  const [tagFilter, setTagFilter] = useState<Record<string, string[]>>({});
   // Tag-filter panel (#160b): which project's chip row is expanded (null = all
   // closed). The row is no longer always-on — it opens from the project-row
   // button group and closes back to zero footprint; single-open mirrors
@@ -428,13 +430,20 @@ export default function Sidebar(props: Props) {
     setTimeout(() => searchInputRef.current?.focus(), 0);
   };
 
-  // 单选切换某项目的激活标签(#150):再点同一枚 chip 取消过滤;换 chip 即换过滤键。
+  // Toggle one chip in a project's OR filter (#150/#160c): add joins the
+  // selected set, re-click removes; removing the last tag returns the
+  // project to unfiltered (no empty-array key left behind).
   const toggleTagFilter = (pId: string, tag: string) => {
     setTagFilter((prev) => {
-      const next = { ...prev };
-      if (next[pId] === tag) delete next[pId];
-      else next[pId] = tag;
-      return next;
+      const cur = prev[pId] ?? [];
+      const next = cur.includes(tag) ? cur.filter((t) => t !== tag) : [...cur, tag];
+      if (next.length === 0) {
+        if (!(pId in prev)) return prev;
+        const rest = { ...prev };
+        delete rest[pId];
+        return rest;
+      }
+      return { ...prev, [pId]: next };
     });
   };
 
@@ -490,17 +499,20 @@ export default function Sidebar(props: Props) {
   // Rendered session list of a project — the exact array the user sees
   // (paginated slice, or tag/search-filtered). Shared by the render loop, the
   // keyboard-nav scope and Shift+click range math so all three agree (#94).
-  // 标签过滤与搜索 AND 叠加(#150):两者任一激活即绕过分页(与搜索行为一致),
-  // 标签先收窄集合,搜索再在结果上做标题∪内容过滤。
+  // Tag filter ANDs with search (#150): either being active bypasses
+  // pagination (same as search); tags narrow the set first, search then
+  // applies title ∪ content on top. OR membership (#160c): a session passes
+  // when any of its tags intersects the selection; an empty selection never
+  // filters.
   const projectList = (pId: string): Session[] => {
     const projSessions = props.sessionsByProject[pId] ?? [];
-    const activeTag = tagFilter[pId];
-    const tagFiltered = activeTag
-      ? projSessions.filter((s) => (s.tags ?? []).includes(activeTag))
+    const activeTags = tagFilter[pId] ?? [];
+    const tagFiltered = activeTags.length
+      ? projSessions.filter((s) => (s.tags ?? []).some((t) => activeTags.includes(t)))
       : projSessions;
     const sessLimit = sessionLimit[pId] ?? SESSION_PAGE;
     const searching = searchProj === pId && searchQ.trim() !== "";
-    if (searching || activeTag) {
+    if (searching || activeTags.length) {
       return searching ? tagFiltered.filter(matchSession) : tagFiltered;
     }
     return tagFiltered.slice(0, sessLimit);
@@ -765,9 +777,10 @@ export default function Sidebar(props: Props) {
           const projSessions = props.sessionsByProject[p.id] ?? [];
           const hiddenCount = Math.max(0, projSessions.length - (sessionLimit[p.id] ?? SESSION_PAGE));
           const searching = searchProj === p.id && searchQ.trim() !== "";
-          // 该项目内出现过的全部标签(首次出现序)+ 当前激活的单选过滤键(#150)。
+          // All tags seen across the project's sessions (first-seen order)
+          // + this project's selected filter tags (#150/#160c).
           const projTags = collectTags(projSessions);
-          const activeTag = tagFilter[p.id];
+          const activeTags = tagFilter[p.id] ?? [];
           const list = projectList(p.id);
           // #161: the select-all button is a toggle — reflect the current
           // state in its tooltip (all visible selected → "deselect all").
@@ -827,12 +840,12 @@ export default function Sidebar(props: Props) {
                       {projTags.map((tag) => (
                         <button
                           key={tag}
-                          className={`session-tag-filter${activeTag === tag ? " active" : ""}`}
+                          className={`session-tag-filter${activeTags.includes(tag) ? " active" : ""}`}
                           style={{ background: tagColor(tag) }}
                           onClick={() => toggleTagFilter(p.id, tag)}
                           data-testid={`tagfilter-${p.id}-${tag}`}
                           data-tooltip-id="md-tip"
-                          data-tooltip-content={activeTag === tag ? t("sidebar.tagFilterActive") : t("sidebar.tagFilterIdle", { tag })}
+                          data-tooltip-content={activeTags.includes(tag) ? t("sidebar.tagFilterActive") : t("sidebar.tagFilterIdle", { tag })}
                           data-tooltip-place="bottom"
                         >
                           {tag}
@@ -984,10 +997,10 @@ export default function Sidebar(props: Props) {
                       </div>
                     );
                   })}
-                  {(searching || activeTag) && list.length === 0 && (
+                  {(searching || activeTags.length) && list.length === 0 && (
                     <div className="session-search-empty">{t("sidebar.noMatch")}</div>
                   )}
-                  {!searching && !activeTag && hiddenCount > 0 && (
+                  {!searching && activeTags.length === 0 && hiddenCount > 0 && (
                     <button
                       className="session-more-btn"
                       data-testid={`load-more-sessions-${p.id}`}

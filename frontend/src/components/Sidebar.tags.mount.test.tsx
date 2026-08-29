@@ -8,10 +8,11 @@
 //  2. Ctx「标签 ›」submenu: Enter on the new-tag input appends to the LIVE tag
 //     set (onSetSessionTags(id, [...live, value])), input clears for rapid entry.
 //  3. Removal: clicking a checked tag row calls onSetSessionTags without it.
-//  4. Panel-gated single-select filter (#160b): the chip row is closed by
-//     default and opens from the project-row tag button; the active chip
-//     narrows the list to sessions carrying that tag; re-click cancels;
-//     another chip re-keys the filter.
+//  4. Panel-gated OR multi-select filter (#160b/#160c): the chip row is
+//     closed by default, opens from the project-row tag button, and carries
+//     the project's FULL tag union; the selected set narrows the list to
+//     sessions matching ANY selected tag (OR); re-click removes one tag;
+//     emptying the selection lifts the filter.
 //  5. Search AND: with a tag filter active, an active search further narrows
 //     to the INTERSECTION (title match ∪ content hits, then tag).
 //  6. Closing the panel clears that project's filter (no hidden state): the
@@ -243,9 +244,9 @@ describe("Sidebar session tags (#150 MVP)", () => {
     expect(tagCallsOf(setTagsMock)).toEqual([["s1", ["db"]]]);
   });
 
-  test("4. panel-gated filter (#160b): closed by default; open → narrow, re-click → cancel, other chip → re-key", async () => {
+  test("4. panel-gated OR multi-select (#160c): full tag union rendered, A+B union visible, non-matching hidden, re-click removes, empty lifts", async () => {
     const { host } = await mounted({
-      p1: [sess("s1", "p1", { tags: ["api"] }), sess("s2", "p1", { tags: ["db"] }), sess("s3", "p1")],
+      p1: [sess("s1", "p1", { tags: ["api"] }), sess("s2", "p1", { tags: ["db"] }), sess("s3", "p1", { tags: ["redis"] })],
     });
     const rows = () => ({
       s1: host.querySelector('[data-testid="session-s1"]'),
@@ -258,27 +259,46 @@ describe("Sidebar session tags (#150 MVP)", () => {
 
     host.querySelector<HTMLElement>('[data-testid="tag-filter-sessions-p1"]')!.dispatchEvent(click());
     await flush();
-    expect(host.querySelector('[data-testid="tag-row-p1"]')).not.toBeNull();
+    // The expanded set view carries the project's FULL tag union — every tag
+    // seen on any session (api/db/redis), not just one session's subset.
+    expect(host.querySelectorAll('[data-testid="tag-row-p1"] .session-tag-filter').length).toBe(3);
 
+    // One selected tag: only its carriers survive.
     host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-api"]')!.dispatchEvent(click());
     await flush();
     expect(rows().s1).not.toBeNull();
     expect(rows().s2).toBeNull();
     expect(rows().s3).toBeNull();
 
-    // Re-click the active chip cancels the filter: full list returns.
-    host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-api"]')!.dispatchEvent(click());
+    // Adding db keeps OR semantics: api-OR-db carriers both stay visible;
+    // the session carrying neither selected tag (redis only) is hidden.
+    host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-db"]')!.dispatchEvent(click());
     await flush();
     expect(rows().s1).not.toBeNull();
     expect(rows().s2).not.toBeNull();
-    expect(rows().s3).not.toBeNull();
+    expect(rows().s3).toBeNull();
+    // Chip state + tooltip follow set membership, not "last clicked".
+    expect(host.querySelector('[data-testid="tagfilter-p1-api"]')!.className).toContain("active");
+    expect(host.querySelector('[data-testid="tagfilter-p1-db"]')!.className).toContain("active");
+    expect(host.querySelector('[data-testid="tagfilter-p1-db"]')!.getAttribute("data-tooltip-content"))
+      .toBe("sidebar.tagFilterActive");
+    expect(host.querySelector('[data-testid="tagfilter-p1-redis"]')!.getAttribute("data-tooltip-content"))
+      .toBe('sidebar.tagFilterIdle {"tag":"redis"}');
 
-    // Clicking another chip re-keys the filter (single-select).
-    host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-db"]')!.dispatchEvent(click());
+    // Re-click removes just that tag from the selection: db-only filter remains.
+    host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-api"]')!.dispatchEvent(click());
     await flush();
     expect(rows().s1).toBeNull();
     expect(rows().s2).not.toBeNull();
     expect(rows().s3).toBeNull();
+
+    // Emptying the selection lifts the filter entirely: full list, no active chip.
+    host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-db"]')!.dispatchEvent(click());
+    await flush();
+    expect(rows().s1).not.toBeNull();
+    expect(rows().s2).not.toBeNull();
+    expect(rows().s3).not.toBeNull();
+    expect(host.querySelector(".session-tag-filter.active")).toBeNull();
   });
 
   test("5. search AND tag filter: intersection only", async () => {
@@ -311,29 +331,75 @@ describe("Sidebar session tags (#150 MVP)", () => {
     expect(host.querySelector('[data-testid="session-s3"]')).toBeNull();
   });
 
-  test("6. closing the panel clears the filter — no hidden state (#160b)", async () => {
+  test("6. closing the panel clears the whole selection — no hidden state (#160b/#160c)", async () => {
     const { host } = await mounted({
-      p1: [sess("s1", "p1", { tags: ["api"] }), sess("s2", "p1")],
+      p1: [sess("s1", "p1", { tags: ["api"] }), sess("s2", "p1", { tags: ["db"] }), sess("s3", "p1")],
     });
 
     host.querySelector<HTMLElement>('[data-testid="tag-filter-sessions-p1"]')!.dispatchEvent(click());
     await flush();
     host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-api"]')!.dispatchEvent(click());
     await flush();
-    expect(host.querySelector('[data-testid="session-s2"]')).toBeNull(); // filtering
+    host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-db"]')!.dispatchEvent(click());
+    await flush();
+    // api OR db active: s1 + s2 visible, untagged s3 filtered out.
+    expect(host.querySelector('[data-testid="session-s1"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="session-s2"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="session-s3"]')).toBeNull();
 
-    // Second click on the toggle closes the panel AND lifts the filter.
+    // Closing the panel drops the ENTIRE selection (not just one chip):
+    // the full list returns and the row hides.
     host.querySelector<HTMLElement>('[data-testid="tag-filter-sessions-p1"]')!.dispatchEvent(click());
     await flush();
     expect(host.querySelector('[data-testid="tag-row-p1"]')).toBeNull();
     expect(host.querySelector('[data-testid="session-s1"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="session-s2"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="session-s3"]')).not.toBeNull();
 
     // Reopening starts clean: the row is back, nothing pre-activated.
     host.querySelector<HTMLElement>('[data-testid="tag-filter-sessions-p1"]')!.dispatchEvent(click());
     await flush();
     expect(host.querySelector('[data-testid="tag-row-p1"]')).not.toBeNull();
     expect(host.querySelector(".session-tag-filter.active")).toBeNull();
+    expect(host.querySelector('[data-testid="session-s3"]')).not.toBeNull();
+  });
+
+  test("7. ctx tag assignment reflects immediately in the open panel's chips and filter", async () => {
+    const sessions = () => ({
+      p1: [sess("s1", "p1", { tags: ["api"] }), sess("s2", "p1", { tags: ["db"] })],
+    });
+    const { host, root } = await mounted({
+      p1: [sess("s1", "p1", { tags: ["api"] }), sess("s2", "p1")],
+    });
+
+    // Panel already open: chips render the CURRENT union (api only).
+    host.querySelector<HTMLElement>('[data-testid="tag-filter-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
+    expect(host.querySelectorAll('[data-testid="tag-row-p1"] .session-tag-filter').length).toBe(1);
+
+    // Assign "db" to s2 via the ctx「标签」submenu.
+    ctxOpen(host, "s2");
+    await flush();
+    const input = host.querySelector<HTMLInputElement>('[data-testid="tag-new-input-s2"]')!;
+    expect(input).not.toBeNull();
+    setInputValue(input, "db");
+    pressEnter(input);
+    await flush();
+    expect(tagCallsOf(setTagsMock)).toEqual([["s2", ["db"]]]);
+
+    // Parent lands the optimistic update as a re-render with the new tag set —
+    // no panel reopen: the chip row picks the new tag up immediately…
+    root.render(<Sidebar {...(baseProps(sessions()) as never)} />);
+    await flush();
+    expect(host.querySelectorAll('[data-testid="tag-row-p1"] .session-tag-filter').length).toBe(2);
+    expect(host.querySelector('[data-testid="tagfilter-p1-db"]')).not.toBeNull();
+
+    // …and the freshly assigned tag filters right away.
+    host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-db"]')!.dispatchEvent(click());
+    await flush();
+    expect(host.querySelector('[data-testid="session-s1"]')).toBeNull();
     expect(host.querySelector('[data-testid="session-s2"]')).not.toBeNull();
+
+    root.unmount();
   });
 });
