@@ -297,10 +297,6 @@ export default function App() {
   // 不进 effect 依赖(避免每次 sessionsByProject 变化都重订阅事件)。
   const sessionsByProjectRef = useRef(sessionsByProject);
   sessionsByProjectRef.current = sessionsByProject;
-  // sessions(选中项目派生列表)的 ref:⌘/Ctrl+1-9 handler 读它切第 N 个 session,
-  // 不进 effect 依赖(避免每次 sessions 变化都重订阅 keydown)。与 sessionsByProjectRef 同理。
-  const sessionsRef = useRef<Session[]>([]);
-  sessionsRef.current = sessions;
   // livePlanBySession 的 ref:turn 结束(idle/error/closed)时读它把实时 plan 转为持久化
   // plan item append 进 itemsBySession。用 ref 绕开「在 setLivePlanBySession updater 内
   // 套 setItemsBySession」的嵌套 setState(StrictMode 下 updater 可能多次执行致重复 append)。
@@ -1865,10 +1861,12 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [isPopout, closeTab, closeFileTab]);
 
-  // ⌘/Ctrl+1-9 切换到当前选中项目的第 N 个 session(VS Code / 浏览器 tab 切换的肌肉记忆)。
-  // 不足 N 个则静默(不切换、不 preventDefault —— 让按键原样透传)。popout 窗口不挂(它只看
-  // 单个 session,无 session 列表/tab 概念)。用 sessionsRef 读最新 sessions,避免 stale closure
-  // (effect 只在 isPopout/openSession 变化时重订阅,不被 sessions 变化牵连)。
+  // ⌘/Ctrl+1-9 switches to the Nth OPEN tab (browser / VS Code muscle memory). Digit order =
+  // openTabs array order (the TabBar display order); activating a tab selects its session, so
+  // the TabBar active state follows. Fewer than N open tabs → silent no-op (no switch, no
+  // preventDefault — the key passes through). Popout windows don't attach the listener (no
+  // tab bar there). Reads openTabsRef for the latest tabs, avoiding stale closure (the effect
+  // only re-subscribes on isPopout/openSession/projectIdOf change, not on every tab mutation).
   useEffect(() => {
     if (isPopout) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1876,14 +1874,14 @@ export default function App() {
       const key = e.key;
       if (key < "1" || key > "9") return;
       const idx = Number(key) - 1;
-      const target = sessionsRef.current[idx];
-      if (!target) return;  // not enough sessions: silent no-op
+      const target = openTabsRef.current[idx];
+      if (!target) return;  // not enough open tabs: silent no-op
       e.preventDefault();
-      void openSession(target.id, target.projectId);
+      void openSession(target, projectIdOf(target));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isPopout, openSession]);
+  }, [isPopout, openSession, projectIdOf]);
 
   // Delete a session. Chat-only for guest/project; owner also removes the worktree; owner WITH
   // guests defers to the 3-option dialog (DeleteWorktreeDialog) since removing the worktree
