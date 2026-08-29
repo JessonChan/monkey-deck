@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, forwardRef, useImperativeHandle, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import * as Popover from "@radix-ui/react-popover";
 import { Command } from "cmdk";
@@ -50,6 +50,15 @@ interface Props {
   focusSignal?: number;
 }
 
+// Imperative handle (ChatView holds the ref). appendMentionPath backs the
+// FilePanel → chat HTML5 drop channel (issue #149): the drop handler on the
+// chat root needs to reach the composer that owns the draft/caret/fold state —
+// the same imperative spirit as the focusSignal channel, but payload-carrying.
+export interface ComposerHandle {
+  // Append "@<rel> " at the draft end and register the mention (dedup by path,
+  // pickMention semantics). `name` defaults to the path basename.
+  appendMentionPath: (rel: string, name?: string) => void;
+}
 // 长文本折叠阈值:超过则折叠成 TUI 风格紧凑块(首尾若干行 + 中间省略),避免撑爆输入区。
 // 折叠仅为展示态,提交内容仍是完整 value(见 submit)。
 const LONG_LINE_THRESHOLD = 8;     // 行数阈值
@@ -212,7 +221,7 @@ const autoGrow = (el: HTMLTextAreaElement) => {
   el.style.height = clampComposerHeight(el.scrollHeight, budget) + "px";
 };
 
-export default function Composer({ value, onChange, disabled, prompting, configOptions, commands, elicitation, onRespondElicitation, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, audios, onAudiosChange, audioSupported, usage, branch, onNewSessionOnBranch, onSend, onEnqueue, onStop, focusSignal = 0 }: Props) {
+export default forwardRef<ComposerHandle, Props>(function Composer({ value, onChange, disabled, prompting, configOptions, commands, elicitation, onRespondElicitation, onSetConfig, onRefreshConfig, history, sessionId, attachments, onAttachmentsChange, mentions, onMentionsChange, images, onImagesChange, imageSupported, audios, onAudiosChange, audioSupported, usage, branch, onNewSessionOnBranch, onSend, onEnqueue, onStop, focusSignal = 0 }: Props, handleRef) {
   const { t } = useTranslation();
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
@@ -545,6 +554,28 @@ useEffect(() => {
     if (node.isDir) drillMention(node);
     else pickMention(node);
   };
+
+  // Imperative @mention append (FilePanel drag → chat drop, issue #149).
+  // Same semantics as pickMention (:490) but anchored at the draft END instead
+  // of the caret: append "@<rel> " (space-separated when the draft doesn't
+  // already end in whitespace), register the mention once per path, unfold the
+  // long-text preview and land the caret after the token — the user drops a
+  // file and keeps typing, exactly like quote-to-composer.
+  const appendMentionPath = (rel: string, name?: string) => {
+    const sep = value !== "" && !/\s$/.test(value) ? " " : "";
+    const next = value + sep + "@" + rel + " ";
+    cursorRef.current = next.length; // sync: prevents the @ panel reopening
+    onChange(next);
+    if (!mentions.some((x) => x.path === rel)) {
+      onMentionsChange([...mentions, { path: rel, name: name || baseName(rel) }]);
+    }
+    setCollapsed(false);
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (el) { el.focus(); el.selectionStart = el.selectionEnd = next.length; }
+    });
+  };
+  useImperativeHandle(handleRef, () => ({ appendMentionPath }));
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // 中文输入法(IME)composing 中:Enter 用于选词,不提交/不触发命令。
@@ -1186,7 +1217,7 @@ useEffect(() => {
       </div>
     </div>
   );
-}
+});
 
 // ComposerUsage:输入区附近的紧凑用量展示(§1.6/§4.4)。合并了原顶部 usage-bar 的全部信息:
 //  - 草稿预估:当前输入框文本的近似 token 数(字符数/4 经验比值,非计费依据)。

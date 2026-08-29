@@ -6,7 +6,7 @@ import remarkMath from "remark-math";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { ChatItem, ConfigOption, PermissionPrompt, ElicitationPrompt, StatusPayload, QueueItem, Mention, ImageAttachment, AudioAttachment, PlanEntry, LivePlan, Usage, SlashCommand } from "../types";
-import Composer from "./Composer";
+import Composer, { type ComposerHandle } from "./Composer";
 import QueuePanel from "./QueuePanel";
 import Collapsible from "./Collapsible";
 import CollapsibleText from "./CollapsibleText";
@@ -20,6 +20,8 @@ import ErrorCard from "./ErrorCard";
 import type { ChatErrorView } from "../lib/errorDiag";
 import { copyTextQuiet } from "../lib/clipboard";
 import { useCopyFeedback } from "../hooks/useCopyFeedback";
+import { relativeToRoot } from "../lib/dropFiles";
+import { hasPanelFilePayload, readPanelFilePayload } from "../lib/panelDrop";
 import { countDiffLines } from "../lib/diff";
 import { unifiedToOldNew } from "../lib/unified";
 import { highlightToLines } from "../lib/highlight";
@@ -606,6 +608,50 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     return () => mo.disconnect();
   }, []);
 
+  // ─── In-app panel drag → @mention drop (issue #149) ───
+  // Second drop channel beside the Wails native one above: FilePanel rows drag
+  // with an application/x-md-panel-file payload (lib/panelDrop.ts). Only drags
+  // carrying OUR MIME are claimed — during dragover the types list is the only
+  // readable signal, and OS file drags (types="Files", never our MIME) fall
+  // through untouched so the native channel keeps owning them.
+  const [mentionDropActive, setMentionDropActive] = useState(false);
+  const composerRef = useRef<ComposerHandle | null>(null);
+  const onPanelDragOver = (e: React.DragEvent) => {
+    if (!hasPanelFilePayload(e.dataTransfer)) return; // not ours → other channels
+    e.preventDefault(); // claim the drop for the whole chat area
+    e.dataTransfer.dropEffect = "copy";
+    setMentionDropActive(true);
+  };
+  const onPanelDragLeave = (e: React.DragEvent) => {
+    if (!mentionDropActive) return;
+    // dragleave fires when moving between children; only a real exit
+    // (relatedTarget outside this root) hides the overlay.
+    if (e.relatedTarget && viewRef.current?.contains(e.relatedTarget as Node)) return;
+    setMentionDropActive(false);
+  };
+  const onPanelDrop = (e: React.DragEvent) => {
+    if (!hasPanelFilePayload(e.dataTransfer)) return; // OS files → native channel
+    e.preventDefault();
+    setMentionDropActive(false);
+    const payload = readPanelFilePayload(e.dataTransfer);
+    if (!payload) return;
+    // Cross-window guard: the drop lands on whatever session THIS window shows;
+    // a payload dragged from another session's panel is ignored.
+    if (payload.sessionId !== props.sessionId) return;
+    const root = props.session?.worktreePath || props.project?.path || "";
+    if (!root) return;
+    // Normalize via the same canonicalizer the OS-drop channel uses: the
+    // root-relative payload is joined and re-derived, so separator/case quirks
+    // collapse and anything escaping the root (or the root itself) is dropped.
+    // relativeToRoot's prefix check does not fold ".." segments, and a JSON
+    // payload is client-authored (unlike OS-supplied absolute paths) — reject
+    // any traversal form outright.
+    const abs = root.replace(/\/+$/, "") + "/" + payload.path;
+    const rel = relativeToRoot(root, abs);
+    if (rel === null || rel === "" || rel.split("/").includes("..")) return;
+    composerRef.current?.appendMentionPath(rel);
+  };
+
   // IntersectionObserver:「加载更多」按钮进入容器视口时自动触发(原生 API,零依赖)。
   // 与 prepend-scroll 补偿/useLayoutEffect 独立协作,后者负责保持视觉位置。
   useEffect(() => {
@@ -645,6 +691,9 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     <div
       className="chat-view"
       ref={viewRef}
+      onDragOver={onPanelDragOver}
+      onDragLeave={onPanelDragLeave}
+      onDrop={onPanelDrop}
       // Wails native file drop target: EnableFileDrop is set on the window, so any
       // element tagged data-file-drop-target receives OS file drops. data-md-session
       // is read by the backend (internal/chat/drop.go) and echoed back in the
@@ -662,6 +711,18 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
             <Paperclip size={20} />
             <span className="chat-drop-title">{t("chat.dropTitle")}</span>
             <span className="chat-drop-hint">{t("chat.dropHint")}</span>
+          </div>
+        </div>
+      )}
+      {/* Panel-drag variant (issue #149): an in-app FilePanel row hovers the chat
+          area. Same overlay family as the native one, different copy — release to
+          @mention the file. The two are mutually exclusive: a drag carries either
+          our panel MIME (this one) or OS files (the native one above). */}
+      {mentionDropActive && (
+        <div className="chat-drop-overlay" data-testid="chat-mention-drop-overlay">
+          <div className="chat-drop-card">
+            <FileText size={20} />
+            <span className="chat-drop-title">{t("chat.dropMentionTitle")}</span>
           </div>
         </div>
       )}
@@ -866,6 +927,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           history={props.history}
           sessionId={props.sessionId}
           focusSignal={props.focusSignal}
+        ref={composerRef}
         />
       </footer>
     </div>

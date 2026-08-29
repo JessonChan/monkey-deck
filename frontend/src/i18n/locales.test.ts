@@ -35,6 +35,12 @@ test("zh / en leaf key 集合完全一致(无 zh-only / en-only)", () => {
   expect(z.length).toBe(e.length);
 });
 
+type ChatLocale = { chat?: { dropMentionTitle?: string } };
+
+test("panel-drag overlay copy pinned (issue #149)", () => {
+  expect((zh as ChatLocale).chat?.dropMentionTitle).toBe("释放以 @引用");
+  expect((en as ChatLocale).chat?.dropMentionTitle).toBe("Release to @mention");
+});
 test("已删的 addIcon* key 不复活(regression for Task #23726)", () => {
   const harnessZh = (zh as any).settings?.harness ?? {};
   const harnessEn = (en as any).settings?.harness ?? {};

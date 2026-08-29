@@ -196,6 +196,7 @@
     "newSessionTitle": "新对话",
     "dropTitle": "拖放文件以附加",
     "dropHint": "项目内文件转为 @提及(或内联图片);项目外文件按路径附加",
+    "dropMentionTitle": "释放以 @引用",
     "toggleTerminalTip": "终端 (⌘J)",
     "mcpChipTip": "本会话的 MCP 服务器:{{names}}",
     "toggleTerminal": "切换终端",

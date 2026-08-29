@@ -4,6 +4,7 @@ import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/i
 import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/internal/fsview/models";
 import type { FileChange } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import { copyTextQuiet } from "../lib/clipboard";
+import { writePanelFilePayload } from "../lib/panelDrop";
 import { getFilePanelState, saveFilePanelState, type ChildrenMap, type FilePanelSnapshot } from "../lib/filePanelCache";
 import {
   ChevronRight,
@@ -44,6 +45,12 @@ const joinPath = (dir: string, name: string) => (dir === "" ? name : dir + "/" +
 const SEARCH_DEBOUNCE_MS = 200;
 // Result cap for one search (#132): enough to be useful, bounded for the flat list.
 const SEARCH_LIMIT = 50;
+
+// Drag-out of tree rows is an HTML5 drag (issue #149); touch has no HTML5 DnD,
+// so coarse-pointer clients never get the draggable attribute (same module-level
+// gate as Composer/App — a desktop window never becomes touch mid-session).
+const coarsePointer = typeof window !== "undefined" && typeof window.matchMedia === "function"
+  && window.matchMedia("(pointer: coarse)").matches;
 
 export default function FilePanel({ sessionId, rootName, rootPath, changes, status, onOpenFile }: Props) {
   const { t } = useTranslation();
@@ -395,6 +402,15 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
     return false;
   };
 
+  // HTML5 drag-out of a file row (issue #149): the payload carries this panel's
+  // session id + the node's original (root-relative) path under the agreed MIME;
+  // the chat area turns the drop into an @mention (see ChatView onDrop).
+  // effectAllowed=copy + the browser's row-snapshot ghost; no dataTransfer
+  // fiddling beyond setData so the default ghost stays intact.
+  const dragRowStart = (e: React.DragEvent, node: FileNode) => {
+    writePanelFilePayload(e.dataTransfer, { sessionId, path: node.path });
+    e.dataTransfer.effectAllowed = "copy";
+  };
   const renderNode = (node: FileNode, depth: number) => {
     const pad = 8 + depth * 14;
     if (node.isDir) {
@@ -430,6 +446,10 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
         key={node.path}
         className={`tree-row ${selected === node.path ? "sel" : ""}`}
         style={{ paddingLeft: pad }}
+        data-testid="tree-file-row"
+        data-path={node.path}
+        draggable={!coarsePointer}
+        onDragStart={(e) => dragRowStart(e, node)}
         onClick={() => void openFile(node)}
         onContextMenu={(e) => openCtxMenu(e, node)}
       >
