@@ -459,4 +459,33 @@ describe("Sidebar batch selection (#94)", () => {
 
     root.unmount();
   });
+
+  test("select-all keeps the Shift+click anchor: range still extends from the pre-existing anchor (#161)", async () => {
+    const { host, root } = await mounted();
+
+    // Anchor at s2 via Cmd+click — select-all must NOT touch it (#155 ④).
+    rowMain(host, "s2")!.dispatchEvent(click({ meta: true }));
+    await flush();
+    expect(isChecked(host, "s2")).toBe(true);
+
+    // Select-all folds the visible set in.
+    host.querySelector('[data-testid="select-all-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
+    expect(isChecked(host, "s1")).toBe(true);
+    expect(isChecked(host, "s3")).toBe(true);
+
+    // Shift+click s3: with the anchor intact (s2) this extends the s2..s3
+    // range and everything stays checked. If select-all had clobbered the
+    // anchor, the shift-click would fall through to a plain toggle and s3
+    // would flip OFF (count 2) — this pins the anchor preservation.
+    rowMain(host, "s3")!.dispatchEvent(click({ shift: true }));
+    await flush();
+    expect(isChecked(host, "s2")).toBe(true);
+    expect(isChecked(host, "s3")).toBe(true);
+    expect(host.querySelector('[data-testid="batch-count"]')!.textContent)
+      .toBe('sidebar.batchCount {"count":3}');
+    expect(activated).toEqual([]); // range select, never activation
+
+    root.unmount();
+  });
 });

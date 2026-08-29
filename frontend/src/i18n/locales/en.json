@@ -100,7 +100,6 @@
     "removeBtn": "Remove",
     "deleteSessionTitle": "Delete chat?",
     "batchSelectAll": "Select all sessions in this project",
-    "batchDeselectAll": "Deselect all sessions in this project",
     "batchCheckTip": "Select / deselect",
     "batchBarLabel": "Batch actions",
     "batchCount": "{{count}} selected",

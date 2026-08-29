@@ -782,9 +782,8 @@ export default function Sidebar(props: Props) {
           const projTags = collectTags(projSessions);
           const activeTags = tagFilter[p.id] ?? [];
           const list = projectList(p.id);
-          // #161: the select-all button is a toggle — reflect the current
-          // state in its tooltip (all visible selected → "deselect all").
-          const projAllSelected = list.length > 0 && list.every((s) => sel.has(s.id));
+          // #161/#28399: the select-all button keeps its STATIC「全选」tooltip
+          // per the pinned spec — it must not flip with selection state.
           // 项目行活跃信号:折叠时显示左竖条(running=慢呼吸 / unread=静态)。展开时 session 行已有 dot/spinner,无需重复。
           const projRunning = projSessions.some((s) => props.statusBySession[s.id] === "prompting");
           const projUnread = projSessions.some((s) => props.statusBySession[s.id] !== "prompting" && props.unreadBySession[s.id]);
@@ -808,7 +807,7 @@ export default function Sidebar(props: Props) {
                 <button className="icon-btn small" onClick={() => toggleTagPanel(p.id)} data-tooltip-id="md-tip" data-tooltip-content={tagPanelProj === p.id ? t("sidebar.tagFilterOn") : t("sidebar.tagFilterOff")} data-tooltip-place="bottom" data-testid={`tag-filter-sessions-${p.id}`}>
                   <Tag size={12} />
                 </button>
-                <button className="icon-btn small" onClick={() => selectAllProject(p.id)} data-tooltip-id="md-tip" data-tooltip-content={projAllSelected ? t("sidebar.batchDeselectAll") : t("sidebar.batchSelectAll")} data-tooltip-place="bottom" data-testid={`select-all-sessions-${p.id}`}>
+                <button className="icon-btn small" onClick={() => selectAllProject(p.id)} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.batchSelectAll")} data-tooltip-place="bottom" data-testid={`select-all-sessions-${p.id}`}>
                   <ListChecks size={13} />
                 </button>
                 <button className="icon-btn small" onClick={() => props.onCreateSession(p.id)} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.newSession")} data-testid={`new-session-${p.id}`}>

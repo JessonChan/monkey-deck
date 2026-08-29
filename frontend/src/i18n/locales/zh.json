@@ -100,7 +100,6 @@
     "removeBtn": "移除",
     "deleteSessionTitle": "删除会话?",
     "batchSelectAll": "全选本项目会话",
-    "batchDeselectAll": "取消全选本项目会话",
     "batchCheckTip": "选择 / 取消选择",
     "batchBarLabel": "批量操作",
     "batchCount": "已选 {{count}} 个",
