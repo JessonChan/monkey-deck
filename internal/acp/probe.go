@@ -92,7 +92,7 @@ func (r ConformanceReport) Summary() string {
 	if r.CanAdd() {
 		verdict = "✅ 可以添加"
 	}
-	fmt.Fprintf(&b, "harness: %s  (%s)\n", r.AgentName, r.Command)
+	fmt.Fprintf(&b, "harness: %s  (%s)\n", r.displayName(), r.Command)
 	fmt.Fprintf(&b, "[Tier1] init=%v session=%v stream=%v turn=%v\n",
 		mark(r.Initialized.Pass), mark(r.NewSession.Pass), mark(r.Streamed.Pass), mark(r.PromptTurn.Pass))
 	fmt.Fprintf(&b, "[能力] resume=%v list=%v load=%v image=%v providers=%v\n",
@@ -122,6 +122,16 @@ func mark(b bool) string {
 		return "✓"
 	}
 	return "✗"
+}
+
+// displayName returns the agent name with a human-readable fallback for
+// harnesses that omit the optional agentInfo in their initialize response
+// (empty AgentName would render as a blank cell / "agent=" in notes).
+func (r ConformanceReport) displayName() string {
+	if r.AgentName == "" {
+		return "(未自报)"
+	}
+	return r.AgentName
 }
 
 func messageIdVerdict(r ConformanceReport) string {
@@ -217,9 +227,12 @@ func ProbeHarness(ctx context.Context, command string) *ConformanceReport {
 			proc.shutdown() // 回收进程组(§3.2)
 		}
 	}()
-	rep.AgentName = initResp.AgentInfo.Name
+	// agentInfo is optional in ACP v1 (see agentName): keep the report field
+	// empty when the harness does not self-report, but render a readable
+	// fallback in user-facing notes (§4.4).
+	rep.AgentName = agentName(initResp)
 	rep.ProtocolVer = int(initResp.ProtocolVersion)
-	rep.Initialized = CheckResult{Pass: true, Note: fmt.Sprintf("agent=%s protocol=%d", initResp.AgentInfo.Name, initResp.ProtocolVersion)}
+	rep.Initialized = CheckResult{Pass: true, Note: fmt.Sprintf("agent=%s protocol=%d", rep.displayName(), initResp.ProtocolVersion)}
 	// 能力矩阵(纯协商,零身份分支)。
 	sc := initResp.AgentCapabilities.SessionCapabilities
 	rep.LoadSession = initResp.AgentCapabilities.LoadSession

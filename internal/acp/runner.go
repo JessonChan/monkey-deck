@@ -135,7 +135,7 @@ func (r *Runner) NewChatSession(ctx context.Context, workDir string, mcps []stor
 		proc.shutdown()
 		return nil, fmt.Errorf("new session: %w", err)
 	}
-	slog.Info("chat session created", "sessionId", sess.SessionId, "cwd", workDir, "agent", initResp.AgentInfo.Name)
+	slog.Info("chat session created", "sessionId", sess.SessionId, "cwd", workDir, "agent", agentName(initResp))
 	cs := &ChatSession{
 		Runner: r, proc: proc, Conn: conn, Handler: handler, SessionID: sess.SessionId, WorkDir: workDir,
 		CanListSessions:    initResp.AgentCapabilities.SessionCapabilities.List != nil,
@@ -272,6 +272,18 @@ func (r *Runner) spawnAndInit(ctx context.Context, workDir string, handler *Hand
 		return nil, nil, acp.InitializeResponse{}, fmt.Errorf("initialize: protocol version mismatch: client=%d agent=%d", acp.ProtocolVersionNumber, initResp.ProtocolVersion)
 	}
 	return proc, conn, initResp, nil
+}
+
+// agentName returns the harness's self-reported name from the Initialize
+// response. agentInfo is optional in ACP v1 (the SDK notes it will only be
+// required in a future protocol version), and some harnesses (e.g. codebuddy)
+// omit it entirely — dereferencing AgentInfo unconditionally crashed the probe
+// with a nil-pointer panic. Always go through this nil-safe accessor.
+func agentName(r acp.InitializeResponse) string {
+	if r.AgentInfo == nil {
+		return ""
+	}
+	return r.AgentInfo.Name
 }
 
 // isTerminalToolStatus 判断 tool status 是否终态(completed/failed)。
