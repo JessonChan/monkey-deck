@@ -1,22 +1,21 @@
-// Mount-test Sidebar session tags (#150 MVP).
+// Mount-test Sidebar session tags (#150 MVP; #160 interaction realignment).
 //
 // Pins the tag contract end-to-end from props/state down to what a user can
 // see and click:
-//  1. Assignment renders: a session carrying tags shows colored mini-chips in
-//     the row meta zone (same slot as the pin mark), keyed by a stable hash
-//     into the 8-color Gmail palette; untagged rows show none.
+//  1. Zero inline footprint (#160a): sessions carrying tags render NO row
+//     chips at all — not by default, not on hover — and the .session-tag-chip
+//     rule is gone from index.css (clean cutover).
 //  2. Ctx「标签 ›」submenu: Enter on the new-tag input appends to the LIVE tag
 //     set (onSetSessionTags(id, [...live, value])), input clears for rapid entry.
 //  3. Removal: clicking a checked tag row calls onSetSessionTags without it.
-//  4. Per-project single-select filter: clicking a filter chip narrows the
-//     list to sessions carrying that tag; clicking it again restores the full
-//     list (cancel); clicking another chip re-keys the filter.
+//  4. Panel-gated single-select filter (#160b): the chip row is closed by
+//     default and opens from the project-row tag button; the active chip
+//     narrows the list to sessions carrying that tag; re-click cancels;
+//     another chip re-keys the filter.
 //  5. Search AND: with a tag filter active, an active search further narrows
 //     to the INTERSECTION (title match ∪ content hits, then tag).
-//  6. Row-height discipline: chips are capped (fixed height / line-height /
-//     flex-shrink:0) so a tagged row never grows taller than a plain one —
-//     pinned by computed style (happy-dom has no layout engine; geometry
-//     equality is asserted too, see notes inline).
+//  6. Closing the panel clears that project's filter (no hidden state): the
+//     full list returns, the row hides, and reopening shows no active chip.
 //
 // Same mock scaffolding as Sidebar.scheduled.mount.test.tsx (bindings / i18n /
 // tooltip / clipboard stubbed; no real backend calls during mount).
@@ -198,26 +197,20 @@ beforeEach(() => {
 });
 
 describe("Sidebar session tags (#150 MVP)", () => {
-  test("1. assignment renders: tagged rows show palette-colored mini-chips, untagged show none", async () => {
+  test("1. zero inline footprint: tagged rows render no chips, CSS rule cut over", async () => {
     const { host } = await mounted({
       p1: [sess("s1", "p1", { tags: ["api", "db"] }), sess("s2", "p1")],
     });
 
-    const chip1 = host.querySelector<HTMLElement>('[data-testid="tagchip-s1-api"]')!;
-    const chip2 = host.querySelector<HTMLElement>('[data-testid="tagchip-s1-db"]')!;
-    expect(chip1).not.toBeNull();
-    expect(chip2).not.toBeNull();
-    expect(chip1.textContent).toBe("api");
-    // Stable hash → palette color, applied as inline background.
-    expect(chip1.getAttribute("style")!.toLowerCase()).toContain(tagColor("api").toLowerCase());
-    expect(chip2.getAttribute("style")!.toLowerCase()).toContain(tagColor("db").toLowerCase());
-    expect(tagColor("api")).toBe(tagColor("api")); // deterministic
+    // No chips anywhere — not on tagged rows, not on untagged ones (#160a).
+    expect(host.querySelectorAll('[data-testid^="tagchip-"]').length).toBe(0);
+    expect(host.querySelectorAll(".session-tag-chip").length).toBe(0);
+    // Palette math itself unchanged (still feeds filter chips + ctx dots).
     expect(TAG_PALETTE).toContain(tagColor("api"));
-    // Untagged row: no chips at all.
-    expect(host.querySelector('[data-testid="tagchip-s2-api"]')).toBeNull();
-    expect(host.querySelectorAll(".session-tag-chip").length).toBe(2);
-    // Tooltip names the tag (raw name, not a key).
-    expect(chip1.getAttribute("data-tooltip-content")).toBe("api");
+    expect(tagColor("api")).toBe(tagColor("api")); // deterministic
+    // Clean cutover: the dead chip rule is gone from index.css.
+    const css = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+    expect(css).not.toMatch(/\.session-tag-chip\s*\{/);
   });
 
   test("2. ctx「标签 ›」Enter appends to the live set and clears the input", async () => {
@@ -250,7 +243,7 @@ describe("Sidebar session tags (#150 MVP)", () => {
     expect(tagCallsOf(setTagsMock)).toEqual([["s1", ["db"]]]);
   });
 
-  test("4. per-project single-select filter: activate → narrow, re-click → cancel, other chip → re-key", async () => {
+  test("4. panel-gated filter (#160b): closed by default; open → narrow, re-click → cancel, other chip → re-key", async () => {
     const { host } = await mounted({
       p1: [sess("s1", "p1", { tags: ["api"] }), sess("s2", "p1", { tags: ["db"] }), sess("s3", "p1")],
     });
@@ -259,6 +252,13 @@ describe("Sidebar session tags (#150 MVP)", () => {
       s2: host.querySelector('[data-testid="session-s2"]'),
       s3: host.querySelector('[data-testid="session-s3"]'),
     });
+
+    // Zero footprint by default: tags exist but the chip row stays closed.
+    expect(host.querySelector('[data-testid="tag-row-p1"]')).toBeNull();
+
+    host.querySelector<HTMLElement>('[data-testid="tag-filter-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
+    expect(host.querySelector('[data-testid="tag-row-p1"]')).not.toBeNull();
 
     host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-api"]')!.dispatchEvent(click());
     await flush();
@@ -302,6 +302,8 @@ describe("Sidebar session tags (#150 MVP)", () => {
     expect(host.querySelector('[data-testid="session-s3"]')).not.toBeNull();
 
     // Activate the api filter → AND narrows to the intersection: only s1.
+    host.querySelector<HTMLElement>('[data-testid="tag-filter-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
     host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-api"]')!.dispatchEvent(click());
     await flush();
     expect(host.querySelector('[data-testid="session-s1"]')).not.toBeNull();
@@ -309,28 +311,29 @@ describe("Sidebar session tags (#150 MVP)", () => {
     expect(host.querySelector('[data-testid="session-s3"]')).toBeNull();
   });
 
-  test("6. row-height discipline: chip CSS caps height so tagged rows never grow", async () => {
-    const five = ["a1", "a2", "a3", "a4", "a5"];
+  test("6. closing the panel clears the filter — no hidden state (#160b)", async () => {
     const { host } = await mounted({
-      p1: [sess("s1", "p1", { tags: five }), sess("s2", "p1")],
+      p1: [sess("s1", "p1", { tags: ["api"] }), sess("s2", "p1")],
     });
 
-    // Geometry: happy-dom has no layout engine, but the invariant still holds —
-    // a tagged row and a plain one report identical heights (both resolve to
-    // the same non-positive value here; real-engine proof is the CSS pin below
-    // plus desktop GUI review).
-    const r1 = host.querySelector<HTMLElement>('[data-testid="session-s1"]')!;
-    const r2 = host.querySelector<HTMLElement>('[data-testid="session-s2"]')!;
-    expect(r1.offsetHeight).toBe(r2.offsetHeight);
+    host.querySelector<HTMLElement>('[data-testid="tag-filter-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
+    host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-api"]')!.dispatchEvent(click());
+    await flush();
+    expect(host.querySelector('[data-testid="session-s2"]')).toBeNull(); // filtering
 
-    // CSS contract pin: the exact properties that keep the row height fixed.
-    const css = readFileSync(new URL("../index.css", import.meta.url), "utf8");
-    const rule = css.match(/\.session-tag-chip\s*\{([^}]*)\}/);
-    expect(rule).not.toBeNull();
-    const body = rule![1];
-    expect(body).toContain("flex-shrink: 0"); // chips never stretch the flex row
-    expect(body).toMatch(/height:\s*14px/); // fixed chip height ≤ meta-zone budget
-    expect(body).toMatch(/line-height:\s*12px/); // 12px discipline
-    expect(body).toContain("overflow: hidden"); // long names ellipsize, never wrap
+    // Second click on the toggle closes the panel AND lifts the filter.
+    host.querySelector<HTMLElement>('[data-testid="tag-filter-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
+    expect(host.querySelector('[data-testid="tag-row-p1"]')).toBeNull();
+    expect(host.querySelector('[data-testid="session-s1"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="session-s2"]')).not.toBeNull();
+
+    // Reopening starts clean: the row is back, nothing pre-activated.
+    host.querySelector<HTMLElement>('[data-testid="tag-filter-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
+    expect(host.querySelector('[data-testid="tag-row-p1"]')).not.toBeNull();
+    expect(host.querySelector(".session-tag-filter.active")).toBeNull();
+    expect(host.querySelector('[data-testid="session-s2"]')).not.toBeNull();
   });
 });

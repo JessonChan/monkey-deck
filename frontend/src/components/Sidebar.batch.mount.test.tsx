@@ -1,5 +1,7 @@
 // Mount-test Sidebar batch selection (issue #94): ⌘/Ctrl+click toggle,
 // Shift+click range from the anchor row, per-row checkboxes in select mode,
+// the per-project select-all button — a full TOGGLE as of #161 (select the
+// visible set, or deselect it when everything visible is already selected) —
 // and the batch actions (copy working dirs newline-joined, delete via confirm
 // modal driving the existing onRemoveSession per selected id). Same mock
 // scaffolding as Sidebar.expanded.mount.test.tsx (bindings / i18n / tooltip /
@@ -325,6 +327,9 @@ describe("Sidebar batch selection (#94)", () => {
       p2: [sess("s4", "p2")],
     });
 
+    // The filter chip row is panel-gated since #160b: open it first.
+    host.querySelector<HTMLElement>('[data-testid="tag-filter-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
     host.querySelector<HTMLElement>('[data-testid="tagfilter-p1-api"]')!.dispatchEvent(click());
     await flush();
     expect(host.querySelector('[data-testid="session-s2"]')).toBeNull(); // filter hides untagged
@@ -393,6 +398,64 @@ describe("Sidebar batch selection (#94)", () => {
     expect(host.querySelector('[data-testid="batch-bar"]')).toBeNull();
     expect(checkbox(host, "s1")).toBeNull();
     expect(activated).toEqual([]);
+
+    root.unmount();
+  });
+  test("select-all is a toggle: second click deselects the visible set and exits the emptied mode (#161)", async () => {
+    const { host, root } = await mounted();
+
+    host.querySelector('[data-testid="select-all-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
+    expect(isChecked(host, "s1")).toBe(true);
+    expect(host.querySelector('[data-testid="batch-bar"]')).not.toBeNull();
+
+    host.querySelector('[data-testid="select-all-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
+    expect(isChecked(host, "s1")).toBe(false);
+    expect(isChecked(host, "s3")).toBe(false);
+    // The toggle emptied the whole selection → select mode leaves entirely
+    // (same end state as Esc): checkboxes and the batch bar are gone.
+    expect(checkbox(host, "s1")).toBeNull();
+    expect(host.querySelector('[data-testid="batch-bar"]')).toBeNull();
+
+    root.unmount();
+  });
+
+  test("select-all toggle tops up a partial selection instead of clearing it (#161)", async () => {
+    const { host, root } = await mounted();
+
+    rowMain(host, "s1")!.dispatchEvent(click({ meta: true }));
+    await flush();
+    expect(isChecked(host, "s1")).toBe(true);
+
+    // Not everything visible is selected → the click selects, never clears.
+    host.querySelector('[data-testid="select-all-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
+    expect(isChecked(host, "s1")).toBe(true);
+    expect(isChecked(host, "s2")).toBe(true);
+    expect(isChecked(host, "s3")).toBe(true);
+
+    root.unmount();
+  });
+
+  test("select-all toggle is per-project: deselecting one project keeps the other's selection", async () => {
+    const { host, root } = await mounted(["p1", "p2"]);
+
+    host.querySelector('[data-testid="select-all-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
+    host.querySelector('[data-testid="select-all-sessions-p2"]')!.dispatchEvent(click());
+    await flush();
+    expect(host.querySelector('[data-testid="batch-count"]')!.textContent)
+      .toBe('sidebar.batchCount {"count":4}');
+
+    host.querySelector('[data-testid="select-all-sessions-p1"]')!.dispatchEvent(click());
+    await flush();
+    expect(isChecked(host, "s1")).toBe(false);
+    expect(isChecked(host, "s3")).toBe(false);
+    expect(isChecked(host, "s4")).toBe(true); // p2 untouched
+    expect(host.querySelector('[data-testid="batch-count"]')!.textContent)
+      .toBe('sidebar.batchCount {"count":1}');
+    expect(host.querySelector('[data-testid="batch-bar"]')).not.toBeNull(); // still in select mode
 
     root.unmount();
   });

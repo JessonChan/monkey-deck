@@ -169,6 +169,12 @@ export default function Sidebar(props: Props) {
   // 标签过滤(#150):tagFilter[projectId] = 该项目当前激活的单选标签(无 key=未过滤)。
   // 与搜索 AND 叠加,过滤态 per-project 互不干扰(照 searchProj 模式)。
   const [tagFilter, setTagFilter] = useState<Record<string, string>>({});
+  // Tag-filter panel (#160b): which project's chip row is expanded (null = all
+  // closed). The row is no longer always-on — it opens from the project-row
+  // button group and closes back to zero footprint; single-open mirrors
+  // searchProj. A closed panel never keeps filtering: closing drops that
+  // project's active tagFilter too (see toggleTagPanel) — no hidden state.
+  const [tagPanelProj, setTagPanelProj] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   // 拖拽时自动折叠所有项目:展开项虽 disabled 仍占满高度(含 session 列表),拖动需跨越整段 → 距离过长 + 碰撞失准。
   // 开始时记录并全折叠,结束/取消时恢复原展开态,不打断用户原本在看的项目。
@@ -432,6 +438,35 @@ export default function Sidebar(props: Props) {
     });
   };
 
+  // Tag-filter panel toggle (#160b): opens the per-project chip row from the
+  // project-row button group (or closes it back). Single-open, mirroring
+  // toggleSearch: opening another project's panel closes the previous one.
+  // Closing a panel — directly or by opening elsewhere — clears that
+  // project's active filter, so a hidden chip row can never keep narrowing
+  // the list invisibly.
+  const toggleTagPanel = (pId: string) => {
+    if (tagPanelProj === pId) {
+      setTagPanelProj(null);
+      setTagFilter((prev) => {
+        if (!(pId in prev)) return prev;
+        const next = { ...prev };
+        delete next[pId];
+        return next;
+      });
+      return;
+    }
+    if (tagPanelProj != null) {
+      const prevProj = tagPanelProj;
+      setTagFilter((prev) => {
+        if (!(prevProj in prev)) return prev;
+        const next = { ...prev };
+        delete next[prevProj];
+        return next;
+      });
+    }
+    if (!expanded.has(pId)) setExpanded((prev) => new Set(prev).add(pId));
+    setTagPanelProj(pId);
+  };
   // ctx 菜单里取该 session 的「活」数据:ctx.session 是打开菜单那一刻的快照,
   // 标签增删后乐观更新的是 sessionsByProject,快照会过期 → 每次渲染/动作前现查。
   const liveSession = (id: string): Session | null => {
@@ -470,27 +505,40 @@ export default function Sidebar(props: Props) {
     }
     return tagFiltered.slice(0, sessLimit);
   };
-  // Select-all for one project (#155): fold every currently visible session of
-  // that project into the selection and turn select mode on. "Visible" is the
-  // same rendered array shared with keyboard-nav and Shift+click range math
-  // (projectList): under an active search/tag filter that is the filtered
-  // result set; otherwise the paginated slice (pagination caps rendering, not
-  // intent — "load more" then select-all again unions the tail). Nothing
-  // visible → no-op, never an error (#155 ③). A collapsed project is expanded
-  // so the promised checkboxes are actually rendered (same auto-expand the
+  // Select-all toggle for one project (#155, toggle semantics #161): first
+  // click folds every currently visible session of that project into the
+  // selection and turns select mode on; when every visible session is already
+  // selected, the click deselects that visible set instead — exiting select
+  // mode if that empties the whole selection. "Visible" is the same rendered
+  // array shared with keyboard-nav and Shift+click range math (projectList):
+  // under an active search/tag filter that is the filtered result set;
+  // otherwise the paginated slice (pagination caps rendering, not intent —
+  // "load more" then select-all again unions the tail). Nothing visible →
+  // no-op, never an error (#155 ③). A collapsed project is expanded so the
+  // promised checkboxes are actually rendered (same auto-expand the
   // neighbouring search button does). The click-order anchor is deliberately
-  // NOT touched: select-all is not an individual toggle click, so the anchor
-  // keeps its documented meaning for Shift+click ranges (#155 ④).
+  // NOT touched in either branch: select-all is not an individual toggle
+  // click, so the anchor keeps its documented meaning for Shift+click ranges
+  // (#155 ④).
   const selectAllProject = (pId: string) => {
     const list = projectList(pId);
     if (list.length === 0) return;
-    if (!expanded.has(pId)) setExpanded((prev) => new Set(prev).add(pId));
-    setSelMode(true);
-    setSel((prev) => {
-      const next = new Set(prev);
-      for (const s of list) next.add(s.id);
-      return next;
-    });
+    if (!list.every((s) => sel.has(s.id))) {
+      if (!expanded.has(pId)) setExpanded((prev) => new Set(prev).add(pId));
+      setSelMode(true);
+      setSel((prev) => {
+        const next = new Set(prev);
+        for (const s of list) next.add(s.id);
+        return next;
+      });
+      return;
+    }
+    // All visible already selected → deselect them. An emptied selection
+    // leaves select mode entirely (same end state as Esc).
+    const remaining = new Set(sel);
+    for (const s of list) remaining.delete(s.id);
+    if (remaining.size === 0) exitSelMode();
+    else setSel(remaining);
   };
 
   // Drop selected ids that no longer exist in any project's session list
@@ -721,6 +769,9 @@ export default function Sidebar(props: Props) {
           const projTags = collectTags(projSessions);
           const activeTag = tagFilter[p.id];
           const list = projectList(p.id);
+          // #161: the select-all button is a toggle — reflect the current
+          // state in its tooltip (all visible selected → "deselect all").
+          const projAllSelected = list.length > 0 && list.every((s) => sel.has(s.id));
           // 项目行活跃信号:折叠时显示左竖条(running=慢呼吸 / unread=静态)。展开时 session 行已有 dot/spinner,无需重复。
           const projRunning = projSessions.some((s) => props.statusBySession[s.id] === "prompting");
           const projUnread = projSessions.some((s) => props.statusBySession[s.id] !== "prompting" && props.unreadBySession[s.id]);
@@ -741,7 +792,10 @@ export default function Sidebar(props: Props) {
                 <button className="icon-btn small" onClick={() => toggleSearch(p.id)} data-tooltip-id="md-tip" data-tooltip-content={searchProj === p.id ? t("sidebar.searchOn") : t("sidebar.searchOff")} data-tooltip-place="bottom" data-testid={`search-sessions-${p.id}`}>
                   <Search size={12} />
                 </button>
-                <button className="icon-btn small" onClick={() => selectAllProject(p.id)} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.batchSelectAll")} data-tooltip-place="bottom" data-testid={`select-all-sessions-${p.id}`}>
+                <button className="icon-btn small" onClick={() => toggleTagPanel(p.id)} data-tooltip-id="md-tip" data-tooltip-content={tagPanelProj === p.id ? t("sidebar.tagFilterOn") : t("sidebar.tagFilterOff")} data-tooltip-place="bottom" data-testid={`tag-filter-sessions-${p.id}`}>
+                  <Tag size={12} />
+                </button>
+                <button className="icon-btn small" onClick={() => selectAllProject(p.id)} data-tooltip-id="md-tip" data-tooltip-content={projAllSelected ? t("sidebar.batchDeselectAll") : t("sidebar.batchSelectAll")} data-tooltip-place="bottom" data-testid={`select-all-sessions-${p.id}`}>
                   <ListChecks size={13} />
                 </button>
                 <button className="icon-btn small" onClick={() => props.onCreateSession(p.id)} data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.newSession")} data-testid={`new-session-${p.id}`}>
@@ -768,7 +822,7 @@ export default function Sidebar(props: Props) {
                       )}
                     </div>
                   )}
-                  {projTags.length > 0 && (
+                  {tagPanelProj === p.id && projTags.length > 0 && (
                     <div className="session-tags-row" data-testid={`tag-row-${p.id}`}>
                       {projTags.map((tag) => (
                         <button
@@ -885,18 +939,6 @@ export default function Sidebar(props: Props) {
                             </span>
                           )}
                           <HarnessIcon harnessId={s.harness} size={12} className="session-harness-icon" tooltip={t("sidebar.harnessTip", { name: harnessNameById(s.harness) })} />
-                          {(s.tags ?? []).map((tag) => (
-                            <span
-                              key={tag}
-                              className="session-tag-chip"
-                              style={{ background: tagColor(tag) }}
-                              data-testid={`tagchip-${s.id}-${tag}`}
-                              data-tooltip-id="md-tip"
-                              data-tooltip-content={tag}
-                            >
-                              {tag}
-                            </span>
-                          ))}
                           {s.pinned && (
                             <span className="session-pin" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.pinnedTip")} data-testid={`pin-${s.id}`}>
                               <Pin size={11} />
@@ -913,7 +955,7 @@ export default function Sidebar(props: Props) {
                             // next chat:queue snapshot arriving, the marker hides early
                             // instead of claiming a pending send that is about to fire.
                             if (!sch || sch.earliest <= Date.now()) return null;
-                            // #141: within the due-soon window the inverted chip pulses.
+                            // #162: within the due-soon window the chip pulses.
                             const dueSoon = sch.earliest - Date.now() <= DUE_SOON_MS;
                             return (
                               <span

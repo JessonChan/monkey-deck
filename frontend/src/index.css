@@ -321,22 +321,10 @@ input, textarea { font-family: inherit; }
    点击该 session 行 → focus popout 窗口(非就地选中)。 */
 .session-popout-mark { flex-shrink: 0; display: inline-flex; color: var(--accent-2); }
 .session-popout-mark svg { color: var(--accent-2); }
-/* Tag chips (#150 MVP): colored mini-chips rendered in the row meta zone
-   (same slot as the pin mark). 12px discipline: fixed 14px height / 12px
-   line-height / 10px font so a tagged row never grows taller than a plain
-   one; flex-shrink:0 keeps chips intact while the label ellipsizes instead.
-   Chip text is fixed dark ink — legible on every palette color. */
-.session-tag-chip {
-  flex-shrink: 0;
-  display: inline-flex; align-items: center;
-  max-width: 72px; height: 14px; padding: 0 6px;
-  border-radius: 999px;
-  font-size: 10px; line-height: 12px;
-  color: #2d2e30;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-/* Per-project filter chip row (#150): sits beside/under the search box inside
-   the expanded project. Single-select: the active chip gets a ring. Pure CSS
+/* Per-project filter chip row (#150; gated by the project-row tag button as of
+   #160b — the row expands only while that project's tag panel is open, and
+   inline row chips were removed entirely (#160a): sessions carry zero visual
+   tag footprint). Single-select: the active chip gets a ring. Pure CSS
    states, no layout impact on session rows. */
 .session-tags-row {
   display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
@@ -396,12 +384,13 @@ input, textarea { font-family: inherit; }
 /* Scheduled-send alarm (#138): amber to match the queue panel's scheduled-send
    language (.queue-scheduled.future). Rendered as an independent mark so it never
    displaces perm/unread/draft signals.
-   Prominence rework (#141): 14px SQUARE chip with INVERTED amber (solid fill +
-   dark glyph) instead of the draft-indicator tint style — an outline-in-tint chip
-   blends into the row; solid fill reads at a glance. 3px radius keeps the square
-   silhouette distinct from the round dot marks. Within DUE_SOON_MS of the earliest
-   send the chip gains .is-due-soon and pulses (reuses perm-pulse keyframes). */
-.scheduled-indicator { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex-shrink: 0; border-radius: 3px; color: #4a3b00; background: var(--amber); }
+   #141 took the chip to a 14px square with solid amber fill + dark glyph;
+   #162 inverts the colorway back — amber glyph on the soft amber tint (the
+   draft-indicator family), so a row full of scheduled marks stays quiet while
+   the 3px-square silhouette and size keep it distinct from the round dot
+   marks. Within DUE_SOON_MS of the earliest send the chip gains .is-due-soon
+   and pulses (reuses perm-pulse keyframes). */
+.scheduled-indicator { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex-shrink: 0; border-radius: 3px; color: var(--amber); background: rgba(255, 214, 10, 0.16); }
 .scheduled-indicator svg { width: 10px; height: 10px; display: block; }
 .scheduled-indicator.is-due-soon { animation: perm-pulse 1.1s ease-in-out infinite; }
 .session-dot.error { background: var(--red); }
