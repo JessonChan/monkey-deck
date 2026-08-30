@@ -597,7 +597,9 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
           >
             {/* Row mousedown preventDefault keeps focus in the input, so the
                 dropdown does not vanish between mousedown and click; the ✕
-                stops propagation so deleting never backfills. */}
+                stops propagation (deleting never backfills) AND cancels the
+                default — Chromium-family engines focus buttons on mousedown,
+                whose blur would unmount the dropdown before the click lands. */}
             {recent.map((q) => (
               <div
                 key={q}
@@ -621,7 +623,7 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
                     data-tooltip-id="md-tip"
                     data-tooltip-content={t("filePanel.searchHistoryDelete")}
                     data-tooltip-place="top"
-                    onMouseDown={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
                     onClick={(e) => { e.stopPropagation(); deleteHistory(q); }}
                   >
                     <X size={12} />

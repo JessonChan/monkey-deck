@@ -222,7 +222,11 @@ describe("FilePanel search history (#167)", () => {
     expect(rows().length).toBe(2);
     expect((rows()[0] as HTMLElement).dataset.query).toBe("alpha"); // newest first
 
-    // Click "beta": backfills the uncontrolled input and triggers the search.
+    // Row mousedown cancels the engine default: on Chromium-family engines the
+    // focus shift would blur the input and unmount the dropdown before click.
+    const rowMd = new window.MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    rows()[1]!.dispatchEvent(rowMd);
+    expect(rowMd.defaultPrevented).toBe(true);
     rows()[1]!.dispatchEvent(click());
     await settle();
     expect(input.value).toBe("beta");
@@ -241,6 +245,12 @@ describe("FilePanel search history (#167)", () => {
     await flush();
 
     const firstDelete = host.querySelectorAll('[data-testid="file-search-history-delete"]')[0] as HTMLElement;
+    // Same engine reality for the ✕: its own mousedown handler must cancel the
+    // default (its stopPropagation alone blocks the row's preventDefault), or
+    // WebView2/Chrome blur the input and the dropdown dies before the click.
+    const delMd = new window.MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    firstDelete.dispatchEvent(delMd);
+    expect(delMd.defaultPrevented).toBe(true);
     firstDelete.dispatchEvent(click());
     await flush();
     expect(JSON.parse(store()!)).toEqual(["beta"]);
