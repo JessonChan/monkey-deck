@@ -151,6 +151,20 @@ tasks:
         fi
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.BUNDLE_NAME}}{{.BUNDLE_SUFFIX}}.app/Contents/MacOS"
       - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.BUNDLE_NAME}}{{.BUNDLE_SUFFIX}}.app/Contents"
+      # Inject the build version into Info.plist BEFORE codesign. Info.plist is
+      # part of the bundle's sealed resources — editing it after signing breaks
+      # the seal (codesign --verify fails with "invalid Info.plist"), which is
+      # exactly what the old release flow produced by injecting post-sign.
+      # PlistBuddy is macOS-only; no-op when cross-compiling (the bundle must
+      # be (re)signed on a mac before distribution anyway).
+      - cmd: |
+          if [ -x /usr/libexec/PlistBuddy ]; then
+            PLIST="{{.BIN_DIR}}/{{.BUNDLE_NAME}}{{.BUNDLE_SUFFIX}}.app/Contents/Info.plist"
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString {{.VERSION}}" "$PLIST" 2>/dev/null \
+              || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string {{.VERSION}}" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion {{.VERSION}}" "$PLIST" 2>/dev/null \
+              || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string {{.VERSION}}" "$PLIST"
+          fi
       - task: '{{if eq OS "darwin"}}codesign:adhoc{{else}}codesign:skip{{end}}'
         vars:
           BUNDLE_SUFFIX: '{{.BUNDLE_SUFFIX}}'

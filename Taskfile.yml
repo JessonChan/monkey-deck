@@ -92,29 +92,18 @@ tasks:
         vars:
           ARCH: amd64
           BUNDLE_SUFFIX: "-amd64"
-      # 1) 注入 git tag 版本到两个架构的 .app 的 Info.plist(单一源 = git describe)
-      - cmd: |
-          set -e
-          VER="$(git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev)"
-          cd "{{.BIN_DIR}}"
-          for arch in arm64 amd64; do
-            app="{{.BUNDLE_NAME}}-$arch.app"
-            # /usr/libexec/PlistBuddy 在所有键不存在时创建它们
-            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VER" "$app/Contents/Info.plist" 2>/dev/null \
-              || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VER" "$app/Contents/Info.plist"
-            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VER" "$app/Contents/Info.plist" 2>/dev/null \
-              || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VER" "$app/Contents/Info.plist"
-          done
-      # 2) 各架构 updater zip(slug 命名,更新器依赖 darwin+arch 子串匹配)
+      # 1) 各架构 updater zip(slug 命名,更新器依赖 darwin+arch 子串匹配)。
+      #    .app 的 Info.plist 版本已在 darwin:package → create:app:bundle 的
+      #    codesign 之前注入(bundle seal 完整)。
       - cmd: |
           set -e
           cd "{{.BIN_DIR}}"
           rm -f {{.APP_NAME}}-darwin-arm64.zip {{.APP_NAME}}-darwin-amd64.zip SHA256SUMS
           zip -r -y {{.APP_NAME}}-darwin-arm64.zip "{{.BUNDLE_NAME}}-arm64.app"
           zip -r -y {{.APP_NAME}}-darwin-amd64.zip "{{.BUNDLE_NAME}}-amd64.app"
-      # 3) Universal DMG:用 lipo 合并两架构二进制,塞进一个 .app,create-dmg 打包
+      # 2) Universal DMG:用 lipo 合并两架构二进制,塞进一个 .app,create-dmg 打包
       - task: darwin:dmg
-      # 4) 汇总 SHA256SUMS(DMG + 两个 zip)
+      # 3) 汇总 SHA256SUMS(DMG + 两个 zip)
       - cmd: |
           set -e
           cd "{{.BIN_DIR}}"
