@@ -107,3 +107,38 @@ func TestSummary_WarnsOnOptionalGaps(t *testing.T) {
 		t.Fatalf("summary missing specific gap warnings: %s", s)
 	}
 }
+
+// TestSummary_ForkDeclared fork 探针行:declared 显示逐项 marks;N/A 行显式标 n/a,不与 ✗ 混淆。
+func TestSummary_ForkDeclared(t *testing.T) {
+	r := ConformanceReport{Fork: ForkReport{
+		Declared:    true,
+		NewID:       CheckResult{Pass: true, Note: "source=fake-sess-1… fork=fake-sess-2…"},
+		SourceAlive: CheckResult{Pass: true, Note: "end_turn"},
+		InList:      CheckResult{Pass: false, Note: "N/A: session/list 未声明"},
+	}}
+	s := r.Summary()
+	if !strings.Contains(s, "[fork] declared") {
+		t.Fatalf("declared summary missing fork line: %s", s)
+	}
+	if !strings.Contains(s, "n/a") {
+		t.Fatalf("N/A row must render n/a: %s", s)
+	}
+	if strings.Contains(s, "forced-fork") {
+		t.Fatalf("declared agent must not show forced-fork line: %s", s)
+	}
+}
+
+// TestSummary_ForkForced undeclared:Summary 显示强 fork 锚定串与分类。
+func TestSummary_ForkForced(t *testing.T) {
+	r := ConformanceReport{Fork: ForkReport{
+		Force:      "forced-fork: -32601 method not found: session/fork",
+		ForceClass: "method-not-found",
+	}}
+	s := r.Summary()
+	if !strings.Contains(s, "forced-fork: -32601 method not found: session/fork") {
+		t.Fatalf("forced summary missing anchored error: %s", s)
+	}
+	if !strings.Contains(s, "method-not-found") {
+		t.Fatalf("forced summary missing error class: %s", s)
+	}
+}

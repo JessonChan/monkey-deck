@@ -17,6 +17,7 @@ package acp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -71,10 +72,44 @@ type ConformanceReport struct {
 	CancelHonored  bool `json:"cancelHonored"`  // harness replied stopReason=cancelled after session/cancel
 	SetConfigWorks bool `json:"setConfigWorks"` // session/set_config_option round-trip returned full state
 
+	// Fork UNSTABLE session/fork 探针(issue #172 Phase 1;Tier2 永不阻断 CanAdd)。
+	Fork ForkReport `json:"fork"`
+
 	// ObservedKinds 本次 Prompt 期间观察到的事件 kind 集合(诊断用)。
 	ObservedKinds []string `json:"observedKinds,omitempty"`
 
 	// Error 探针自身失败(spawn 起不来 / Initialize 崩溃等),非 conformance 判定。
+	Error string `json:"error,omitempty"`
+}
+
+// ForkReport UNSTABLE session/fork 探针结果(issue #172 Phase 1)。
+//
+// 三段产出:P1 声明位(Declared)+ P2 undeclared 强 fork 错误码锚定(Force/ForceClass)
+// + P3 declared 最小往返取证(①-⑧:六问 + fork 链 + 并发两个扩展)。
+// 每项独立 CheckResult;不适用/前置失败也必须落行(Note 标 "N/A: 原因"),绝不静默省略。
+type ForkReport struct {
+	// Declared Initialize 响应 SessionCapabilities.Fork 非 nil(P1 声明矩阵行)。
+	Declared bool `json:"declared"`
+
+	// Force undeclared 时的强 fork 取证串:"forced-fork: <code> <message>";
+	// declared 或探针未跑到(NewSession 失败等)时为空。
+	Force string `json:"force,omitempty"`
+	// ForceClass 强 fork 结果分类:method-not-found / invalid-params / other /
+	// no-answer(无 JSON-RPC 错误响应,如超时/断连)/
+	// unexpected-success(未声明却 fork 成功 —— 声明与实现不一致,本身是发现)。
+	ForceClass string `json:"forceClass,omitempty"`
+
+	// P3 declared 往返逐项(六问 ①-⑥ + 扩展 ⑦⑧)。
+	NewID       CheckResult `json:"newId"`       // ① 新 sessionId ≠ 源
+	SourceAlive CheckResult `json:"sourceAlive"` // ② fork 后源 session 仍可 prompt(最小提示词)
+	InList      CheckResult `json:"inList"`      // ③ session/list 含新 id
+	Resumable   CheckResult `json:"resumable"`   // ④ 新 id 可 load/resume
+	Echo        CheckResult `json:"echo"`        // ⑤ fork 响应 configOptions/modes 回显与源一致
+	Cwd         CheckResult `json:"cwd"`         // ⑥ 同 cwd vs 新 cwd fork 行为差异记录
+	Chain       CheckResult `json:"chain"`       // ⑦ fork 链(对 fork 结果再 fork)
+	Concurrent  CheckResult `json:"concurrent"`  // ⑧ 源/fork 并发各一发 prompt 互扰观察
+
+	// Error fork 探针自身异常(panic 兜底等);空 = 正常收敛出报告。
 	Error string `json:"error,omitempty"`
 }
 
@@ -98,6 +133,20 @@ func (r ConformanceReport) Summary() string {
 	fmt.Fprintf(&b, "[能力] resume=%v list=%v load=%v image=%v providers=%v\n",
 		mark(r.Resume), mark(r.List), mark(r.LoadSession), mark(r.Image), mark(r.Providers))
 	fmt.Fprintf(&b, "[行为] messageId=%s\n", messageIdVerdict(r))
+	fmt.Fprintf(&b, "[fork] ")
+	if r.Fork.Declared {
+		fmt.Fprintf(&b, "declared 新id=%s 源存活=%s list=%s resume=%s 回显=%s cwd=%s 链=%s 并发=%s\n",
+			forkMark(r.Fork.NewID), forkMark(r.Fork.SourceAlive), forkMark(r.Fork.InList),
+			forkMark(r.Fork.Resumable), forkMark(r.Fork.Echo), forkMark(r.Fork.Cwd),
+			forkMark(r.Fork.Chain), forkMark(r.Fork.Concurrent))
+	} else if r.Fork.Force != "" {
+		fmt.Fprintf(&b, "undeclared %s(%s)\n", r.Fork.Force, r.Fork.ForceClass)
+	} else {
+		fmt.Fprintf(&b, "undeclared(往返未执行)\n")
+	}
+	if r.Fork.Error != "" {
+		fmt.Fprintf(&b, "[fork] 探针异常: %s\n", r.Fork.Error)
+	}
 	fmt.Fprintf(&b, "[功能] 模型选择器=%s 用量=%s 思考流=%s (configOptions=%d)\n",
 		mark(r.HasModelOption), mark(r.ReportedUsage), mark(r.StreamedThoughts), r.ConfigOptions)
 	var gaps []string
@@ -115,6 +164,14 @@ func (r ConformanceReport) Summary() string {
 	}
 	fmt.Fprintf(&b, "结论: %s\n", verdict)
 	return b.String()
+}
+
+// forkMark fork 逐项结果渲染:N/A 行(不适用/前置失败)显式标 n/a,不与失败 ✗ 混淆。
+func forkMark(cr CheckResult) string {
+	if strings.HasPrefix(cr.Note, "N/A") {
+		return "n/a"
+	}
+	return mark(cr.Pass)
 }
 
 func mark(b bool) string {
@@ -149,6 +206,7 @@ const (
 	probeInitTimeout = 20 * time.Second
 	probeSessTimeout = 20 * time.Second
 	probeTurnTimeout = 90 * time.Second // 首条模型调用可能慢
+	probeForkTimeout = 20 * time.Second // fork/list/load 单次 RPC 硬超时(#172;undeclared 强 fork 同样适用)
 )
 
 // ProbeHarness 对 command 指定的 ACP harness 跑一次受控 conformance 探针。
@@ -242,6 +300,7 @@ func ProbeHarness(ctx context.Context, command string) *ConformanceReport {
 	rep.Image = initResp.AgentCapabilities.PromptCapabilities.Image
 	rep.Audio = initResp.AgentCapabilities.PromptCapabilities.Audio
 	rep.Providers = initResp.AgentCapabilities.Providers != nil
+	rep.Fork.Declared = sc.Fork != nil // P1 fork 声明位(issue #172)
 
 	// 2. NewSession(临时目录,非 nil 空 mcpServers —— 规避 null 死挂,§5.4)。
 	sessCtx, cancelSess := context.WithTimeout(ctx, probeSessTimeout)
@@ -369,6 +428,17 @@ func ProbeHarness(ctx context.Context, command string) *ConformanceReport {
 		rep.ResumeReplays = replayed
 	}
 
+	// 3.x fork 探针(issue #172 Phase 1):undeclared 强 fork 错误码锚定 / declared 最小往返。
+	// recover 兜底:任何 SDK/协议层异常都收敛为报告行,探针自身永不 panic(UNSTABLE 红线)。
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				rep.Fork.Error = truncate(fmt.Sprintf("panic: %v", r), 200)
+			}
+		}()
+		runForkProbes(ctx, conn, rep, sess, sc, initResp.AgentCapabilities.LoadSession, workDir)
+	}()
+
 	// 4. 干净 teardown:尽力 close,再回收进程组。
 	closeCtx, cancelClose := context.WithTimeout(ctx, 5*time.Second)
 	defer cancelClose()
@@ -398,4 +468,289 @@ func joinKinds(ks []string) string {
 		return "(无事件)"
 	}
 	return strings.Join(ks, ",")
+}
+
+// runForkProbes 执行 fork 探针主体(issue #172 Phase 1)。
+//
+// P2:undeclared → 构造最小 UnstableForkSessionRequest 强发,锚定 JSON-RPC 错误码
+// (预期 -32601 Method not found,以实测为准),跳过往返并逐项落 N/A。
+// P3:declared → 最小往返取证(①-⑧)。调用方已 recover 兜底;这里任何单步失败
+// 都只落报告行,绝不中断收敛(UNSTABLE 红线:失败也产出 failed 行 + 原因)。
+func runForkProbes(ctx context.Context, conn *acp.ClientSideConnection, rep *ConformanceReport,
+	sess acp.NewSessionResponse, sc acp.SessionCapabilities, loadDeclared bool, workDir string) {
+
+	// na N/A 行工厂:跳过/前置失败的项也必须落行(绝不静默省略)。
+	na := func(reason string) CheckResult { return CheckResult{Pass: false, Note: "N/A: " + reason} }
+	naRoundtrip := func(reason string) {
+		rep.Fork.NewID = na(reason)
+		rep.Fork.SourceAlive = na(reason)
+		rep.Fork.InList = na(reason)
+		rep.Fork.Resumable = na(reason)
+		rep.Fork.Echo = na(reason)
+		rep.Fork.Cwd = na(reason)
+		rep.Fork.Chain = na(reason)
+		rep.Fork.Concurrent = na(reason)
+	}
+	srcID := sess.SessionId
+
+	if !rep.Fork.Declared {
+		// P2 undeclared:最小强 fork(源=探针会话 id,cwd=探针 cwd)。
+		fctx, cancel := context.WithTimeout(ctx, probeForkTimeout)
+		_, err := conn.UnstableForkSession(fctx, acp.UnstableForkSessionRequest{
+			SessionId: srcID,
+			Cwd:       workDir,
+		})
+		cancel()
+		if err == nil {
+			// 未声明却成功 —— 声明与实现不一致,本身是发现(记入报告,不崩)。
+			rep.Fork.Force = "forced-fork: succeeded (undeclared but accepted)"
+			rep.Fork.ForceClass = "unexpected-success"
+		} else {
+			rep.Fork.Force = "forced-fork: " + requestErrText(err)
+			if re, ok := asRequestErr(err); ok {
+				switch re.Code {
+				case -32601:
+					rep.Fork.ForceClass = "method-not-found"
+				case -32602:
+					rep.Fork.ForceClass = "invalid-params"
+				default:
+					rep.Fork.ForceClass = "other"
+				}
+			} else {
+				rep.Fork.ForceClass = "no-answer" // 超时/断连等,无 JSON-RPC 错误响应
+			}
+		}
+		naRoundtrip("fork 未声明,跳过往返(P1 标注)")
+		return
+	}
+
+	// P3 declared 最小往返。
+	// ① 同 cwd fork 一次。
+	fr, ferr := forkOnce(ctx, conn, srcID, workDir)
+	if ferr != nil {
+		rep.Fork.NewID = CheckResult{Pass: false, Note: "fork error: " + truncate(ferr.Error(), 160)}
+		// 其余七项落 N/A,但保留 NewID 的 fork 错误原因(不能被 N/A 覆盖)。
+		rep.Fork.SourceAlive = na("前置 fork 失败")
+		rep.Fork.InList = na("前置 fork 失败")
+		rep.Fork.Resumable = na("前置 fork 失败")
+		rep.Fork.Echo = na("前置 fork 失败")
+		rep.Fork.Cwd = na("前置 fork 失败")
+		rep.Fork.Chain = na("前置 fork 失败")
+		rep.Fork.Concurrent = na("前置 fork 失败")
+		return
+	}
+	forkID := fr.SessionId
+	rep.Fork.NewID = CheckResult{
+		Pass: forkID != srcID,
+		Note: fmt.Sprintf("source=%s fork=%s", safeID(srcID), safeID(forkID)),
+	}
+
+	// ⑤ 回显一致性:fork 响应的 configOptions/modes vs 源 NewSession 响应。
+	rep.Fork.Echo = echoVerdict(sess, fr)
+
+	// ② 源 session fork 后仍可 prompt(最小提示词,防配额浪费)。
+	rep.Fork.SourceAlive = promptVerdict(ctx, conn, srcID, "hi")
+
+	// ③ session/list 含新 id(list 未声明 → N/A)。
+	if sc.List != nil {
+		lctx, cancel := context.WithTimeout(ctx, probeForkTimeout)
+		lresp, lerr := conn.ListSessions(lctx, acp.ListSessionsRequest{})
+		cancel()
+		switch {
+		case lerr != nil:
+			rep.Fork.InList = CheckResult{Pass: false, Note: "list error: " + truncate(lerr.Error(), 160)}
+		default:
+			found := false
+			for _, si := range lresp.Sessions {
+				if si.SessionId == forkID {
+					found = true
+					break
+				}
+			}
+			rep.Fork.InList = CheckResult{Pass: found, Note: fmt.Sprintf("%d sessions listed", len(lresp.Sessions))}
+		}
+	} else {
+		rep.Fork.InList = na("session/list 未声明")
+	}
+
+	// ④ 新 id 可 load/resume(loadSession 与 session/resume 均未声明 → N/A)。
+	switch {
+	case loadDeclared:
+		lctx, cancel := context.WithTimeout(ctx, probeForkTimeout)
+		_, lerr := conn.LoadSession(lctx, acp.LoadSessionRequest{
+			SessionId:  forkID,
+			Cwd:        workDir,
+			McpServers: []acp.McpServer{},
+		})
+		cancel()
+		if lerr != nil {
+			rep.Fork.Resumable = CheckResult{Pass: false, Note: "load error: " + truncate(lerr.Error(), 160)}
+		} else {
+			rep.Fork.Resumable = CheckResult{Pass: true, Note: "session/load ok"}
+		}
+	case sc.Resume != nil:
+		rctx, cancel := context.WithTimeout(ctx, probeForkTimeout)
+		_, rerr := conn.ResumeSession(rctx, acp.ResumeSessionRequest{
+			SessionId:  forkID,
+			Cwd:        workDir,
+			McpServers: []acp.McpServer{},
+		})
+		cancel()
+		if rerr != nil {
+			rep.Fork.Resumable = CheckResult{Pass: false, Note: "resume error: " + truncate(rerr.Error(), 160)}
+		} else {
+			rep.Fork.Resumable = CheckResult{Pass: true, Note: "session/resume ok"}
+		}
+	default:
+		rep.Fork.Resumable = na("loadSession 与 session/resume 均未声明")
+	}
+
+	// ⑥ cwd 语义:同 cwd(①的结果)vs 新 tmp cwd 各 fork 一次,记录行为差异。
+	// 干净协议错误也算确定性观察(Pass);只有超时/断连等不定态判失败。
+	newCwd, cerr := os.MkdirTemp("", "md-probe-fork-*")
+	if cerr != nil {
+		rep.Fork.Cwd = CheckResult{Pass: false, Note: "tempdir: " + truncate(cerr.Error(), 120)}
+	} else {
+		defer os.RemoveAll(newCwd)
+		fr2, ferr2 := forkOnce(ctx, conn, srcID, newCwd)
+		switch {
+		case ferr2 == nil:
+			distinct := fr2.SessionId != srcID
+			rep.Fork.Cwd = CheckResult{
+				Pass: true,
+				Note: fmt.Sprintf("同 cwd fork=%s ok;新 cwd fork=%s (distinct=%v)",
+					safeID(forkID), safeID(fr2.SessionId), distinct),
+			}
+		default:
+			_, isReq := asRequestErr(ferr2)
+			rep.Fork.Cwd = CheckResult{
+				Pass: isReq,
+				Note: "新 cwd fork error: " + truncate(ferr2.Error(), 160),
+			}
+		}
+	}
+
+	// ⑦ fork 链:对 fork 结果再 fork。
+	fr3, ferr3 := forkOnce(ctx, conn, forkID, workDir)
+	if ferr3 != nil {
+		rep.Fork.Chain = CheckResult{Pass: false, Note: "fork-of-fork error: " + truncate(ferr3.Error(), 160)}
+	} else {
+		chainID := fr3.SessionId
+		rep.Fork.Chain = CheckResult{
+			Pass: chainID != forkID && chainID != srcID,
+			Note: fmt.Sprintf("chain=%s (fork=%s)", safeID(chainID), safeID(forkID)),
+		}
+	}
+
+	// ⑧ 源/fork 并发各一发 prompt,观察互扰(两路都收敛 = 无致命互扰)。
+	var wg sync.WaitGroup
+	var srcResp, forkResp acp.PromptResponse
+	var srcErr, forkErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		srcResp, srcErr = promptSession(ctx, conn, srcID, "hi")
+	}()
+	go func() {
+		defer wg.Done()
+		forkResp, forkErr = promptSession(ctx, conn, forkID, "hi")
+	}()
+	wg.Wait()
+	switch {
+	case srcErr == nil && forkErr == nil:
+		rep.Fork.Concurrent = CheckResult{
+			Pass: true,
+			Note: fmt.Sprintf("source=%s fork=%s", srcResp.StopReason, forkResp.StopReason),
+		}
+	case srcErr != nil && forkErr != nil:
+		rep.Fork.Concurrent = CheckResult{
+			Pass: false,
+			Note: "两路 prompt 均错: " + truncate(srcErr.Error(), 80) + " / " + truncate(forkErr.Error(), 80),
+		}
+	case srcErr != nil:
+		rep.Fork.Concurrent = CheckResult{Pass: false, Note: "source prompt error: " + truncate(srcErr.Error(), 160)}
+	default:
+		rep.Fork.Concurrent = CheckResult{Pass: false, Note: "fork prompt error: " + truncate(forkErr.Error(), 160)}
+	}
+}
+
+// forkOnce 单次 fork RPC(硬超时;UNSTABLE session/fork,#172)。
+func forkOnce(ctx context.Context, conn *acp.ClientSideConnection, srcID acp.SessionId, cwd string) (acp.UnstableForkSessionResponse, error) {
+	fctx, cancel := context.WithTimeout(ctx, probeForkTimeout)
+	defer cancel()
+	return conn.UnstableForkSession(fctx, acp.UnstableForkSessionRequest{
+		SessionId: srcID,
+		Cwd:       cwd,
+	})
+}
+
+// promptSession 单发一轮最小 prompt(turn 级硬超时;诊断场景,与 §3.3 无关)。
+func promptSession(ctx context.Context, conn *acp.ClientSideConnection, sid acp.SessionId, text string) (acp.PromptResponse, error) {
+	pctx, cancel := context.WithTimeout(ctx, probeTurnTimeout)
+	defer cancel()
+	return conn.Prompt(pctx, acp.PromptRequest{
+		SessionId: sid,
+		Prompt:    []acp.ContentBlock{acp.TextBlock(text)},
+	})
+}
+
+// promptVerdict prompt 往返判定:end_turn=pass,其余 stopReason/error 落 Note。
+func promptVerdict(ctx context.Context, conn *acp.ClientSideConnection, sid acp.SessionId, text string) CheckResult {
+	presp, err := promptSession(ctx, conn, sid, text)
+	switch {
+	case err != nil:
+		return CheckResult{Pass: false, Note: "prompt error: " + truncate(err.Error(), 160)}
+	case presp.StopReason == acp.StopReasonEndTurn:
+		return CheckResult{Pass: true, Note: "end_turn"}
+	default:
+		return CheckResult{Pass: false, Note: fmt.Sprintf("stopReason=%s", presp.StopReason)}
+	}
+}
+
+// echoVerdict ⑤ fork 响应回显一致性:configOptions 逐条 id/currentValue 与源一致,
+// modes 存在性与 currentModeId 一致(协议未承诺 fork 必回显,差异本身是取证结果)。
+func echoVerdict(src acp.NewSessionResponse, fork acp.UnstableForkSessionResponse) CheckResult {
+	var notes []string
+	if len(src.ConfigOptions) != len(fork.ConfigOptions) {
+		notes = append(notes, fmt.Sprintf("configOptions %d→%d", len(src.ConfigOptions), len(fork.ConfigOptions)))
+	} else {
+		for i, so := range src.ConfigOptions {
+			fo := fork.ConfigOptions[i]
+			switch {
+			case so.Select != nil && fo.Select != nil:
+				if so.Select.Id != fo.Select.Id || so.Select.CurrentValue != fo.Select.CurrentValue {
+					notes = append(notes, fmt.Sprintf("config[%d] %s:%s→%s:%s",
+						i, so.Select.Id, so.Select.CurrentValue, fo.Select.Id, fo.Select.CurrentValue))
+				}
+			case (so.Select == nil) != (fo.Select == nil):
+				notes = append(notes, fmt.Sprintf("config[%d] variant kind changed", i))
+			}
+		}
+	}
+	if (src.Modes == nil) != (fork.Modes == nil) {
+		notes = append(notes, "modes 存在性不一致")
+	} else if src.Modes != nil && fork.Modes != nil && src.Modes.CurrentModeId != fork.Modes.CurrentModeId {
+		notes = append(notes, fmt.Sprintf("currentMode %s→%s", src.Modes.CurrentModeId, fork.Modes.CurrentModeId))
+	}
+	if len(notes) == 0 {
+		return CheckResult{Pass: true, Note: "configOptions/modes 与源一致"}
+	}
+	return CheckResult{Pass: false, Note: truncate(strings.Join(notes, "; "), 160)}
+}
+
+// asRequestErr 把 err 还原成 SDK 的 *acp.RequestError(JSON-RPC 错误响应)。
+func asRequestErr(err error) (*acp.RequestError, bool) {
+	var re *acp.RequestError
+	if errors.As(err, &re) {
+		return re, true
+	}
+	return nil, false
+}
+
+// requestErrText 提取 JSON-RPC 错误的 "<code> <message>" 锚定串;非协议错误原样截断返回。
+func requestErrText(err error) string {
+	if re, ok := asRequestErr(err); ok {
+		return fmt.Sprintf("%d %s", re.Code, re.Message)
+	}
+	return truncate(err.Error(), 160)
 }

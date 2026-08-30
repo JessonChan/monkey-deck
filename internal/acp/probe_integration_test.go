@@ -64,6 +64,11 @@ func TestProbeAllHarnesses(t *testing.T) {
 			t.Log("\n" + rep.Summary())
 			t.Logf("behavioral probes: resumeReplays=%v cancelHonored=%v setConfigWorks=%v",
 				rep.ResumeReplays, rep.CancelHonored, rep.SetConfigWorks)
+			t.Logf("fork(#172): declared=%v class=%q force=%q | newId=%s alive=%s list=%s resume=%s echo=%s cwd=%s chain=%s conc=%s err=%q",
+				rep.Fork.Declared, rep.Fork.ForceClass, rep.Fork.Force,
+				rep.Fork.NewID.Note, rep.Fork.SourceAlive.Note, rep.Fork.InList.Note,
+				rep.Fork.Resumable.Note, rep.Fork.Echo.Note, rep.Fork.Cwd.Note,
+				rep.Fork.Chain.Note, rep.Fork.Concurrent.Note, rep.Fork.Error)
 			if rep.Error != "" {
 				t.Logf("probe self-error: %s", rep.Error)
 				return
