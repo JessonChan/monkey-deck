@@ -5,7 +5,7 @@ import type { FileNode } from "../../bindings/github.com/jessonchan/monkey-deck/
 import type { FileChange } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import { copyTextQuiet } from "../lib/clipboard";
 import { writePanelFilePayload } from "../lib/panelDrop";
-import { getFilePanelState, saveFilePanelState, type ChildrenMap, type FilePanelSnapshot } from "../lib/filePanelCache";
+import { getFilePanelState, saveFilePanelState, recentFileSearchesKey, loadRecentFileSearches, rememberRecentFileSearch, removeRecentFileSearch, type ChildrenMap, type FilePanelSnapshot } from "../lib/filePanelCache";
 import {
   ChevronRight,
   ChevronDown,
@@ -19,6 +19,8 @@ import {
   Trash2,
   Copy,
   Search,
+  History,
+  X,
 } from "lucide-react";
 
 interface Props {
@@ -59,6 +61,11 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
   // Lazy initializers run only on mount.
   const [children, setChildren] = useState<ChildrenMap>(() => getFilePanelState(sessionId)?.children ?? {});
   const [expanded, setExpanded] = useState<Set<string>>(() => getFilePanelState(sessionId)?.expanded ?? new Set());
+  // Search open/typed-query are snapshot-restored as well (#167): switching the
+  // session tab away and back reopens the search row with the query intact.
+  // Results stay transient — the debounce effect below refetches on its own.
+  const [searchOpen, setSearchOpen] = useState(() => getFilePanelState(sessionId)?.searchOpen ?? false);
+  const [query, setQuery] = useState(() => getFilePanelState(sessionId)?.query ?? "");
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(() => getFilePanelState(sessionId)?.selected ?? null);
   const [error, setError] = useState<string | null>(null);
@@ -73,8 +80,8 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
   // session's tab restores the file tree exactly. SidePanel is keyed by sessionId, so this
   // instance lives for exactly one session — cleanup runs once on unmount, reading the
   // latest state via snapRef (avoids re-subscribing the effect on every state change).
-  const snapRef = useRef<FilePanelSnapshot>({ expanded, children, selected });
-  snapRef.current = { expanded, children, selected };
+  const snapRef = useRef<FilePanelSnapshot>({ expanded, children, selected, searchOpen, query });
+  snapRef.current = { expanded, children, selected, searchOpen, query };
   useEffect(() => {
     return () => saveFilePanelState(sessionId, snapRef.current);
   }, [sessionId]);
@@ -189,14 +196,22 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
   }, [expanded, loadChildren]);
 
   // ── File search (#132) ──
-  // Transient UI state: deliberately NOT part of the per-session snapshot
-  // (filePanelCache stays untouched — search closes/clears, the tree state it
-  // returns to is exactly what was there before).
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [query, setQuery] = useState("");
+  // searchOpen/query live in the per-session snapshot (#167 — restored on
+  // remount); everything below stays transient: results are refetched by the
+  // debounce effect, never cached.
   const [results, setResults] = useState<FileNode[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
+  // Recent-search history (#167): a project-level localStorage asset keyed by
+  // rootPath (App resolves sessionId → project; empty rootPath degrades to a
+  // per-session key). Reloaded when the search opens, written on pick
+  // (move-to-front, cap 12), single-deletable from the dropdown.
+  const [recent, setRecent] = useState<string[]>([]);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const historyKey = recentFileSearchesKey(rootPath, sessionId);
+  useEffect(() => {
+    if (searchOpen) setRecent(loadRecentFileSearches(historyKey));
+  }, [searchOpen, historyKey]);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const activeRowRef = useRef<HTMLDivElement | null>(null);
   // IME composition tracking: manual compositionStart/End recording plus
@@ -210,6 +225,8 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
   const searchSeq = useRef(0);
 
   const searchActive = searchOpen && query.trim() !== "";
+  // History dropdown (#167): focused input + empty query + non-empty history.
+  const showHistory = searchOpen && !searchActive && searchFocused && recent.length > 0;
 
   const exitSearch = useCallback(() => {
     searchSeq.current++;
@@ -218,6 +235,7 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
     setResults(null);
     setSearching(false);
     setActiveIdx(0);
+    setSearchFocused(false);
     if (searchInputRef.current) searchInputRef.current.value = "";
   }, []);
 
@@ -290,6 +308,11 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
   };
 
   const pickResult = (node: FileNode) => {
+    // History write at the entry (#167 D3): recording the committed query is
+    // decoupled from the exit below. Directory hits keep their reveal-in-tree
+    // behavior unchanged; they simply also count as a committed search.
+    const q = query.trim();
+    if (q) rememberRecentFileSearch(historyKey, q);
     if (node.isDir) revealInTree(node);
     else {
       setSelected(node.path);
@@ -348,6 +371,41 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
       el.removeEventListener("compositionend", onCompositionEnd);
     };
   }, [searchOpen, results, activeIdx, exitSearch]);
+
+  // History dropdown actions (#167). Backfill sets the DOM value directly (the
+  // input is uncontrolled) and lets the debounce effect fire the search; the
+  // ✕ removes just that entry and refreshes the open dropdown.
+  const applyHistory = (q: string) => {
+    const el = searchInputRef.current;
+    if (el) {
+      el.value = q;
+      el.focus();
+    }
+    setQuery(q);
+  };
+  const deleteHistory = (q: string) => {
+    removeRecentFileSearch(historyKey, q);
+    setRecent(loadRecentFileSearches(historyKey));
+  };
+
+  // Dropdown focus tracking + restored-input hydration (#167). Deliberately a
+  // separate effect so the key-listener chain above stays untouched (D5/D6):
+  // it only adds native focus/blur listeners to the same uncontrolled input
+  // and re-fills the DOM value when a remount restored searchOpen+query from
+  // the snapshot (results are never cached — the debounce effect refetches).
+  useEffect(() => {
+    const el = searchInputRef.current;
+    if (!searchOpen || !el) return;
+    if (el.value === "" && query !== "") el.value = query;
+    const onFocus = () => setSearchFocused(true);
+    const onBlur = () => setSearchFocused(false);
+    el.addEventListener("focus", onFocus);
+    el.addEventListener("blur", onBlur);
+    return () => {
+      el.removeEventListener("focus", onFocus);
+      el.removeEventListener("blur", onBlur);
+    };
+  }, [searchOpen, query]);
 
   const toggleDir = (node: FileNode) => {
     setExpanded((prev) => {
@@ -531,6 +589,47 @@ export default function FilePanel({ sessionId, rootName, rootPath, changes, stat
               </div>
             ))}
           </>
+        ) : showHistory ? (
+          <div
+            className="file-search-history"
+            data-testid="file-search-history"
+            aria-label={t("filePanel.searchHistory")}
+          >
+            {/* Row mousedown preventDefault keeps focus in the input, so the
+                dropdown does not vanish between mousedown and click; the ✕
+                stops propagation so deleting never backfills. */}
+            {recent.map((q) => (
+              <div
+                key={q}
+                className="tree-row file-search-item"
+                data-testid="file-search-history-item"
+                data-query={q}
+                data-tooltip-id="md-tip"
+                data-tooltip-content={q}
+                data-tooltip-place="bottom"
+                style={{ paddingLeft: 8 }}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyHistory(q)}
+              >
+                <History size={13} className="tree-ico-file" />
+                <span className="tree-name">{q}</span>
+                <span className="tree-acts">
+                  <button
+                    className="tree-act"
+                    data-testid="file-search-history-delete"
+                    aria-label={t("filePanel.searchHistoryDelete")}
+                    data-tooltip-id="md-tip"
+                    data-tooltip-content={t("filePanel.searchHistoryDelete")}
+                    data-tooltip-place="top"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); deleteHistory(q); }}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              </div>
+            ))}
+          </div>
         ) : (
           <>
             {rootLoading && <div className="tree-empty">{t("filePanel.loadingTree")}</div>}

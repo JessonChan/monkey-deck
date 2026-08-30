@@ -477,7 +477,9 @@
     "search": "搜索文件",
     "searchPlaceholder": "搜索文件…",
     "searchSearching": "搜索中…",
-    "searchNoResults": "无匹配文件"
+    "searchNoResults": "无匹配文件",
+    "searchHistory": "最近搜索",
+    "searchHistoryDelete": "删除这条搜索历史"
   },
   "gitPanel": {
     "title": "源代码管理",

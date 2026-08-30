@@ -477,7 +477,9 @@
     "search": "Search files",
     "searchPlaceholder": "Search files…",
     "searchSearching": "Searching…",
-    "searchNoResults": "No matching files"
+    "searchNoResults": "No matching files",
+    "searchHistory": "Recent searches",
+    "searchHistoryDelete": "Delete this search entry"
   },
   "gitPanel": {
     "title": "Source Control",
