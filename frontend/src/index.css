@@ -1431,7 +1431,9 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
   max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .composer-count { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
-.cfg-group { display: flex; align-items: center; gap: 5px; }
+/* flex-shrink:0 — under width squeeze the chips keep their text; the compose-bar RO
+   collapses them to fixed dots instead of silently ellipsizing (#151 phase 2). */
+.cfg-group { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
 /* ─── Config select: Radix Popover + cmdk (model/mode/effort) ─── */
 .cfg-trigger {
   display: inline-flex; align-items: center; gap: 4px;
@@ -1448,6 +1450,26 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
 }
 .cfg-chevron { flex-shrink: 0; transition: transform 0.12s; }
 .cfg-trigger.open .cfg-chevron { transform: rotate(180deg); }
+
+/* cfg-dot-letter: fixed category micro-badge (M/E/T) rendered inside the trigger;
+   hidden in the expanded form, becomes the trigger's whole label in the dot form. */
+.cfg-dot-letter { display: none; font-size: 8px; line-height: 1; font-weight: 600; }
+
+/* Narrow-state dot form (#151 phase 2): the toggle is the data-cfg-collapsed attribute
+   that Composer's compose-bar ResizeObserver flips — deliberately NOT a media query,
+   so it composes with and stops above the ≤768 rules (which already display:none the
+   triggers on phones; the attribute is a visual no-op there). Collapsed triggers become
+   fixed 14px circles (box-sizing: border-box keeps the border inside): the row's width
+   stops depending on model/mode/effort names, which is what makes the collapse
+   thresholds hysteretic (see cfgShouldExpand in Composer.tsx). Click/popover chain,
+   native title tooltip and testids are untouched. */
+.compose-bar[data-cfg-collapsed] .cfg-trigger {
+  width: 14px; height: 14px; min-width: 14px; max-width: 14px;
+  padding: 0; gap: 0; justify-content: center; border-radius: 50%;
+}
+.compose-bar[data-cfg-collapsed] .cfg-trigger-text,
+.compose-bar[data-cfg-collapsed] .cfg-chevron { display: none; }
+.compose-bar[data-cfg-collapsed] .cfg-dot-letter { display: block; }
 
 /* Radix Popover.Content 经 Portal 渲染到 body;z-index 用 Radix 默认即可。 */
 .cfg-popover-content {
