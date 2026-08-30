@@ -58,3 +58,21 @@ export function playNotifySound(): void {
     /* 静默失败 */
   }
 }
+
+// ─── 权限到达提示音(#73)───────────────────────────────────────────────
+//
+// 恰一次语义:按权限主键(prompt id)归并(§5.3 不变量)——harness 超时重发会再次广播
+// 同一 id 的 chat:permission 事件,只有首次到达算「进入 pending」,重发不重响。
+// seen 集合随进程存活:每条 ~40B,桌面单次运行的权限量级下内存可忽略,不做容量修剪。
+const seenPermissionIds = new Set<string>();
+
+// notifyPermissionOnce:该权限首次到达时,若提示音开关开启则播放一次。
+// 返回是否真正触发播放(测试断言「恰一次」与「开关生效」用)。id 未到达过即登记
+// (开关关闭时也登记)——重发永远静默,开关不改变「首次到达」的判定。
+export function notifyPermissionOnce(id: string): boolean {
+  if (!id || seenPermissionIds.has(id)) return false;
+  seenPermissionIds.add(id);
+  if (!isNotifySoundEnabled()) return false;
+  playNotifySound();
+  return true;
+}

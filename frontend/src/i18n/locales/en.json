@@ -217,6 +217,7 @@
     "messageCopiedTip": "Message copied",
     "outputTruncated": "Output truncated by agent",
     "permissionTitleFallback": "Permission request",
+    "permPendingPlaceholder": "Permission pending — click to focus",
     "elicitationTitleFallback": "Your input needed",
     "elicitAccept": "Submit",
     "elicitSkip": "Skip",
@@ -700,7 +701,10 @@
       "shapeFilename": "File name",
       "shapeFilenameTip": "Same-named files in any directory match — the shape \"Allow globally\" creates for reads",
       "shapePath": "Exact path",
-      "shapePathTip": "Only this exact path matches — the shape \"Allow globally\" creates for writes"
+      "shapePathTip": "Only this exact path matches — the shape \"Allow globally\" creates for writes",
+      "timeoutTitle": "Auto-allow on timeout",
+      "timeoutDesc": "What happens when a permission prompt goes unanswered and its budget runs out: off (default) rejects the tool call; on lets it through so the conversation continues. Takes effect for new sessions; a restart applies it everywhere.",
+      "timeoutTip": "On: auto-allow when timed out · Off (default): auto-deny"
     },
     "mcp": {
       "desc": "MCP servers registered globally. Pick which to connect per session in the new-chat dialog. Stored locally (SQLite); import an opencode / OMP config to bulk-add.",

@@ -617,6 +617,14 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   // through untouched so the native channel keeps owning them.
   const [mentionDropActive, setMentionDropActive] = useState(false);
   const composerRef = useRef<ComposerHandle | null>(null);
+  // 权限 sticky 卡容器(#73):时间线占位行点击时聚焦它(滚动到位 + 键盘焦点)。
+  const permissionDockRef = useRef<HTMLDivElement | null>(null);
+  const focusPermissionCard = useCallback(() => {
+    const card = permissionDockRef.current?.querySelector<HTMLElement>('[data-testid="permission-card"]');
+    if (!card) return;
+    card.scrollIntoView?.({ block: "nearest" });
+    card.focus();
+  }, []);
   const onPanelDragOver = (e: React.DragEvent) => {
     if (!hasPanelFilePayload(e.dataTransfer)) return; // not ours → other channels
     e.preventDefault(); // claim the drop for the whole chat area
@@ -821,9 +829,16 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
           })}
           {/* Bottom spacer: scroll space of rows [win.end, n). */}
           {bottomSpacer > 0 && <div className="cv-spacer" style={{ height: bottomSpacer }} aria-hidden />}
-          {/* 尾部区:权限卡 + 实时 plan + 打字指示。实测高度 tailHRef(data-iid=__tail__)。 */}
+          {/* 尾部区:权限占位行 + 实时 plan + 打字指示。实测高度 tailHRef(data-iid=__tail__)。 */}
           <div className="cv-tail" data-iid="__tail__">
-            {props.permission && <PermissionCard prompt={props.permission} onRespond={props.onRespondPermission} />}
+            {/* 权限卡已上浮到 composer 上方 sticky 常驻(#73,不随时间线滚动消失);
+                时间线留一枚可点击占位行,点击聚焦 sticky 卡。 */}
+            {props.permission && (
+              <button type="button" className="perm-placeholder" data-testid="permission-placeholder" onClick={focusPermissionCard}>
+                <ShieldAlert size={13} />
+                <span>{t("chat.permPendingPlaceholder")}</span>
+              </button>
+            )}
             {/* 当前 turn 的实时 plan(进行中,带 spinner)。turn 结束后由 App.tsx 转为持久化
                 type:'plan' ChatItem 内联渲染在 items 里(无 spinner 的静态展示)。 */}
             {props.livePlan && props.livePlan.entries.length > 0 && (
@@ -886,6 +901,13 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         <div className={`merge-result ${props.mergeResult.startsWith("✅") ? "ok" : "fail"}`}>
           <span className="merge-result-msg">{props.mergeResult}</span>
           <CopyIconButton text={props.mergeResult || ""} />
+        </div>
+      )}
+      {/* 权限 sticky 常驻(#73):卡片钉在 composer 上方(chat-body 与 footer 之间,flex 布局
+          天然永在视野,响应前不随时间线滚动消失)。视觉对齐 permission-card 家族。 */}
+      {props.permission && (
+        <div className="permission-dock" data-testid="permission-dock" ref={permissionDockRef}>
+          <PermissionCard prompt={props.permission} onRespond={props.onRespondPermission} />
         </div>
       )}
       <footer className="chat-footer">
@@ -1733,7 +1755,7 @@ function PermissionCard({ prompt, onRespond }: { prompt: PermissionPrompt; onRes
     return { key: "chat.permGlobalHintGeneric", preview: "" };
   })();
   return (
-    <div className="permission-card" data-testid="permission-card">
+    <div className="permission-card" data-testid="permission-card" tabIndex={-1}>
       <div className="permission-head">
         <ShieldAlert size={18} />
         <div>

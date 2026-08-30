@@ -29,6 +29,8 @@ export default function PermissionRulesPane() {
   const [rules, setRules] = useState<PermissionRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // 权限超时策略(#73):null = 尚未从后端拉到;true = allow(超时放行),false = deny(默认)。
+  const [timeoutAllow, setTimeoutAllow] = useState<boolean | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -40,6 +42,20 @@ export default function PermissionRulesPane() {
     } finally {
       setLoading(false);
     }
+  }, []);
+  const toggleTimeoutAllow = useCallback(async () => {
+    const next = !(timeoutAllow ?? false);
+    setTimeoutAllow(next); // optimistic; roll back on failure
+    try {
+      await ChatService.SetPermissionTimeoutPolicy(next ? "allow" : "deny");
+    } catch (e) {
+      setTimeoutAllow(!next);
+      setError(String(e));
+    }
+  }, [timeoutAllow]);
+  // 初始拉取当前策略(#73):失败静默,保持默认 deny 视图。
+  useEffect(() => {
+    void ChatService.GetPermissionTimeoutPolicy().then((v) => setTimeoutAllow(v === "allow")).catch(() => {});
   }, []);
 
   // 懒加载:设置中心切到本 pane 时才挂载并拉取,避免无谓请求。
@@ -124,6 +140,27 @@ export default function PermissionRulesPane() {
       </div>
 
       {error && <div className="modal-del-err">{error}</div>}
+
+      {/* 权限超时策略(#73):无人响应、预算耗尽后的降级动作。关 = deny(默认,拒绝);
+          开 = allow(放行让对话继续)。持久化 settings KV,新会话/重启后生效。
+          复用 settings-row 家族样式(与 harness 开关行同族)。 */}
+      <div className="settings-row" data-testid="perm-timeout-row">
+        <div className="settings-row-text">
+          <div className="settings-row-title">{t("settings.perm.timeoutTitle")}</div>
+          <div className="settings-row-sub">{t("settings.perm.timeoutDesc")}</div>
+        </div>
+        <button
+          className={`settings-switch ${timeoutAllow ? "on" : ""}`}
+          role="switch"
+          aria-checked={!!timeoutAllow}
+          data-testid="settings-perm-timeout-allow"
+          data-tooltip-id="md-tip"
+          data-tooltip-content={t("settings.perm.timeoutTip")}
+          onClick={() => void toggleTimeoutAllow()}
+        >
+          <span className="settings-switch-thumb" />
+        </button>
+      </div>
 
       <div className="perm-rule-list" data-testid="perm-rule-list">
         {loading && <div className="perm-empty">{t("settings.perm.loading")}</div>}

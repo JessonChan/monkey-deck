@@ -1202,6 +1202,24 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
   word-break: break-all; white-space: pre-wrap;
 }
 
+/* Sticky permission dock (#73): the card moved out of the timeline flow and is pinned
+   between chat-body and chat-footer — flex layout keeps it permanently in view until
+   responded, regardless of timeline scroll. Reuses the .permission-card family as-is
+   (visual parity); the dock only supplies horizontal padding + focus affordance. */
+.permission-dock { padding: 0 16px 8px; }
+.permission-dock .permission-card { margin: 0 auto; }
+.permission-dock .permission-card:focus { outline: 2px solid var(--amber); outline-offset: 2px; }
+/* Timeline placeholder row: a clickable "permission pending" hint where the card used to
+   live. Click focuses the sticky card above the composer. */
+.perm-placeholder {
+  display: flex; gap: 6px; align-items: center; justify-content: center;
+  margin: 8px auto; max-width: 1080px; width: 100%;
+  padding: 6px 12px; border-radius: var(--r-sm); font-size: 12px; cursor: pointer;
+  border: 1px dashed rgba(255, 214, 10, 0.35);
+  background: rgba(255, 214, 10, 0.04); color: var(--amber);
+}
+.perm-placeholder:hover { background: rgba(255, 214, 10, 0.09); }
+
 /* Elicitation inline form (ACP v1 standard protocol): rendered inside compose-card at the
    top (above attachments + textarea) — agent is waiting on the user, so it lives where the
    user acts. Independent from permission-card (different semantics).

@@ -217,6 +217,7 @@
     "shareMessageTip": "分享消息到其他应用",
     "outputTruncated": "输出已被 agent 截断",
     "permissionTitleFallback": "权限请求",
+    "permPendingPlaceholder": "权限待确认,点击定位",
     "elicitationTitleFallback": "需要你的输入",
     "elicitAccept": "提交",
     "elicitSkip": "跳过",
@@ -700,7 +701,10 @@
       "shapeFilename": "文件名",
       "shapeFilenameTip": "任意目录下同名文件都命中——「全局允许」对读取类生成的形态",
       "shapePath": "精确路径",
-      "shapePathTip": "仅该路径命中——「全局允许」对写入类生成的形态"
+      "shapePathTip": "仅该路径命中——「全局允许」对写入类生成的形态",
+      "timeoutTitle": "超时自动放行",
+      "timeoutDesc": "权限弹窗无人响应、等待预算耗尽后的默认动作:关闭(默认)拒绝该次工具调用;开启则放行让对话继续。对新会话生效,重启后全部生效。",
+      "timeoutTip": "开:超时后自动允许 · 关(默认):超时后自动拒绝"
     },
     "mcp": {
       "desc": "全局注册的 MCP 服务器。每次新建会话时勾选要连接的。配置存本地(SQLite);可导入 opencode / OMP 配置批量添加。",

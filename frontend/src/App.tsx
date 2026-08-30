@@ -34,7 +34,7 @@ import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin } f
 import type { FileChange, BranchInfo, WorktreeInfo } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import { applyEventToItems as applyEventToItemsPure } from "./lib/streamMerge";
 import { shouldDropOnSwitch } from "./lib/sessionDrop";
-import { isNotifySoundEnabled, playNotifySound } from "./lib/notifySound";
+import { isNotifySoundEnabled, notifyPermissionOnce, playNotifySound } from "./lib/notifySound";
 import { extractErrMsg } from "./lib/errorMsg";
 import { renderChatError, type ChatErrorView, type DiagL10n } from "./lib/errorDiag";
 import i18n from "./i18n";
@@ -608,6 +608,8 @@ export default function App() {
       // 已弹出到独立窗口的 session:主窗口不弹权限(由 popout 窗口处理),避免双弹(§5.3 不变量)。
       if (e.data && !poppedSessionIdsRef.current.has(e.data.sessionId)) {
         setPermissionBySession((prev) => ({ ...prev, [e.data.sessionId]: e.data }));
+        // 到达提示音(#73):恰一次(同 id 重发不重响),尊重 notifySound 开关。
+        notifyPermissionOnce(e.data.id);
         // PWA icon badge: permission needs the user while the app is backgrounded.
         if (document.hidden) appBadge.bump();
       }
