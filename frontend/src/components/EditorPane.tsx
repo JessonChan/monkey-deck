@@ -5,6 +5,7 @@ import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/i
 import CodeViewer from "./CodeViewer";
 import SelectionToolbar, { type SelectionAction } from "./SelectionToolbar";
 import { isImageFile } from "../utils";
+import { copyTextQuiet } from "../lib/clipboard";
 import { useCopyFeedback } from "../hooks/useCopyFeedback";
 
 // EditorPane renders the content of one opened file tab: text -> CodeViewer
@@ -34,6 +35,43 @@ import { useCopyFeedback } from "../hooks/useCopyFeedback";
 export interface EditorFile {
   path: string;
   line?: number;
+}
+
+// Resolve the 1-based line numbers under the live DOM selection's anchor and
+// focus endpoints (issue #168). CodeViewer rows carry data-line, so walking
+// closest() from each endpoint's element yields its row. Returns null when
+// either endpoint can't be resolved to a row (selection outside the viewer,
+// empty, or a malformed attribute) — callers then proceed WITHOUT the source
+// footnote (exact pre-#168 behavior) and never error.
+function selectionLineRange(): [number, number] | null {
+  const s = window.getSelection();
+  if (!s || s.rangeCount === 0) return null;
+  const lineOf = (node: Node | null): number | null => {
+    const el = node && node.nodeType === 1 ? (node as Element) : (node?.parentElement ?? null);
+    const raw = el?.closest("[data-line]")?.getAttribute("data-line");
+    const n = raw == null ? NaN : Number(raw);
+    return Number.isInteger(n) && n >= 1 ? n : null;
+  };
+  const a = lineOf(s.anchorNode);
+  const b = lineOf(s.focusNode);
+  if (a === null || b === null) return null;
+  // Drag direction is irrelevant to the cited range: normalize ascending.
+  return a <= b ? [a, b] : [b, a];
+}
+
+// Append the source footnote (#168): `<selection>\n— <path>:N` for a single
+// line, `<selection>\n— <path>:N-M` (N≤M) across lines. path is the file's
+// relative path verbatim; the em-dash footnote is deliberately not i18n'd —
+// it's a machine-readable anchor pasted into chat, not UI copy. App's
+// quoteToComposer blockquotes the payload line-by-line, so the footnote lands
+// naturally as the last line inside the quote block. Read at action-run time
+// (the SelectionToolbar invokes run before clearing the selection), so the
+// numbers always match the selection the user actually acted on.
+function withSourceFootnote(text: string, path: string): string {
+  const range = selectionLineRange();
+  if (!range) return text;
+  const span = range[0] === range[1] ? String(range[0]) : `${range[0]}-${range[1]}`;
+  return `${text}\n— ${path}:${span}`;
 }
 
 export default function EditorPane({
@@ -84,15 +122,28 @@ export default function EditorPane({
   const contentRef = useRef<HTMLDivElement>(null);
   const onQuoteRef = useRef(onQuoteToComposer);
   onQuoteRef.current = onQuoteToComposer;
+  // Same stability trick as onQuoteRef: the actions array must stay referentially
+  // stable (SelectionToolbar re-renders on every selectionchange), while file.path
+  // changes on tab switches without remount — read it through a ref at run time.
+  const filePathRef = useRef(file.path);
+  filePathRef.current = file.path;
   const selectionActions = useMemo<SelectionAction[]>(
     () => [
+      {
+        key: "copy",
+        labelKey: "common.copy",
+        tipKey: "selectionToolbar.copyTip",
+        Icon: Copy,
+        testId: "editor-selection-copy",
+        run: (text) => { copyTextQuiet(withSourceFootnote(text, filePathRef.current)); },
+      },
       {
         key: "quote",
         labelKey: "selectionToolbar.quoteToChat",
         tipKey: "selectionToolbar.quoteToChatTip",
         Icon: Quote,
         testId: "editor-selection-quote",
-        run: (text) => { onQuoteRef.current?.(text); },
+        run: (text) => { onQuoteRef.current?.(withSourceFootnote(text, filePathRef.current)); },
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
