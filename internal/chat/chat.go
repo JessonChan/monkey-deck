@@ -2534,7 +2534,7 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 		if e.Kind == "agent_thought_chunk" {
 			role = "thought"
 		}
-		id := messageKey(ls, e.MessageID, role)
+		id := messageKey(ls, e.MessageID, role, e.RotateOnce)
 		entry := ls.index[id]
 		if entry == nil || entry.kind != "message" || entry.role != role {
 			// New entry (messageId changed / role changed / first chunk): merge interrupted, start fresh.
@@ -2624,17 +2624,24 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 //
 // Primary path (§5.3): messageId + role — all chunks sharing a messageId merge
 // into one entry. omp/opencode always send messageId, so they use this path.
+// rotateOnce is ignored here: the primary key already pins the block, a tagged
+// messageId chunk must not split its own message (frontend mirrors this).
 //
 // Fallback path: messageId is UNSTABLE/optional and some harnesses (e.g. Reasonix)
 // never send it. Then consecutive same-role chunks append into one entry; a role
-// change rotates the key (fallbackSeq++), and a tool_call clears fallbackRole so the
-// next chunk also opens a new entry. This best-effort fallback is the documented
-// no-messageId behavior; it does not affect the primary path. Caller holds ls.mu.
-func messageKey(ls *liveSession, messageId, role string) string {
+// change or a tool_call clears fallbackRole so the next chunk also opens a new
+// entry. rotateOnce (#79) adds one more rotate tier: the first no-messageId
+// agent_message_chunk after session/resume (tagged by the runner, see
+// acp.tagResumeRotate) must open a FRESH entry instead of appending into an open
+// pre-resume one — junie-style harnesses replay history after the resume RPC
+// returns, and without the tier the real reply would merge into that replay tail.
+// Exactly one chunk per resume carries the flag; later chunks return to the
+// documented fallback semantics. Caller holds ls.mu.
+func messageKey(ls *liveSession, messageId, role string, rotateOnce bool) string {
 	if messageId != "" {
 		return "msg:" + messageId + ":" + role
 	}
-	if ls.fallbackRole != role {
+	if rotateOnce || ls.fallbackRole != role {
 		ls.fallbackRole = role
 		ls.fallbackSeq++
 	}

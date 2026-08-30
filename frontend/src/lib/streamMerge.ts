@@ -78,11 +78,18 @@ export function applyEventToItems(cur: ChatItem[], ev: SessionEvent): ChatItem[]
         } as ChatItem);
         return next;
       }
-      // 回退(无 messageId):找最后一个同类型 streaming item 归并;否则 finalize 新建。
-      // 注意:不只看 last(可能是异类型 agent),要向回查找同类型,避免交替时反复新建。
+      // Fallback (no messageId): append into the last same-type streaming item; otherwise
+      // finalize + open a fresh one. Look BACKWARD, not just at last — the neighbor may be
+      // the other role, and alternating chunks must not spawn a bubble per chunk.
+      // rotateOnce (#79): the first no-messageId agent_message_chunk after session/resume
+      // must open a FRESH block — never append into a pre-resume streaming bubble (the
+      // sticking source: junie-style penetrating replay tail / DB tail). Exactly one
+      // event per resume carries it; later chunks return to the documented stickiness.
       let lastSameType = -1;
-      for (let j = next.length - 1; j >= 0; j--) {
-        if (next[j].type === type) { lastSameType = j; break; }
+      if (!ev.rotateOnce) {
+        for (let j = next.length - 1; j >= 0; j--) {
+          if (next[j].type === type) { lastSameType = j; break; }
+        }
       }
       if (lastSameType >= 0 && (next[lastSameType] as Extract<ChatItem, { type: "agent" } | { type: "thought" }>).streaming) {
         const existing = next[lastSameType] as Extract<ChatItem, { type: "agent" } | { type: "thought" }>;

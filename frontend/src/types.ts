@@ -16,6 +16,11 @@ export interface SessionEvent {
     | "available_commands";
   text?: string; // agent/thought 为累积全文
   messageId?: string; // ACP messageId:同一条逻辑消息的所有 chunk 共享(§5.4 #11),主键归并用
+  // rotateOnce (#79): set by the backend on the FIRST no-messageId agent_message_chunk
+  // after session/resume. The fallback merge must open a fresh bubble instead of
+  // appending into a pre-resume one (junie-style penetrating replay tail / DB tail);
+  // exactly one event per resume carries it.
+  rotateOnce?: boolean;
   seq?: number; // 单调序号(防流式乱序)
   // turnId:plan 事件所属的 turn(= 开启该 turn 的 user message ID,client 生成;协议无 turnId)。
   // 仅 plan 事件携带:plan 按 turn 索引,当前 turn 实时 / 历史 turn 静态展示。
