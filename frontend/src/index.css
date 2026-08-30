@@ -3391,6 +3391,9 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
   .queue-grip { display: none; }
   .queue-btn.move { display: inline-flex; }
   .queue-btn { min-height: 40px; min-width: 40px; padding: 8px 12px; justify-content: center; }
+  /* #170: labels hide on touch, leaving icon-only 40x40 buttons (the words
+     live on in title/aria-label); desktop keeps the inline text label. */
+  .queue-btn .queue-btn-label { display: none; }
    .queue-item-actions { flex-basis: 100%; flex-wrap: wrap; }
    /* The staged chip left the actions row (#144): its own .queue-schedule-staged-row
       is already full-width at every width, so only the in-row notices keep the

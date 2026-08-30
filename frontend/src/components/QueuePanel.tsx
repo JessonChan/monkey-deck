@@ -668,32 +668,36 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                   data-testid="queue-schedule"
                   onClick={() => startSchedule(item)}
                   title={t("queue.scheduleTip")}
+                  aria-label={t("queue.scheduleTip")}
                 >
-                  <Clock size={13} /> {t("queue.schedule")}
+                  <Clock size={13} /> <span className="queue-btn-label">{t("queue.schedule")}</span>
                 </button>
                 <button
                   className="queue-btn edit"
                   data-testid="queue-edit"
                   onClick={() => startEdit(item)}
                   title={t("queue.editTip")}
+                  aria-label={t("queue.editTip")}
                 >
-                  <Pencil size={13} /> {t("queue.edit")}
+                  <Pencil size={13} /> <span className="queue-btn-label">{t("queue.edit")}</span>
                 </button>
                 <button
                   className="queue-btn interrupt"
                   data-testid="queue-interrupt"
                   onClick={() => onInterrupt(item.id)}
                   title={t("queue.interruptTip")}
+                  aria-label={t("queue.interruptTip")}
                 >
-                  <Zap size={13} /> {t("queue.interrupt")}
+                  <Zap size={13} /> <span className="queue-btn-label">{t("queue.interrupt")}</span>
                 </button>
                 <button
                   className="queue-btn revoke"
                   data-testid="queue-revoke"
                   onClick={() => onRevoke(item.id)}
                   title={t("queue.revokeTip")}
+                  aria-label={t("queue.revokeTip")}
                 >
-                  <Trash2 size={13} /> {t("queue.revoke")}
+                  <Trash2 size={13} /> <span className="queue-btn-label">{t("queue.revoke")}</span>
                 </button>
               </div>
             </>
