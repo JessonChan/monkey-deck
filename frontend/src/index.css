@@ -3386,7 +3386,11 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
      tap targets. HTML5 drag is unreachable on touch: the grip hides and the
      desktop-hidden up/down move buttons take over reordering through the
      same onReorder prop (component keeps one code path). */
-  .queue-panel { padding: 0 12px; }
+  /* #171: side padding matches the chat rows (.row) and the composer so the
+     panel edges line up with the message column on phones. Orchestrator
+     ruling: baseline = the chat's 28px, NOT a smaller value — a wider queue
+     would break the three-zone alignment line. */
+  .queue-panel { padding: 0 28px; }
   .queue-item { flex-wrap: wrap; row-gap: 8px; }
   .queue-grip { display: none; }
   .queue-btn.move { display: inline-flex; }
