@@ -18,8 +18,8 @@
 //   ⑤ record with path + body strings       → path on the first line, body after
 //   ⑥ record with url/title                 → title, then the url
 //   ⑦ record with ok/success boolean        → success/failure word (via t())
-//   ⑧ flat record / nested record           → "key: value" lines, recursively
-//                                             flattened — never JSON.stringify
+//   ⑧ flat record / nested record           → └─ tree: sub-keys one per line,
+//                                             2-space + └─ per level (formatHuman)
 // Open forms that match nothing (primitives, empty shapes) return
 // {summary:null, hadStructure:false}; the caller keeps its own last resort and
 // the raw payload goes to the JSON collapse layer verbatim.
@@ -48,37 +48,53 @@ export function extractFilePath(raw: unknown): string {
   return pickStr(raw, ["path", "file", "filepath", "filePath", "fileName", "filename", "dir", "directory", "cwd"]);
 }
 
-// Human-readable multi-line rendering. Strings verbatim; records as "key: value"
-// lines; arrays item-per-line; nested structures via formatInline (single line).
-export function formatHuman(v: unknown): string {
+// Human-readable rendering as a nested tree (#169): record sub-keys and array
+// items go on their own lines, each nesting level indented 2 spaces with a
+// └─ prefix — rendered inside the existing monospace .tool-pre, whose
+// white-space:pre-wrap preserves the layout, so a plain string return suffices.
+// Guards: a subtree deeper than TREE_DEPTH_MAX collapses to one formatInline
+// line (full content, not elided); arrays beyond TREE_ARRAY_MAX show the first
+// PREVIEW_ITEMS plus an "N more" tail; leaf lines clip at PREVIEW_LINE_MAX;
+// cycles render ↻ via a path seen-set. `t` is optional: the direct ChatView
+// fallback callsites pass no t, but they only ever see empty/scalar roots
+// (anything structural is summarized first), so no i18n-bearing line is
+// produced without it.
+export function formatHuman(v: unknown, t?: TranslateFn): string {
   if (v == null) return "";
   if (typeof v === "string") return v;
   if (typeof v === "number" || typeof v === "boolean") return String(v);
-  if (Array.isArray(v)) return v.map(formatHuman).filter(Boolean).join("\n");
-  if (isRecord(v)) {
-    const lines: string[] = [];
-    for (const [k, val] of Object.entries(v)) {
-      if (val == null || val === "") continue;
-      if (typeof val === "string" || typeof val === "number" || typeof val === "boolean") lines.push(`${k}: ${val}`);
-      else lines.push(`${k}: ${formatInline(val)}`);
-    }
-    return lines.join("\n");
-  }
-  return String(v);
+  // Top-level empty containers stay "" — the summarizer's open-form gate
+  // (summarizeToolPayload → NO_STRUCTURE) depends on the falsy result.
+  const emptyContainer = Array.isArray(v) ? v.length === 0 : Object.keys(v).length === 0;
+  if (emptyContainer) return "";
+  const out: Array<[number, string]> = [];
+  flattenTree(v, 0, new WeakSet<object>(), t, out);
+  // Level-0 lines are the tree's roots (bare, matching the old flat look);
+  // every deeper line gets its level's indent plus the └─ child prefix.
+  return out.map(([lvl, line]) => (lvl > 0 ? TREE_INDENT.repeat(lvl) + TREE_PREFIX + line : line)).join("\n");
 }
 
 // Single-line rendering for nested values. Recursively flattens objects/arrays
 // into "key: value" fragments — never JSON.stringify (#109: nested objects used
-// to leak raw JSON here).
-export function formatInline(v: unknown): string {
+// to leak raw JSON here). `seen` guards reference cycles (D6): re-entering an
+// object already on the current descent path renders ↻. Optional so the public
+// one-arg callsites (preview lines, depth-cap flattening) keep their exact
+// semantics; they simply start a fresh set.
+export function formatInline(v: unknown, seen?: WeakSet<object>): string {
   if (typeof v === "string") return v;
   if (typeof v === "number" || typeof v === "boolean") return String(v);
-  if (Array.isArray(v)) return v.map(formatInline).filter(Boolean).join(", ");
-  if (isRecord(v)) {
-    return Object.entries(v)
-      .filter(([, val]) => val != null && val !== "")
-      .map(([k, val]) => `${k}: ${formatInline(val)}`)
-      .join(", ");
+  if (Array.isArray(v) || isRecord(v)) {
+    const path = seen ?? new WeakSet<object>();
+    if (path.has(v)) return CYCLE_MARK;
+    path.add(v);
+    const out = Array.isArray(v)
+      ? v.map((x) => formatInline(x, path)).filter(Boolean).join(", ")
+      : Object.entries(v)
+          .filter(([, val]) => val != null && val !== "")
+          .map(([k, val]) => `${k}: ${formatInline(val, path)}`)
+          .join(", ");
+    path.delete(v);
+    return out;
   }
   return String(v);
 }
@@ -87,6 +103,124 @@ export function formatInline(v: unknown): string {
 // being clipped (downstream CollapsibleText handles overall length folding).
 const PREVIEW_ITEMS = 3;
 const PREVIEW_LINE_MAX = 200;
+
+// Tree rendering knobs (#169): 2-space indent per level + └─ child prefix (D2);
+// depth cap beyond which a subtree flattens to one line (D3); array item cap
+// with an "N more" tail (D4). Line width shares PREVIEW_LINE_MAX with the
+// preview clipper (D5).
+const TREE_INDENT = "  ";
+const TREE_PREFIX = "└─ ";
+const TREE_DEPTH_MAX = 4;
+const TREE_ARRAY_MAX = 8;
+
+// D6 cycle marker: pure symbol, deliberately not an i18n key.
+const CYCLE_MARK = "↻";
+
+// Clip one rendered line to PREVIEW_LINE_MAX with an ellipsis. Shared by the
+// summarize previews and the tree renderer so both caps move together (D5).
+function clipLine(s: string): string {
+  return s.length > PREVIEW_LINE_MAX ? `${s.slice(0, PREVIEW_LINE_MAX - 1)}…` : s;
+}
+
+// D7 empty-node word. `t` is undefined only on the direct ChatView fallback
+// callsites, which never produce these lines (see formatHuman).
+function emptyValueLabel(t: TranslateFn | undefined): string {
+  return t ? t("chat.emptyValue") : "(empty)";
+}
+
+// Depth-first flatten of one node into (level, line) pairs. `level` is the
+// line's nesting depth (0 = root); formatHuman turns each pair into one tree
+// line. A node's content sits at its own level: record entries and array items
+// alike, so only real container descent adds a └─ step. `seen` holds the
+// objects on the current descent path — re-entering one is a reference cycle.
+function flattenTree(v: unknown, level: number, seen: WeakSet<object>, t: TranslateFn | undefined, out: Array<[number, string]>): void {
+  // D3: past the depth cap the whole subtree flattens to a single line,
+  // deliberately unclipped — full content survives, nothing is elided.
+  if (level > TREE_DEPTH_MAX) {
+    out.push([level, formatInline(v, seen)]);
+    return;
+  }
+  // D7: empty value nodes render the localized "(empty)" word.
+  if (v == null || v === "") {
+    out.push([level, emptyValueLabel(t)]);
+    return;
+  }
+  if (typeof v === "string") {
+    for (const l of v.split("\n")) out.push([level, clipLine(l)]);
+    return;
+  }
+  if (typeof v === "number" || typeof v === "boolean") {
+    out.push([level, String(v)]);
+    return;
+  }
+  if (Array.isArray(v)) {
+    if (v.length === 0) {
+      out.push([level, emptyValueLabel(t)]);
+      return;
+    }
+    if (seen.has(v)) {
+      out.push([level, CYCLE_MARK]);
+      return;
+    }
+    seen.add(v);
+    try {
+      // D4: up to TREE_ARRAY_MAX items tree-ify in full; beyond that the first
+      // PREVIEW_ITEMS plus an "N more" tail on its own line.
+      const head = v.length > TREE_ARRAY_MAX ? PREVIEW_ITEMS : v.length;
+      for (const item of v.slice(0, head)) flattenTree(item, level, seen, t, out);
+      if (v.length > TREE_ARRAY_MAX) {
+        const rest = v.length - PREVIEW_ITEMS;
+        out.push([level, t ? t("chat.itemsMore", { count: rest }) : `…and ${rest} more`]);
+      }
+    } finally {
+      seen.delete(v);
+    }
+    return;
+  }
+  if (isRecord(v)) {
+    if (seen.has(v)) {
+      out.push([level, CYCLE_MARK]);
+      return;
+    }
+    seen.add(v);
+    try {
+      for (const [k, val] of Object.entries(v)) {
+        // D7: null/"" entries render "(empty)" instead of being skipped.
+        if (val == null || val === "") {
+          out.push([level, `${k}: ${emptyValueLabel(t)}`]);
+          continue;
+        }
+        if (typeof val === "string") {
+          const lines = val.split("\n").map(clipLine);
+          out.push([level, clipLine(`${k}: ${lines[0]}`)]);
+          for (const l of lines.slice(1)) out.push([level, l]);
+          continue;
+        }
+        if (typeof val === "number" || typeof val === "boolean") {
+          out.push([level, `${k}: ${String(val)}`]);
+          continue;
+        }
+        // Empty containers inline as "(empty)"; real ones open a child block.
+        const emptyVal = Array.isArray(val) ? val.length === 0 : Object.keys(val).length === 0;
+        if (emptyVal) {
+          out.push([level, `${k}: ${emptyValueLabel(t)}`]);
+          continue;
+        }
+        // D3: this entry's subtree would exceed the cap → inline after the key.
+        if (level + 1 > TREE_DEPTH_MAX) {
+          out.push([level, `${k}: ${formatInline(val, seen)}`]);
+          continue;
+        }
+        out.push([level, `${k}:`]);
+        flattenTree(val, level + 1, seen, t, out);
+      }
+    } finally {
+      seen.delete(v);
+    }
+    return;
+  }
+  out.push([level, String(v)]);
+}
 
 // Record keys whose array value, when present and non-empty, dominates the
 // payload (search results / file lists / row sets). First array wins.
@@ -118,10 +252,11 @@ function summarizeArray(items: unknown[], t: TranslateFn): string {
   // ① Everything else: total count + first 3 previews + "N more" tail.
   const lines = [t("chat.itemsTotal", { count: items.length })];
   for (const item of items.slice(0, PREVIEW_ITEMS)) {
-    // Collapse each preview item to one clipped line; full values stay
-    // available in the raw payload disclosure rendered next to summaries.
+    // Collapse each preview item to one clipped line (same cap as the tree
+    // renderer via clipLine, D5); full values stay available in the raw
+    // payload disclosure rendered next to summaries.
     const s = formatInline(item).replace(/\s+/g, " ").trim();
-    lines.push(`- ${s.length > PREVIEW_LINE_MAX ? `${s.slice(0, PREVIEW_LINE_MAX - 1)}…` : s}`);
+    lines.push(`- ${clipLine(s)}`);
   }
   const rest = items.length - PREVIEW_ITEMS;
   if (rest > 0) lines.push(t("chat.itemsMore", { count: rest }));
@@ -183,8 +318,8 @@ export function summarizeToolPayload(raw: unknown, t: TranslateFn): ToolSummary 
   // ⑦ Success flag: {ok: true} / {success: false} → the word, not "ok: true".
   const ok = typeof raw.ok === "boolean" ? raw.ok : typeof raw.success === "boolean" ? raw.success : null;
   if (ok !== null) return { summary: t(ok ? "chat.toolSucceeded" : "chat.toolFailed"), hadStructure: true };
-  // ⑧ Flat / nested record: "key: value" lines (JSON-free after formatInline).
-  const flat = formatHuman(raw);
+  // ⑧ Flat / nested record: └─ tree (JSON-free after formatInline).
+  const flat = formatHuman(raw, t);
   return flat ? { summary: flat, hadStructure: true } : NO_STRUCTURE;
 }
 

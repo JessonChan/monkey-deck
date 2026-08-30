@@ -305,6 +305,7 @@
     "toolFailed": "Failed",
     "itemsTotal": "{{count}} items",
     "itemsMore": "…and {{count}} more",
+    "emptyValue": "(empty)",
     "mermaidDiagram": "Diagram",
     "mermaidWriting": "Diagram (streaming)",
     "mermaidLoading": "Rendering diagram…",

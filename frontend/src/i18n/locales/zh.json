@@ -305,6 +305,7 @@
     "toolFailed": "失败",
     "itemsTotal": "共 {{count}} 项",
     "itemsMore": "…另有 {{count}} 项",
+    "emptyValue": "(空)",
     "mermaidDiagram": "图表",
     "mermaidWriting": "图表(生成中)",
     "mermaidLoading": "正在渲染图表…",
