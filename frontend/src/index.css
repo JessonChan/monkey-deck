@@ -1049,6 +1049,7 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
 }
 .tool-badge-pattern { color: var(--accent-2); border-color: rgba(10, 132, 255, 0.28); background: rgba(10, 132, 255, 0.08); }
 .tool-badge-count { color: var(--green); border-color: rgba(48, 209, 88, 0.22); background: rgba(48, 209, 88, 0.08); }
+.tool-badge-structured { color: var(--accent); border-color: rgba(94, 92, 230, 0.26); background: rgba(94, 92, 230, 0.08); }
 /* 文件类卡片头标题不再吃满 flex(给徽章让位)。 */
 .file-tool-summary .tool-title { flex: 0 1 auto; min-width: 0; }
 .file-tool-summary { gap: 7px; }

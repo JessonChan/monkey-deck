@@ -9,14 +9,20 @@
 // recurring payload shapes and renders each in plain language, and formatInline
 // now flattens recursively so no code path can emit JSON.
 //
-// Category coverage (priority order):
-//   ① array (non-path items)            → "共 N 项" + first 3 item previews
-//   ② path-led array (paths/grep lines) → the lines as-is, path lines first
-//   ③ record with dominant array field  → same as ① (matches/results/files/…)
-//   ④ record with path + body strings   → path on the first line, body after
-//   ⑤ flat record (scalar values)       → "key: value" lines (formatHuman)
-//   ⑥ nested record                     → recursive "key: value" flattening
-//                                         (formatInline, never JSON.stringify)
+// Category coverage (priority order — the #109 spec's six forms plus the
+// flat/nested record fallbacks the spec keeps as "open forms → raw collapse"):
+//   ① content-block array / {content:[…]}   → text join (LLM/MCP tool results)
+//   ② array (non-path items)                → "共 N 项" + first 3 item previews
+//   ③ path-led array (paths/grep lines)     → the lines as-is, path lines first
+//   ④ record with dominant array field      → same as ②/③ (matches/results/…)
+//   ⑤ record with path + body strings       → path on the first line, body after
+//   ⑥ record with url/title                 → title, then the url
+//   ⑦ record with ok/success boolean        → success/failure word (via t())
+//   ⑧ flat record / nested record           → "key: value" lines, recursively
+//                                             flattened — never JSON.stringify
+// Open forms that match nothing (primitives, empty shapes) return
+// {summary:null, hadStructure:false}; the caller keeps its own last resort and
+// the raw payload goes to the JSON collapse layer verbatim.
 
 /** Minimal structural type for i18next's t() so this lib stays UI-agnostic. */
 export type TranslateFn = (key: string, options?: Record<string, unknown>) => string;
@@ -122,22 +128,73 @@ function summarizeArray(items: unknown[], t: TranslateFn): string {
   return lines.join("\n");
 }
 
+// Content-block array (category ①): [{type:"text",text:"…"}, …] — the LLM/MCP
+// tool-result convention. Joins the text parts (one block per line; blocks
+// carry their own intra-block whitespace). All-or-nothing: if any item lacks a
+// string `text` (image blocks, plain scalars) the caller falls through to the
+// generic count+preview treatment instead. Null when nothing text-shaped.
+function joinTextBlocks(items: unknown[]): string | null {
+  if (items.length === 0) return null;
+  const parts: string[] = [];
+  for (const item of items) {
+    if (!isRecord(item) || typeof item.text !== "string") return null;
+    parts.push(item.text);
+  }
+  const joined = parts.join("\n").trim();
+  return joined || null;
+}
+
+export type ToolSummary = { summary: string | null; hadStructure: boolean };
+
+// Shared "no recognized structure" result: the caller renders its own last
+// resort and the raw payload goes to the JSON collapse layer verbatim.
+const NO_STRUCTURE: ToolSummary = { summary: null, hadStructure: false };
+
 // Summarize a fallback payload (no known text key matched) in plain language.
-// Returns null when there is nothing meaningful to say (primitives / empty
-// shapes); the caller keeps its own last-resort formatting for that case.
-export function summarizeToolPayload(raw: unknown, t: TranslateFn): string | null {
-  if (raw == null || typeof raw !== "object") return null;
-  if (Array.isArray(raw)) return raw.length > 0 ? summarizeArray(raw, t) : null;
-  if (!isRecord(raw)) return null;
-  // ③ Dominant array field (e.g. {matches: [...]}): same treatment as ①.
+// Returns {summary, hadStructure} per the #109 spec: hadStructure is true when
+// a known shape was recognized (the summary is the authoritative digest),
+// false for open forms where only the raw collapse carries real information.
+export function summarizeToolPayload(raw: unknown, t: TranslateFn): ToolSummary {
+  if (raw == null || typeof raw !== "object") return NO_STRUCTURE;
+  if (Array.isArray(raw)) {
+    if (raw.length === 0) return NO_STRUCTURE;
+    // ① before ②③: a text-block array must join, not become "N items".
+    return { summary: joinTextBlocks(raw) ?? summarizeArray(raw, t), hadStructure: true };
+  }
+  if (!isRecord(raw)) return NO_STRUCTURE;
+  // ① Content blocks wrapped in a record (MCP tool result {content: [...]}).
+  if (Array.isArray(raw.content)) {
+    const blocks = joinTextBlocks(raw.content);
+    if (blocks) return { summary: blocks, hadStructure: true };
+  }
+  // ④ Dominant array field (e.g. {matches: [...]}): same treatment as ②③.
   for (const k of ARRAY_FIELDS) {
     const v = raw[k];
-    if (Array.isArray(v) && v.length > 0) return summarizeArray(v, t);
+    if (Array.isArray(v) && v.length > 0) return { summary: summarizeArray(v, t), hadStructure: true };
   }
-  // ④ Read/write shape: path first, body after.
+  // ⑤ Read/write shape: path first, body after.
   const path = extractFilePath(raw);
   const body = pickStr(raw, BODY_KEYS);
-  if (path && body) return `${path}\n${body}`;
-  // ⑤⑥ Flat / nested record: "key: value" lines (JSON-free after formatInline).
-  return formatHuman(raw) || null;
+  if (path && body) return { summary: `${path}\n${body}`, hadStructure: true };
+  // ⑥ Link/fetch shape: title first, then the url (either may be absent).
+  const title = pickStr(raw, ["title"]);
+  const url = pickStr(raw, ["url"]);
+  if (title || url) return { summary: [title, url].filter(Boolean).join("\n"), hadStructure: true };
+  // ⑦ Success flag: {ok: true} / {success: false} → the word, not "ok: true".
+  const ok = typeof raw.ok === "boolean" ? raw.ok : typeof raw.success === "boolean" ? raw.success : null;
+  if (ok !== null) return { summary: t(ok ? "chat.toolSucceeded" : "chat.toolFailed"), hadStructure: true };
+  // ⑧ Flat / nested record: "key: value" lines (JSON-free after formatInline).
+  const flat = formatHuman(raw);
+  return flat ? { summary: flat, hadStructure: true } : NO_STRUCTURE;
+}
+
+// Faithful pretty-print of a raw payload — the #109 fidelity contract: the
+// summary line is for reading, while the copy button and the collapsed
+// disclosure <pre> carry the exact machine payload (JSON.stringify(raw, null, 2)).
+export function rawJsonText(raw: unknown): string {
+  try {
+    return JSON.stringify(raw, null, 2) ?? String(raw);
+  } catch {
+    return String(raw);
+  }
 }

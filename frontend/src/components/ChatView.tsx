@@ -24,7 +24,7 @@ import { relativeToRoot } from "../lib/dropFiles";
 import { hasPanelFilePayload, readPanelFilePayload } from "../lib/panelDrop";
 import { countDiffLines } from "../lib/diff";
 import { unifiedToOldNew } from "../lib/unified";
-import { extractFilePath, formatHuman, isRecord, pickStr, summarizeToolPayload, type TranslateFn } from "../lib/toolPayload";
+import { extractFilePath, formatHuman, isRecord, pickStr, rawJsonText, summarizeToolPayload, type TranslateFn } from "../lib/toolPayload";
 import { highlightToLines } from "../lib/highlight";
 import "../hljs-theme.css";
 import { buildRows, computeLayout, computeWindow, anchorAt, restoreScroll, isAtBottom, HeightModel, TAIL_PRIOR, HEAD_PRIOR, type VRow, type Layout } from "../lib/virtualList";
@@ -1185,12 +1185,16 @@ function MessageActions({ text, className = "", testId = "copy-msg" }: { text: s
 // in Collapsible, so a nested <button> is valid HTML). Copies the tool's output text and
 // stopPropagation so clicking it never toggles the collapse. §4.5 tooltip via react-tooltip.
 // Render only when `text` is non-empty (caller decides what to copy — usually extractToolText(rawOutput)).
-function SummaryCopyBtn({ text, testId }: { text: string; testId?: string }) {
+// `raw` (fallback outputs only): the #109 copy-semantics switch — the button then copies the
+// faithful pretty-printed machine payload (rawJsonText) instead of the human summary, and the
+// tooltip says so.
+function SummaryCopyBtn({ text, raw, testId }: { text: string; raw?: unknown; testId?: string }) {
   const { t } = useTranslation();
   const { copied, failed, copy } = useCopyFeedback();
+  const payload = raw !== undefined ? rawJsonText(raw) : text;
   const onCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
-    void copy(text);
+    void copy(payload);
   };
   const stop = (e: React.MouseEvent) => { e.stopPropagation(); };
   return (
@@ -1200,7 +1204,7 @@ function SummaryCopyBtn({ text, testId }: { text: string; testId?: string }) {
       onClick={onCopy}
       onMouseDown={stop}
       data-tooltip-id="md-tip"
-      data-tooltip-content={copied ? t("common.copied") : failed ? t("common.copyFailed") : t("chat.copyOutputTip")}
+      data-tooltip-content={copied ? t("common.copied") : failed ? t("common.copyFailed") : raw !== undefined ? t("chat.copyRawJsonTip") : t("chat.copyOutputTip")}
       {...(testId ? { "data-testid": testId } : {})}
     >
       {copied ? <Check size={12} /> : failed ? <X size={12} /> : <Copy size={12} />}
@@ -1262,8 +1266,9 @@ function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
   const hasDiff = !!(parts.oldStr && parts.newStr); // 真 diff(old/new 两段)
   const plainText = parts.plain; // 非 diff 的纯内容
   const outputR = item.status === "failed" && item.rawOutput != null ? extractToolText(item.rawOutput, t) : null;
-  // 折叠态复制:失败时复制 output,否则复制写入内容 / diff 新文本。
-  const summaryCopyText = outputR?.text || plainText || parts.newStr || "";
+  // Collapsed-state copy: failed fallback output copies the faithful raw JSON (#109);
+  // otherwise the written content / diff new text.
+  const summaryCopyText = outputR ? (outputR.fallback ? rawJsonText(item.rawOutput) : outputR.text) : (plainText || parts.newStr || "");
 
   const renderTarget = (label: string, p: string) => (
     <div className="file-target" data-testid="edit-target">
@@ -1282,7 +1287,7 @@ function EditToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
         <span className="tool-title">{item.title || t("chat.toolTitle.edit")}</span>
         {path && <span className="tool-badge" title={path}>{shortPath(path)}</span>}
         <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
-        {!running && summaryCopyText.trim() && <SummaryCopyBtn text={summaryCopyText} testId="edit-summary-copy" />}
+        {!running && summaryCopyText.trim() && <SummaryCopyBtn text={summaryCopyText} raw={outputR?.fallback ? item.rawOutput : undefined} testId="edit-summary-copy" />}
       </>}
     >
       {path && renderTarget(t("chat.targetFile"), path)}
@@ -1349,7 +1354,7 @@ function ReadToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
         <span className="tool-title">{item.title || t("chat.toolTitle.read")}</span>
         {path && <span className="tool-badge" title={path}>{shortPath(path)}</span>}
         <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
-        {!running && outputR?.text && <SummaryCopyBtn text={outputR.text} testId="read-summary-copy" />}
+        {!running && outputR?.text && <SummaryCopyBtn text={outputR.text} raw={outputR.fallback ? item.rawOutput : undefined} testId="read-summary-copy" />}
       </>}
     >
       {path && (
@@ -1407,7 +1412,7 @@ function SearchToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, {
         {pattern && <span className="tool-badge tool-badge-pattern" title={pattern}>{pattern}</span>}
         {!running && matchCount > 0 && <span className="tool-badge tool-badge-count">{t("chat.resultsCount", { count: matchCount })}</span>}
         <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
-        {!running && outputR?.text && <SummaryCopyBtn text={outputR.text} testId="search-summary-copy" />}
+        {!running && outputR?.text && <SummaryCopyBtn text={outputR.text} raw={outputR.fallback ? item.rawOutput : undefined} testId="search-summary-copy" />}
       </>}
     >
       {pattern && (
@@ -1451,12 +1456,10 @@ function SearchToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, {
 // for debugging, but never the first thing the user sees (§4.4).
 function RawPayloadDisclosure({ raw, testId }: { raw: unknown; testId?: string }) {
   const { t } = useTranslation();
-  let json: string;
-  try { json = JSON.stringify(raw, null, 2) ?? String(raw); } catch { json = String(raw); }
   return (
     <details className="tool-raw">
-      <summary className="tool-raw-summary" data-testid={testId}>{t("chat.rawData")}</summary>
-      <pre className="tool-raw-pre">{json}</pre>
+      <summary className="tool-raw-summary" data-testid={testId}>{t("chat.viewRawJson")}</summary>
+      <pre className="tool-raw-pre">{rawJsonText(raw)}</pre>
     </details>
   );
 }
@@ -1494,7 +1497,7 @@ function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, 
         <span className="tool-title">{item.title || t("chat.toolTitle.generic")}</span>
         {item.kind && <span className="tool-kind">{item.kind}</span>}
         <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
-        {!running && outputR?.text && <SummaryCopyBtn text={outputR.text} testId="generic-summary-copy" />}
+        {!running && outputR?.text && <SummaryCopyBtn text={outputR.text} raw={outputR.fallback ? item.rawOutput : undefined} testId="generic-summary-copy" />}
       </>}
     >
       {inputR && (
@@ -1523,11 +1526,16 @@ function GenericToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, 
             <span className="tool-section-label">
               {t("chat.output")}{outputR.exit != null ? t("chat.exitSuffix", { code: outputR.exit }) : ""}{outputR.truncated ? t("chat.truncatedSuffix") : ""}
             </span>
+            {/* #109: fallback digest marker — the line below is a summarized view of a
+                structured payload; the faithful machine payload hides in the raw disclosure. */}
+            {outputR.fallback && outputR.hadStructure && (
+              <span className="tool-badge tool-badge-structured" data-testid="generic-fallback-badge">{t("chat.structuredOutput")}</span>
+            )}
             <button
               className="msg-action-btn"
-              onClick={() => void outFb.copy(outputR?.text || "")}
+              onClick={() => void outFb.copy(outputR.fallback ? rawJsonText(item.rawOutput) : outputR?.text || "")}
               data-tooltip-id="md-tip"
-              data-tooltip-content={outFb.copied ? t("common.copied") : outFb.failed ? t("common.copyFailed") : t("common.copy")}
+              data-tooltip-content={outFb.copied ? t("common.copied") : outFb.failed ? t("common.copyFailed") : outputR.fallback ? t("chat.copyRawJsonTip") : t("common.copy")}
             >
               {outFb.copied ? <Check size={11} /> : outFb.failed ? <X size={11} /> : <Copy size={11} />}
             </button>
@@ -1563,7 +1571,7 @@ function BashToolCard({ item, onOpenFilePreview }: { item: Extract<ChatItem, { t
         <span className="tool-title">{item.title || t("chat.toolTitle.bash")}</span>
         {outputR?.exit != null && <span className={`bash-exit ${exitCls(outputR.exit)}`}>exit {outputR.exit}</span>}
         <span className={`tool-status ${stInfo.cls}`}>{stLabel}</span>
-        {!running && outputR?.text && <SummaryCopyBtn text={outputR.text} testId="bash-summary-copy" />}
+        {!running && outputR?.text && <SummaryCopyBtn text={outputR.text} raw={outputR.fallback ? item.rawOutput : undefined} testId="bash-summary-copy" />}
       </>}
     >
       {command && (
@@ -2010,23 +2018,28 @@ function pad2(n: number): string { return n < 10 ? `0${n}` : String(n); }
 // 从工具的 input/output 提取「人类可读的主要文本」+ exit/truncated 元信息。
 // opencode 的工具结果常是 {output, metadata:{exit,output,truncated}} 或 {command/content/...}。
 // 已知 key 都未命中(partial in_progress 载荷、未知 harness 结构)时,不再把结构化载荷
-// 直接抛给用户(#109):先 summarizeToolPayload 出人话摘要,最后才 formatHuman 兜底;
-// 原始载荷由渲染层的 RawPayloadDisclosure 折叠展示。formatHuman/formatInline/isRecord
-// 已抽到 lib/toolPayload.ts(formatInline 递归扁平化,永不 JSON.stringify)。
-function extractToolText(raw: unknown, t: TranslateFn): { text: string; exit?: number; truncated?: boolean; fallback: boolean } {
-  if (typeof raw === "string") return { text: raw, fallback: false };
+// 直接抛给用户(#109):先 summarizeToolPayload 出人话摘要(返回 {summary, hadStructure},
+// hadStructure 标记已识别形态),最后才 formatHuman 兜底;原始载荷由渲染层的
+// RawPayloadDisclosure 折叠展示。formatHuman/formatInline/isRecord 已抽到
+// lib/toolPayload.ts(formatInline 递归扁平化,永不 JSON.stringify)。
+function extractToolText(raw: unknown, t: TranslateFn): { text: string; exit?: number; truncated?: boolean; fallback: boolean; hadStructure: boolean } {
+  if (typeof raw === "string") return { text: raw, fallback: false, hadStructure: false };
   // Arrays are payloads too (glob/grep lists, record arrays): route them through
   // summarize for the count+preview / path-lines treatment instead of dumping
   // every item. isRecord excludes arrays, so they must not take the record path.
-  if (Array.isArray(raw)) return { text: summarizeToolPayload(raw, t) ?? formatHuman(raw), fallback: true };
-  if (!isRecord(raw)) return { text: formatHuman(raw), fallback: true };
+  if (Array.isArray(raw)) {
+    const s = summarizeToolPayload(raw, t);
+    return { text: s.summary ?? formatHuman(raw), fallback: true, hadStructure: s.hadStructure };
+  }
+  if (!isRecord(raw)) return { text: formatHuman(raw), fallback: true, hadStructure: false };
   const meta = isRecord(raw.metadata) ? raw.metadata : undefined;
   const exit = typeof meta?.exit === "number" ? meta.exit : (typeof raw.exit === "number" ? raw.exit : undefined);
   const truncated = Boolean(meta?.truncated ?? raw.truncated);
   for (const k of ["output", "stdout", "stderr", "content", "command", "prompt", "message", "text"]) {
     const v = raw[k];
-    if (typeof v === "string" && v.trim()) return { text: v, exit, truncated, fallback: false };
+    if (typeof v === "string" && v.trim()) return { text: v, exit, truncated, fallback: false, hadStructure: false };
   }
-  if (typeof meta?.output === "string" && meta.output.trim()) return { text: meta.output, exit, truncated, fallback: false };
-  return { text: summarizeToolPayload(raw, t) ?? formatHuman(raw), exit, truncated, fallback: true };
+  if (typeof meta?.output === "string" && meta.output.trim()) return { text: meta.output, exit, truncated, fallback: false, hadStructure: false };
+  const s = summarizeToolPayload(raw, t);
+  return { text: s.summary ?? formatHuman(raw), exit, truncated, fallback: true, hadStructure: s.hadStructure };
 }
