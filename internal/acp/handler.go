@@ -328,14 +328,17 @@ func NewHandler(workDir string, onEvent func(SessionEvent), onPermission func(Pe
 }
 
 // SetPermissionRecovery 配置权限回调失败恢复策略(Task #15115)。
-// retries<0 视作 0;timeoutPolicy 为 "allow"/"deny"(空串保留默认)。
+// retries<0 视作 0;timeoutPolicy 为 "allow"/"deny";空串/未知视作 allow(与零值语义一致),
+// chat 装配层负责归一(normalizePermTimeoutPolicy)。
 // 并发安全:仅在 session 启动 / 配置变更时调用,不在 RequestPermission 热路径中写。
 func (h *Handler) SetPermissionRecovery(retries int, timeoutPolicy string) {
 	if retries < 0 {
 		retries = 0
 	}
+	h.mu.Lock()
 	h.permRetries = retries
 	h.permTimeoutPolicy = timeoutPolicy
+	h.mu.Unlock()
 }
 
 // RespondPermission 由 service 调(前端用户点了某个选项)。非阻塞;返回 ok=false 表示无此待裁决项。
