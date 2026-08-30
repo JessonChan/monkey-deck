@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/coder/acp-go-sdk"
 	"github.com/jessonchan/monkey-deck/internal/mcp"
@@ -160,18 +161,29 @@ func (r *Runner) ResumeChatSession(ctx context.Context, workDir, sessionID strin
 		proc.shutdown()
 		return nil, fmt.Errorf("resume session: harness does not advertise sessionCapabilities.resume")
 	}
-	// 抑制 resume 期间 harness 重放的历史消息/工具/plan 事件:前端已从 DB 加载历史,重放会重复显示。
-	// 但不能 blanket 吞——available_commands 是会话级元数据(不在 load 响应里、也不入库),opencode 在
-	// load 响应*之前*发它(service.ts sendAvailableCommands 在 return 前),会落在 ResumeSession 阻塞窗口
-	// 里被吞掉、永久丢失。故只抑制历史重放,放行元数据(available_commands / config_option 等)。
+	// Suppress history events the harness replays during resume: the frontend already
+	// loaded them from the DB, replay would render duplicates. Never a blanket drop —
+	// available_commands is session-level metadata (not in the load response, not in the
+	// DB); opencode sends it BEFORE the load response (service.ts sendAvailableCommands
+	// runs before return), so it lands inside the blocking ResumeSession window and a
+	// blanket drop would lose it for good. Only history replay is suppressed; metadata
+	// (available_commands / config_option etc.) passes through.
+	//
+	// #79: the pass-through chain also tags the first post-resume no-messageId
+	// agent_message_chunk (see tagResumeRotate). The arm is set for the whole call, but
+	// window chunks are dropped before tagging ever sees them, so only chunks arriving
+	// after the RPC returned can consume it.
 	realOnEvent := handler.OnEvent
+	var rotateArmed atomic.Bool
+	rotateArmed.Store(true)
+	liveOnEvent := func(e SessionEvent) { realOnEvent(tagResumeRotate(&rotateArmed, e)) }
 	handler.OnEvent = func(e SessionEvent) {
 		switch e.Kind {
 		case "agent_message_chunk", "agent_thought_chunk", "user_message_chunk",
 			"tool_call", "tool_call_update", "plan", "plan_update", "plan_removed":
-			return // 历史重放:前端已从 DB 加载,丢弃
+			return // replayed history: frontend already loaded it from the DB, drop
 		}
-		realOnEvent(e) // 会话级元数据:放行
+		liveOnEvent(e) // session-level metadata: pass through
 	}
 	acpServers, skipped := mcp.ToAcpServers(mcps, initResp.AgentCapabilities.McpCapabilities)
 	if len(skipped) > 0 {
@@ -182,7 +194,7 @@ func (r *Runner) ResumeChatSession(ctx context.Context, workDir, sessionID strin
 		Cwd:        workDir,
 		McpServers: acpServers,
 	})
-	handler.OnEvent = realOnEvent
+	handler.OnEvent = liveOnEvent // keep rotate-once tagging active for post-resume chunks (#79)
 	if err != nil {
 		proc.shutdown()
 		return nil, fmt.Errorf("load session: %w", err)
@@ -196,6 +208,23 @@ func (r *Runner) ResumeChatSession(ctx context.Context, workDir, sessionID strin
 	}
 	registerHarness(proc.pgid)
 	return cs, nil
+}
+
+// tagResumeRotate marks the FIRST no-messageId agent_message_chunk after session/resume
+// with RotateOnce (#79). junie-style harnesses violate session-resume.mdx by replaying
+// history AFTER the resume RPC returned (penetrating the suppression window — conformance
+// audit, docs/worklog/2026-08-06-acp-conformance-audit.md) and never send messageId, so
+// without the marker the fallback merge appends the real reply into a pre-resume bubble
+// (penetrating replay tail / DB tail). The CAS consumes the arm exactly once per resume:
+// a messageId-bearing chunk or a thought chunk passing through does NOT spend it, and once
+// spent every later chunk keeps the documented fallback merge semantics (rotate once).
+// Extracted as a pure step for unit testing; ResumeChatSession wires it into the event
+// chain. Safe under concurrent callbacks (atomic).
+func tagResumeRotate(armed *atomic.Bool, e SessionEvent) SessionEvent {
+	if e.Kind == "agent_message_chunk" && e.MessageID == "" && armed.CompareAndSwap(true, false) {
+		e.RotateOnce = true
+	}
+	return e
 }
 
 // spawnAndInit 公共前置:spawn harness(独立进程组)→ 建连接 → Initialize。

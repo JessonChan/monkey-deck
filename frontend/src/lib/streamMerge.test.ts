@@ -172,3 +172,47 @@ test("无 messageId 回退:同类连续归并(不因中间异类新建)", () => 
   expect(thoughts.length).toBe(1);
   expect((thoughts[0] as Extract<ChatItem, { type: "thought" }>).text).toBe("想123");
 });
+
+// #79 junie resume 粘连缓解:resume 后首个无 messageId agent_message_chunk 强制开新块。
+// 后端(acp.tagResumeRotate)恰好给一条事件打标;这里锁定前端 merge 的消费语义。
+test("#79 rotateOnce:resume 后首个无 messageId chunk 强制新块,不粘 resume 前气泡", () => {
+  // Pre-resume residue: a still-streaming bubble standing in for the penetrating
+  // replay tail (the sticking source — the real reply used to merge into it).
+  let items: ChatItem[] = [];
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "replay tail", seq: 1 }));
+  // The tagged first chunk must NOT append into it: fresh bubble, old one finalized.
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "real", rotateOnce: true, seq: 2 }));
+  let bubbles = agentBubbles(items);
+  expect(bubbles.length).toBe(2);
+  expect(bubbles[0].text).toBe("replay tail");
+  expect(bubbles[0].streaming).toBe(false);
+  expect(bubbles[1].text).toBe("real");
+  expect(bubbles[1].streaming).toBe(true);
+
+  // Second chunk carries no flag: documented fallback stickiness resumes.
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "real reply", seq: 3 }));
+  bubbles = agentBubbles(items);
+  expect(bubbles.length).toBe(2);
+  expect(bubbles[1].text).toBe("real reply");
+});
+
+test("#79 rotateOnce:对 DB 末条(非 streaming)也只开一个新块", () => {
+  // App.tsx seeds items straight from messagesToItems — DB rows carry no streaming flag.
+  let items: ChatItem[] = [{ type: "agent", id: "db-tail", text: "db tail" }];
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "real", rotateOnce: true, seq: 1 }));
+  const bubbles = agentBubbles(items);
+  expect(bubbles.length).toBe(2);
+  expect(bubbles[0].text).toBe("db tail");
+  expect(bubbles[1].text).toBe("real");
+});
+
+test("#79 rotateOnce + messageId:主键归并路径零回归", () => {
+  // A tagged chunk that DOES carry messageId stays on the primary key path —
+  // the flag exists for the no-messageId fallback only.
+  let items: ChatItem[] = [];
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "AB", messageId: "mA", rotateOnce: true, seq: 1 }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "ABC", messageId: "mA", seq: 2 }));
+  const bubbles = agentBubbles(items);
+  expect(bubbles.length).toBe(1);
+  expect(bubbles[0].text).toBe("ABC");
+});

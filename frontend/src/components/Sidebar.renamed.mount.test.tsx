@@ -1,14 +1,18 @@
-// Mount-test Sidebar session renamed marker (#154).
+// Mount-test Sidebar session renamed marker (#154, phase 2 state-typed).
 //
 // Pins the rename-indicator contract end-to-end from props down to what a user
 // can see and hover:
-//  1. Renamed rows (custom_title set) show the quiet pencil AHEAD of the title,
-//     wired to the md-tip tooltip with the sidebar.renamedTip key; the real
-//     zh/en locale copy is pinned too (「用户重命名」 / "Renamed by user").
-//  2. Native (auto-titled) rows render zero prefix — no marker node anywhere.
-//  3. Coexistence: a renamed+pinned row keeps the same height as a plain row
-//     (12px discipline; geometry equality + CSS contract pin — happy-dom has
-//     no layout engine, same method as Sidebar.tags.mount.test.tsx).
+//  1. Idle renamed rows (custom_title set, statusBySession !== "prompting")
+//     show the quiet pencil at the title TAIL — the label's next sibling,
+//     ahead of the meta cluster.
+//  2. Prompting rows keep the pencil AHEAD of the title (front slot constant
+//     for the whole turn).
+//  3. Both slots wire the md-tip tooltip to the sidebar.renamedTip key; the
+//     real zh/en locale copy is pinned too (「用户重命名」 / "Renamed by user").
+//  4. Native (auto-titled) rows render zero marker in either state.
+//  5. Coexistence: a renamed+pinned row keeps the same height as a plain row
+//     in both states (12px discipline; geometry equality + CSS contract pin —
+//     happy-dom has no layout engine, same method as Sidebar.tags.mount.test.tsx).
 //
 // Same mock scaffolding as Sidebar.tags.mount.test.tsx (bindings / i18n /
 // tooltip / clipboard stubbed; no real backend calls during mount).
@@ -155,7 +159,7 @@ beforeEach(() => {
 });
 
 describe("Sidebar session renamed marker (#154)", () => {
-  test("1. renamed row: pencil ahead of title, tooltip keyed to sidebar.renamedTip", async () => {
+  test("1. idle renamed row: pencil at title tail, ahead of the meta cluster", async () => {
     const { host } = await mounted({ p1: [sess("s1", "p1", { customTitle: "my title" })] });
 
     const mark = host.querySelector<HTMLElement>('[data-testid="renamed-s1"]');
@@ -163,11 +167,12 @@ describe("Sidebar session renamed marker (#154)", () => {
     expect(mark!.classList.contains("session-renamed")).toBe(true);
     expect(mark!.querySelector("svg")).not.toBeNull();
 
-    // AHEAD of the title: the marker is the label's direct previous sibling
-    // inside the row main button (dot → pencil → title).
+    // Idle (no status entry → st !== "prompting"): the marker is the label's
+    // direct NEXT sibling inside the row main button (dot → title → pencil),
+    // ahead of the meta cluster occupying the tail slots.
     const main = host.querySelector<HTMLElement>('[data-testid="session-s1"] .session-item-main')!;
     const label = main.querySelector<HTMLElement>(".session-label")!;
-    expect(label.previousElementSibling).toBe(mark);
+    expect(label.nextElementSibling).toBe(mark);
 
     // Tooltip payload: the marker requests exactly the renamedTip key.
     expect(mark!.getAttribute("data-tooltip-id")).toBe("md-tip");
@@ -178,13 +183,41 @@ describe("Sidebar session renamed marker (#154)", () => {
     expect((en as Record<string, any>).sidebar.renamedTip).toBe("Renamed by user");
   });
 
-  test("2. native title: zero prefix — no marker node anywhere", async () => {
-    const { host } = await mounted({ p1: [sess("s1", "p1")] });
-    expect(host.querySelector('[data-testid="renamed-s1"]')).toBeNull();
-    expect(host.querySelectorAll(".session-renamed").length).toBe(0);
+  test("2. prompting renamed row: pencil ahead of the title — front slot constant", async () => {
+    const { host } = await mounted(
+      { p1: [sess("s1", "p1", { customTitle: "my title" })] },
+      { statusBySession: { s1: "prompting" } },
+    );
+
+    const mark = host.querySelector<HTMLElement>('[data-testid="renamed-s1"]');
+    expect(mark).not.toBeNull();
+    expect(mark!.classList.contains("session-renamed")).toBe(true);
+
+    // Prompting: marker is the label's direct PREVIOUS sibling (dot → pencil → title).
+    const main = host.querySelector<HTMLElement>('[data-testid="session-s1"] .session-item-main')!;
+    const label = main.querySelector<HTMLElement>(".session-label")!;
+    expect(label.previousElementSibling).toBe(mark);
+
+    // Same tooltip contract in the front slot.
+    expect(mark!.getAttribute("data-tooltip-id")).toBe("md-tip");
+    expect(mark!.getAttribute("data-tooltip-content")).toBe("sidebar.renamedTip");
   });
 
-  test("3. coexists with pin: row height unchanged + CSS family contract", async () => {
+  test("3. native title: zero marker in either state", async () => {
+    const idle = await mounted({ p1: [sess("s1", "p1")] });
+    expect(idle.host.querySelector('[data-testid="renamed-s1"]')).toBeNull();
+    expect(idle.host.querySelectorAll(".session-renamed").length).toBe(0);
+
+    const prompting = await mounted(
+      { p1: [sess("s2", "p1")] },
+      { statusBySession: { s2: "prompting" } },
+    );
+    expect(prompting.host.querySelector('[data-testid="renamed-s2"]')).toBeNull();
+    expect(prompting.host.querySelectorAll(".session-renamed").length).toBe(0);
+  });
+
+  test("4. coexists with pin: row height unchanged in both states + CSS family contract", async () => {
+    // Idle (tail slot): renamed+pinned row present, geometry matches a plain row.
     const { host } = await mounted({
       p1: [sess("s1", "p1", { customTitle: "renamed", pinned: true }), sess("s2", "p1")],
     });
@@ -197,6 +230,15 @@ describe("Sidebar session renamed marker (#154)", () => {
     const r1 = host.querySelector<HTMLElement>('[data-testid="session-s1"]')!;
     const r2 = host.querySelector<HTMLElement>('[data-testid="session-s2"]')!;
     expect(r1.offsetHeight).toBe(r2.offsetHeight);
+
+    // Prompting (front slot): same height discipline.
+    const act = await mounted(
+      { p1: [sess("s3", "p1", { customTitle: "renamed", pinned: true }), sess("s4", "p1")] },
+      { statusBySession: { s3: "prompting" } },
+    );
+    const r3 = act.host.querySelector<HTMLElement>('[data-testid="session-s3"]')!;
+    const r4 = act.host.querySelector<HTMLElement>('[data-testid="session-s4"]')!;
+    expect(r3.offsetHeight).toBe(r4.offsetHeight);
 
     // CSS contract pin: same persistent-marker family as the pin mark —
     // never stretches the flex row, no extra line box, lowest-contrast tier.

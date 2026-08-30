@@ -194,3 +194,54 @@ func TestSegmentFallbackToolCallUpdateNoBreak(t *testing.T) {
 		t.Fatalf("tool_call_update must not break the stream; want one agent segment %q, got %+v", "abc", segs)
 	}
 }
+
+// TestSegmentFallbackResumeRotate locks the #79 rotate tier: the first no-messageId
+// agent_message_chunk after session/resume (tagged RotateOnce by acp.tagResumeRotate)
+// must open a FRESH entry even when a same-role fallback entry is open. Without the
+// tier, junie-style harnesses (replay history after the resume RPC returns + never
+// send messageId) make the real reply append into the replay tail. The NEXT chunk
+// must return to the documented fallback semantics (merge into the fresh entry).
+func TestSegmentFallbackResumeRotate(t *testing.T) {
+	t.Run("rotate once, then fallback stickiness resumes", func(t *testing.T) {
+		svc, sessionID, _ := newTestService(t)
+		ls := svc.active[sessionID]
+
+		// Open fallback entry — stands in for the pre-resume / replay tail block.
+		svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "old"})
+		// First post-resume chunk, tagged: fresh entry, must NOT merge into "old".
+		svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "new", RotateOnce: true})
+		// Next chunk, untagged: documented fallback merge into the fresh entry.
+		svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "!"})
+
+		ls.mu.Lock()
+		segs := ls.segmentEntries()
+		ls.mu.Unlock()
+
+		want := []segEntry{{"agent", "old"}, {"agent", "new!"}}
+		if len(segs) != len(want) {
+			t.Fatalf("rotate-once must split into %d segments, got %d: %+v", len(want), len(segs), segs)
+		}
+		for i, w := range want {
+			if segs[i] != w {
+				t.Fatalf("segment %d: want %+v, got %+v", i, w, segs[i])
+			}
+		}
+	})
+
+	t.Run("messageId path ignores the flag", func(t *testing.T) {
+		svc, sessionID, _ := newTestService(t)
+		ls := svc.active[sessionID]
+
+		// Primary path: a tagged messageId chunk must not split its own message.
+		svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "a", MessageID: "m1", RotateOnce: true})
+		svc.handleEvent(ls, sessionID, acp.SessionEvent{Kind: "agent_message_chunk", Text: "b", MessageID: "m1"})
+
+		ls.mu.Lock()
+		segs := ls.segmentEntries()
+		ls.mu.Unlock()
+
+		if len(segs) != 1 || segs[0].role != "agent" || segs[0].content != "ab" {
+			t.Fatalf("RotateOnce must not split the primary messageId path, got %+v", segs)
+		}
+	})
+}

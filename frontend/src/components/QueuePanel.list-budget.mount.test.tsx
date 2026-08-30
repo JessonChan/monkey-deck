@@ -274,10 +274,12 @@ describe("QueuePanel list scroll cap (#146)", () => {
       </>
     );
     await flush();
-    // QueuePanel's RO and Composer's RO both target the queue panel (its box
-    // always moves, even once the footer's 60vh cap freezes the footer box).
-    expect(FakeResizeObserver.instances.length).toBe(2);
-    expect(FakeResizeObserver.instances.every((ro) => ro.observed?.classList.contains("queue-panel"))).toBe(true);
+    // QueuePanel's RO and Composer's budget RO both target the queue panel (its box
+    // always moves, even once the footer's 60vh cap freezes the footer box). Since
+    // #151 phase 2 a third observer (compose-bar cfg loop) also exists; count only
+    // the queue-panel watchers.
+    const panelRos = FakeResizeObserver.instances.filter((ro) => ro.observed?.classList.contains("queue-panel"));
+    expect(panelRos.length).toBe(2);
     // Idempotent: repeated deliveries settle on the same values.
     await settle();
     const cap = listEl()!.style.maxHeight;

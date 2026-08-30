@@ -186,6 +186,31 @@ export function clampComposerHeight(scrollHeight: number, budget: number): numbe
   return Math.min(scrollHeight, cap);
 }
 
+// ─── cfg dot collapse (#151 phase 2) ───
+// Threshold decisions for the ModelSelect narrow-state collapse. Both are pure and
+// unit-tested; the ResizeObserver effect on .compose-bar only supplies measurements.
+// Entry (expanded form): the row's natural widths overflow the bar. .cfg-group is
+// flex-shrink:0, so under squeeze the chips keep their text and the overflow shows up
+// in the measurements instead of being masked by silent shrink.
+export function cfgShouldCollapse(toolsW: number, rightW: number, avail: number, gap: number): boolean {
+  return toolsW + gap + rightW > avail;
+}
+// Exit (dot form): the dot row's own width (rightW already includes it) plus the
+// REMEMBERED full width of the cfg-group must fit again. Comparing against the
+// remembered expanded width — not the current dot-row width — is the hysteresis: the
+// dot row is fixed-width, so a naive current-width check would read "fits" right after
+// collapsing and flip straight back (with no RO refire to recover from).
+export function cfgShouldExpand(toolsW: number, restW: number, cfgFullW: number, avail: number, gap: number): boolean {
+  return toolsW + gap + restW + cfgFullW <= avail;
+}
+// compose-bar column gap for the threshold math; engines resolve the stylesheet value,
+// bare mounts (tests / detached nodes) fall back to the .compose-bar CSS constant.
+const CFG_COLLAPSE_GAP_FALLBACK = 8;
+function composeBarGap(bar: HTMLElement): number {
+  const px = Number.parseFloat(getComputedStyle(bar).columnGap);
+  return Number.isFinite(px) ? px : CFG_COLLAPSE_GAP_FALLBACK;
+}
+
 // Viewport budget for the textarea: distance from the chat-body's top edge to the
 // viewport bottom (= viewport minus header and anything stacked above the scroll
 // area), minus everything inside the footer except the textarea's current height
@@ -237,6 +262,12 @@ export default forwardRef<ComposerHandle, Props>(function Composer({ value, onCh
   // Tab path completion race guard: monotonic id; each Tab press bumps it and
   // only the latest resolution may apply (§5.3 invariant over identity, not order).
   const completeReqId = useRef(0);
+
+  // cfg dot collapse (#151 phase 2): the compose-bar element carries data-cfg-collapsed;
+  // cfgFullW remembers the cfg-group's last measured natural (expanded) width so the
+  // exit threshold stays decidable while collapsed (the dot row hides the real width).
+  const composeBarRef = useRef<HTMLDivElement | null>(null);
+  const cfgFullWRef = useRef(0);
 
   // --- 长文本折叠(展示态)---
   // isLong:超过行/字符阈值即为长文本;collapsed:是否折叠成紧凑预览块。
@@ -376,6 +407,62 @@ useEffect(() => {
     ro?.disconnect();
   };
 }, [collapsed]);
+
+// cfg dot collapse (#151 phase 2): one RO instance (deliberately separate from the
+// queue-panel budget observer above) watches the compose-bar, its two flex children and
+// the cfg-group, and toggles data-cfg-collapsed on the bar. The attribute — not React
+// state — drives the dot form via CSS, so collapse/expand cannot disturb popover state
+// or re-render the composer. Feedback-loop safety: the cfg-group DOES resize on the
+// flip (text row ↔ fixed 14px dots) and re-fires this observer, but re-evaluation is
+// idempotent — entry compares tools + gap + right against avail, exit compares the
+// same canonical widths with cfg's remembered natural width — so a flip is confirmed
+// (not reversed) by the extra fire and the observation settles. The remembered width
+// (cfgFullWRef) is exactly the cfg-group's between-forms width difference, refreshed
+// on every expanded delivery; if it went stale while collapsed (model renamed via the
+// dot popover) the expansion pass re-checks and re-collapses. Unknown-width/hidden
+// deliveries (avail <= 0, inactive tab) decide nothing; no-RO environments keep the
+// wide form.
+useEffect(() => {
+  const bar = composeBarRef.current;
+  if (!bar || typeof ResizeObserver === "undefined") return;
+  const entryWidth = (el: Element, entries: ResizeObserverEntry[]): number | null => {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if (entries[i].target === el) return entries[i].contentRect.width;
+    }
+    return null;
+  };
+  const observed = new WeakSet<Element>();
+  const ro = new ResizeObserver((entries) => {
+    if (!entries) return; // shared test fakes may trigger() bare (no delivery payload)
+    const tools = bar.querySelector<HTMLElement>(".compose-tools");
+    const right = bar.querySelector<HTMLElement>(".compose-right");
+    const cfg = bar.querySelector<HTMLElement>(".cfg-group");
+    // Lazy-watch the cfg-group: ModelSelect renders null until config options arrive.
+    if (cfg && !observed.has(cfg)) { observed.add(cfg); ro.observe(cfg); }
+    if (!tools || !right || !cfg) { bar.removeAttribute("data-cfg-collapsed"); return; }
+    const avail = entryWidth(bar, entries) ?? bar.clientWidth;
+    if (avail <= 0) return; // hidden bar (inactive tab): keep current form
+    const gap = composeBarGap(bar);
+    const toolsW = entryWidth(tools, entries) ?? tools.offsetWidth;
+    const rightW = entryWidth(right, entries) ?? right.offsetWidth;
+    const cfgW = entryWidth(cfg, entries) ?? cfg.offsetWidth;
+    if (cfgW <= 0) return; // cfg width unknown (first delivery before its observation,
+    // hidden triggers): deciding now would memorize a bogus 0 natural width and flip
+    // straight back on the next delivery — wait for a real measurement instead.
+    if (!bar.hasAttribute("data-cfg-collapsed")) {
+      cfgFullWRef.current = cfgW; // natural width — .cfg-group is flex-shrink:0
+      if (cfgShouldCollapse(toolsW, rightW, avail, gap)) bar.setAttribute("data-cfg-collapsed", "");
+    } else if (cfgShouldExpand(toolsW, rightW - cfgW, cfgFullWRef.current, avail, gap)) {
+      bar.removeAttribute("data-cfg-collapsed");
+    }
+  });
+  observed.add(bar);
+  ro.observe(bar);
+  for (const el of [bar.querySelector(".compose-tools"), bar.querySelector(".compose-right")]) {
+    if (el) { observed.add(el); ro.observe(el); }
+  }
+  return () => ro.disconnect();
+}, []);
 
   // Imperative focus via focusSignal (quote-to-composer). Expand the long-text
   // preview first (the textarea isn't mounted while collapsed → ref is null),
@@ -1075,7 +1162,7 @@ useEffect(() => {
           />
         )}
 
-        <div className="compose-bar">
+        <div className="compose-bar" ref={composeBarRef}>
           <div className="compose-tools">
             {/* PickFiles opens a NATIVE dialog on the desktop host (§1.8 remote):
                 on a phone the tap would do nothing visible there. Hide the entry
@@ -1287,6 +1374,11 @@ function ComposerUsage({ usage, draftTokens }: {
 // ModelSelect 渲染 configOptions 里的 model/effort/mode 控件(发送按钮左侧)。
 // 用 cmdk(Command) + @radix-ui/react-popover:Radix 管开合/定位/焦点/ARIA,cmdk 管搜索/分组/键盘导航。
 // model 按 value 的 provider 前缀("provider/model")分组;大量选项时 cmdk 内置搜索 + List 滚动。
+// Narrow-state dot form (#151 phase 2): Composer's compose-bar RO toggles
+// data-cfg-collapsed and CSS swaps the text chips for fixed 14px letter dots. Letters
+// are the fixed category identity M/E/T, positional per render order: Model / Mode /
+// Thought — "Mode" can't take "M" (Model owns it), so it takes the spec's E; the
+// native title tooltip carries the real label: value either way.
 export function ModelSelect({ configOptions, disabled, onSetConfig, onRefreshConfig, contextTokens }: {
   configOptions: ConfigOption[];
   disabled: boolean;
@@ -1301,9 +1393,9 @@ export function ModelSelect({ configOptions, disabled, onSetConfig, onRefreshCon
   if (!modelOpt) return null;
   return (
     <div className="cfg-group">
-      <ConfigSelect label={t("composer.cfgLabel.model")} currentValue={modelOpt.currentValue} options={modelOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(modelOpt.id, v)} groupByProvider searchable contextTokens={contextTokens} onRefreshConfig={onRefreshConfig} />
-      {modeOpt && <ConfigSelect label={t("composer.cfgLabel.mode")} currentValue={modeOpt.currentValue} options={modeOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(modeOpt.id, v)} />}
-      {effortOpt && <ConfigSelect label={t("composer.cfgLabel.thought")} currentValue={effortOpt.currentValue} options={effortOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(effortOpt.id, v)} />}
+      <ConfigSelect label={t("composer.cfgLabel.model")} currentValue={modelOpt.currentValue} options={modelOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(modelOpt.id, v)} groupByProvider searchable contextTokens={contextTokens} onRefreshConfig={onRefreshConfig} dotLetter="M" />
+      {modeOpt && <ConfigSelect label={t("composer.cfgLabel.mode")} currentValue={modeOpt.currentValue} options={modeOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(modeOpt.id, v)} dotLetter="E" />}
+      {effortOpt && <ConfigSelect label={t("composer.cfgLabel.thought")} currentValue={effortOpt.currentValue} options={effortOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(effortOpt.id, v)} dotLetter="T" />}
     </div>
   );
 }
@@ -1320,9 +1412,10 @@ interface ConfigSelectProps {
   searchable?: boolean;
   contextTokens?: number; // model 专用:切换成本提示用的当前上下文 token 量(Task #15138)
   onRefreshConfig?: () => void; // model 专用:打开下拉时防抖重拉 configOptions
+  dotLetter?: string; // collapsed-dot micro-badge (M/E/T category identity)
 }
 
-function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupByProvider, searchable, contextTokens, onRefreshConfig }: ConfigSelectProps) {
+function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupByProvider, searchable, contextTokens, onRefreshConfig, dotLetter }: ConfigSelectProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   // model 下拉打开时防抖重拉最新 configOptions(同步外部 provider/model 改动);mode/effort 不传 → 不触发。
@@ -1385,6 +1478,7 @@ function ConfigSelect({ label, currentValue, options, disabled, onSelect, groupB
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
         <button className={`cfg-trigger ${open ? "open" : ""}`} disabled={disabled} title={`${label}: ${currentName}`} data-testid={`cfg-trigger-${label}`}>
+          {dotLetter && <span className="cfg-dot-letter" aria-hidden="true">{dotLetter}</span>}
           <span className="cfg-trigger-text">{currentName}</span>
           <ChevronDown size={11} className="cfg-chevron" />
         </button>

@@ -279,15 +279,16 @@ describe("Composer autoGrow viewport budget (#151)", () => {
 
   test("RO observes the queue panel (footer box freezes under the 60vh cap)", async () => {
     await mountedHeight(600);
-    expect(FakeResizeObserver.instances.length).toBe(1);
-    const ro = FakeResizeObserver.instances[0];
-    expect(ro.observed?.classList.contains("queue-panel")).toBe(true);
+    // Two observers exist since #151 phase 2 (this budget loop + the compose-bar cfg
+    // loop); this suite pins the budget loop's target only, so look it up by target.
+    const ro = FakeResizeObserver.instances.find((r) => r.observed?.classList.contains("queue-panel"));
+    expect(ro).toBeDefined();
   });
 
   test("queue growth re-clamps via RO delivery and is idempotent", async () => {
     const ta = await mountedHeight(600);
     expect(ta.style.height).toBe("220px");
-    const ro = FakeResizeObserver.instances[0];
+    const ro = FakeResizeObserver.instances.find((r) => r.observed?.classList.contains("queue-panel"))!;
     // queue items arrive: base 100 -> 450 -> budget 500 - 450 = 50 -> floor 52
     footerBase = 450;
     ro.trigger();
@@ -309,7 +310,8 @@ describe("Composer autoGrow viewport budget (#151)", () => {
     activeTa = ta;
     // budget fallback = 220 -> min(1000, 220) regardless of the small window
     expect(ta.style.height).toBe("220px");
-    // no footer ancestor -> nothing to observe
-    expect(FakeResizeObserver.instances.every((r) => r.observed === null)).toBe(true);
+    // no footer ancestor -> the budget loop observes nothing (only the cfg loop,
+    // which targets the compose-bar family, exists here)
+    expect(FakeResizeObserver.instances.some((r) => r.observed?.classList.contains("queue-panel"))).toBe(false);
   });
 });

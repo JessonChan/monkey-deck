@@ -904,6 +904,21 @@ export default function Sidebar(props: Props) {
                     // (affects every non-renamed session).
                     const labelTip = s.customTitle && s.title ? t("sidebar.originalTitleTip", { title: s.title }) : undefined;
                     const labelTipProps = labelTip ? { "data-tooltip-id": "md-tip", "data-tooltip-content": labelTip } : {};
+                    // #154 phase 2: the rename marker is state-typed. While the session is
+                    // prompting it stays ahead of the title (persistent, as shipped in #154);
+                    // when idle (statusBySession !== "prompting") it moves to the tail slot
+                    // after the label, ahead of the meta cluster. One element, two mutually
+                    // exclusive slots — node, size, color and tooltip are identical either way.
+                    const renamedMark = s.customTitle ? (
+                      <span
+                        className="session-renamed"
+                        data-tooltip-id="md-tip"
+                        data-tooltip-content={t("sidebar.renamedTip")}
+                        data-testid={`renamed-${s.id}`}
+                      >
+                        <Pencil size={10} />
+                      </span>
+                    ) : null;
                     return (
                       <div
                         key={s.id}
@@ -932,19 +947,13 @@ export default function Sidebar(props: Props) {
                           onClick={(e) => onSessionRowClick(e, s, p.id)}
                         >
                           <span className={`session-dot ${cls}`} data-tooltip-id="md-tip" data-tooltip-content={dotTip} />
-                          {/* #154: user-renamed marker, ahead of the title — quiet pencil so a
-                              custom_title stays distinguishable from the auto title at a glance. */}
-                          {s.customTitle && (
-                            <span
-                              className="session-renamed"
-                              data-tooltip-id="md-tip"
-                              data-tooltip-content={t("sidebar.renamedTip")}
-                              data-testid={`renamed-${s.id}`}
-                            >
-                              <Pencil size={10} />
-                            </span>
-                          )}
+                          {/* Prompting slot (#154 phase 2): marker ahead of the title —
+                              constant for the whole turn. */}
+                          {active && renamedMark}
                           <span className="session-label" {...labelTipProps}>{displayTitle}</span>
+                          {/* Idle slot: title tail, ahead of the meta cluster (popout /
+                              harness / pin / terminal / status). Same node, same appearance. */}
+                          {!active && renamedMark}
                           {props.poppedSessionIds?.has(s.id) && (
                             <span className="session-popout-mark" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.popoutTip")} data-testid={`popout-${s.id}`}>
                               <ExternalLink size={11} />
