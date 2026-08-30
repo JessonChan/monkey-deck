@@ -187,3 +187,64 @@ func TestPermissionDispatchPanicRecovered(t *testing.T) {
 		t.Fatalf("expected a terminal outcome, got %+v", resp.Outcome)
 	}
 }
+
+// TestPermissionTimeoutDefaultsToDeny 锁定 #73 出厂默认:不调 SetPermissionRecovery
+// (chat 装配未注入设置值)时,预算耗尽自动拒绝(取 reject 选项),而非旧行为的放行。
+// 同时锁定重发默认仍是 DefaultPermRetries(+1 轮)——策略翻转不改变恢复节奏。
+func TestPermissionTimeoutDefaultsToDeny(t *testing.T) {
+	var dispatches atomic.Int32
+	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { dispatches.Add(1) }, nil, 0)
+	h.permTTL = 300 * time.Millisecond // 默认 retries=1 → 2 轮,每轮 150ms
+
+	kind := acp.ToolKind("execute")
+	req := acp.RequestPermissionRequest{
+		ToolCall: acp.ToolCallUpdate{Kind: &kind},
+		Options: []acp.PermissionOption{
+			{Kind: acp.PermissionOptionKindAllowOnce, OptionId: "allow", Name: "Allow"},
+			{Kind: acp.PermissionOptionKindRejectOnce, OptionId: "deny", Name: "Deny"},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := h.RequestPermission(ctx, req)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if resp.Outcome.Selected == nil || resp.Outcome.Selected.OptionId != "deny" {
+		t.Fatalf("default policy: want selected reject option, got %+v", resp.Outcome)
+	}
+	if n := dispatches.Load(); n != int32(DefaultPermRetries+1) {
+		t.Fatalf("default retries: want %d dispatches, got %d", DefaultPermRetries+1, n)
+	}
+}
+
+// TestPermissionWiredDefaultsDeny 锁定 #73 装配形态(chat.startLive 实际调用):
+// SetPermissionRecovery(DefaultPermRetries, <设置 policy>)——设置未配置(归一 deny)时
+// 行为与出厂默认一致:2 轮分发后取 reject 选项自动拒绝。
+func TestPermissionWiredDefaultsDeny(t *testing.T) {
+	var dispatches atomic.Int32
+	h := NewHandler("/tmp/proj", nil, func(PermissionPrompt) { dispatches.Add(1) }, nil, 0)
+	h.permTTL = 300 * time.Millisecond
+	h.SetPermissionRecovery(DefaultPermRetries, "deny")
+
+	kind := acp.ToolKind("execute")
+	req := acp.RequestPermissionRequest{
+		ToolCall: acp.ToolCallUpdate{Kind: &kind},
+		Options: []acp.PermissionOption{
+			{Kind: acp.PermissionOptionKindAllowOnce, OptionId: "allow", Name: "Allow"},
+			{Kind: acp.PermissionOptionKindRejectOnce, OptionId: "deny", Name: "Deny"},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := h.RequestPermission(ctx, req)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if resp.Outcome.Selected == nil || resp.Outcome.Selected.OptionId != "deny" {
+		t.Fatalf("wired deny: want selected reject option, got %+v", resp.Outcome)
+	}
+	if n := dispatches.Load(); n != 2 {
+		t.Fatalf("wired retries: want 2 dispatches, got %d", n)
+	}
+}

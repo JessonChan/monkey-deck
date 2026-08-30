@@ -1681,6 +1681,9 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 	// Setters (not bare field writes): the ACP reader goroutine is already live at this point, so
 	// mu-guarded assignment is race-free with the handler's read-side snapshots.
 	chat.Handler.SetGlobalRule(s.persistGlobalPermissionRule)
+	// 权限回调失败恢复(#73):按设置注入超时降级策略(默认 deny),重发次数保持既有默认。
+	// Setter 装配形式,与上方 SetGlobalRule 同理(ACP reader goroutine 已启动,mu 对齐写)。
+	chat.Handler.SetPermissionRecovery(acp.DefaultPermRetries, s.permissionTimeoutPolicySetting())
 	chat.Handler.SetElicitationResolved(onElicitationResolved)
 	// #158:elicitation form 无法渲染(fields==0)时 handler 直接 Decline,这里向该
 	// session 推可见 notice。Setter 形式:ACP reader goroutine 此时已启动,
@@ -3685,6 +3688,49 @@ func defaultPermissionRulesForStore() []store.PermissionRule {
 		})
 	}
 	return out
+}
+
+// ─── 权限超时策略设置(#73:permission_timeout_policy)──────────────────
+//
+// 权限弹窗无人响应、总预算(permTTL)耗尽后的降级动作:"deny"(默认,拒绝该次工具
+// 调用,更安全)/ "allow"(放行让对话继续)。值持久化在 settings KV,装配(startLive)
+// 时读出并经 Handler.SetPermissionRecovery 注入 handler;重启/新会话生效(活跃 session
+// 不热更,策略是装配期注入的)。
+
+const settingKeyPermTimeoutPolicy = "permission_timeout_policy"
+
+// normalizePermTimeoutPolicy 把任意输入归一为 "allow"/"deny";空/未知回默认 "deny"。
+func normalizePermTimeoutPolicy(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "allow":
+		return "allow"
+	default:
+		return "deny"
+	}
+}
+
+// permissionTimeoutPolicySetting 读权限超时策略设置(默认 deny)。
+func (s *ChatService) permissionTimeoutPolicySetting() string {
+	v, _ := s.st.GetSetting(s.ctx, settingKeyPermTimeoutPolicy)
+	return normalizePermTimeoutPolicy(v)
+}
+
+// GetPermissionTimeoutPolicy 返回权限超时策略当前值("allow"/"deny";默认 deny)。
+// store 未就绪(单测)时按默认 deny,与启动默认一致(前端设置面板开关)。
+func (s *ChatService) GetPermissionTimeoutPolicy() string {
+	if s.st == nil {
+		return "deny"
+	}
+	return s.permissionTimeoutPolicySetting()
+}
+
+// SetPermissionTimeoutPolicy 设置权限超时策略并持久化(重启后保持)。
+// 活跃 session 不热更:策略在 startLive 装配时注入 handler,新会话/重启后生效。
+func (s *ChatService) SetPermissionTimeoutPolicy(policy string) error {
+	if s.st == nil {
+		return errors.New("store not ready")
+	}
+	return s.st.SetSetting(s.ctx, settingKeyPermTimeoutPolicy, normalizePermTimeoutPolicy(policy))
 }
 
 // --- 权限规则 CRUD(前端设置面板用,§3.4)---

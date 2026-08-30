@@ -241,8 +241,9 @@ type Handler struct {
 	// 权限回调失败自动恢复(§3.4 + Task #15115):
 	// permRetries:用户未响应时「重发提示」的额外次数(含首次共 retries+1 轮),
 	//   每轮把总预算 permTTL 均分;0=只发一次(等价旧行为)。应对「提示丢失/用户没看到」。
-	// permTimeoutPolicy:总预算耗尽后的降级策略;"allow"(默认,放行让对话继续)/"deny"(拒绝)。
-	//   空串视作 allow(零值安全:直接 &Handler{} 构造的测试默认放行,不致误拒)。
+	// permTimeoutPolicy:总预算耗尽后的降级策略;"deny"(默认,拒绝更安全,#73)/"allow"
+	//   (放行让对话继续,可在设置开启)。空串视作 allow(零值安全:直接 &Handler{} 构造的
+	//   测试默认放行,不致误拒)。
 	permRetries       int
 	permTimeoutPolicy string
 	// 权限裁决记忆(§3.4):用户曾选「本会话/本项目允许」后,后续 RequestPermission 当场自动放行,
@@ -284,11 +285,17 @@ type ElicitationResponse struct {
 	Content map[string]any `json:"content,omitempty"` // accept 时:字段名 → 值(omp 约定单字段 "value")
 }
 
-// 权限回调恢复默认(§3.4 + Task #15115)。
+// 权限回调恢复默认(§3.4 + Task #15115 + #73)。
 const (
-	defaultPermRetries       = 1                      // 用户未响应时额外重发 1 次(共 2 轮通知)
-	defaultPermTimeoutPolicy = "allow"                // 总预算耗尽:放行让对话继续(对齐 §3.4 桌面有人但走开了)
-	permSubIntervalFloor     = 200 * time.Millisecond // 总预算切分下限,防极短 TTL 切出 0
+	// DefaultPermRetries:用户未响应时「重发提示」的默认额外次数(chat.go 装配时按设置
+	// 调 SetPermissionRecovery,传入该默认值保持既有重发行为不变)。
+	DefaultPermRetries = 1
+	// defaultPermTimeoutPolicy:总预算耗尽后的降级策略,默认 "deny"(#73:没人裁决时
+	// 拒绝比放行安全——放行可能让 agent 未经确认就执行写/执行类操作;用户可在设置里
+	// 切回 allow)。空串仍视作 allow(零值安全:直接 &Handler{} 构造的测试默认放行)。
+	defaultPermTimeoutPolicy = "deny"
+	// permSubIntervalFloor:总预算切分下限,防极短 TTL 切出 0。
+	permSubIntervalFloor = 200 * time.Millisecond
 )
 
 // timeoutPolicyAllow 把策略字符串归一为「是否放行」;空/未知 → allow(零值安全)。
@@ -315,7 +322,7 @@ func NewHandler(workDir string, onEvent func(SessionEvent), onPermission func(Pe
 		pending:           map[string]*pendingPermission{},
 		pendingElicit:     map[string]*pendingElicitation{},
 		permTTL:           permTTL,
-		permRetries:       defaultPermRetries,
+		permRetries:       DefaultPermRetries,
 		permTimeoutPolicy: defaultPermTimeoutPolicy,
 	}
 }
@@ -481,7 +488,7 @@ func (h *Handler) RequestPermission(ctx context.Context, req acp.RequestPermissi
 		}
 	}
 
-	// 全部尝试耗尽 → 按策略降级(§3.4:桌面有人但走开了,默认放行让对话继续)。
+	// 全部尝试耗尽 → 按策略降级(§3.4 + #73:默认 deny 拒绝;设置切 allow 才放行)。
 	h.removePending(id)
 	if timeoutPolicyAllow(h.permTimeoutPolicy) {
 		def := defaultOption(req.Options)
