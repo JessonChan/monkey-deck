@@ -78,6 +78,7 @@
     "moveBackToMainWindow": "Move Back to Main Window",
     "forkSession": "Fork from last conversation",
     "forkSessionTip": "Create a new chat from the end of this conversation",
+    "forkedFromTip": "Forked from {{src}}",
     "popoutTip": "Open in separate window · click to focus",
     "unpin": "Unpin",
     "pin": "Pin chat",

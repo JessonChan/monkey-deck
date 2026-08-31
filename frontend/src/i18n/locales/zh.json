@@ -78,6 +78,7 @@
     "moveBackToMainWindow": "移回主窗口",
     "forkSession": "基于最后的对话分叉",
     "forkSessionTip": "从当前对话末尾复制出一个新会话",
+    "forkedFromTip": "分叉自 {{src}}",
     "popoutTip": "在独立窗口打开 · 点击聚焦",
     "unpin": "取消置顶",
     "pin": "置顶对话",

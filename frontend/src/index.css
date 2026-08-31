@@ -323,6 +323,13 @@ input, textarea { font-family: inherit; }
    点击该 session 行 → focus popout 窗口(非就地选中)。 */
 .session-popout-mark { flex-shrink: 0; display: inline-flex; color: var(--accent-2); }
 .session-popout-mark svg { color: var(--accent-2); }
+/* Fork lineage badge (#172): a session forked from another shows a quiet GitFork
+   icon beside the harness icon (tooltip names the source). Same persistent-marker
+   family as pin/renamed/terminal/popout: flex-shrink:0 and inline-flex keep the
+   12px row discipline (row height never grows); lowest-contrast text tier so it
+   never competes with status accents. */
+.session-fork-mark { flex-shrink: 0; display: inline-flex; color: var(--text-3); }
+.session-fork-mark svg { color: var(--text-3); }
 /* Per-project filter chip row (#150; gated by the project-row tag button as of
    #160b — the row expands only while that project's tag panel is open, and
    inline row chips were removed entirely (#160a): sessions carry zero visual

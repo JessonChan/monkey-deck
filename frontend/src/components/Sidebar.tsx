@@ -564,6 +564,20 @@ export default function Sidebar(props: Props) {
     () => new Set(Object.values(props.sessionsByProject).flat().map((s) => s.id)),
     [props.sessionsByProject],
   );
+
+  // #172 fork badge: source-session title lookup over the FULL cross-project
+  // session map (same snapshot allSessionIds derives from). Titles prefer the
+  // custom title, falling back to the auto title; an unresolvable source id
+  // (source deleted / cross-window lag) degrades at the render site to the id
+  // prefix — never a broken badge.
+  const forkSrcTitleById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const s of Object.values(props.sessionsByProject).flat()) {
+      if (!m.has(s.id)) m.set(s.id, s.customTitle || s.title || "");
+    }
+    return m;
+  }, [props.sessionsByProject]);
+
   useEffect(() => {
     setSel((prev) => {
       let changed = false;
@@ -965,6 +979,21 @@ export default function Sidebar(props: Props) {
                             </span>
                           )}
                           <HarnessIcon harnessId={s.harness} size={12} className="session-harness-icon" tooltip={t("sidebar.harnessTip", { name: harnessNameById(s.harness) })} />
+                          {/* #172 fork badge: lineage-only visibility marker, beside the
+                              harness icon. Renders only when forkedFrom is set (undefined /
+                              '' = native session). Tooltip prefers the source session's
+                              display title via the full sessionsByProject map; an
+                              unresolvable source falls back to its id prefix. */}
+                          {s.forkedFrom ? (
+                            <span
+                              className="session-fork-mark"
+                              data-tooltip-id="md-tip"
+                              data-tooltip-content={t("sidebar.forkedFromTip", { src: forkSrcTitleById.get(s.forkedFrom) || s.forkedFrom.slice(0, 8) })}
+                              data-testid={`fork-badge-${s.id}`}
+                            >
+                              <GitFork size={12} />
+                            </span>
+                          ) : null}
                           {s.pinned && (
                             <span className="session-pin" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.pinnedTip")} data-testid={`pin-${s.id}`}>
                               <Pin size={11} />
