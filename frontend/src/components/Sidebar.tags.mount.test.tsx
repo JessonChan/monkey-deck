@@ -2,9 +2,11 @@
 //
 // Pins the tag contract end-to-end from props/state down to what a user can
 // see and click:
-//  1. Zero inline footprint (#160a): sessions carrying tags render NO row
-//     chips at all — not by default, not on hover — and the .session-tag-chip
-//     rule is gone from index.css (clean cutover).
+//  1. Inline dot family (#174 — explicit rollback of #160a's zero-footprint,
+//     dot-level identity only, no text chips): tagged rows render up to 3
+//     hash-colored dots in the meta cluster (same tagColor() as everywhere),
+//     overflow folds into the wrapper tooltip, untagged rows stay bare; the
+//     .session-tag-chip rule stays gone from index.css.
 //  2. Ctx「标签 ›」submenu: Enter on the new-tag input appends to the LIVE tag
 //     set (onSetSessionTags(id, [...live, value])), input clears for rapid entry.
 //  3. Removal: clicking a checked tag row calls onSetSessionTags without it.
@@ -198,20 +200,35 @@ beforeEach(() => {
 });
 
 describe("Sidebar session tags (#150 MVP)", () => {
-  test("1. zero inline footprint: tagged rows render no chips, CSS rule cut over", async () => {
+  test("1. inline dot family (#174): ≤3 hash dots per row, overflow in tooltip, untagged bare", async () => {
     const { host } = await mounted({
-      p1: [sess("s1", "p1", { tags: ["api", "db"] }), sess("s2", "p1")],
+      p1: [
+        sess("s1", "p1", { tags: ["api", "db"] }),
+        sess("s2", "p1", { tags: ["a", "b", "c", "d", "e"] }),
+        sess("s3", "p1"),
+      ],
     });
 
-    // No chips anywhere — not on tagged rows, not on untagged ones (#160a).
-    expect(host.querySelectorAll('[data-testid^="tagchip-"]').length).toBe(0);
-    expect(host.querySelectorAll(".session-tag-chip").length).toBe(0);
-    // Palette math itself unchanged (still feeds filter chips + ctx dots).
+    // Tagged rows carry the dot family, untagged rows none.
+    const dots1 = host.querySelectorAll('[data-testid="tag-dots-s1"] .session-tag-dot');
+    expect(dots1.length).toBe(2);
+    // Colors come from the shared palette math (filter panel / ctx menu / dots).
+    expect(dots1[0].getAttribute("style")).toContain(tagColor("api"));
+    expect(dots1[1].getAttribute("style")).toContain(tagColor("db"));
     expect(TAG_PALETTE).toContain(tagColor("api"));
     expect(tagColor("api")).toBe(tagColor("api")); // deterministic
-    // Clean cutover: the dead chip rule is gone from index.css.
+    // Cap 3: five tags render exactly three dots…
+    expect(host.querySelectorAll('[data-testid="tag-dots-s2"] .session-tag-dot').length).toBe(3);
+    // …with the full list — overflow included — merged into the tooltip.
+    expect(host.querySelector('[data-testid="tag-dots-s2"]')!.getAttribute("data-tooltip-content"))
+      .toBe('sidebar.tagDotsTip {"tags":"a, b, c, d, e"}');
+    expect(host.querySelector('[data-testid="tag-dots-s3"]')).toBeNull();
+    // Text chips stay gone (rollback scope is dot-level only).
+    expect(host.querySelectorAll('[data-testid^="tagchip-"]').length).toBe(0);
+    expect(host.querySelectorAll(".session-tag-chip").length).toBe(0);
     const css = readFileSync(new URL("../index.css", import.meta.url), "utf8");
     expect(css).not.toMatch(/\.session-tag-chip\s*\{/);
+    expect(css).toMatch(/\.session-tag-dot\s*\{/);
   });
 
   test("2. ctx「标签 ›」Enter appends to the live set and clears the input", async () => {
@@ -401,5 +418,61 @@ describe("Sidebar session tags (#150 MVP)", () => {
     expect(host.querySelector('[data-testid="session-s2"]')).not.toBeNull();
 
     root.unmount();
+  });
+
+  test("8. ctx tags submenu two sections (#174): project quick-add appends, then flips sections live", async () => {
+    const sessions = (s1Tags: string[] = ["api"]) => ({
+      p1: [
+        sess("s1", "p1", { tags: s1Tags }),
+        sess("s2", "p1", { tags: ["db", "api"] }),
+        sess("s3", "p1", { tags: ["redis"] }),
+      ],
+    });
+    const { host, root } = await mounted(sessions());
+
+    ctxOpen(host, "s1");
+    await flush();
+    // Section 1: the session's own tags — remove contract unchanged.
+    expect(host.querySelector('[data-testid="tag-remove-s1-api"]')).not.toBeNull();
+    // Section 2: the project's remaining tags, first-seen order, own excluded.
+    const addIds = Array.from(host.querySelectorAll('[data-testid^="tag-add-s1-"]')).map(
+      (el) => el.getAttribute("data-testid")
+    );
+    expect(addIds).toEqual(["tag-add-s1-db", "tag-add-s1-redis"]);
+    // Clicking a project tag appends to the LIVE set.
+    host.querySelector<HTMLElement>('[data-testid="tag-add-s1-db"]')!.dispatchEvent(click());
+    await flush();
+    expect(tagCallsOf(setTagsMock)).toEqual([["s1", ["api", "db"]]]);
+
+    // Optimistic update lands as a re-render with the new tag set — the menu
+    // stays open and db flips from quick-add to the assigned section in place.
+    root.render(<Sidebar {...(baseProps(sessions(["api", "db"])) as never)} />);
+    await flush();
+    expect(host.querySelector('[data-testid="tag-remove-s1-db"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="tag-add-s1-db"]')).toBeNull();
+    expect(host.querySelector('[data-testid="tag-add-s1-redis"]')).not.toBeNull();
+    root.unmount();
+  });
+
+  test("9. tags-empty message only when the project has no tags at all (#174)", async () => {
+    // Project carries other tags: quick-add section replaces the empty message.
+    const a = await mounted({
+      p1: [sess("s1", "p1"), sess("s2", "p1", { tags: ["db"] })],
+    });
+    ctxOpen(a.host, "s1");
+    await flush();
+    expect(a.host.querySelector('[data-testid="tags-empty-s1"]')).toBeNull();
+    expect(a.host.querySelector('[data-testid="tag-add-s1-db"]')).not.toBeNull();
+    a.root.unmount();
+
+    // Fully tagless project: legacy empty state, no quick-add rows.
+    const b = await mounted({
+      p1: [sess("s9", "p1")],
+    });
+    ctxOpen(b.host, "s9");
+    await flush();
+    expect(b.host.querySelector('[data-testid="tags-empty-s9"]')).not.toBeNull();
+    expect(b.host.querySelector('[data-testid^="tag-add-s9-"]')).toBeNull();
+    b.root.unmount();
   });
 });

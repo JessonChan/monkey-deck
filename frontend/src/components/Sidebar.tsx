@@ -995,6 +995,28 @@ export default function Sidebar(props: Props) {
                               <GitFork size={12} />
                             </span>
                           ) : null}
+                          {/* #174 inline tag dot family: up to 3 hash-colored dots
+                              in the meta cluster, same tagColor() source as the
+                              filter panel and the ctx menu (three surfaces, one
+                              palette). Tags beyond 3 fold into the wrapper
+                              tooltip; no tags → no footprint. 6px dots keep the
+                              row height untouched. */}
+                          {(() => {
+                            const rowTags = s.tags ?? [];
+                            if (rowTags.length === 0) return null;
+                            return (
+                              <span
+                                className="session-tag-dots"
+                                data-testid={`tag-dots-${s.id}`}
+                                data-tooltip-id="md-tip"
+                                data-tooltip-content={t("sidebar.tagDotsTip", { tags: rowTags.join(", ") })}
+                              >
+                                {rowTags.slice(0, 3).map((tag) => (
+                                  <span key={tag} className="session-tag-dot" style={{ background: tagColor(tag) }} />
+                                ))}
+                              </span>
+                            );
+                          })()}
                           {s.pinned && (
                             <span className="session-pin" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.pinnedTip")} data-testid={`pin-${s.id}`}>
                               <Pin size={11} />
@@ -1166,35 +1188,77 @@ export default function Sidebar(props: Props) {
           >
             <Pencil size={13} /> {t("sidebar.rename")}
           </button>
-          {/* 标签 ›(#150):hover 展开的二级菜单。已有标签打勾 → 点击移除;
-              输入框 Enter → 追加新标签(后端 NormalizeTags 兜底 trim/去重/上限)。
-              数据一律读 liveSession(ctx 打开后的乐观更新直接反映,菜单不关,可连续增删)。 */}
+          {/* Tags ›(#150, #174): hover-expanded submenu split in two sections.
+              Section 1 — the session's own tags: check = assigned, click
+              removes (unchanged contract). Section 2 — the project's remaining
+              tags (collectTags union minus the session's own, first-seen
+              order): click appends. Free input stays at the bottom; Enter
+              appends (backend NormalizeTags re-normalizes trim/dedupe/cap).
+              The submenu scrolls past its max-height cap (index.css). Data is
+              always read from the LIVE session so optimistic updates reflect
+              in place and the menu stays open for rapid add/remove. */}
           <div className="ctx-item ctx-has-sub" data-testid={`tags-menu-${ctx.session.id}`}>
             <Tag size={13} /> {t("sidebar.tags")}
             <div className="ctx-submenu">
               {(() => {
                 const live = liveSession(ctx.session.id) ?? ctx.session;
                 const tags = live.tags ?? [];
+                // #174 quick-add section: the project's full tag union — same
+                // collectTags source and first-seen order as the filter panel —
+                // minus the tags this session already carries.
+                const projTags = collectTags(props.sessionsByProject[ctx.session.projectId] ?? [])
+                  .filter((tg) => !tags.includes(tg));
                 return (
                   <>
-                    {tags.length === 0 && (
+                    {tags.length === 0 && projTags.length === 0 && (
                       <div className="ctx-submenu-empty" data-testid={`tags-empty-${ctx.session.id}`}>{t("sidebar.tagsEmpty")}</div>
                     )}
-                    {tags.map((tag) => (
-                      <button
-                        key={tag}
-                        className="ctx-item ctx-tag-item"
-                        data-testid={`tag-remove-${ctx.session.id}-${tag}`}
-                        data-tooltip-id="md-tip"
-                        data-tooltip-content={t("sidebar.tagRemoveTip")}
-                        data-tooltip-place="right"
-                        onClick={() => props.onSetSessionTags(live.id, tags.filter((x) => x !== tag))}
-                      >
-                        <span className="ctx-tag-dot" style={{ background: tagColor(tag) }} />
-                        <span className="ctx-tag-name">{tag}</span>
-                        <Check size={12} className="ctx-tag-check" />
-                      </button>
-                    ))}
+                    {tags.length > 0 && (
+                      <>
+                        <div className="ctx-label">{t("sidebar.tagsSessionSection")}</div>
+                        {tags.map((tag) => (
+                          <button
+                            key={tag}
+                            className="ctx-item ctx-tag-item"
+                            data-testid={`tag-remove-${ctx.session.id}-${tag}`}
+                            data-tooltip-id="md-tip"
+                            data-tooltip-content={t("sidebar.tagRemoveTip")}
+                            data-tooltip-place="right"
+                            onClick={() => props.onSetSessionTags(live.id, tags.filter((x) => x !== tag))}
+                          >
+                            <span className="ctx-tag-dot" style={{ background: tagColor(tag) }} />
+                            <span className="ctx-tag-name">{tag}</span>
+                            <Check size={12} className="ctx-tag-check" />
+                          </button>
+                        ))}
+                      </>
+                    )}
+                    {projTags.length > 0 && (
+                      <>
+                        {tags.length > 0 && <div className="ctx-sep" />}
+                        <div className="ctx-label">{t("sidebar.tagsProjectSection")}</div>
+                        {projTags.map((tag) => (
+                          <button
+                            key={tag}
+                            className="ctx-item ctx-tag-item"
+                            data-testid={`tag-add-${ctx.session.id}-${tag}`}
+                            data-tooltip-id="md-tip"
+                            data-tooltip-content={t("sidebar.tagAddTip")}
+                            data-tooltip-place="right"
+                            onClick={() => {
+                              // Live read at action time: repeated appends see
+                              // the accumulated set, not the render-time snapshot.
+                              const cur = liveSession(ctx.session.id)?.tags ?? [];
+                              props.onSetSessionTags(live.id, [...cur, tag]);
+                            }}
+                          >
+                            <span className="ctx-tag-dot" style={{ background: tagColor(tag) }} />
+                            <span className="ctx-tag-name">{tag}</span>
+                            <Plus size={12} className="ctx-tag-add" />
+                          </button>
+                        ))}
+                      </>
+                    )}
                     <div className="ctx-sep" />
                     <input
                       className="ctx-tag-input"
