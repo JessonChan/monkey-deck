@@ -125,7 +125,8 @@ func TestQueueRepeatRearmFormula(t *testing.T) {
 
 // TestQueueRepeatSkipsCatchUp pins skip-catch-up (#111 hard gate): an item
 // overdue across SEVERAL periods (downtime) sends exactly ONCE per drain and
-// re-anchors to now — no back-fill burst.
+// re-anchors one full interval PAST the send — no back-fill burst, and the
+// re-anchored value is never due-now (#176).
 func TestQueueRepeatSkipsCatchUp(t *testing.T) {
 	svc, sid, fc := newTestService(t)
 	const iv = 60 // ms
@@ -143,14 +144,16 @@ func TestQueueRepeatSkipsCatchUp(t *testing.T) {
 	svc.drainQueue(sid)
 	waitStarted(t, fc, 1)
 	row := waitRepeatRow(t, svc, sid, 1)
-	// Re-anchored to ~now (at/after the send), NOT prev+iv (which lies in the
-	// past — a catch-up reschedule would land BEFORE the send that just ran).
-	if got := row.ScheduledAt; got < sentAt || got > sentAt+150 {
-		t.Fatalf("overdue re-arm must re-anchor to ~now(%d), got %d", sentAt, got)
+	// Re-anchored one interval past the send (~sentAt+iv), NOT prev+iv (which
+	// lies in the past — a catch-up reschedule would land BEFORE the send
+	// that just ran) and NOT bare now (due-now — the #176 bug).
+	if got := row.ScheduledAt; got < sentAt+iv-10 || got > sentAt+150 {
+		t.Fatalf("overdue re-arm must re-anchor to ~sentAt+iv(%d+%d), got %d", sentAt, iv, got)
 	}
-	// One send per drain — no catch-up burst (the fake turn stays blocked so
-	// the only possible sends would come from drain/timer, and a re-anchored
-	// due-now item arms no timer).
+	// One send per drain — no catch-up burst. Under the new semantics the
+	// future re-anchor arms the schedule timer at ~+iv, but the still-running
+	// turn's busy guard rejects that early fire (the row is requeued, sent
+	// count untouched), so no second prompt can start in this window.
 	time.Sleep(3 * iv)
 	if n := countPrompts(fc, "tick"); n != 1 {
 		t.Fatalf("downtime across periods must send exactly once, got %d (%v)", n, fc.prompts)

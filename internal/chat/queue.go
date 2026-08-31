@@ -446,9 +446,11 @@ func (s *ChatService) drainQueue(sessionID string) {
 // rescheduleRepeat re-inserts a recurring item after its send succeeded
 // (#111). The dequeue already removed the row (dequeue-before-send,
 // exactly-once); this puts it back at its original position with:
-//   - scheduledAt = max(now, prevScheduledAt + interval) — skip-catch-up:
-//     downtime spanning several periods yields ONE send, then the schedule
-//     re-anchors to now (no back-fill);
+//   - scheduledAt = prevScheduledAt + interval, clamped forward to
+//     now + interval when that still lies in the past — skip-catch-up:
+//     downtime spanning several periods yields ONE send, no back-fill, and
+//     the re-anchor is never due-now (a due-now re-anchor made the very next
+//     drain trigger re-send the item immediately, #176);
 //   - sentCount + 1 — counts successful sends only (failed requeues keep it);
 //   - maxSends reached (sentCount would reach N) → the item stays consumed:
 //     the repeat auto-clears and the row is not re-inserted at all.
@@ -468,7 +470,9 @@ func (s *ChatService) rescheduleRepeat(sessionID string, idx int, row store.Queu
 	}
 	nextAt := row.ScheduledAt + row.RepeatEveryMs
 	if now := time.Now().UnixMilli(); nextAt < now {
-		nextAt = now
+		// Overdue catch-up (#176): re-anchor to the NEXT period from now —
+		// never to now itself, or any drain trigger would re-send at once.
+		nextAt = now + row.RepeatEveryMs
 	}
 	row.SentCount = sent
 	row.ScheduledAt = nextAt
