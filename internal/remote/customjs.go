@@ -21,6 +21,17 @@ const customJS = `(function() {
 	var wsUrl = protocol + '//' + location.host + '/wails/events' + (clientId ? '?clientId=' + encodeURIComponent(clientId) : '');
 	var ws;
 
+	// Auth escape hatch (N1): expired/revoked cookies turn every binding POST
+	// into a silent 401 (the runtime throws and callers swallow errors), which
+	// left a frozen-but-clickable shell with no way back to pairing. Poll the
+	// health endpoint when the socket dies repeatedly: an unauthenticated
+	// document reload makes the server serve the pairing page for "/".
+	function checkAuth() {
+		fetch('/health').then(function(r) {
+			if (r.status === 401) location.reload();
+		}).catch(function() {});
+	}
+
 	function dispatch(event) {
 		if (window._wails && window._wails.dispatchWailsEvent) {
 			window._wails.dispatchWailsEvent(event);
@@ -45,6 +56,10 @@ const customJS = `(function() {
 			}
 		};
 		ws.onclose = function() {
+			// A closed WS is either a server restart or dead auth: check once,
+			// then retry. The reload lands on the pairing page when the cookie
+			// no longer authenticates (server serves it for "/" on 401).
+			checkAuth();
 			setTimeout(connect, 1000);
 		};
 		ws.onerror = function() {
