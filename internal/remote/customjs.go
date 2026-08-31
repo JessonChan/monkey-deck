@@ -74,7 +74,13 @@ const customJS = `(function() {
 	// the socket still reads OPEN, since a half-open link delivers nothing.
 	document.addEventListener('visibilitychange', function() {
 		if (document.visibilityState !== 'visible') return;
-		if (!ws || ws.readyState > 1) { connect(); return; }
+		// readyState !== OPEN: if CONNECTING, the pending onopen will dispatch
+		// resync (dispatching here too caused a double resync per wake-up);
+		// if CLOSING/CLOSED, reconnect now. Either way the socket ends up
+		// reconciling exactly once.
+		if (!ws || ws.readyState !== 1) { connect(); return; }
+		// Socket reads OPEN: still reconcile — a half-open link delivers
+		// nothing, and dispatch is cheap compared to a missed event gap.
 		dispatch({ name: 'remote:resync', data: null });
 	});
 
