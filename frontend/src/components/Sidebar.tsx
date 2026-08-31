@@ -1010,7 +1010,7 @@ export default function Sidebar(props: Props) {
                       </div>
                     );
                   })}
-                  {(searching || activeTags.length) && list.length === 0 && (
+                  {(searching || activeTags.length > 0) && list.length === 0 && (
                     <div className="session-search-empty">{t("sidebar.noMatch")}</div>
                   )}
                   {!searching && activeTags.length === 0 && hiddenCount > 0 && (
