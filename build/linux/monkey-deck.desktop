@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=monkey-deck
+Exec=monkey-deck
+Icon=monkey-deck
+Categories=Development;
+Terminal=false
+Keywords=wails
+Version=1.0
+StartupNotify=false

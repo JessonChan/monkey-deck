@@ -120,6 +120,69 @@ tasks:
           echo "    {{.BIN_DIR}}/{{.APP_NAME}}-darwin-amd64.zip \\"
           echo "    --title \"v$VER\" --generate-notes"
 
+  release:linux:
+    summary: 构建+打包 Linux 应用,产出双架构 deb/rpm + SHA256SUMS
+    description: |
+      产出(位于 {{.BIN_DIR}}/):
+        - monkey-deck-linux-amd64.deb / .rpm
+        - monkey-deck-linux-arm64.deb / .rpm
+        - SHA256SUMS(与 darwin 资产同发时需合并,见下方说明)
+      发布流程:① git tag v<版本> ② task release:linux ③ 用输出里的 gh 命令发布。
+      资产名 <slug>-linux-<arch>.<pkg>,scripts/install.sh 按此约定拉取。
+      构建:本机 Linux + gcc 时原生构建;否则走 docker wails-cross 镜像
+      (task setup:docker 先建镜像)。deb/rpm 用 nfpm(nfpm.yaml),版本经
+      VERSION 环境变量注入 git describe 结果。
+      注意:与 darwin 资产同一次 release 发布时,把两边的产物放同一目录后
+      重新汇总一份 SHA256SUMS 覆盖上传(shasum 全部资产再生成)。
+    cmds:
+      - task: linux:build
+        vars:
+          ARCH: amd64
+          OUTPUT: "{{.BIN_DIR}}/{{.APP_NAME}}-linux-amd64"
+      - task: linux:build
+        vars:
+          ARCH: arm64
+          OUTPUT: "{{.BIN_DIR}}/{{.APP_NAME}}-linux-arm64"
+      # nfpm 打包:每架构 deb+rpm。注意:必须从 repo 根目录调用(nfpm
+      # contents.src 相对 cwd 解析),产物重命名为 install.sh 契约名
+      # (<slug>-linux-<arch>.<pkg>),MDPKG_BIN 指向本架构二进制。
+      - cmd: |
+          set -e
+          VER="$(git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev)"
+          command -v wails3 >/dev/null 2>&1 || { echo "需要 wails3 CLI"; exit 1; }
+          cd "{{.ROOT_DIR}}"
+          rm -f {{.BIN_DIR}}/{{.APP_NAME}}.deb {{.BIN_DIR}}/{{.APP_NAME}}.rpm \
+                {{.BIN_DIR}}/{{.APP_NAME}}-linux-amd64.deb {{.BIN_DIR}}/{{.APP_NAME}}-linux-amd64.rpm \
+                {{.BIN_DIR}}/{{.APP_NAME}}-linux-arm64.deb {{.BIN_DIR}}/{{.APP_NAME}}-linux-arm64.rpm
+          for arch in amd64 arm64; do
+            GOARCH=$arch VERSION="$VER" MDPKG_BIN="./{{.BIN_DIR}}/{{.APP_NAME}}-linux-$arch" \
+              wails3 tool package -name {{.APP_NAME}} -format deb \
+              -config ./build/linux/nfpm/nfpm.yaml -out ./{{.BIN_DIR}} \
+              && mv {{.BIN_DIR}}/{{.APP_NAME}}.deb {{.BIN_DIR}}/{{.APP_NAME}}-linux-$arch.deb
+            GOARCH=$arch VERSION="$VER" MDPKG_BIN="./{{.BIN_DIR}}/{{.APP_NAME}}-linux-$arch" \
+              wails3 tool package -name {{.APP_NAME}} -format rpm \
+              -config ./build/linux/nfpm/nfpm.yaml -out ./{{.BIN_DIR}} \
+              && mv {{.BIN_DIR}}/{{.APP_NAME}}.rpm {{.BIN_DIR}}/{{.APP_NAME}}-linux-$arch.rpm
+          done
+      - cmd: |
+          set -e
+          cd "{{.BIN_DIR}}"
+          shasum -a 256 {{.APP_NAME}}-linux-amd64.deb {{.APP_NAME}}-linux-amd64.rpm \
+                            {{.APP_NAME}}-linux-arm64.deb {{.APP_NAME}}-linux-arm64.rpm > SHA256SUMS
+          echo "==== 已生成 release 资源(位于 {{.BIN_DIR}}/): ===="
+          ls -la {{.APP_NAME}}-linux-*.deb {{.APP_NAME}}-linux-*.rpm SHA256SUMS
+          VER="$(git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev)"
+          echo "二进制内 currentVersion = $VER(应与下方 tag 一致)"
+          echo "发布(确保 tag 与上面的版本一致):"
+          echo "  gh release create \"v$VER\" \\"
+          echo "    {{.BIN_DIR}}/SHA256SUMS \\"
+          echo "    {{.BIN_DIR}}/{{.APP_NAME}}-linux-amd64.deb \\"
+          echo "    {{.BIN_DIR}}/{{.APP_NAME}}-linux-amd64.rpm \\"
+          echo "    {{.BIN_DIR}}/{{.APP_NAME}}-linux-arm64.deb \\"
+          echo "    {{.BIN_DIR}}/{{.APP_NAME}}-linux-arm64.rpm \\"
+          echo "    --title \"v$VER\" --generate-notes"
+
+
   darwin:dmg:
     summary: 构建 universal DMG(拖拽安装),需 create-dmg(brew install create-dmg)
     internal: true

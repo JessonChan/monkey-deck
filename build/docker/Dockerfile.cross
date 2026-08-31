@@ -192,8 +192,11 @@ fi
 APP=${APP_NAME:-$(basename $(pwd))}
 mkdir -p bin
 
-EXT=""
-LDFLAGS="-s -w"
+VERSION=""
+if [ -n "$APP_VERSION" ]; then
+    VERSION="-X main.currentVersion=$APP_VERSION"
+fi
+LDFLAGS="-s -w$VERSION"
 if [ "$GOOS" = "windows" ]; then
     EXT=".exe"
     LDFLAGS="-s -w -H windowsgui"

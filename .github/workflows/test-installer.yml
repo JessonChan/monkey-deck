@@ -1,0 +1,63 @@
+name: Test installer
+
+# Tests scripts/install.sh end-to-end on real macOS runners.
+# The harness (scripts/ci/installer-test.sh) serves a fake release from a
+# local python http.server and pins MD_INSTALL_BASE/MD_INSTALL_TAG, so the
+# workflow exercises the installer's mechanics deterministically — no real
+# GitHub release, network flakiness, or rate limits involved.
+#
+#   - manual dispatch (workflow_dispatch), optionally against a REAL published
+#     release (real_release input) as a network-level smoke test.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/install.sh"
+      - "scripts/ci/installer-test.sh"
+      - ".github/workflows/test-installer.yml"
+  pull_request:
+    paths:
+      - "scripts/install.sh"
+      - "scripts/ci/installer-test.sh"
+      - ".github/workflows/test-installer.yml"
+  workflow_dispatch:
+    inputs:
+      real_release:
+        description: "Also test against the real latest GitHub release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  test-installer:
+    name: Installer E2E (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: sh -n scripts/install.sh && sh -n scripts/ci/installer-test.sh
+
+      - name: Run harness (local fake release)
+        run: scripts/ci/installer-test.sh
+
+      - name: Real release smoke (optional)
+        if: github.event_name == 'workflow_dispatch' && inputs.real_release
+        run: |
+          # Unset the harness overrides and run against the true GitHub
+          # release endpoint. Requires an actual published release to exist.
+          env -u MD_INSTALL_BASE -u MD_INSTALL_TAG sh scripts/install.sh </dev/null
+          codesign --verify --deep --strict "/Applications/Monkey Deck.app"
+          test -d "/Applications/Monkey Deck.app"
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf "/Applications/Monkey Deck.app"
