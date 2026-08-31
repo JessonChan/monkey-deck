@@ -101,6 +101,15 @@ type ChatSession struct {
 	// capabilities.session.list)。协议硬约束:未声明时禁止调用 session/list
 	// (session-list.mdx:Clients MUST verify this capability before calling)。
 	CanListSessions bool
+	// canFork:agent 是否声明了 session/fork 能力(Initialize 响应的
+	// sessionCapabilities.fork,UNSTABLE)。#172 Phase2:fork 前置声明位检查用,
+	// CanFork() 读出。未声明时 Fork 直接返回 ErrForkNotDeclared(不发 RPC)。
+	// 协议硬约束同 list:Clients MUST verify sessionCapabilities.fork before forking。
+	// 错误响应码不可假设(探针实测 jcode 曾回 -32603),声明位是唯一门控依据。
+	canFork bool
+	// mcpCaps:Initialize 协商的 mcp 能力(stdio/http/sse);Fork 重建源 session 的
+	// MCP 注入列表时按此过滤(与 NewChatSession/ResumeChatSession 同一转换)。
+	mcpCaps acp.McpCapabilities
 	// ConfigOptions:agent 在 NewSession/LoadSession 响应里自报的 session config options
 	// (model/mode/effort)。set_config_option 返回时更新为最新全量。FlatConfigOptions 扁平化给前端。
 	ConfigOptions []acp.SessionConfigOption
@@ -140,6 +149,8 @@ func (r *Runner) NewChatSession(ctx context.Context, workDir string, mcps []stor
 	cs := &ChatSession{
 		Runner: r, proc: proc, Conn: conn, Handler: handler, SessionID: sess.SessionId, WorkDir: workDir,
 		CanListSessions:    initResp.AgentCapabilities.SessionCapabilities.List != nil,
+		canFork:            initResp.AgentCapabilities.SessionCapabilities.Fork != nil,
+		mcpCaps:            initResp.AgentCapabilities.McpCapabilities,
 		ConfigOptions:      sess.ConfigOptions,
 		PromptCapabilities: initResp.AgentCapabilities.PromptCapabilities,
 	}
@@ -203,6 +214,8 @@ func (r *Runner) ResumeChatSession(ctx context.Context, workDir, sessionID strin
 	cs := &ChatSession{
 		Runner: r, proc: proc, Conn: conn, Handler: handler, SessionID: acp.SessionId(sessionID), WorkDir: workDir,
 		CanListSessions:    initResp.AgentCapabilities.SessionCapabilities.List != nil,
+		canFork:            initResp.AgentCapabilities.SessionCapabilities.Fork != nil,
+		mcpCaps:            initResp.AgentCapabilities.McpCapabilities,
 		ConfigOptions:      resumeResp.ConfigOptions,
 		PromptCapabilities: initResp.AgentCapabilities.PromptCapabilities,
 	}
@@ -651,6 +664,115 @@ func (cs *ChatSession) SetConfigOption(ctx context.Context, configId, value stri
 	}
 	cs.ConfigOptions = resp.ConfigOptions
 	return nil
+}
+
+// ErrForkNotDeclared:agent 未在 Initialize 响应里声明 sessionCapabilities.fork(UNSTABLE)。
+// #172 Phase2 铁律①:门控以声明位为准,未声明直接拒绝、不发 RPC —— 错误响应码不可假设
+//(探针实测:jcode 对强发 fork 曾回 -32603 而非主流的 -32601),错误响应仅作诊断。
+var ErrForkNotDeclared = errors.New("harness does not advertise sessionCapabilities.fork")
+
+// ForkResult 是 session/fork 的消费面结果:新 ACP session id + fork 响应自报的 configOptions。
+// ConfigOptions 已按既有管线拍平(FlattenConfigOptions),业务包零 SDK 类型依赖(§2.1);
+// 与 NewSession/LoadSession 的消费管线完全同一套表示。响应的 Modes 无既有消费者
+// (与 ResumeSessionResponse.Modes 同样被忽略),不透出。
+type ForkResult struct {
+	NewSessionID  string
+	ConfigOptions []ConfigOption
+}
+
+// CanFork 报告 agent 是否声明了 sessionCapabilities.fork(铁律①门控位)。
+func (cs *ChatSession) CanFork() bool { return cs.canFork }
+
+// Fork 把当前 ACP session 复刻成一个新 session(harness 侧复制上下文,UNSTABLE 扩展)。
+//
+// #172 Phase2 铁律②(同 cwd fork):cwd 恒传源 session 的 WorkDir(worktree 路径),
+// 绝不新建 worktree / 改 baseRef —— 换 cwd fork 在 omp 是确定性错误(探针⑥),同 cwd 是
+// 唯一普适语义。mcpServers 沿源:调用方传入源 session 落库的 MCP 选择,按 Initialize 协商的
+// mcp 能力过滤(与 NewChatSession/ResumeChatSession 同一转换,不受支持的传输丢弃并告警)。
+//
+// fork 点恒为当前对话末尾(协议无位置参数);fork 后源与新 session 各自独立,并发使用
+// 不在本层互斥(铁律③,omp 实测并发 prompt 有崩溃风险,由上层文档化)。
+func (cs *ChatSession) Fork(ctx context.Context, mcps []store.McpServer) (ForkResult, error) {
+	if !cs.canFork {
+		return ForkResult{}, ErrForkNotDeclared
+	}
+	acpServers, skipped := mcp.ToAcpServers(mcps, cs.mcpCaps)
+	if len(skipped) > 0 {
+		slog.Warn("mcp servers skipped (transport unsupported by harness)", "cwd", cs.WorkDir, "skipped", skipped)
+	}
+	resp, err := cs.Conn.UnstableForkSession(ctx, acp.UnstableForkSessionRequest{
+		SessionId:  cs.SessionID,
+		Cwd:        cs.WorkDir,
+		McpServers: toUnstableMcpServers(acpServers),
+	})
+	if err != nil {
+		return ForkResult{}, fmt.Errorf("fork session: %w", err)
+	}
+	return ForkResult{
+		NewSessionID:  string(resp.SessionId),
+		ConfigOptions: FlattenConfigOptions(unstableConfigOptions(resp.ConfigOptions)),
+	}, nil
+}
+
+// toUnstableMcpServers 把 ToAcpServers 产出的稳定 McpServer 列表转成 session/fork 要求的
+// UNSTABLE 线格式。两侧变体字段同构(stdio 完全同型;http/sse name/url/headers 同型),
+// 纯机械搬运,不做语义判断 —— 过滤已由 ToAcpServers 按协商能力完成。
+func toUnstableMcpServers(in []acp.McpServer) []acp.UnstableMcpServer {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]acp.UnstableMcpServer, 0, len(in))
+	for _, m := range in {
+		u := acp.UnstableMcpServer{}
+		switch {
+		case m.Stdio != nil:
+			u.Stdio = m.Stdio
+		case m.Http != nil:
+			u.Http = &acp.UnstableMcpServerHttp{Name: m.Http.Name, Url: m.Http.Url, Headers: m.Http.Headers}
+		case m.Sse != nil:
+			u.Sse = &acp.UnstableMcpServerSse{Name: m.Sse.Name, Url: m.Sse.Url, Headers: m.Sse.Headers}
+		case m.Acp != nil:
+			u.Acp = &acp.UnstableMcpServerAcpInline{Name: m.Acp.Name, Id: acp.UnstableMcpServerAcpId(m.Acp.Id)}
+		}
+		out = append(out, u)
+	}
+	return out
+}
+
+// unstableConfigOptions 把 fork 响应的 UNSTABLE configOptions 归一为稳定 SessionConfigOption,
+// 使 fork 的消费(set_config / FlattenConfigOptions / 能力位判断)与 NewSession/LoadSession
+// 走同一套表示(§5.3:多套表示收敛成一套)。Boolean 变体两侧同被下游忽略,原样搬运。
+func unstableConfigOptions(in []acp.UnstableSessionConfigOption) []acp.SessionConfigOption {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]acp.SessionConfigOption, 0, len(in))
+	for _, o := range in {
+		var so acp.SessionConfigOption
+		switch {
+		case o.Select != nil:
+			so.Select = &acp.SessionConfigOptionSelect{
+				Category:     o.Select.Category,
+				CurrentValue: o.Select.CurrentValue,
+				Description:  o.Select.Description,
+				Id:           o.Select.Id,
+				Name:         o.Select.Name,
+				Options:      o.Select.Options,
+				Type:         o.Select.Type,
+			}
+		case o.Boolean != nil:
+			so.Boolean = &acp.SessionConfigOptionBoolean{
+				Category:     o.Boolean.Category,
+				CurrentValue: o.Boolean.CurrentValue,
+				Description:  o.Boolean.Description,
+				Id:           o.Boolean.Id,
+				Name:         o.Boolean.Name,
+				Type:         o.Boolean.Type,
+			}
+		}
+		out = append(out, so)
+	}
+	return out
 }
 
 // Close 销毁 session:kill 整个 harness 进程组 + 注销活跃(§3.2)。
