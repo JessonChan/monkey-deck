@@ -175,8 +175,12 @@ describe("Sidebar session 行 fork 徽章(#172 可见性)", () => {
     const tip = badge!.getAttribute("data-tooltip-content") ?? "";
     expect(tip).toContain("sidebar.forkedFromTip");
     expect(tip).toContain("源会话定制名");
-    // Badge sits in the meta cluster right beside the harness icon.
-    expect(badge!.previousElementSibling?.classList.contains("session-harness-icon")).toBe(true);
+    // #175: the harness icon moved to the row TAIL — last element child of
+    // session-item-main, behind the whole meta cluster. The badge stays at
+    // the cluster head (here: label → badge, the time fallback follows).
+    const main = host.querySelector<HTMLElement>('[data-testid="session-s1"] .session-item-main')!;
+    expect(main.lastElementChild?.classList.contains("session-harness-icon")).toBe(true);
+    expect(badge!.previousElementSibling?.classList.contains("session-label")).toBe(true);
   });
 
   test("tooltip 解析不到源会话:回退源 id 前 8 位", async () => {
