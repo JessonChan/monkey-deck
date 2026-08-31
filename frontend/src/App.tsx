@@ -970,10 +970,13 @@ export default function App() {
 
   // 多项目同时展开:项目列表就绪后,把每个项目的 sessions 都加载进 map(本地 SQLite,快)。
   useEffect(() => {
+    // Popout windows render exactly one session (their own); the all-project
+    // list load is main-window bookkeeping (O2 — P wasted requests per boot).
+    if (isPopout) return;
     for (const p of projects) {
       if (!(p.id in sessionsByProject)) void refreshSessions(p.id);
     }
-  }, [projects, sessionsByProject, refreshSessions]);
+  }, [projects, sessionsByProject, refreshSessions, isPopout]);
 
   // 把持久化消息转成展示 items。
   const messagesToItems = useCallback((msgs: Message[]): ChatItem[] => {
