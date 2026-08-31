@@ -38,6 +38,9 @@ type fakeChat struct {
 	errSeq     []error          // per-attempt Prompt error sequence consumed in order (#46 retry tests): one popped per Prompt call; falls back to promptErr once exhausted; both empty → normal block flow
 	alive      atomic.Bool      // IsAlive 返回值(默认 true;kill 置 false 模拟 harness 死)
 	declined   atomic.Bool      // ElicitDeclined 返回值(模拟用户主动 decline elicitation 后的空 turn)
+	canFork    bool             // CanFork 返回值(模拟 harness 声明 sessionCapabilities.fork 与否)
+	forkResult acp.ForkResult   // Fork 成功时返回值(fork 测试断言落库内容用)
+	forkErr    error            // Fork 非空则立即返回该错(模拟 harness 拒绝 / 断连)
 }
 
 func newFakeChat() *fakeChat {
@@ -107,6 +110,17 @@ func (f *fakeChat) RefreshConfig(_ context.Context) ([]acp.ConfigOption, error) 
 	return nil, nil
 }
 func (f *fakeChat) SetPermissionRules(_ []permissions.Rule) {}
+
+// CanFork / Fork:chatConn 的 fork 面(#172 Phase2)。canFork 置 true 时 Fork 返回
+// forkResult(或 forkErr),供 ForkSession 测试断言新行的落库内容。
+func (f *fakeChat) CanFork() bool { return f.canFork }
+
+func (f *fakeChat) Fork(_ context.Context, _ []store.McpServer) (acp.ForkResult, error) {
+	if f.forkErr != nil {
+		return acp.ForkResult{}, f.forkErr
+	}
+	return f.forkResult, nil
+}
 
 // promptAttachmentsAt returns the attachments recorded for the n-th Prompt.
 func (f *fakeChat) promptAttachmentsAt(n int) []acp.Attachment {

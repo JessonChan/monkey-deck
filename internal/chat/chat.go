@@ -188,6 +188,12 @@ type chatConn interface {
 	RefreshConfig(ctx context.Context) ([]acp.ConfigOption, error)
 	// SetPermissionRules 更新该 session 的分级权限规则快照(§3.4)。规则变更时由 service 对所有活跃 session 调用。
 	SetPermissionRules(rules []permissions.Rule)
+	// CanFork 报告 agent 是否声明了 sessionCapabilities.fork(#172 铁律①门控位)。
+	CanFork() bool
+	// Fork 把当前 ACP session 复刻成新 session(UNSTABLE session/fork):cwd 恒为源
+	// session 的 worktree(铁律②同 cwd),mcpServers 沿源。未声明能力返回
+	// acp.ErrForkNotDeclared(typed error)。详见 acp.ChatSession.Fork。
+	Fork(ctx context.Context, mcps []store.McpServer) (acp.ForkResult, error)
 }
 
 // turnEntry 一轮时序里的一项,由稳定标识驱动(对标 omp/opencode 的"对象归并"模型):
@@ -1058,6 +1064,94 @@ func (s *ChatService) DeleteSession(sessionID string) error {
 	// state; queue rows cascade with the session row (FK).
 	s.cleanupQueueState(sessionID)
 	return s.st.DeleteSession(s.ctx, sessionID)
+}
+
+// errForkSourceBusy 源 session 一轮对话进行中(prompting/executing)拒绝 fork(#172 铁律③:
+// forked session 串行使用 —— 源忙拒绝在先;fork 之后源与 fork 的并发 prompt 不做运行时互斥)。
+var errForkSourceBusy = errors.New("源会话正在对话中,请等回合结束后再分叉")
+
+// ForkSession forks a session (#172 Phase 2): replicates the source ACP session
+// at its CURRENT conversation end (the protocol has no position parameter) into
+// a new harness-side session and creates a DB row for the fork.
+//
+// Iron rules (probe 0cf4df6, docs/worklog/2026-08-31-fork-probe-172.md):
+//   - Gate on the DECLARED bit (sessionCapabilities.fork): undeclared → typed
+//     acp.ErrForkNotDeclared before any RPC. Wire error codes are diagnostics
+//     only — not assumed (-32603 was observed alongside the mainstream -32601).
+//   - Same-cwd fork (iron rule ②): the fork shares the source's worktree path;
+//     no new worktree, no baseRef. (A changed cwd is a deterministic omp error.)
+//   - Serial use (iron rule ③): a busy source (turn in flight) is rejected;
+//     after the fork, source and fork are NOT runtime-mutexed (known risk,
+//     worklog-documented; omp crashed on concurrent prompts).
+//
+// The new row inherits project / model / harness / worktree from the source,
+// carries forked_from = source id and a " (fork)" title suffix, and pins the
+// fork response's OWN configOptions as the read-only model-select cache
+// (consume-from-response per probe ⑤, never assume an echo).
+func (s *ChatService) ForkSession(sourceSessionID string) (*store.Session, error) {
+	se, err := s.st.GetSession(s.ctx, sourceSessionID)
+	if err != nil {
+		return nil, err
+	}
+	if se == nil {
+		return nil, fmt.Errorf("session not found: %s", sourceSessionID)
+	}
+	if s.isBusy(sourceSessionID) {
+		return nil, errForkSourceBusy
+	}
+	// Fork needs a live harness holding the source ACP session: lazily spawn +
+	// resume when not active (readonly / after restart). This also yields the
+	// authoritative declared bit behind CanFork.
+	if err := s.ensureLive(sourceSessionID); err != nil {
+		return nil, fmt.Errorf("fork: start source session: %w", err)
+	}
+	s.mu.RLock()
+	ls := s.active[sourceSessionID]
+	s.mu.RUnlock()
+	if ls == nil {
+		return nil, fmt.Errorf("fork: source session failed to start: %s", sourceSessionID)
+	}
+	if !ls.chat.CanFork() {
+		return nil, acp.ErrForkNotDeclared
+	}
+	mcps, err := s.st.GetSessionMcpServers(s.ctx, sourceSessionID)
+	if err != nil {
+		return nil, fmt.Errorf("fork: load source mcp selection: %w", err)
+	}
+	res, err := ls.chat.Fork(s.ctx, mcps)
+	if err != nil {
+		return nil, err
+	}
+	displayTitle := se.CustomTitle
+	if displayTitle == "" {
+		displayTitle = se.Title
+	}
+	fresh, err := s.st.CreateSession(s.ctx, se.ProjectID, displayTitle+" (fork)", se.Model, se.Harness)
+	if err != nil {
+		return nil, err
+	}
+	if se.WorktreePath != "" {
+		if err := s.st.SetSessionWorktree(s.ctx, fresh.ID, se.WorktreePath, se.Branch); err != nil {
+			slog.Warn("persist fork worktree", "err", err)
+		} else {
+			fresh.WorktreePath, fresh.Branch = se.WorktreePath, se.Branch
+		}
+	}
+	if err := s.st.SetSessionForkedFrom(s.ctx, fresh.ID, se.ID); err != nil {
+		slog.Warn("persist forked_from", "err", err)
+	} else {
+		fresh.ForkedFrom = se.ID
+	}
+	// Pin the fork's ACP session id immediately: the forked context lives
+	// harness-side (our DB copies no messages), so the next open must RESUME
+	// into the forked session — not spawn a fresh, context-less one.
+	if err := s.st.UpdateSessionACP(s.ctx, fresh.ID, res.NewSessionID, fresh.Title); err != nil {
+		slog.Warn("persist fork acp session id", "err", err)
+	}
+	fresh.ACPSession = res.NewSessionID
+	s.persistConfigCache(fresh.ID, res.ConfigOptions)
+	slog.Info("session forked", "source", sourceSessionID, "fork", fresh.ID, "acpSession", res.NewSessionID)
+	return fresh, nil
 }
 
 // MergeSession 把 session 分支已提交的内容合并进项目主仓库。

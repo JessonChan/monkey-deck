@@ -45,6 +45,10 @@ func (m *mockChatConn) RefreshConfig(ctx context.Context) ([]acp.ConfigOption, e
 	return nil, nil
 }
 func (m *mockChatConn) SetPermissionRules(_ []permissions.Rule) {}
+func (m *mockChatConn) CanFork() bool { return false }
+func (m *mockChatConn) Fork(ctx context.Context, mcps []store.McpServer) (acp.ForkResult, error) {
+	return acp.ForkResult{}, acp.ErrForkNotDeclared
+}
 
 // newIdleTestService 建一个不启 harness 的 svc,注入短 idleTimeout。
 func newIdleTestService(t *testing.T, idleTimeout time.Duration) *ChatService {
