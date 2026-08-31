@@ -30,6 +30,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { mdSourceProps, type MdComponentProps } from "../lib/markdownSource";
 
 // Floor for any dragged width (px): a column dragged far left stays wide
 // enough to remain readable instead of collapsing into a vertical sliver.
@@ -136,7 +137,8 @@ export const TableSessionContext = createContext("");
 // and this re-run stamps saved widths onto whatever cells the latest commit
 // produced. DOM nodes react reuses keep the inline styles anyway; recreated
 // ones get them back before paint — either way drags stay visible.
-export function ResizableTable(props: ComponentPropsWithoutRef<"table">) {
+export function ResizableTable(props: ComponentPropsWithoutRef<"table"> & MdComponentProps) {
+  const { node, ...rest } = props;
   const sessionId = useContext(TableSessionContext);
   const tableRef = useRef<HTMLTableElement>(null);
 
@@ -150,8 +152,10 @@ export function ResizableTable(props: ComponentPropsWithoutRef<"table">) {
   });
 
   return (
-    <div className="md-table-wrap">
-      <table ref={tableRef} {...props} />
+    // #177: source-span anchors sit on the component's actual DOM root; the
+    // hast node position covers the raw pipe-table source (issue #177).
+    <div className="md-table-wrap" {...mdSourceProps(node)}>
+      <table ref={tableRef} {...rest} />
     </div>
   );
 }
@@ -159,13 +163,14 @@ export function ResizableTable(props: ComponentPropsWithoutRef<"table">) {
 // Header-cell renderer: unchanged <th> semantics plus the drag grip. On
 // coarse-pointer devices the grip is not even mounted (mobile-disable layer 1);
 // hooks run unconditionally before that early return, per React rules.
-export function HeadCell(props: ComponentPropsWithoutRef<"th">) {
+export function HeadCell(props: ComponentPropsWithoutRef<"th"> & MdComponentProps) {
+  const { node, ...rest } = props;
   const { t } = useTranslation();
   const sessionId = useContext(TableSessionContext);
   const hint = t("chat.colResizeTip");
 
   // Mobile-disable layer 1: on touch-primary devices the grip never mounts.
-  if (coarsePointer) return <th {...props} />;
+  if (coarsePointer) return <th {...rest} {...mdSourceProps(node)} />;
 
   const beginResize = (e: ReactPointerEvent<HTMLSpanElement>) => {
     // Layer 2: a touch contact never drags, even where layer 1 under-counted
@@ -244,7 +249,7 @@ export function HeadCell(props: ComponentPropsWithoutRef<"th">) {
   };
 
   return (
-    <th {...props}>
+    <th {...rest} {...mdSourceProps(node)}>
       {props.children}
       <span
         className="md-col-grip"

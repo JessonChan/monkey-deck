@@ -354,6 +354,7 @@
   "selectionToolbar": {
     "label": "选中操作",
     "copyTip": "复制选中文字",
+    "copyMdTip": "复制为 Markdown 源(选中表格/列表等时保留原始格式)",
     "quote": "引用",
     "quoteTip": "把选中文字作为引用插入输入框",
     "quoteToChat": "引用到对话",

@@ -19,6 +19,7 @@ import CopyIconButton from "./CopyIconButton";
 import ErrorCard from "./ErrorCard";
 import type { ChatErrorView } from "../lib/errorDiag";
 import { copyTextQuiet } from "../lib/clipboard";
+import { markdownSourceFromSelection, mdSourceProps, type MdComponentProps } from "../lib/markdownSource";
 import { useCopyFeedback } from "../hooks/useCopyFeedback";
 import { relativeToRoot } from "../lib/dropFiles";
 import { hasPanelFilePayload, readPanelFilePayload } from "../lib/panelDrop";
@@ -241,15 +242,38 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
   // actions identity each time is wasteful (and would re-bind every button).
   const onQuoteRef = useRef(props.onQuoteToComposer);
   onQuoteRef.current = props.onQuoteToComposer;
+  // Copy-as-markdown-source (#177): the copy run resolves the selected
+  // message's raw source at click time, so the actions array stays stable
+  // (memo invariant below) without tracking items in its dependencies.
+  const mdItemsRef = useRef(props.items);
+  mdItemsRef.current = props.items;
+  // Raw markdown of the message containing the current selection, or "" when
+  // the selection is not inside a rendered markdown message (#177).
+  const rawSourceOfSelection = useCallback((): string => {
+    const sel = typeof window === "undefined" ? null : window.getSelection();
+    const start = sel?.anchorNode;
+    const el = start instanceof Element ? start : start?.parentElement;
+    const id = el?.closest("[data-md-msg]")?.getAttribute("data-md-msg");
+    if (!id) return "";
+    const item = mdItemsRef.current.find((i) => i.id === id);
+    return item ? mdSourceOfItem(item) : "";
+  }, []);
   const selectionActions = useMemo<SelectionAction[]>(
     () => [
       {
         key: "copy",
         labelKey: "common.copy",
-        tipKey: "selectionToolbar.copyTip",
+        tipKey: "selectionToolbar.copyMdTip",
         Icon: Copy,
         testId: "selection-copy",
-        run: (text) => { copyTextQuiet(text); },
+        // #177: prefer the selection's markdown source; fall back to plain
+        // text where it has no markdown anchors (tool cards, meta rows,
+        // plain-text bubbles). The toolbar runs the action before clearing
+        // the selection, so the live selection is still readable here.
+        run: (text) => {
+          const raw = rawSourceOfSelection();
+          copyTextQuiet((raw && markdownSourceFromSelection(raw)) || text);
+        },
       },
       {
         key: "quote",
@@ -260,8 +284,9 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
         run: (text) => { onQuoteRef.current?.(text); },
       },
     ],
-    // t is stable (i18next); copyText/Quote/Copy are module-level. onQuoteRef is
-    // a stable ref. The array is built once.
+    // t is stable (i18next); copyText/Quote/Copy are module-level. onQuoteRef /
+    // mdItemsRef are stable refs; rawSourceOfSelection is a stable callback.
+    // The array is built once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [t],
   );
@@ -970,11 +995,22 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
 });
 
 
+// The exact string AgentMarkdown renders for a markdown chat item (#177):
+// streaming agent messages append the caret glyph to the source, so the
+// data-md-s/e offsets stamped onto the DOM are valid against THIS string.
+// Tool/plan items never render markdown → "" (also the rawSourceOfSelection
+// lookup answer for selections outside any markdown message).
+function mdSourceOfItem(item: ChatItem): string {
+  if (item.type === "agent") return item.text + (item.streaming ? " ▋" : "");
+  if (item.type === "user") return item.text;
+  return "";
+}
+
 const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview, durationMs, canFork, forkBusy, onFork }: { item: ChatItem; sessionId: string; onOpenFilePreview: (path: string, line?: number) => void; durationMs?: number; canFork: boolean; forkBusy: boolean; onFork: () => void }) {
   if (item.type === "user") {
     return (
       <div className="row row-user" data-testid="msg-user">
-        <div className="bubble-user-wrap">
+        <div className="bubble-user-wrap" data-md-msg={item.id}>
           <UserBubble sessionId={sessionId} text={item.text} onOpenFilePreview={onOpenFilePreview} />
           <div className="msg-meta">
             {item.ts && <span className="msg-time">{formatTime(item.ts)}</span>}
@@ -990,8 +1026,8 @@ const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview, dura
       <div className="row row-agent" data-testid="msg-agent">
         <div className="avatar"><Sparkles size={15} /></div>
         <div className="bubble-agent-wrap">
-          <div className="bubble-agent">
-            <AgentMarkdown sessionId={sessionId} text={item.text + (item.streaming ? " ▋" : "")} onOpenFilePreview={onOpenFilePreview} streaming={item.streaming} />
+          <div className="bubble-agent" data-md-msg={item.id}>
+            <AgentMarkdown sessionId={sessionId} text={mdSourceOfItem(item)} onOpenFilePreview={onOpenFilePreview} streaming={item.streaming} />
           </div>
           <div className="msg-meta">
             {item.ts && (
@@ -1893,17 +1929,23 @@ function PlanTimeline({ entries, prompting, isOpen, onToggle }: { entries: PlanE
 // - Math blocks ($$..$$ via remark-math) AND ```math fences both arrive here as
 //   <code.language-math> — one shared route to MathBlock covers both shapes.
 // - Everything else -> CodeBox (highlight.js).
-function PreRenderer(props: ComponentPropsWithoutRef<"pre"> & { streaming?: boolean }) {
+function PreRenderer(props: ComponentPropsWithoutRef<"pre"> & MdComponentProps & { streaming?: boolean }) {
+  const { node, streaming } = props;
   const codeEl = extractCodeChild(props.children);
   const language = codeEl?.language || "code";
   const raw = codeEl?.text || "";
+  // #177: the rendered code box stands in for the original <pre>, so the
+  // fence-to-fence source span lands on its root (CodeBox spreads it).
+  // Math/mermaid branches keep their own roots unanchored; selections inside
+  // them find no anchor and the copy falls back to plain text.
+  const src = mdSourceProps(node);
   if (language === "math") {
     return <MathBlock code={raw} />;
   }
   if (isMermaidLanguage(language)) {
-    return <MermaidRenderer code={raw} streaming={props.streaming} />;
+    return <MermaidRenderer code={raw} streaming={streaming} />;
   }
-  return <CodeBox language={language} raw={raw} />;
+  return <CodeBox language={language} raw={raw} {...src} />;
 }
 
 // 同时识别 mermaid 官方语言名与常见变体(mmd / flowchart 等),宽容匹配。
@@ -1914,8 +1956,8 @@ function isMermaidLanguage(lang: string): boolean {
 
 // 对话外链拦截(Task #15668):markdown 里的 http/https 链接点击 → 调后端 OpenURL
 // 用系统默认浏览器打开(Wails3 webview 不承担浏览器导航)。mailto/tel/相对路径/锚点放行默认行为。
-function AnchorRenderer(props: ComponentPropsWithoutRef<"a">) {
-  const { href, children, ...rest } = props;
+function AnchorRenderer(props: ComponentPropsWithoutRef<"a"> & MdComponentProps) {
+  const { href, children, node, ...rest } = props;
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     if (href && /^https?:\/\//i.test(href)) {
@@ -1923,7 +1965,7 @@ function AnchorRenderer(props: ComponentPropsWithoutRef<"a">) {
       void ChatService.OpenURL(href);
     }
   };
-  return <a href={href} onClick={onClick} target="_blank" rel="noopener noreferrer" {...rest}>{children}</a>;
+  return <a href={href} onClick={onClick} target="_blank" rel="noopener noreferrer" {...rest} {...mdSourceProps(node)}>{children}</a>;
 }
 
 // Agent / user-markdown renderer (Task #15084): recognises file paths inside
@@ -1939,7 +1981,7 @@ function AgentMarkdown({ sessionId, text, onOpenFilePreview, streaming = false }
   const components = useMemo(
     () => ({
       code: CodeRenderer,
-      pre: (props: ComponentPropsWithoutRef<"pre">) => <PreRenderer {...props} streaming={streaming} />,
+      pre: (props: ComponentPropsWithoutRef<"pre"> & MdComponentProps) => <PreRenderer {...props} streaming={streaming} />,
       a: AnchorRenderer,
       p: makeTextLinkifyRenderer("p", onOpenFilePreview),
       li: makeTextLinkifyRenderer("li", onOpenFilePreview),
@@ -1947,6 +1989,22 @@ function AgentMarkdown({ sessionId, text, onOpenFilePreview, streaming = false }
       // #140: ResizableTable keeps the .md-table-wrap scroll skeleton (#136)
       // and adds column-resize plumbing; HeadCell mounts the drag grip.
       table: ResizableTable,
+      // #177: remaining core elements get source-span anchors (data-md-s/e
+      // from the hast node position) so DOM selections map back to the
+      // original markdown (lib/markdownSource). remark-math has no `math`
+      // tagName on v6 (it emits code.language-math, anchored via code/pre).
+      h1: makeAnchored("h1"),
+      h2: makeAnchored("h2"),
+      h3: makeAnchored("h3"),
+      h4: makeAnchored("h4"),
+      h5: makeAnchored("h5"),
+      h6: makeAnchored("h6"),
+      ul: makeAnchored("ul"),
+      ol: makeAnchored("ol"),
+      blockquote: makeAnchored("blockquote"),
+      strong: makeAnchored("strong"),
+      em: makeAnchored("em"),
+      del: makeAnchored("del"),
       th: HeadCell,
     }),
     [onOpenFilePreview, streaming]
@@ -1962,6 +2020,19 @@ function AgentMarkdown({ sessionId, text, onOpenFilePreview, streaming = false }
   );
 }
 
+// Source-span anchor factory (#177): renders `tag` unchanged plus the
+// data-md-s/e offsets from the hast node, so DOM selections inside the element
+// map back to the original markdown (lib/markdownSource). Module-level so the
+// returned components keep stable identities across renders (streaming
+// remount invariant, Task #21289).
+function makeAnchored<T extends keyof React.JSX.IntrinsicElements>(tag: T) {
+  const Comp = (props: ComponentPropsWithoutRef<T> & MdComponentProps) => {
+    const { node, children, ...rest } = props;
+    return React.createElement(tag, { ...(rest as Record<string, unknown>), ...mdSourceProps(node) }, children);
+  };
+  return Comp;
+}
+
 // ReactMarkdown 文本节点(p / li / td)路径链接化工厂(Task #15084)。
 // 这些节点的 children 通常是字符串/数组,把其中纯字符串片段用 PathLinkified 包起来。
 // 行内 code / 链接等子元素保持原样(不识别其中的路径,避免破坏代码语义)。
@@ -1969,9 +2040,9 @@ function makeTextLinkifyRenderer(
   tag: "p" | "li" | "td",
   onOpenFilePreview: (path: string, line?: number) => void
 ) {
-  const Comp = (props: ComponentPropsWithoutRef<typeof tag>) => {
-    const { children, ...rest } = props;
-    return React.createElement(tag, rest as Record<string, unknown>, linkifyReactChildren(children, onOpenFilePreview));
+  const Comp = (props: ComponentPropsWithoutRef<typeof tag> & MdComponentProps) => {
+    const { children, node, ...rest } = props;
+    return React.createElement(tag, { ...(rest as Record<string, unknown>), ...mdSourceProps(node) }, linkifyReactChildren(children, onOpenFilePreview));
   };
   return Comp;
 }
@@ -1997,17 +2068,17 @@ function linkifyReactChildren(children: React.ReactNode, onOpenFilePreview: (pat
 // for `$...$`; route it to KaTeX BEFORE the generic isBlock check (its className
 // contains "language-" and would otherwise be treated as a code block). Block math
 // never reaches this renderer — PreRenderer intercepts <pre>-wrapped variants.
-function CodeRenderer(props: ComponentPropsWithoutRef<"code">) {
-  const { className, children, ...rest } = props;
+function CodeRenderer(props: ComponentPropsWithoutRef<"code"> & MdComponentProps) {
+  const { className, children, node, ...rest } = props;
   if (className?.includes("math-inline")) {
     return <MathInline code={String(children ?? "")} />;
   }
   const isBlock = Boolean(className?.includes("language-")) || String(children ?? "").includes("\n");
-  if (isBlock) return <code className={className} data-block {...rest}>{children}</code>;
-  return <code className="code-inline" {...rest}>{children}</code>;
+  if (isBlock) return <code className={className} data-block {...rest} {...mdSourceProps(node)}>{children}</code>;
+  return <code className="code-inline" {...rest} {...mdSourceProps(node)}>{children}</code>;
 }
 
-function CodeBox({ language, raw }: { language: string; raw: string }) {
+function CodeBox({ language, raw, ...rest }: { language: string; raw: string } & ComponentPropsWithoutRef<"div">) {
   const { t } = useTranslation();
   const { copied, failed, copy } = useCopyFeedback(1500);
   // 复用 lib/highlight 的 highlightToLines(Task #15088):显式 language 优先,否则 highlightAuto。
@@ -2018,7 +2089,7 @@ function CodeBox({ language, raw }: { language: string; raw: string }) {
     [raw, language]
   );
   return (
-    <div className="code-box">
+    <div className="code-box" {...rest}>
       <div className="code-box-head">
         <span className="code-lang">{detected || language}</span>
         {/* Keep copy as plain text: always write raw (original source), not highlighted HTML. */}

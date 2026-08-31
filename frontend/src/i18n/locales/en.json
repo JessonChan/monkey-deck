@@ -354,6 +354,7 @@
   "selectionToolbar": {
     "label": "Selection actions",
     "copyTip": "Copy selected text",
+    "copyMdTip": "Copy as Markdown source (keeps raw formatting for tables, lists, …)",
     "quote": "Quote",
     "quoteTip": "Insert the selected text as a quote into the composer",
     "quoteToChat": "Quote to chat",
