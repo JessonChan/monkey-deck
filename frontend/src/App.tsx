@@ -758,7 +758,12 @@ export default function App() {
         // (same stopReason= data-source distinction as the notify sound, §5.3).
         if (document.hidden && s.detail?.startsWith("stopReason=")) appBadge.bump();
         const sid = selectedSessionIdRef.current;
-        if (sid) { ChatService.SessionChanges(sid).then((c) => setChangesBySession((p) => ({ ...p, [sid]: c }))).catch(() => {}); ChatService.SessionMergeable(sid).then(m => setMergeableBySession((p) => ({ ...p, [sid]: m }))).catch(() => {}); }
+        // R5: same gate as openSession — phones with the drawer closed have
+        // no consumer for these; the backfill effect covers reopening.
+        if (sid && shouldPullGitRef.current()) {
+          ChatService.SessionChanges(sid).then((c) => setChangesBySession((p) => ({ ...p, [sid]: c }))).catch(() => {});
+          ChatService.SessionMergeable(sid).then(m => setMergeableBySession((p) => ({ ...p, [sid]: m }))).catch(() => {});
+        }
       }
       // auto-continue moved server-side (#126A): the backend drains in its own
       // runPrompt tail at turn end (idle/error/notice) — the frontend no longer
@@ -1111,7 +1116,7 @@ export default function App() {
       if (pullCommands) commandsSeededRef.current.add(sessionId);
       // R5: on phones with the drawer closed nothing consumes the git data —
       // skip the 3 pulls; the backfill effect covers the gate reopening.
-      const pullGit = shouldPullGit();
+      const pullGit = shouldPullGitRef.current();
       const [msgs, hist, cachedConfig, cachedCommands, changes, br, mergeable, kind] = await Promise.all([
         pullMessages ?? Promise.resolve(null),
         pullHistory ?? Promise.resolve(null),
@@ -2251,22 +2256,36 @@ export default function App() {
   // this is just the cheap invariant guarantee).
   const openRightDrawer = () => { setDrawerOpen(false); setRightDrawerOpen(true); };
 
-  // ── R5 git-pull gating refs ──
-  // shouldPullGit(): skip the per-session git pulls (SessionChanges / Current
-  // Branch / Mergeable — 3-5 git subprocess spawns) when NOTHING can consume
-  // them, i.e. ONLY on phones with the right drawer closed (both SidePanel
-  // tabs + the composer branch chip are unreachable). Desktop ALWAYS pulls,
-  // even with the panel collapsed: the composer branch chip stays visible, so
-  // gating there would blank it (deliberate conservative side). Reads refs,
-  // not closure state, so openSession (memoized elsewhere) sees fresh values.
+  // ── R5 git-pull gating ──
+  // Skip the per-session git pulls (SessionChanges / CurrentBranch / Mergeable
+  // — 3-5 git subprocess spawns) when NOTHING can consume them: ONLY on phones
+  // (<=768px) with the right drawer closed (both SidePanel tabs are off-screen
+  // and the composer branch chip is display:none). Desktop ALWAYS pulls, even
+  // with the panel collapsed — the composer branch chip stays visible there, so
+  // gating would blank it (deliberate conservative side).
   const mdViewportRef = useRef(mdViewport);
   mdViewportRef.current = mdViewport;
   const rightDrawerOpenRef = useRef(rightDrawerOpen);
   rightDrawerOpenRef.current = rightDrawerOpen;
   const rightCollapsedRef = useRef(rightCollapsed);
   rightCollapsedRef.current = rightCollapsed;
-  const shouldPullGit = () =>
+  // Ref, not closure: chat:status handlers register in an earlier effect and
+  // must read fresh values without re-subscribing (selectedSessionIdRef pattern).
+  const shouldPullGitRef = useRef((): boolean => true);
+  shouldPullGitRef.current = () =>
     !mdViewportRef.current || rightDrawerOpenRef.current || !rightCollapsedRef.current;
+
+  // R5 backfill: when the gate reopens (drawer opened / viewport crossed back
+  // over 768px / panel expanded / switched session), re-pull the skipped git
+  // data for the SELECTED session — the stale-by-design window ends here.
+  useEffect(() => {
+    const sid = selectedSessionIdRef.current;
+    if (!sid || !shouldPullGitRef.current()) return;
+    ChatService.SessionChanges(sid).then((c) => setChangesBySession((p) => ({ ...p, [sid]: c }))).catch(() => {});
+    ChatService.SessionCurrentBranch(sid).then((br) => setBranchBySession((p) => ({ ...p, [sid]: br || "" }))).catch(() => {});
+    ChatService.SessionMergeable(sid).then((m) => setMergeableBySession((p) => ({ ...p, [sid]: m }))).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mdViewport, rightDrawerOpen, rightCollapsed, selectedSessionId]);
 
   // Android back gesture (M2 PWA): while a layer below is open, back closes
   // the TOP layer instead of exiting the app (the biggest native-feel gap —
