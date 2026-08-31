@@ -758,7 +758,7 @@ export default function App() {
         // (same stopReason= data-source distinction as the notify sound, §5.3).
         if (document.hidden && s.detail?.startsWith("stopReason=")) appBadge.bump();
         const sid = selectedSessionIdRef.current;
-        if (sid) { ChatService.SessionChanges(sid).then(setSessionChanges).catch(() => {}); ChatService.SessionMergeable(sid).then(m => setMergeableBySession((p) => ({ ...p, [sid]: m }))).catch(() => {}); }
+        if (sid) { ChatService.SessionChanges(sid).then((c) => setChangesBySession((p) => ({ ...p, [sid]: c }))).catch(() => {}); ChatService.SessionMergeable(sid).then(m => setMergeableBySession((p) => ({ ...p, [sid]: m }))).catch(() => {}); }
       }
       // auto-continue moved server-side (#126A): the backend drains in its own
       // runPrompt tail at turn end (idle/error/notice) — the frontend no longer
@@ -1128,8 +1128,9 @@ export default function App() {
         } catch { /* 无缓存或读取失败:静默,等 spawn 推送 */ }
       }
       try {
-        setSessionChanges(await ChatService.SessionChanges(sessionId));
-      } catch { setSessionChanges(null); }
+        const changes = await ChatService.SessionChanges(sessionId);
+        setChangesBySession((p) => ({ ...p, [sessionId]: changes }));
+      } catch { setChangesBySession((p) => ({ ...p, [sessionId]: null })); }
       // 源代码管理面板的分支展示:读真实 HEAD(worktree 模式 = md/<id>;非 worktree git 项目 = 项目目录当前分支)。
       // session.Branch 仅 worktree 模式有值,非 worktree 恒空 —— 直接用它会在非 worktree 的 git 项目里显示空分支。
       try {
@@ -1670,7 +1671,10 @@ export default function App() {
   }, [t]);
 
   const [mergeResults, setMergeResults] = useState<Record<string, string>>({});  // per-session 合并结果(切 session 不会串窗口)
-  const [sessionChanges, setSessionChanges] = useState<FileChange[] | null>(null);
+  // Per-session file changes (map-ification): the old global single-slot let a
+  // slow SessionChanges from session A overwrite session B after fast A→B→A
+  // switches (structural fix beats a write-guard at every call site, §5.3).
+  const [changesBySession, setChangesBySession] = useState<Record<string, FileChange[] | null>>({});
   const [mergeableBySession, setMergeableBySession] = useState<Record<string, boolean>>({});  // per-session:branch 有无领先基线的已提交 commit(决定合并按钮 enable/disable)
   const [worktreeKindBySession, setWorktreeKindBySession] = useState<Record<string, string>>({});  // per-session:"project"|"owner"|"guest"(guest → 合并禁用 + 提示)
   const mergeSession = useCallback(async () => {
@@ -1697,26 +1701,26 @@ export default function App() {
     if (!selectedSessionId) return;
     try { await ChatService.SessionStage(selectedSessionId, paths); setErrorMessage(null); }
     catch (e) { setErrorMessage(extractErrMsg(e)); }
-    finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
+    finally { try { const sid = selectedSessionId; if (sid) { const changes = await ChatService.SessionChanges(sid); setChangesBySession((p) => ({ ...p, [sid]: changes })); } } catch {} }
   }, [selectedSessionId]);
   const unstageFiles = useCallback(async (paths: string[]) => {
     if (!selectedSessionId) return;
     try { await ChatService.SessionUnstage(selectedSessionId, paths); setErrorMessage(null); }
     catch (e) { setErrorMessage(extractErrMsg(e)); }
-    finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
+    finally { try { const sid = selectedSessionId; if (sid) { const changes = await ChatService.SessionChanges(sid); setChangesBySession((p) => ({ ...p, [sid]: changes })); } } catch {} }
   }, [selectedSessionId]);
   const discardFiles = useCallback(async (paths: string[]) => {
     if (!selectedSessionId) return;
     try { await ChatService.SessionDiscard(selectedSessionId, paths); setErrorMessage(null); }
     catch (e) { setErrorMessage(extractErrMsg(e)); }
-    finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); } catch {} }
+    finally { try { const sid = selectedSessionId; if (sid) { const changes = await ChatService.SessionChanges(sid); setChangesBySession((p) => ({ ...p, [sid]: changes })); } } catch {} }
   }, [selectedSessionId]);
   // 提交:失败时 rethrow,让 GitPanel 保留提交信息 + 显示内联错误。
   const commitSession = useCallback(async (message: string) => {
     if (!selectedSessionId) throw new Error(t("app.noActiveSession"));
     try { await ChatService.SessionCommit(selectedSessionId, message); setErrorMessage(null); }
     catch (e) { setErrorMessage(extractErrMsg(e)); throw e; }
-    finally { try { setSessionChanges(await ChatService.SessionChanges(selectedSessionId)); const m = await ChatService.SessionMergeable(selectedSessionId); setMergeableBySession((p) => ({ ...p, [selectedSessionId]: m })); } catch {} }
+    finally { try { const sid = selectedSessionId; if (sid) { const changes = await ChatService.SessionChanges(sid); setChangesBySession((p) => ({ ...p, [sid]: changes })); } const m = await ChatService.SessionMergeable(selectedSessionId); setMergeableBySession((p) => ({ ...p, [selectedSessionId]: m })); } catch {} }
   }, [selectedSessionId]);
   // AI 提交:让当前 session 的 agent 自动提交。触发一轮 turn;turn 结束(idle)时
   // 已有 effect 自动刷新 sessionChanges,故无需手动 finally 刷新。
@@ -1817,6 +1821,7 @@ export default function App() {
     setAudiosBySession(drop);
     setAudioSupportedBySession(drop);
     setConfigOptionsBySession(drop);
+    setChangesBySession(drop);
     setFileTabsBySession(drop);
     setActiveFileTabBySession(drop);
     // Queue cache drops too (#126A): re-opening the session re-syncs via
@@ -2577,7 +2582,7 @@ export default function App() {
             rootName={selectedProject?.name || ""}
             rootPath={activeSession?.worktreePath || selectedProject?.path || ""}
             isGitProject={gitByProject[selectedProject?.id ?? ""] ?? false}
-            changes={sessionChanges}
+            changes={changesBySession[selectedSessionId] ?? null}
             status={status}
             mergeResult={mergeResults[selectedSessionId] || null}
             branch={branchBySession[selectedSessionId] || activeSession.branch || ""}
