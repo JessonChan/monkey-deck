@@ -591,9 +591,14 @@ export default function App() {
   }, []);
 
   // 启动:加载项目 + 订阅事件。
+  // R3: marks that the mount-effect boot pulls have started, so the FIRST
+  // WS-connect resync (which races along initial boot) can skip duplicating
+  // the project/harness list refresh. Later resyncs always refresh.
+  const bootListsStartedRef = useRef(false);
   useEffect(() => {
     void refreshProjects();
     ChatService.ListHarnesses().then((h) => setHarnesses(h ?? [])).catch(() => {});
+    bootListsStartedRef.current = true; // first-connect resync skips these (R3)
     // 后端异步发现 harness 完成后推 chat:harnesses 事件,据此重拉 enriched 列表(含版本/可升级)。
     const offHarnesses = Events.On("chat:harnesses", () => {
       ChatService.ListHarnesses().then((h) => setHarnesses(h ?? [])).catch(() => {});
@@ -768,27 +773,42 @@ export default function App() {
     // desktop process. Desktop never sees it (custom.js 404s there). Re-pull the
     // server-side snapshots only — live streaming state is intentionally not
     // replayed (WS reconnects resync, never backfill).
+    // Debounce + first-boot dedup (R3): custom.js may deliver resync bursts
+    // (visibilitychange + onopen raced before the root-cause fix; multiple
+    // tabs each fire their own). A 300ms trailing debounce coalesces them,
+    // and the first WS connect rides along the mount-effect boot pulls
+    // below — skipping the list refresh for it avoids a full duplicate.
+    let resyncTimer: ReturnType<typeof window.setTimeout> | undefined;
     const offResync = Events.On("remote:resync", () => {
-      void refreshProjects();
-      ChatService.ListHarnesses().then((h) => setHarnesses(h ?? [])).catch(() => {});
-      for (const pid of Object.keys(sessionsByProjectRef.current)) {
-        void refreshSessions(pid, true);
-      }
-      // Status snapshot merge: chat:status events pushed while the WS was down
-      // are gone for good (no replay, §1.8) — pull the backend truth so both
-      // stuck "prompting" (#134) and missed "prompting" (#127) reconcile.
-      void syncSessionStatuses();
-      // A reconnect implies a possible EVENT GAP, and the open conversation's
-      // tail exists only in the desktop's memory — lists alone leave a frozen
-      // partial message on the phone until manual re-entry (user report).
-      // Force a DB reload via the same path as the switch-away cache drop.
-      // Guard: only when this session was already loaded (first WS connect
-      // rides along initial boot — skip to avoid a double load).
-      const sid = selectedSessionIdRef.current;
-      if (sid && loadedSessionsRef.current.has(sid)) {
-        loadedSessionsRef.current.delete(sid);
-        void openSessionRef.current(sid);
-      }
+      clearTimeout(resyncTimer);
+      resyncTimer = setTimeout(() => {
+        if (bootListsStartedRef.current) {
+          void refreshProjects();
+          ChatService.ListHarnesses().then((h) => setHarnesses(h ?? [])).catch(() => {});
+        }
+        // else: first WS connect rides along the mount-effect boot pulls
+        // (ref set there) — the list refresh would be a full duplicate.
+        for (const pid of Object.keys(sessionsByProjectRef.current)) {
+          void refreshSessions(pid, true);
+        }
+        // Status snapshot merge: chat:status events pushed while the WS was
+        // down are gone for good (no replay, §1.8) — pull the backend truth
+        // so both stuck "prompting" (#134) and missed "prompting" (#127)
+        // reconcile. (openSession's own syncSessionStatuses call covers the
+        // reload below — one pull, not two.)
+        void syncSessionStatuses();
+        // A reconnect implies a possible EVENT GAP, and the open conversation's
+        // tail exists only in the desktop's memory — lists alone leave a frozen
+        // partial message on the phone until manual re-entry (user report).
+        // Force a DB reload via the same path as the switch-away cache drop.
+        // Guard: only when this session was already loaded (first WS connect
+        // rides along initial boot — skip to avoid a double load).
+        const sid = selectedSessionIdRef.current;
+        if (sid && loadedSessionsRef.current.has(sid)) {
+          loadedSessionsRef.current.delete(sid);
+          void openSessionRef.current(sid);
+        }
+      }, 300);
     });
     // OS file drag-and-drop onto the chat area (Task #24255 / #83): the backend
     // (internal/chat/drop.go) forwards native drop paths + the target session id
@@ -839,6 +859,7 @@ export default function App() {
       offElicit();
       offElicitResolved();
       offStatus();
+      clearTimeout(resyncTimer);
       offMeta();
       offQueue();
       offHarnesses();
