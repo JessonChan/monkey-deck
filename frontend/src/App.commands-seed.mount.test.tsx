@@ -108,7 +108,6 @@ mock.module("./bindings/github.com/jessonchan/monkey-deck/internal/chat/chatserv
     return CACHED_COMMANDS;
   };
   stubs.GetSessionSnapshot = async () => JSON.stringify({ draft: "/" });
-  stubs.SessionDiff = async () => "";
   stubs.SessionChanges = async () => null;
   stubs.SessionCurrentBranch = async () => "";
   stubs.SessionMergeable = async () => false;

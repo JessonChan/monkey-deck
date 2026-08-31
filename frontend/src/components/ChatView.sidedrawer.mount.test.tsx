@@ -66,7 +66,6 @@ const baseProps = {
   error: null,
   permission: null,
   mergeResult: null,
-  sessionDiff: null,
   onSend: () => {},
   onEnqueue: () => {},
   onStop: () => {},

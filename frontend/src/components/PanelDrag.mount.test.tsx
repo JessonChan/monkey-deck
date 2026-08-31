@@ -137,7 +137,6 @@ function chatProps(sessionId: string, session: Record<string, unknown>) {
     permission: null,
     elicitation: null,
     mergeResult: null,
-    sessionDiff: null,
     onSend: () => {},
     onEnqueue: () => {},
     onStop: () => {},

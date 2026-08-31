@@ -72,7 +72,6 @@ function baseProps(permission: PermissionPrompt | null) {
     error: null,
     permission,
     mergeResult: null,
-    sessionDiff: null,
     notice: null,
     onSend: () => {},
     onEnqueue: () => {},

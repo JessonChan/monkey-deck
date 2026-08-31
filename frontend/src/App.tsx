@@ -735,7 +735,7 @@ export default function App() {
         // (same stopReason= data-source distinction as the notify sound, §5.3).
         if (document.hidden && s.detail?.startsWith("stopReason=")) appBadge.bump();
         const sid = selectedSessionIdRef.current;
-        if (sid) { ChatService.SessionDiff(sid).then(d => setSessionDiff(d || "")).catch(() => {}); ChatService.SessionChanges(sid).then(setSessionChanges).catch(() => {}); ChatService.SessionMergeable(sid).then(m => setMergeableBySession((p) => ({ ...p, [sid]: m }))).catch(() => {}); }
+        if (sid) { ChatService.SessionChanges(sid).then(setSessionChanges).catch(() => {}); ChatService.SessionMergeable(sid).then(m => setMergeableBySession((p) => ({ ...p, [sid]: m }))).catch(() => {}); }
       }
       // auto-continue moved server-side (#126A): the backend drains in its own
       // runPrompt tail at turn end (idle/error/notice) — the frontend no longer
@@ -1087,12 +1087,6 @@ export default function App() {
             setCommandsBySession((prev) => (prev[sessionId] ? prev : { ...prev, [sessionId]: cached }));
           }
         } catch { /* 无缓存或读取失败:静默,等 spawn 推送 */ }
-      }
-      try {
-        const diff = await ChatService.SessionDiff(sessionId);
-        setSessionDiff(diff || "");
-      } catch {
-        setSessionDiff("");
       }
       try {
         setSessionChanges(await ChatService.SessionChanges(sessionId));
@@ -1637,7 +1631,6 @@ export default function App() {
   }, [t]);
 
   const [mergeResults, setMergeResults] = useState<Record<string, string>>({});  // per-session 合并结果(切 session 不会串窗口)
-  const [sessionDiff, setSessionDiff] = useState<string | null>(null);
   const [sessionChanges, setSessionChanges] = useState<FileChange[] | null>(null);
   const [mergeableBySession, setMergeableBySession] = useState<Record<string, boolean>>({});  // per-session:branch 有无领先基线的已提交 commit(决定合并按钮 enable/disable)
   const [worktreeKindBySession, setWorktreeKindBySession] = useState<Record<string, string>>({});  // per-session:"project"|"owner"|"guest"(guest → 合并禁用 + 提示)
@@ -1649,8 +1642,7 @@ export default function App() {
       setMergeResults((prev) => ({ ...prev, [selectedSessionId]: result || t("app.mergeDone") }));
       const sid = selectedSessionId;
       setTimeout(() => setMergeResults((prev) => { const n = { ...prev }; delete n[sid]; return n; }), 6000);
-      // 合并后刷新 diff(变为"无变更")+ mergeable(变 false)
-      try { setSessionDiff(await ChatService.SessionDiff(sid) || ""); } catch {}
+      // 合并后刷新 mergeable(变 false);diff 视图由 GitPanel 自取,不走这里
       try { const m = await ChatService.SessionMergeable(sid); setMergeableBySession((prev) => ({ ...prev, [sid]: m })); } catch {}
     } catch (e) {
       const msg = t("app.mergeFailed", { error: extractErrMsg(e) });
@@ -2424,6 +2416,7 @@ export default function App() {
               usage={usage}
               branch={branchBySession[selectedSessionId] || activeSession?.branch || ""}
               onNewSessionOnBranch={onNewSessionOnBranch}
+              composerValue={composerValue}
               error={error}
               notice={notice}
               permission={permission}
@@ -2438,7 +2431,6 @@ export default function App() {
               onOpenSideDrawer={openRightDrawer}
               mergeResult={mergeResults[selectedSessionId] || null}
               onMerge={mergeSession}
-              sessionDiff={sessionDiff}
               queue={queue}
               onInterruptQueue={interruptQueue}
               onRevokeQueue={revokeQueue}
@@ -2446,7 +2438,6 @@ export default function App() {
               onScheduleQueue={scheduleQueueItem}
               onReorderQueue={reorderQueue}
               onSetRepeatQueue={setQueueItemRepeat}
-              composerValue={composerValue}
               onComposerChange={onComposerChange}
               attachments={attachments}
               onAttachmentsChange={onAttachmentsChange}

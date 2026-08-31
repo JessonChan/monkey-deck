@@ -47,7 +47,6 @@ interface Props {
   permission: PermissionPrompt | null;
   elicitation: ElicitationPrompt | null;
   mergeResult: string | null;
-  sessionDiff: string | null;
   onSend: (text: string, mentions: Mention[], images?: ImageAttachment[], audios?: AudioAttachment[]) => void;
   onEnqueue: (text: string, mentions: Mention[], images?: ImageAttachment[], audios?: AudioAttachment[]) => void;
   onStop: () => void;

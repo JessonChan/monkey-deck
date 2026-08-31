@@ -94,7 +94,7 @@ function baseProps(itemsList: ChatItem[], status: "idle" | "prompting", extra: R
   return {
     project: null, session: { id: "s1" }, items: itemsList, status, statusDetail: "",
     usage: { used: 0, size: 0, cost: 0, cachedReadTokens: 0, cachedWriteTokens: 0, inputTokens: 0, outputTokens: 0 },
-    error: null, permission: null, mergeResult: null, sessionDiff: null,
+    error: null, permission: null, mergeResult: null,
     onSend: () => {}, onEnqueue: () => {}, onStop: () => {}, onContinue: () => {},
     onRespondPermission: () => {}, onToggleTerminal: () => {}, onRefreshConfig: () => {},
     onMerge: () => {}, queue: [], onInterruptQueue: () => {}, onRevokeQueue: () => {}, onEditQueue: () => {}, onScheduleQueue: () => {}, onReorderQueue: () => {},

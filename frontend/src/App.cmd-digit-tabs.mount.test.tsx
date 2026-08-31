@@ -96,7 +96,6 @@ mock.module("./bindings/github.com/jessonchan/monkey-deck/internal/chat/chatserv
   stubs.ListUserMessages = async () => [];
   stubs.GetSessionCachedConfigOptions = async () => [];
   stubs.GetSessionCachedCommands = async () => [];
-  stubs.SessionDiff = async () => "";
   stubs.SessionChanges = async () => null;
   stubs.SessionCurrentBranch = async () => "";
   stubs.SessionMergeable = async () => false;
