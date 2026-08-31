@@ -25,6 +25,15 @@ md.example.com {
 - 可选强化(需 xcaddy 自编译 `caddy-ratelimit` 插件):给 `/pair` 限速防爆破。不装也够——应用层配对码本身 10 分钟有效 + 错 5 次烧死 + 一次性
 - 反代只连公网机**本机回环**,不暴露隧道端口到公网机网卡(`GatewayPorts` 保持默认关闭)
 
+### 1.1 为什么要 TLS 反代(不只是加密)
+
+明文 HTTP/1.1 下浏览器对同一源最多 6 条并发连接:打开一个 session 的
+并行 binding 拉取会排成两波,消息里的懒加载 chunk(数学/图表)也互相抢连接。
+经 Caddy TLS 后自动升级 **HTTP/2**:单连接多路复用,并行请求不再排队
+(openSession 扇出从两波变一波),头部压缩(HPACK)也省掉每个 binding POST
+重复的 cookie 头。局域网直连感知不大(瓶颈是 RTT 不是带宽);公网/VPN
+链路 RTT 高,HTTP/2 的收益被放大。
+
 ## 2. Mac → 公网机:SSH 反向隧道 + launchd 保活
 
 ### 2.1 免密登录
