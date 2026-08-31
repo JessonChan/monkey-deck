@@ -49,7 +49,7 @@ type RemoteInfo struct {
 func AttachEmbeddedRemote(s *ChatService, tr *application.HTTPTransport, assets http.Handler, eventNames []string) {
 	s.remoteSrv = remote.New(remote.Options{
 		Transport:  tr,
-		Assets:     assets,
+		Assets:     remote.WithAssetCache(assets),
 		EventNames: eventNames,
 		Token:      s.remoteTokenSnapshot,
 		Sessions:   sessionStore{svc: s},
