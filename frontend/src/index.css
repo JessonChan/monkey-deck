@@ -292,9 +292,11 @@ input, textarea { font-family: inherit; }
   background: var(--bg); border: 1px solid var(--accent-2); border-radius: var(--r-sm);
   color: var(--text); font-size: 12.5px; outline: none;
 }
-/* harness 品牌图标(label 之后,弱色常驻):每个 session 钉住其 harness 的官方 logo,
-   多 harness 项目下可一眼区分。原图自带背景(opencode 深色底),圆角 + contain 适配;
-   空间小,Idle 时降透明度不抢视觉,hover/active 时回到前景色层次。 */
+/* Harness brand icon (row tail since #175, quiet persistent): pins each
+   session's harness official logo, tells harnesses apart at a glance in
+   multi-harness projects. Original art carries its own background (opencode
+   dark), rounded + contain; space is tight so opacity drops when idle,
+   back to the foreground tier on hover/active. */
 .session-harness-icon {
   flex-shrink: 0;
   border-radius: 3px;
@@ -324,7 +326,8 @@ input, textarea { font-family: inherit; }
 .session-popout-mark { flex-shrink: 0; display: inline-flex; color: var(--accent-2); }
 .session-popout-mark svg { color: var(--accent-2); }
 /* Fork lineage badge (#172): a session forked from another shows a quiet GitFork
-   icon beside the harness icon (tooltip names the source). Same persistent-marker
+   icon at the head of the meta cluster, before the row-tail harness icon (#175)
+   (tooltip names the source). Same persistent-marker
    family as pin/renamed/terminal/popout: flex-shrink:0 and inline-flex keep the
    12px row discipline (row height never grows); lowest-contrast text tier so it
    never competes with status accents. */

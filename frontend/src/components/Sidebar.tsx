@@ -972,16 +972,16 @@ export default function Sidebar(props: Props) {
                           {active && renamedMark}
                           <span className="session-label" {...labelTipProps}>{displayTitle}</span>
                           {/* Idle slot: title tail, ahead of the meta cluster (popout /
-                              harness / pin / terminal / status). Same node, same appearance. */}
+                              fork / pin / terminal / status). Same node, same appearance. */}
                           {!active && renamedMark}
                           {props.poppedSessionIds?.has(s.id) && (
                             <span className="session-popout-mark" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.popoutTip")} data-testid={`popout-${s.id}`}>
                               <ExternalLink size={11} />
                             </span>
                           )}
-                          <HarnessIcon harnessId={s.harness} size={12} className="session-harness-icon" tooltip={t("sidebar.harnessTip", { name: harnessNameById(s.harness) })} />
-                          {/* #172 fork badge: lineage-only visibility marker, beside the
-                              harness icon. Renders only when forkedFrom is set (undefined /
+                          {/* #172 fork badge: lineage-only visibility marker, head of the
+                              meta cluster (#175 moved the harness icon to the row tail).
+                              Renders only when forkedFrom is set (undefined /
                               '' = native session). Tooltip prefers the source session's
                               display title via the full sessionsByProject map; an
                               unresolvable source falls back to its id prefix. */}
@@ -1058,6 +1058,9 @@ export default function Sidebar(props: Props) {
                               <span className="draft-indicator" data-tooltip-id="md-tip" data-tooltip-content={t("sidebar.draftTip", { text: dh.trim() })} data-testid={`draft-${s.id}`}><Pencil /></span>
                             ) : <span className="session-time" data-tooltip-id="md-tip" data-tooltip-content={formatDateTime(s.updatedAt)}>{timeAgo(s.updatedAt)}</span>;
                           })()}
+                          {/* #175: harness brand icon closes the row — after the tail
+                              status slot, so transient state never displaces identity. */}
+                          <HarnessIcon harnessId={s.harness} size={12} className="session-harness-icon" tooltip={t("sidebar.harnessTip", { name: harnessNameById(s.harness) })} />
                         </button>
                       </div>
                     );
