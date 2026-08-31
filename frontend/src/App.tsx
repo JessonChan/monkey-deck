@@ -315,20 +315,38 @@ export default function App() {
   projectsRef.current = projects;
   const imageSupportedBySessionRef = useRef(imageSupportedBySession);
   imageSupportedBySessionRef.current = imageSupportedBySession;
+  // gitByProject 的 ref:refreshProjects 增量探测时读当前缓存(true 项跳过),
+  // 不进依赖。与 sessionsByProjectRef 同款 render 期赋值模式。
+  const gitByProjectRef = useRef(gitByProject);
+  gitByProjectRef.current = gitByProject;
 
   const refreshProjects = useCallback(async () => {
     const list = await ChatService.ListProjects();
     setProjects(list || []);
     // 加载项目级 hasGitContext 信息供 SCM 可见性判定(对齐 orca / VS Code repo-kind 判定,
     // 跟 session 是否有独立 worktree 解耦).RELAXED:wrapper 目录非 git 但子目录是 repo 也算,
-    // 与 scmDir 的 FindSubRepo fallback 语义一致。每个项目探测一次,缓存到 gitByProject。
+    // 与 scmDir 的 FindSubRepo fallback 语义一致。
     // 注:worktree 门控(createSession)用 STRICT 的 IsGitProject,不是这个。
+    //
+    // Incremental probe (R4): `true` is cached for the process lifetime
+    // (each probe = 1 git exec + FindSubRepo fs walk); `false` entries are
+    // RE-PROBED every refresh — false→true is the only real flip direction
+    // (agents run `git init`/`git clone` mid-session; true→false needs the
+    // user to delete .git). Caching `false` forever would hide a project's
+    // whole SCM surface until restart. Merge, never replace: a replace would
+    // wipe entries this pass skipped.
     if (list && list.length > 0) {
-      const entries = await Promise.all(list.map(async (p) => {
+      const toProbe = list.filter((p) => gitByProjectRef.current[p.id] !== true);
+      if (toProbe.length === 0) return;
+      const entries = await Promise.all(toProbe.map(async (p) => {
         try { return [p.id, await ChatService.HasGitContext(p.id)] as [string, boolean]; }
         catch { return [p.id, false] as [string, boolean]; }
       }));
-      setGitByProject(Object.fromEntries(entries));
+      setGitByProject((prev) => {
+        const next = { ...prev };
+        for (const [id, v] of entries) next[id] = v;
+        return next;
+      });
     }
   }, []);
 
