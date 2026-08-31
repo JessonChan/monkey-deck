@@ -9,8 +9,14 @@
     <title>Monkey Deck</title>
     <!-- PWA (M2): remote clients (phone browser / Capacitor shell) get an
          installable standalone app. Harmless no-op for the desktop webview. -->
+    <!-- Icon files are renamed to icon-<size>-<md5-head-8>.png (content hash).
+         Chrome 144+ treats an icon as changed only when its URL changes
+         (web.dev/manifest-updates), so baking the hash into the filename
+         cache-busts on every icon swap without query-string hacks.
+         When replacing icons: re-hash each file, rename, and update every
+         reference here + in manifest.webmanifest. -->
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icons/icon-192-dd0e986e.png" />
     <meta name="theme-color" content="#1a1a1c" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
