@@ -909,7 +909,11 @@ export default function App() {
   // 仅执行一次(hasReconciled 守卫),后续由 popout-changed 事件实时维护。
   const popoutReconciledRef = useRef(false);
   useEffect(() => {
-    if (isPopout || popoutReconciledRef.current) return;
+    // Remote clients have no popout windows at all (OpenSessionWindow is a
+    // no-op without GUI, window.go), and a popout window never needs the
+    // main-window reconcile. Skip both — otherwise boot fires one
+    // IsSessionWindowPopped per session (S requests) that all return false.
+    if (isRemoteClient() || isPopout || popoutReconciledRef.current) return;
     const allSids = Object.values(sessionsByProject).flat().map((s) => s.id);
     if (allSids.length === 0) return;
     popoutReconciledRef.current = true;
