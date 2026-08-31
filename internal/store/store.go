@@ -95,6 +95,10 @@ type Session struct {
 	// Written on every available_commands_update (full-table replace, empty allowed) by the
 	// handler via the service callback; read back for the lazy-spawn read-only slash menu.
 	CommandsCache string `json:"commandsCache,omitempty"`
+	// ForkedFrom:DB session id this session was forked from (0023, #172 Phase 2).
+	// Empty = not a fork. Lineage only this phase — no UI marking, no cascade
+	// semantics; the fork shares the source's worktree (same-cwd fork).
+	ForkedFrom string `json:"forkedFrom,omitempty"`
 }
 
 // New 打开(或创建)SQLite 并跑迁移。dbPath 为空时用内存库(测试用)。

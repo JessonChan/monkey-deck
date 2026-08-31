@@ -131,6 +131,48 @@ func TestSessionUsagePersist(t *testing.T) {
 	}
 }
 
+// TestSessionForkedFromPersist validates the fork lineage column (0023, #172
+// Phase 2): write-once via SetSessionForkedFrom, read back through the shared
+// sessionColumns scan (GetSession + ListSessions); a non-fork session reads "".
+func TestSessionForkedFromPersist(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	p, err := s.CreateProject(ctx, "demo", "/tmp/demo-fork", "zai/glm-4.6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := s.CreateSession(ctx, p.ID, "source", "zai/glm-4.6", "omp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fork, err := s.CreateSession(ctx, p.ID, "source (fork)", "zai/glm-4.6", "omp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Non-fork session: lineage empty by default (NOT NULL DEFAULT '').
+	got, _ := s.GetSession(ctx, src.ID)
+	if got.ForkedFrom != "" {
+		t.Fatalf("non-fork session should have empty forked_from, got %q", got.ForkedFrom)
+	}
+
+	if err := s.SetSessionForkedFrom(ctx, fork.ID, src.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetSession(ctx, fork.ID)
+	if got.ForkedFrom != src.ID {
+		t.Fatalf("forked_from not persisted via GetSession: got %q want %q", got.ForkedFrom, src.ID)
+	}
+	list, _ := s.ListSessions(ctx, p.ID)
+	byID := map[string]string{}
+	for _, se := range list {
+		byID[se.ID] = se.ForkedFrom
+	}
+	if byID[fork.ID] != src.ID || byID[src.ID] != "" {
+		t.Fatalf("forked_from not persisted via ListSessions: %v", byID)
+	}
+}
+
 // TestSessionTokenBreakdownPersist 校验 token 明细(来自 PromptResponse.Usage)的独立写入与读回
 // (Task #15138)。明细与 used/size/cost(streaming)分离写入,互不覆盖。
 func TestSessionTokenBreakdownPersist(t *testing.T) {

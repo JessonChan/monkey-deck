@@ -11,7 +11,7 @@ import (
 )
 
 // sessionColumns / scanSession:统一 session 的列与扫描,避免多处 SELECT/Scan 漂移(§1.5)。
-const sessionColumns = `id,project_id,acp_session_id,title,custom_title,model,harness,worktree_path,branch,base_ref,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,config_options_cache,tags,commands_cache`
+const sessionColumns = `id,project_id,acp_session_id,title,custom_title,model,harness,worktree_path,branch,base_ref,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,config_options_cache,tags,commands_cache,forked_from`
 
 func scanSession(r interface {
 	Scan(dest ...any) error
@@ -21,7 +21,7 @@ func scanSession(r interface {
 		&se.WorktreePath, &se.Branch, &se.BaseRef,
 		&se.UsedTokens, &se.SizeTokens, &se.Cost,
 		&se.CachedReadTokens, &se.CachedWriteTokens, &se.InputTokens, &se.OutputTokens, &se.ThoughtTokens, &se.TotalTokens,
-		&se.CreatedAt, &se.UpdatedAt, &se.PromptedAt, &se.Pinned, &se.ConfigOptionsCache, &tags, &commandsCache)
+		&se.CreatedAt, &se.UpdatedAt, &se.PromptedAt, &se.Pinned, &se.ConfigOptionsCache, &tags, &commandsCache, &se.ForkedFrom)
 	if err != nil {
 		return err
 	}
@@ -257,6 +257,17 @@ func (s *Store) SetSessionBaseRef(ctx context.Context, id, baseRef string) error
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE sessions SET base_ref=?, updated_at=? WHERE id=?`,
 		baseRef, now(), id)
+	return err
+}
+
+// SetSessionForkedFrom records the fork lineage (0023, #172 Phase 2): the DB
+// session id this session was forked from. Write-once at fork time; empty on
+// non-fork sessions. Lineage is metadata, not content activity → updated_at
+// untouched (same rationale as pinned 0008 / custom_title 0016 / tags 0021).
+func (s *Store) SetSessionForkedFrom(ctx context.Context, id, forkedFrom string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET forked_from=? WHERE id=?`,
+		forkedFrom, id)
 	return err
 }
 
