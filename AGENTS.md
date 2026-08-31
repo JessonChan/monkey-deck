@@ -424,6 +424,7 @@ WAILS_SERVER_PORT=9246 ./bin/monkey-deck-server      # 或 wails3 task run:serve
 | 远程 relay 服务 / 移动端推送(APNs/FCM) | M4+ | 局域网/VPN 直连先行(§1.8);跨网无 VPN 或推送成刚需再评估,当前零设计 |
 | Flutter / React Native 专职移动客户端(完全重写 UI) | 条件触发 | 2026-08-23 拍板放弃近期采用;渐进路径见 §3.1 M 系列。仅当 WebView 手感(PWA/Capacitor 薄壳)成为真实瓶颈时触发,届时首选 RN(React 19 + TS 同栈) |
 | 导入 opencode/OMP 历史聊天记录 | **不做** | ACP `session/list`+`session/load` 技术上可批量重放导入,但太重(每个 session 都要 spawn harness 重放)+ 协议字段贫瘠(`SessionInfo` 无 usage/cost/model,load 重放只带协议标准字段)。用户判定永不。详见 `docs/worklog/2026-07-01-decline-import-historical-chats.md` |
+| PWA Service Worker(离线壳缓存) | **不做** | 2026-08-31 拍板 DROP:R6(assetcache 缓存头 + gzip,`internal/remote/assetcache.go`)落地后 SW 剩余唯一价值是「离线开壳」,而离线壳在无 401 处理时是主动有害的冻屏(现已由 custom.js 401 逃生门独立修复);`index.html 永不缓存`是 R6 的承重不变量,SW 会破坏它。需要离线能力时先改本条再动手。 |
 
 ---
 
