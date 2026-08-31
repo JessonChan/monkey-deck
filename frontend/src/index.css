@@ -457,6 +457,7 @@ input, textarea { font-family: inherit; }
 .ctx-tag-dot { width: 10px; height: 10px; flex-shrink: 0; border-radius: 50%; }
 .ctx-tag-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-tag-check { flex-shrink: 0; color: var(--accent); }
+.ctx-tag-add { flex-shrink: 0; }
 /* New-tag input inside the submenu: Enter commits (backend normalizes), Esc
    closes the whole menu via the global handler. */
 .ctx-tag-input {
