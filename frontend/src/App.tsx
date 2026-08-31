@@ -215,7 +215,10 @@ export default function App() {
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
   // 已探测 harness 能力矩阵(harnessID → CapabilityMatrix;#172 fork 门控数据面)。
   // 启动拉一次快照,后端探测完成后推 chat:harness-capabilities 触发重拉(镜像 HarnessSettings)。
-  const [harnessCaps, setHarnessCaps] = useState<Record<string, CapabilityMatrix>>({});
+  // §caps-type:对齐 wails -ts binding 的 map 生成形态({ [_ in string]?: T },值可 undefined)——
+  // Record/index-signature(值必有)与 ListHarnessCapabilities 返回不兼容(TS2345,#28913)。
+  // Partial 索引签名:消费端照旧 harnessCaps[id] 取值(undefined 时门控隐藏,铁律①语义不变)。
+  const [harnessCaps, setHarnessCaps] = useState<{ [harnessId: string]: CapabilityMatrix | undefined }>({});
   // 任一 harness 有新版 → 设置入口齿轮 + 设置内 harness 菜单亮红点(§设置入口/harness 菜单红点)。
   const harnessUpdateAvailable = useMemo(
     () => harnesses.some((h) => h.upgradeAvailable),
