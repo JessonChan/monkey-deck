@@ -4,6 +4,7 @@ import { Events } from "@wailsio/runtime";
 import * as ChatService from "../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import * as TerminalService from "../bindings/github.com/jessonchan/monkey-deck/internal/terminal/terminalservice";
 import { Project, Session, Message } from "../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
+import type { CapabilityMatrix } from "../bindings/github.com/jessonchan/monkey-deck/internal/acp/models";
 import type { ChatItem, ConfigOption, PermissionPrompt, ElicitationPrompt, SessionEvent, StatusPayload, QueueItem, QueuePayload, Mention, ImageAttachment, AudioAttachment, Attachment, PlanEntry, LivePlan, Usage, SlashCommand } from "./types";
 import Sidebar from "./components/Sidebar";
 import TabBar, { TAB_LIMIT } from "./components/TabBar";
@@ -212,6 +213,9 @@ export default function App() {
   const [fileTabsBySession, setFileTabsBySession] = useState<Record<string, FileTab[]>>({});
   const [activeFileTabBySession, setActiveFileTabBySession] = useState<Record<string, string>>({});
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
+  // 已探测 harness 能力矩阵(harnessID → CapabilityMatrix;#172 fork 门控数据面)。
+  // 启动拉一次快照,后端探测完成后推 chat:harness-capabilities 触发重拉(镜像 HarnessSettings)。
+  const [harnessCaps, setHarnessCaps] = useState<Record<string, CapabilityMatrix>>({});
   // 任一 harness 有新版 → 设置入口齿轮 + 设置内 harness 菜单亮红点(§设置入口/harness 菜单红点)。
   const harnessUpdateAvailable = useMemo(
     () => harnesses.some((h) => h.upgradeAvailable),
@@ -1240,6 +1244,44 @@ export default function App() {
     }
   }, [newSession, selectedProjectId, refreshSessions, openSession, selectProject]);
 
+  // Harness 能力矩阵(#172 数据面):启动拉一次,后端探测完成后经事件重拉。
+  // 失败静默(caps 保持原值,门控入口保持隐藏 —— 铁律①隐藏而非禁用)。
+  const reloadHarnessCaps = useCallback(async () => {
+    try {
+      const m = await ChatService.ListHarnessCapabilities();
+      setHarnessCaps(m ?? {});
+    } catch { /* 静默:保持原值 */ }
+  }, []);
+
+  useEffect(() => {
+    void reloadHarnessCaps();
+    const off = Events.On("chat:harness-capabilities", () => { void reloadHarnessCaps(); });
+    return () => { off(); };
+  }, [reloadHarnessCaps]);
+
+  // #172 铁律①:fork 入口只按声明位门控 —— 该 session 的 harness 在探测中声明了
+  // sessionCapabilities.fork 才露出入口(undeclared 不渲染;错误码不作门控依据)。
+  const canForkSession = useCallback((s: Session | null | undefined): boolean => {
+    if (!s) return false;
+    return !!harnessCaps[s.harness]?.sessionFork;
+  }, [harnessCaps]);
+
+  // #172:fork session(从当前对话末尾分叉)。成功后刷新列表并切到新会话
+  // (与 confirmNewSession 同一创建链路);失败走既有错误呈现。
+  const forkSession = useCallback(async (sessionId: string) => {
+    try {
+      const fresh = await ChatService.ForkSession(sessionId);
+      if (!fresh) return;
+      setItemsBySession((prev) => ({ ...prev, [fresh.id]: [] }));
+      setStatusBySession((prev) => ({ ...prev, [fresh.id]: "empty" }));
+      loadedSessionsRef.current.add(fresh.id);
+      await refreshSessions(fresh.projectId);
+      await openSession(fresh.id, fresh.projectId);
+    } catch (e) {
+      setErrorMessage(extractErrMsg(e));
+    }
+  }, [refreshSessions, openSession]);
+
   // Send a message: idle → direct send; prompting (turn in flight) → enqueue on
   // the server (#126A); the backend's drainQueue auto-continues at turn end (the
   // protocol has no queue, §5.4). mentions (@mentions + paperclip files) go to the
@@ -1257,6 +1299,7 @@ export default function App() {
       setHistoryBySession((prev) => {
         const cur = prev[selectedSessionId] || [];
         if (cur[cur.length - 1] === text) return prev; // 与最后一条相同则不重复
+
         return { ...prev, [selectedSessionId]: [...cur, text] };
       });
       // Turn in flight (statusRef avoids stale closures): enqueue on the server
@@ -2317,6 +2360,8 @@ export default function App() {
           onPopoutSession={popoutSession}
           onFocusPopout={focusPopout}
           onClosePopout={closePopout}
+          canForkSession={canForkSession}
+          onForkSession={(sid) => void forkSession(sid)}
         />
       </Panel>
       )}
@@ -2420,6 +2465,8 @@ export default function App() {
               onOpenFile={(path, line) => openFileTab(selectedSessionId, path, line)}
               onQuoteToComposer={quoteToComposer}
               focusSignal={composerFocusSignal}
+              canFork={canForkSession(activeSession)}
+              onForkSession={() => { void forkSession(selectedSessionId); }}
             />
             </div>
             {/* EditorPane (content) / DiffPane (git changes): shown when a non-chat

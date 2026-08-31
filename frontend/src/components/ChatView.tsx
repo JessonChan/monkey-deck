@@ -29,8 +29,7 @@ import { highlightToLines } from "../lib/highlight";
 import "../hljs-theme.css";
 import { buildRows, computeLayout, computeWindow, anchorAt, restoreScroll, isAtBottom, HeightModel, TAIL_PRIOR, HEAD_PRIOR, type VRow, type Layout } from "../lib/virtualList";
 import SelectionToolbar, { type SelectionAction } from "./SelectionToolbar";
-import { SquareTerminal, Sparkles, Brain, Check, Copy, FolderOpen, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus, Quote, Paperclip, Share2, X, PanelRightOpen } from "lucide-react";
-
+import { SquareTerminal, Sparkles, Brain, Check, Copy, FolderOpen, Wrench, ShieldAlert, ChevronRight, ChevronDown, ChevronUp, ArrowDown, Terminal, FilePen, FileText, Search, ListChecks, Eye, MessageSquarePlus, Quote, Paperclip, Share2, X, PanelRightOpen, GitFork } from "lucide-react";
 interface Props {
   project: Project | null;
   session: Session | null;
@@ -104,6 +103,11 @@ interface Props {
   // Bump to imperatively focus the composer (passed through to Composer). Used by
   // quote-to-composer so the caret lands ready to type after the quoted block.
   focusSignal?: number;
+  // #172 fork:canFork = 当前 session 的 harness 声明了 sessionCapabilities.fork
+  // (声明位门控,undeclared 不渲染);onForkSession 走 App 的 forkSession 链路
+  // (成功切到新会话,失败走既有错误呈现)。fork 点恒为当前对话末尾。
+  canFork?: boolean;
+  onForkSession?: () => void;
 }
 // 状态 → i18n key + 样式。label 在渲染处用 t() 解析(支持语言切换)。
 const STATUS_MAP: Record<string, { key: string; cls: string }> = {
@@ -225,6 +229,11 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     // No-op if the host hasn't wired the prop (keeps ChatView usable standalone).
     onOpenFileRef.current?.(path, line);
   }, []);
+  // Same ref-stabilization for the fork callback (#172): App.tsx passes an inline
+  // arrow; a fresh identity per render would break ChatRow's memo on every chunk.
+  const onForkRef = useRef(props.onForkSession);
+  onForkRef.current = props.onForkSession;
+  const onForkSessionStable = useCallback(() => { onForkRef.current?.(); }, []);
   // Selection toolbar (Copy / Quote) lives in .chat-body (scrollRef). Keep the
   // quote callback in a ref so the actions array is stable across renders — the
   // toolbar re-renders on every selectionchange-driven position update and a new
@@ -812,13 +821,12 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
                 ? <ToolGroup tools={group} onOpenFilePreview={openFilePreview} />
                 : <ToolCard item={group[0]} onOpenFilePreview={openFilePreview} />;
             } else if (row.kind === "plan") {
-              // 历史 turn 的 plan(静态展示,无 spinner —— turn 已结束,plan 是定格快照)。
               content = <PlanTimeline entries={(items[row.first] as Extract<ChatItem, { type: "plan" }>).entries} prompting={false} isOpen={planOpen} onToggle={onTogglePlanOpen} />;
             } else {
               // duration 挂最后一条 agent 回复(非 user,需求钉死 #68):仅 agent 行查 map。
               const durationMs = row.kind === "agent" ? agentTurnDuration.get(row.first) : undefined;
               content = (
-                <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} durationMs={durationMs} />
+                <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} durationMs={durationMs} canFork={props.canFork ?? false} forkBusy={props.status === "prompting"} onFork={onForkSessionStable} />
               );
             }
             return (
@@ -958,7 +966,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
 });
 
 
-const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview, durationMs }: { item: ChatItem; sessionId: string; onOpenFilePreview: (path: string, line?: number) => void; durationMs?: number }) {
+const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview, durationMs, canFork, forkBusy, onFork }: { item: ChatItem; sessionId: string; onOpenFilePreview: (path: string, line?: number) => void; durationMs?: number; canFork: boolean; forkBusy: boolean; onFork: () => void }) {
   if (item.type === "user") {
     return (
       <div className="row row-user" data-testid="msg-user">
@@ -987,7 +995,9 @@ const ChatRow = memo(function ChatRow({ item, sessionId, onOpenFilePreview, dura
                 {formatTime(item.ts)}{dur && <span className="msg-dur"> · {dur}</span>}
               </span>
             )}
-            {!item.streaming && item.text && <MessageActions text={item.text} />}
+            {!item.streaming && item.text && (
+              <MessageActions text={item.text} fork={canFork ? { busy: forkBusy, onFork } : undefined} />
+            )}
           </div>
         </div>
       </div>
@@ -1166,7 +1176,9 @@ function ThoughtBlock({ item, sessionId, onOpenFilePreview }: { item: Extract<Ch
   );
 }
 
-function MessageActions({ text, className = "", testId = "copy-msg" }: { text: string; className?: string; testId?: string }) {
+// fork(#172):非空时在「复制」旁渲染「分叉」(仅 agent 行传入;声明位门控在调用方)。
+// busy(源 prompting)→ 置灰 + tooltip;disabled 按钮不吃鼠标事件,tooltip 挂外层 span。
+function MessageActions({ text, className = "", testId = "copy-msg", fork }: { text: string; className?: string; testId?: string; fork?: { busy: boolean; onFork: () => void } }) {
   const { t } = useTranslation();
   const { copied, failed, copy } = useCopyFeedback(1500);
   // Mobile-only share (CSS-gated): the OS share sheet ships agent output to
@@ -1189,6 +1201,25 @@ function MessageActions({ text, className = "", testId = "copy-msg" }: { text: s
       >
         {copied ? <Check size={12} /> : failed ? <X size={12} /> : <Copy size={12} />} {copied ? t("common.copied") : failed ? t("common.copyFailed") : t("common.copy")}
       </button>
+      {fork && !fork.busy && (
+        <button
+          className="msg-action-btn"
+          type="button"
+          onClick={fork.onFork}
+          data-testid="fork-msg"
+          data-tooltip-id="md-tip"
+          data-tooltip-content={t("chat.forkTip")}
+        >
+          <GitFork size={12} /> {t("chat.forkAction")}
+        </button>
+      )}
+      {fork && fork.busy && (
+        <span className="msg-fork-wrap" data-tooltip-id="md-tip" data-tooltip-content={t("chat.forkSourceBusyTip")}>
+          <button className="msg-action-btn" type="button" disabled data-testid="fork-msg">
+            <GitFork size={12} /> {t("chat.forkAction")}
+          </button>
+        </span>
+      )}
       <button
         className="msg-action-btn msg-share-btn"
         type="button"

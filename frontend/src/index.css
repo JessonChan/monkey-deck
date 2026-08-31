@@ -765,6 +765,8 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
   border-radius: 5px; display: inline-flex; align-items: center; gap: 4px;
   transition: background 0.1s, color 0.1s;
 }
+/* #172 fork busy state: disabled button wrapped in a span (tooltip anchor). */
+.msg-fork-wrap { display: inline-flex; }
 .msg-action-btn:hover { background: var(--elev); color: var(--text); }
 .msg-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .msg-action-btn:disabled:hover { background: transparent; color: var(--text-3); }

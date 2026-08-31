@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { Project, Session } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
-import { AlarmClock, Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Search, X, Pin, PinOff, Settings, SquareTerminal, ExternalLink, Pencil, FileText, Braces, ListChecks, Check, Tag } from "lucide-react";
+import { AlarmClock, Plus, ChevronDown, Folder, Copy, FolderOpen, Trash2, Search, X, Pin, PinOff, Settings, SquareTerminal, ExternalLink, Pencil, FileText, Braces, ListChecks, Check, Tag, GitFork } from "lucide-react";
 import { useCopyFeedback } from "../hooks/useCopyFeedback";
 import {
   DndContext,
@@ -64,6 +64,11 @@ interface Props {
   onPopoutSession?: (sessionId: string) => void;   // 弹出到独立窗口(主窗口打包快照 + 调 OpenSessionWindow)
   onFocusPopout?: (sessionId: string) => void;     // 聚焦已弹出的窗口
   onClosePopout?: (sessionId: string) => void;     // 关闭 popout(移回主窗口)
+  // #172 fork:「基于最后的对话分叉」右键菜单项。canForkSession 为声明位门控
+  // (session harness 探测矩阵的 sessionFork 位,undeclared 不渲染该菜单项);
+  // onForkSession 走与 ChatView 相同的 forkSession 链路,成功后新会话打开。
+  canForkSession?: (s: Session) => boolean;
+  onForkSession?: (sessionId: string) => void;
 }
 
 // 可拖拽项目行(0007):折叠态整行可拖,展开态 disabled(不可主动拖,但仍可被其他项挤动)。
@@ -1097,6 +1102,17 @@ export default function Sidebar(props: Props) {
           ) : (
             <button className="ctx-item" onClick={() => { props.onPopoutSession?.(ctx.session.id); closeCtx(); }}>
               <ExternalLink size={13} /> {t("sidebar.moveToNewWindow")}
+            </button>
+          )}
+          {props.canForkSession?.(ctx.session) && props.onForkSession && (
+            <button
+              className="ctx-item"
+              data-testid={`fork-session-${ctx.session.id}`}
+              data-tooltip-id="md-tip"
+              data-tooltip-content={t("sidebar.forkSessionTip")}
+              onClick={() => { void props.onForkSession!(ctx.session.id); closeCtx(); }}
+            >
+              <GitFork size={13} /> {t("sidebar.forkSession")}
             </button>
           )}
           <div className="ctx-sep" />
