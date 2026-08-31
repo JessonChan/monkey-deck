@@ -63,8 +63,22 @@ export function acquireTerminal(id: string, onExit?: () => void): TermEntry {
   }).catch(() => {});
   const entry: TermEntry = { term, fit, host, attachedTo: null, dead: false };
 
-  // 输入 → 后端。
-  const dataDisp = term.onData((d) => { void TerminalService.Write(id, d); });
+  // 输入 → 后端。击键合并写入(O4):每次 keystroke 一个 POST 在远程端按 RTT
+  // 串行(回显绕 desktop 一圈),粘手。照 resize 的模式合并 ~30ms 窗内的输入,
+  // 顺序保持(xterm 的 onData 顺序 = 用户输入顺序,合并不改变 PTY 语义)。
+  let writeBuf = "";
+  let writeTimer: ReturnType<typeof setTimeout> | undefined;
+  const flushWrite = () => {
+    if (!writeBuf) return;
+    const data = writeBuf;
+    writeBuf = "";
+    void TerminalService.Write(id, data);
+  };
+  const dataDisp = term.onData((d) => {
+    writeBuf += d;
+    clearTimeout(writeTimer);
+    writeTimer = setTimeout(flushWrite, 30);
+  });
 
   // resize → 后端(100ms 防抖,折叠/游离态 cols/rows 为 0 时 sendResize 内过滤)。
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -89,6 +103,8 @@ export function acquireTerminal(id: string, onExit?: () => void): TermEntry {
 
   (entry as TermEntry & { cleanup?: () => void }).cleanup = () => {
     clearTimeout(resizeTimer);
+    clearTimeout(writeTimer);
+    flushWrite(); // don't lose buffered keystrokes to a tab close
     dataDisp.dispose();
     resizeDisp.dispose();
     offData();
