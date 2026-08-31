@@ -3258,6 +3258,7 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
     /* Starts below the 52px chat-header (#173): the scrim never covers the
        header row, so the drawer entry/close buttons stay tappable while a
        drawer is open. */
+    position: fixed;
     top: calc(env(safe-area-inset-top) + 52px); right: 0; bottom: 0; left: 0;
     z-index: 55;
     background: rgba(0, 0, 0, 0.45);
