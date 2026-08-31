@@ -18,7 +18,7 @@ Task #28930(实现 #177)。issue 原始形态是「表格加复制按钮,从 AST
 
 ## 决策 / 取舍
 
-- **`math` 锚未加**:remark-math v6 不产生 `math` tagName(行内/块级都是 `code.language-math`),已被 code/pre 路径覆盖;components map 里加 `math` 是死键(§5.3 删无用代码)。
+- **`math` 锚未加**:remark-math v6 不产生 `math` tagName(行内/块级都是 `code.language-math`),components map 里加 `math` 是死键(§5.3 删无用代码)。但 math 块/行内经 MathBlock/MathInline 渲染,根上**未挂锚**——选区内 math 回退纯文本,**并非**「经 code/pre 路径覆盖」(初稿此句有误,review #28931 勘误;挂锚留 OPEN)。
 - **Mermaid/MathBlock 根不锚**:PreRenderer 只把 pre 的 span 传给 CodeBox(围栏代码选中 → 复制完整 ``` 围栏);mermaid/math 需要改任务面之外的文件,本次不做,选区回退纯文本(记 OPEN)。
 - **部分选中语义**:「包含两边界的最内带锚元素」优先,跨块才膨胀到块级并集——同段内选中加粗短语得 `**粗体**`,跨段得整段;行为可预测,不追求 Typora 级的子块精确切片(需要文本节点级 offset 映射,hast text node 不经组件,成本不成比例)。
 - **tableCell span 含管道**:mdast 语义(单元格 "A" 覆盖 `"| A "`),字节级正确但非独立合法 markdown;整表复制是主诉求,单元格碎片可接受。
