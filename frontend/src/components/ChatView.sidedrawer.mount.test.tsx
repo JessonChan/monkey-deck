@@ -1,9 +1,10 @@
-// Mount-test the ChatView side-panel drawer entry (issue #124): the header
-// button (mobile-only via CSS) must render when the prop is wired and fire
-// App's open callback on click. Pins the wiring the ≤768px drawer depends on:
-// entry button → onOpenSideDrawer → App.openRightDrawer (data-md-side-drawer).
+// Mount-test the ChatView side-panel drawer entry (issue #124, toggle per
+// #173): the header button (mobile-only via CSS) must render when the prop is
+// wired, fire App's toggle callback on click, and advertise the drawer state
+// via label/tooltip (closed → app.expandSidePanel, open → sidebar.collapse).
+// App maps the toggle: rightDrawerOpen=true → closeRightDrawer, else open.
 // Same mock scaffolding as ChatView.virtual.mount.test.tsx (bindings / i18n /
-// tooltip stubbed;挂载期不触发真后端调用).
+// tooltip stubbed; no real backend calls during mount).
 
 import { describe, test, expect, mock } from "bun:test";
 import { Window } from "happy-dom";
@@ -121,21 +122,39 @@ async function flush() {
 
 const click = () => new window.MouseEvent("click", { bubbles: true, button: 0 });
 
-describe("ChatView side-panel drawer entry (#124)", () => {
-  test("renders the header entry when onOpenSideDrawer is wired; click fires it", async () => {
-    const onOpenSideDrawer = mock(() => {});
-    const { host, root } = mount({ onOpenSideDrawer });
+describe("ChatView side-panel drawer entry (#124, toggle per #173)", () => {
+  test("closed drawer: button offers expand; click fires the toggle callback", async () => {
+    const onToggleSideDrawer = mock(() => {});
+    const { host, root } = mount({ onToggleSideDrawer, rightDrawerOpen: false });
     await flush();
 
     const btn = host.querySelector('[data-testid="open-side-drawer"]') as HTMLElement | null;
     expect(btn).not.toBeNull();
     expect(btn!.getAttribute("aria-label")).toBe("app.expandSidePanel");
+    expect(btn!.getAttribute("data-tooltip-content")).toBe("app.expandSidePanel");
     // Sits in the header actions row (right edge), after the status badge.
     expect(btn!.closest(".chat-header-actions")).not.toBeNull();
 
     btn!.dispatchEvent(click());
     await flush();
-    expect(onOpenSideDrawer).toHaveBeenCalledTimes(1);
+    expect(onToggleSideDrawer).toHaveBeenCalledTimes(1);
+
+    root.unmount();
+  });
+
+  test("open drawer: same button offers collapse; click still fires the toggle", async () => {
+    const onToggleSideDrawer = mock(() => {});
+    const { host, root } = mount({ onToggleSideDrawer, rightDrawerOpen: true });
+    await flush();
+
+    const btn = host.querySelector('[data-testid="open-side-drawer"]') as HTMLElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn!.getAttribute("aria-label")).toBe("sidebar.collapse");
+    expect(btn!.getAttribute("data-tooltip-content")).toBe("sidebar.collapse");
+
+    btn!.dispatchEvent(click());
+    await flush();
+    expect(onToggleSideDrawer).toHaveBeenCalledTimes(1);
 
     root.unmount();
   });

@@ -3205,10 +3205,11 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
      width/position here win without touching the panel library or desktop CSS.
      Visibility = App's explicit data-md-drawer state (the ≤768px rail toggle),
      NOT the panel library's collapsed state — mount-time imperative collapse()
-     races the library's deferred initial layout and loses. */
+     races the library's deferred initial layout and loses. Top starts below
+     the 52px chat-header (#173): the drawer never covers the header row. */
   #sidebar {
     position: fixed;
-    top: 0; left: 0; bottom: 0;
+    top: calc(env(safe-area-inset-top) + 52px); left: 0; bottom: 0;
     width: min(80vw, 320px);
     max-width: 80vw;
     z-index: 60;
@@ -3216,9 +3217,9 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
     box-shadow: var(--shadow-pop);
     transform: translateX(-105%);
     transition: transform 0.18s ease-out;
-    /* Notch / home-indicator clearance (viewport-fit=cover, installed PWA).
-       env() resolves to 0 where no inset exists. */
-    padding-top: env(safe-area-inset-top);
+    /* Bottom/left notch & home-indicator clearance (viewport-fit=cover,
+       installed PWA); env() resolves to 0 where no inset exists. No
+       padding-top: the top offset already starts below safe-area + header. */
     padding-bottom: env(safe-area-inset-bottom);
     padding-left: env(safe-area-inset-left);
   }
@@ -3229,10 +3230,11 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
      (inline flex sizing from the panel library stops applying), width/position
      here win. Visibility = App's explicit data-md-side-drawer state; the panel
      library's collapsed state (auto-collapsed below 750px) is irrelevant —
-     CSS transform governs. */
+     CSS transform governs. Top starts below the 52px chat-header (#173):
+     the header row (and its entry button) stays visible and tappable. */
   #side {
     position: fixed;
-    top: 0; right: 0; bottom: 0;
+    top: calc(env(safe-area-inset-top) + 52px); right: 0; bottom: 0;
     width: min(85vw, 340px);
     max-width: 85vw;
     z-index: 60;
@@ -3240,9 +3242,9 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
     box-shadow: var(--shadow-pop);
     transform: translateX(105%);
     transition: transform 0.18s ease-out;
-    /* Notch / home-indicator clearance (viewport-fit=cover, installed PWA);
-       right edge inset mirrors the drawer's screen edge. */
-    padding-top: env(safe-area-inset-top);
+    /* Bottom/right notch & home-indicator clearance (viewport-fit=cover,
+       installed PWA); right edge inset mirrors the drawer's screen edge. No
+       padding-top: the top offset already starts below safe-area + header. */
     padding-bottom: env(safe-area-inset-bottom);
     padding-right: env(safe-area-inset-right);
   }
@@ -3253,7 +3255,10 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
      sibling after .app, hence the general-sibling selector. */
   .drawer-scrim {
     display: none;
-    position: fixed; inset: 0;
+    /* Starts below the 52px chat-header (#173): the scrim never covers the
+       header row, so the drawer entry/close buttons stay tappable while a
+       drawer is open. */
+    top: calc(env(safe-area-inset-top) + 52px); right: 0; bottom: 0; left: 0;
     z-index: 55;
     background: rgba(0, 0, 0, 0.45);
     border: none; padding: 0; cursor: default;

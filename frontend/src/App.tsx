@@ -2258,6 +2258,9 @@ export default function App() {
   // left drawer's scrim, making the overlap unreachable in practice anyway —
   // this is just the cheap invariant guarantee).
   const openRightDrawer = () => { setDrawerOpen(false); setRightDrawerOpen(true); };
+  // Header entry is a TOGGLE (#173): the drawer starts below the 52px header,
+  // so the same header button stays tappable while open and must close it.
+  const toggleRightDrawer = () => { if (rightDrawerOpen) closeRightDrawer(); else openRightDrawer(); };
 
   // ── R5 git-pull gating ──
   // Skip the per-session git pulls (SessionChanges / CurrentBranch / Mergeable
@@ -2508,7 +2511,8 @@ export default function App() {
               onRespondPermission={respondPermission}
               onRespondElicitation={respondElicitation}
               onToggleTerminal={toggleTerminalPanel}
-              onOpenSideDrawer={openRightDrawer}
+              rightDrawerOpen={rightDrawerOpen}
+              onToggleSideDrawer={toggleRightDrawer}
               mergeResult={mergeResults[selectedSessionId] || null}
               onMerge={mergeSession}
               queue={queue}
