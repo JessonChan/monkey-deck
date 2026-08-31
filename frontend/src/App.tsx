@@ -1082,72 +1082,69 @@ export default function App() {
           thoughtTokens: se?.thoughtTokens ?? 0, totalTokens: se?.totalTokens ?? 0,
         } };
       });
-      if (!loadedSessionsRef.current.has(sessionId)) {
-        loadedSessionsRef.current.add(sessionId);
-        const msgs = await ChatService.LoadMessagesPage(sessionId, 0, PAGE_SIZE);
+      // Follow-up pulls run in PARALLEL (R2): they are mutually independent
+      // (each reads SQLite/git by sessionId) — sequential awaits made opening
+      // a session cost Σ(RTT + backend) instead of max(...). Two load-bearing
+      // guards stay intact across the parallel window:
+      //   - config/commands seeds are first-write-wins (prev[sid] ? prev : …),
+      //     so a live spawn push that arrives early is not overwritten by the
+      //     stale DB cache seed;
+      //   - status merges are fresher-wins (mergeStatusSnapshot, #134/#127).
+      // LoadMessagesPage is the ONE un-caught pull: its rejection propagates
+      // through Promise.all to openSession's caller (confirmNewSession surfaces
+      // the error) — the other pulls all .catch to neutral defaults.
+      const pullMessages = !loadedSessionsRef.current.has(sessionId)
+        ? ChatService.LoadMessagesPage(sessionId, 0, PAGE_SIZE)
+        : null;
+      if (pullMessages) loadedSessionsRef.current.add(sessionId);
+      const pullHistory = !historySeededRef.current.has(sessionId)
+        ? ChatService.ListUserMessages(sessionId).catch(() => [] as string[])
+        : null;
+      if (pullHistory) historySeededRef.current.add(sessionId);
+      const pullConfig = !configSeededRef.current.has(sessionId)
+        ? ChatService.GetSessionCachedConfigOptions(sessionId).catch(() => null)
+        : null;
+      if (pullConfig) configSeededRef.current.add(sessionId);
+      const pullCommands = !commandsSeededRef.current.has(sessionId)
+        ? ChatService.GetSessionCachedCommands(sessionId).catch(() => null)
+        : null;
+      if (pullCommands) commandsSeededRef.current.add(sessionId);
+      // R5: on phones with the drawer closed nothing consumes the git data —
+      // skip the 3 pulls; the backfill effect covers the gate reopening.
+      const pullGit = shouldPullGit();
+      const [msgs, hist, cachedConfig, cachedCommands, changes, br, mergeable, kind] = await Promise.all([
+        pullMessages ?? Promise.resolve(null),
+        pullHistory ?? Promise.resolve(null),
+        pullConfig ?? Promise.resolve(null),
+        pullCommands ?? Promise.resolve(null),
+        pullGit ? ChatService.SessionChanges(sessionId).catch(() => null) : Promise.resolve(null),
+        pullGit ? ChatService.SessionCurrentBranch(sessionId).catch(() => "") : Promise.resolve(""),
+        pullGit ? ChatService.SessionMergeable(sessionId).catch(() => false) : Promise.resolve(false),
+        // WorktreeKind is a pure DB read (0 git exec) and feeds the visible
+        // merge-button gating — never gate it.
+        ChatService.WorktreeKind(sessionId).catch(() => ""),
+      ]);
+      if (msgs !== null) {
         const hasMorePage = (msgs?.length || 0) > PAGE_SIZE;
         const page = hasMorePage ? msgs!.slice(1) : (msgs || []);
         if (page.length > 0) oldestSeqRef.current[sessionId] = page[0].seq;
         setItemsBySession((prev) => ({ ...prev, [sessionId]: messagesToItems(page) }));
         setHasMoreBySession((prev) => ({ ...prev, [sessionId]: hasMorePage }));
       }
-      // 输入框历史 seed:从 DB 取全部用户消息(无长度限制),供上下键翻历史。
-      // 仅首次打开 seed(后续本会话的发送由 sendMessage 追加,不覆盖)。用 ref 守卫避免 stale closure。
-      if (!historySeededRef.current.has(sessionId)) {
-        historySeededRef.current.add(sessionId);
-        try {
-          const hist = await ChatService.ListUserMessages(sessionId);
-          setHistoryBySession((prev) => ({ ...prev, [sessionId]: hist || [] }));
-        } catch { setHistoryBySession((prev) => ({ ...prev, [sessionId]: [] })); }
+      if (hist !== null) setHistoryBySession((prev) => ({ ...prev, [sessionId]: hist }));
+      if (cachedConfig && cachedConfig.length > 0) {
+        // bindings 的 ConfigOption.options 是 `[] | null`(Go nil slice → JSON null),
+        // 本地 types.ts 是非空数组(渲染层假设非空)。归一化:null → []。
+        const normalized: ConfigOption[] = cachedConfig.map((c) => ({ ...c, options: c.options ?? [] }));
+        setConfigOptionsBySession((prev) => (prev[sessionId] ? prev : { ...prev, [sessionId]: normalized }));
       }
-      // 懒 spawn config options 缓存 seed:只读态(懒 spawn 未活跃)用持久化缓存渲染 ModelSelect,
-      // 避免 configOptions 为空 → ModelSelect return null(§3.x)。仅首次打开 seed;活跃 session 的
-      // config_option 事件会覆盖此缓存(spawn 后推送最新全量)。
-      if (!configSeededRef.current.has(sessionId)) {
-        configSeededRef.current.add(sessionId);
-        try {
-          const cached = await ChatService.GetSessionCachedConfigOptions(sessionId);
-          // bindings 的 ConfigOption.options 是 `[] | null`(Go nil slice → JSON null),
-          // 本地 types.ts 的 ConfigOption.options 是非空数组(渲染层假设非空)。此处归一化:null → []。
-          if (cached && cached.length > 0) {
-            const normalized: ConfigOption[] = cached.map((c) => ({ ...c, options: c.options ?? [] }));
-            setConfigOptionsBySession((prev) => (prev[sessionId] ? prev : { ...prev, [sessionId]: normalized }));
-          }
-        } catch { /* 无缓存或读取失败:静默,等 spawn 推送 */ }
+      if (cachedCommands && cachedCommands.length > 0) {
+        setCommandsBySession((prev) => (prev[sessionId] ? prev : { ...prev, [sessionId]: cachedCommands }));
       }
-      // 懒 spawn slash 命令表缓存 seed(#152):只读态(懒 spawn 未活跃)用持久化缓存渲染
-      // slash 菜单,避免命令列表为空。仅首次打开 seed;活跃 session 的 available_commands
-      // 事件会整表覆盖(spawn 后推送最新全量)。长度>0 才写:空表/读失败静默走空,等事件。
-      if (!commandsSeededRef.current.has(sessionId)) {
-        commandsSeededRef.current.add(sessionId);
-        try {
-          const cached = await ChatService.GetSessionCachedCommands(sessionId);
-          if (cached && cached.length > 0) {
-            setCommandsBySession((prev) => (prev[sessionId] ? prev : { ...prev, [sessionId]: cached }));
-          }
-        } catch { /* 无缓存或读取失败:静默,等 spawn 推送 */ }
-      }
-      try {
-        const changes = await ChatService.SessionChanges(sessionId);
-        setChangesBySession((p) => ({ ...p, [sessionId]: changes }));
-      } catch { setChangesBySession((p) => ({ ...p, [sessionId]: null })); }
-      // 源代码管理面板的分支展示:读真实 HEAD(worktree 模式 = md/<id>;非 worktree git 项目 = 项目目录当前分支)。
-      // session.Branch 仅 worktree 模式有值,非 worktree 恒空 —— 直接用它会在非 worktree 的 git 项目里显示空分支。
-      try {
-        const br = await ChatService.SessionCurrentBranch(sessionId);
-        setBranchBySession((prev) => ({ ...prev, [sessionId]: br || "" }));
-      } catch { /* 非 git 项目:保持空 */ }
-      // 合并预检:branch 有无领先基线的已提交 commit → 决定合并按钮 enable/disable。
-      // 打开/切到 session 时查一次;turn 结束后由事件刷新点(见 onStatusChanged)重查。
-      try {
-        const mergeable = await ChatService.SessionMergeable(sessionId);
-        setMergeableBySession((prev) => ({ ...prev, [sessionId]: mergeable }));
-      } catch { /* 非 git session:保持 false */ }
-      // worktree 身份:guest 的合并按钮要禁用 + 给「无权合并」提示(owner/project 正常)。
-      try {
-        const kind = await ChatService.WorktreeKind(sessionId);
-        setWorktreeKindBySession((prev) => ({ ...prev, [sessionId]: kind }));
-      } catch { /* keep absent → treat as project */ }
+      setChangesBySession((p) => ({ ...p, [sessionId]: changes }));
+      setBranchBySession((prev) => ({ ...prev, [sessionId]: br || "" }));
+      setMergeableBySession((prev) => ({ ...prev, [sessionId]: mergeable }));
+      setWorktreeKindBySession((prev) => ({ ...prev, [sessionId]: kind }));
     },
     [messagesToItems, selectedProjectId, sessionsByProject, syncSessionStatuses]
   );
@@ -2253,6 +2250,23 @@ export default function App() {
   // left drawer's scrim, making the overlap unreachable in practice anyway —
   // this is just the cheap invariant guarantee).
   const openRightDrawer = () => { setDrawerOpen(false); setRightDrawerOpen(true); };
+
+  // ── R5 git-pull gating refs ──
+  // shouldPullGit(): skip the per-session git pulls (SessionChanges / Current
+  // Branch / Mergeable — 3-5 git subprocess spawns) when NOTHING can consume
+  // them, i.e. ONLY on phones with the right drawer closed (both SidePanel
+  // tabs + the composer branch chip are unreachable). Desktop ALWAYS pulls,
+  // even with the panel collapsed: the composer branch chip stays visible, so
+  // gating there would blank it (deliberate conservative side). Reads refs,
+  // not closure state, so openSession (memoized elsewhere) sees fresh values.
+  const mdViewportRef = useRef(mdViewport);
+  mdViewportRef.current = mdViewport;
+  const rightDrawerOpenRef = useRef(rightDrawerOpen);
+  rightDrawerOpenRef.current = rightDrawerOpen;
+  const rightCollapsedRef = useRef(rightCollapsed);
+  rightCollapsedRef.current = rightCollapsed;
+  const shouldPullGit = () =>
+    !mdViewportRef.current || rightDrawerOpenRef.current || !rightCollapsedRef.current;
 
   // Android back gesture (M2 PWA): while a layer below is open, back closes
   // the TOP layer instead of exiting the app (the biggest native-feel gap —
