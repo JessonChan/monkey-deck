@@ -18,6 +18,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { timeAgo, formatDateTime, sanitizeFileName } from "../utils";
 import { copyTextQuiet } from "../lib/clipboard";
 import { downloadText } from "../lib/download";
+import { isRemoteClient } from "../lib/remote";
 import { tagColor, collectTags } from "../lib/tagColor";
 import HarnessIcon from "./HarnessIcon";
 
@@ -1124,7 +1125,12 @@ export default function Sidebar(props: Props) {
           >
             <Folder size={13} /> {t("sidebar.activateSession")}
           </button>
-          {props.poppedSessionIds?.has(ctx.session.id) ? (
+          {/* Popout windows are host-side OS windows: remote clients cannot
+              see or control them (OpenSessionWindow would open a window on
+              the HOST's screen, silently). Hide both affordances — but keep
+              the popout MARK dot above: it is information (a window exists
+              on the host), not an action. */}
+          {!isRemoteClient() && (props.poppedSessionIds?.has(ctx.session.id) ? (
             <button className="ctx-item" onClick={() => { props.onClosePopout?.(ctx.session.id); closeCtx(); }}>
               <ExternalLink size={13} /> {t("sidebar.moveBackToMainWindow")}
             </button>
@@ -1132,7 +1138,7 @@ export default function Sidebar(props: Props) {
             <button className="ctx-item" onClick={() => { props.onPopoutSession?.(ctx.session.id); closeCtx(); }}>
               <ExternalLink size={13} /> {t("sidebar.moveToNewWindow")}
             </button>
-          )}
+          ))}
           {props.canForkSession?.(ctx.session) && props.onForkSession && (
             <button
               className="ctx-item"
