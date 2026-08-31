@@ -1263,63 +1263,6 @@ func (s *ChatService) SessionAICommit(sessionID string) error {
 	return s.SendMessage(sessionID, aiCommitPrompt(), nil)
 }
 
-// SessionDiff 返回该 session 的 git 变更摘要。
-// 有 worktree 时展示分支相对主仓库的 diff --stat + commit log;
-// 无 worktree 时展示工作目录(项目目录)的未提交改动。
-func (s *ChatService) SessionDiff(sessionID string) (string, error) {
-	if !s.hasSCM(sessionID) {
-		return "", nil
-	}
-	se, err := s.st.GetSession(s.ctx, sessionID)
-	if err != nil {
-		return "", err
-	}
-	if se == nil {
-		return "", fmt.Errorf("session not found: %s", sessionID)
-	}
-	proj, err := s.st.GetProject(s.ctx, se.ProjectID)
-	if err != nil {
-		return "", err
-	}
-	if proj == nil {
-		return "", fmt.Errorf("project not found")
-	}
-	// 无 worktree:直接展示项目目录的工作区改动
-	if se.WorktreePath == "" {
-		dir, derr := s.scmDir(sessionID)
-		if derr != nil {
-			return "暂无变更", nil
-		}
-		changes, cerr := worktree.StatusFiles(dir)
-		if cerr != nil || len(changes) == 0 {
-			return "暂无变更", nil
-		}
-		var sb strings.Builder
-		sb.WriteString("工作区改动:\n")
-		for _, c := range changes {
-			sb.WriteString(fmt.Sprintf("  %s %s\n", c.Status, c.Path))
-		}
-		return sb.String(), nil
-	}
-	// 有 worktree:展示分支相对主仓库的变更摘要
-	stat, _ := worktree.DiffStat(proj.Path, se.Branch, se.BaseRef)
-	log, _ := worktree.BranchLog(proj.Path, se.Branch, se.BaseRef)
-	uncommitted, _ := worktree.UncommittedStat(se.WorktreePath)
-	var sb strings.Builder
-	if log != "" {
-		sb.WriteString("提交:\n" + log + "\n\n")
-	}
-	if stat != "" {
-		sb.WriteString("已提交变更:\n" + stat + "\n")
-	}
-	if uncommitted != "" {
-		sb.WriteString("\n未提交改动:\n" + uncommitted)
-	}
-	if sb.Len() == 0 {
-		return "暂无变更", nil
-	}
-	return sb.String(), nil
-}
 
 // SessionChanges 返回该 session 的文件级变更列表(VS Code 风格:逐文件 + M/A/D/U 状态)。
 func (s *ChatService) SessionChanges(sessionID string) ([]worktree.FileChange, error) {
