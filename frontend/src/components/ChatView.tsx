@@ -1991,8 +1991,10 @@ function AgentMarkdown({ sessionId, text, onOpenFilePreview, streaming = false }
       table: ResizableTable,
       // #177: remaining core elements get source-span anchors (data-md-s/e
       // from the hast node position) so DOM selections map back to the
-      // original markdown (lib/markdownSource). remark-math has no `math`
-      // tagName on v6 (it emits code.language-math, anchored via code/pre).
+      // original markdown (lib/markdownSource). remark-math v6 has no `math`
+      // tagName (it emits code.language-math); block/inline math render via
+      // MathBlock/MathInline with UNANCHORED roots, so math selections fall
+      // back to plain text (anchoring them stays #177 OPEN).
       h1: makeAnchored("h1"),
       h2: makeAnchored("h2"),
       h3: makeAnchored("h3"),

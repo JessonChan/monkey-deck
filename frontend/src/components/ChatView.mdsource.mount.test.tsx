@@ -100,6 +100,18 @@ mock.module("../lib/clipboard", () => ({
   },
 }));
 
+// #177 math case: stub the lazy katex chunk (same recipe as
+// ChatView.math.mount.test.tsx) so the math block renders deterministically
+// without loading real KaTeX + fonts.
+mock.module("katex", () => ({
+  default: {
+    renderToString: (src: string, opts?: { displayMode?: boolean }) =>
+      `<i data-fake-katex="${opts?.displayMode ? "d" : "i"}">${src}</i>`,
+  },
+}));
+// The stylesheet co-import is Vite-side; under bun test it must not hit disk.
+mock.module("katex/dist/katex.min.css", () => ({}));
+
 const { default: ChatView } = await import("./ChatView.tsx");
 const { markdownSourceFromSelection } = await import("../lib/markdownSource.ts");
 import type { ChatItem } from "../types";
@@ -303,4 +315,40 @@ describe("copy markdown source (#177)", () => {
     root.unmount();
     host.remove();
   });
+  test("whole-message Copy keeps copying the raw markdown source (#177)", async () => {
+    const { host, root } = mount([ITEM]);
+    await flush();
+
+    click(host.querySelector('[data-testid="copy-msg"]')!);
+    await flush();
+    // Pinned per #177: the per-message button copies item.text verbatim — the
+    // exact raw string AgentMarkdown renders from.
+    expect(copied).toEqual([MD]);
+
+    root.unmount();
+    host.remove();
+  });
+
+  test("selection inside rendered math degrades to plain text, never source (#177)", async () => {
+    const { host, root } = mount([{ type: "agent", id: "math-1", text: "Header\n\n$$\ne^{i\\pi} + 1 = 0\n$$\n\nDone." }]);
+    await flush();
+
+    const math = host.querySelector('[data-testid="math-block"]')!;
+    expect(math).not.toBeNull();
+    // Deliberately unanchored (#177 OPEN): MathBlock's root carries no span,
+    // so source resolution declines and Copy falls back to plain text.
+    expect(math.closest("[data-md-s]")).toBeNull();
+    const selected = (await selectNodes(math, math)).toString();
+    click(host.querySelector('[data-testid="selection-copy"]')!);
+    await flush();
+    // Plain-text fallback, never the $$..$$ markdown source (math stays
+    // deliberately unanchored). Toolbar clears the selection on run, so the
+    // expected value is captured above.
+    expect(copied[0]).not.toContain("$$");
+    expect(copied).toEqual([selected]);
+
+    root.unmount();
+    host.remove();
+  });
+
 });
