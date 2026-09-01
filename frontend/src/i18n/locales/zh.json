@@ -326,10 +326,6 @@
     "mermaidZoomOut": "缩小",
     "mermaidZoomReset": "重置缩放",
     "mermaidFullscreen": "全屏",
-    "mermaidCopyImage": "复制为图片",
-    "mermaidImageCopied": "已复制图片",
-    "mermaidImageDownloaded": "剪贴板不支持图片,已下载 PNG",
-    "mermaidImageCopyFailed": "复制为图片失败",
     "planStatus": {
       "completed": "已完成",
       "in_progress": "进行中",
