@@ -382,6 +382,17 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
     }
     return m;
   }, [items, props.status]);
+  // #172 fork entry: the fork button lives ONLY on the LAST completed agent
+  // row — the protocol has no position parameter, so a fork always branches
+  // at the conversation end; rendering it on earlier rows would invite an
+  // expectation the harness cannot honor. Mirrors agentTurnDuration's cheap
+  // reverse scan.
+  const lastAgentIdx = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].type === "agent") return i;
+    }
+    return -1;
+  }, [items]);
   const layout = useMemo(
     () => computeLayout(rows, modelRef.current, tailHRef.current, headHRef.current),
     // modelRef/tailHRef/headHRef 是 ref:modelVersion bump 是重算信号(RO 回调写入时保证同步 bump)。
@@ -855,7 +866,7 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
               // duration 挂最后一条 agent 回复(非 user,需求钉死 #68):仅 agent 行查 map。
               const durationMs = row.kind === "agent" ? agentTurnDuration.get(row.first) : undefined;
               content = (
-                <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} durationMs={durationMs} canFork={props.canFork ?? false} forkBusy={props.status === "prompting"} onFork={onForkSessionStable} />
+                <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} durationMs={durationMs} canFork={(props.canFork ?? false) && row.kind === "agent" && row.first === lastAgentIdx} forkBusy={props.status === "prompting"} onFork={onForkSessionStable} />
               );
             }
             return (

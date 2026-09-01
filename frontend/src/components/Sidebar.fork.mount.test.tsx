@@ -14,6 +14,7 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
 import { Window } from "happy-dom";
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { registerChatserviceMock } from "../test/chatservice-mock";
 
 // ---- happy-dom setup ----
 const window = new Window();
@@ -29,12 +30,11 @@ globalThis.localStorage = window.localStorage;
 window.React = React;
 
 // ---- binding / i18n / tooltip / clipboard mocks ----
-mock.module("../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice", () => ({
-  ToggleMaximise: async () => {},
+registerChatserviceMock(mock, {
   RevealPath: async () => {},
   ExportSession: async () => "",
   SearchSessionContent: async () => [],
-}));
+});
 mock.module("react-tooltip", () => ({ Tooltip: () => null, default: () => null }));
 mock.module("react-i18next", () => {
   const t = (k: string, opts?: Record<string, unknown>) =>

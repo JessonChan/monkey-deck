@@ -16,6 +16,7 @@ import { describe, test, expect, mock } from "bun:test";
 import { Window } from "happy-dom";
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { registerChatserviceMock } from "../test/chatservice-mock";
 
 // ---- happy-dom setup ----
 const window = new Window();
@@ -59,15 +60,13 @@ class MockResizeObserver {
 }
 (globalThis as { ResizeObserver: unknown }).ResizeObserver = MockResizeObserver;
 
-mock.module("../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice", () => ({
-  ToggleMaximise: async () => {},
-  OpenURL: async () => {},
+registerChatserviceMock(mock, {
   SessionReadFile: async () => "",
   SessionListDir: async () => [],
   SessionFuzzyFind: async () => [],
   PickFiles: async () => [],
   GetSessionMcpServers: async () => [],
-}));
+});
 mock.module("react-tooltip", () => ({ Tooltip: () => null, default: () => null }));
 mock.module("react-i18next", () => ({
   useTranslation: () => ({ t: (k: string) => k }),
@@ -125,13 +124,20 @@ async function settle() { for (let i = 0; i < 10; i++) await delay(2); }
 const forkCallsOf = (fn: unknown): unknown[][] => (fn as { mock: { calls: unknown[][] } }).mock.calls;
 
 describe("ChatView fork button(#172 声明位门控)", () => {
-  test("declared:agent 行渲染分叉按钮,点击走 onForkSession;user 行无分叉", async () => {
+  test("declared:仅最后一条 agent 行渲染分叉按钮,点击走 onForkSession;更早的 agent 行与 user 行无分叉", async () => {
     const onForkSession = mock(() => {});
-    const { host } = mount(items(), "idle", { canFork: true, onForkSession });
+    // Two turns: u0/a1 (older) + u2/a3 (latest) — only a3 may show fork.
+    const twoTurns: ChatItem[] = [
+      { type: "user", id: "u0", text: "hello" },
+      { type: "agent", id: "a1", text: "older reply" },
+      { type: "user", id: "u2", text: "again" },
+      { type: "agent", id: "a3", text: "latest reply" },
+    ];
+    const { host } = mount(twoTurns, "idle", { canFork: true, onForkSession });
     await settle();
 
     const btns = host.querySelectorAll<HTMLElement>('[data-testid="fork-msg"]');
-    expect(btns.length).toBe(1); // 仅 agent 行(1 条 user + 1 条 agent)
+    expect(btns.length).toBe(1); // ONLY the last agent row
     expect(btns[0].textContent).toContain("chat.forkAction");
     expect(btns[0].getAttribute("data-tooltip-content")).toBe("chat.forkTip");
 
