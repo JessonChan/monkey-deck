@@ -244,6 +244,16 @@ describe("Sidebar session tags (#150 MVP)", () => {
     expect(css).toMatch(/\.session-tag-chip\s*\{/);
     expect(css).toMatch(/\.session-tag-more\s*\{/);
     expect(css).not.toMatch(/\.session-tag-dots?\s*\{/);
+    // Ellipsis gate (#181 rework): text-overflow applies to block containers
+    // only (css-overflow-3) — an inline-flex chip hard-cuts long tag names
+    // with no "…" glyph. Pin the display so this can't silently regress.
+    const chipRule = css.match(/\.session-tag-chip\s*\{([^}]*)\}/)![1];
+    const moreRule = css.match(/\.session-tag-more\s*\{([^}]*)\}/)![1];
+    expect(chipRule).toContain("display: block");
+    expect(chipRule).not.toContain("inline-flex");
+    expect(chipRule).toContain("text-overflow: ellipsis");
+    expect(moreRule).toContain("display: block");
+    expect(moreRule).not.toContain("inline-flex");
   });
 
   test("2. ctx「标签 ›」Enter appends to the live set and clears the input", async () => {

@@ -337,28 +337,34 @@ input, textarea { font-family: inherit; }
    dot family. Up to 3 hash-colored chips in the row meta cluster (after the
    fork badge, before pin), same tagColor() source as the filter panel and the
    ctx menu; tags beyond 3 fold into one +N overflow chip whose tooltip lists
-   the full set. 12px discipline: fixed 14px height / 12px line-height / 10px
-   font so a tagged row never grows taller than a plain one; flex-shrink:0
-   keeps chips intact while the label ellipsizes instead. Chip text is fixed
-   dark ink — legible on every palette color. */
+   the full set. 12px discipline: fixed 14px height / 10px font so a tagged
+   row never grows taller than a plain one; flex-shrink:0 keeps chips intact
+   while the label ellipsizes instead. Chip text is fixed dark ink — legible
+   on every palette color. Chips are display:block, never inline-flex:
+   text-overflow applies to block containers only (css-overflow-3), so an
+   inline-flex chip hard-cuts long tag names with no "…" glyph (#181 rework);
+   the row's flex + align-items:center centers the chip and its 14px line box
+   instead. */
 .session-tag-chip {
   flex-shrink: 0;
-  display: inline-flex; align-items: center;
+  display: block;
   max-width: 72px; height: 14px; padding: 0 6px;
   border-radius: 999px;
-  font-size: 10px; line-height: 12px;
+  font-size: 10px; line-height: 14px;
   color: #2d2e30;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 /* Overflow chip (+N): same capsule shape, neutral chrome — no tagColor
    background, hairline border + dimmest text tier (global border-box keeps
-   the border inside the fixed 14px height). Tooltip carries the full list. */
+   the border inside the fixed 14px height). Tooltip carries the full list.
+   Content is a fixed "+N" (no truncation risk) but stays display:block to
+   match the chip family. */
 .session-tag-more {
   flex-shrink: 0;
-  display: inline-flex; align-items: center;
+  display: block;
   max-width: 72px; height: 14px; padding: 0 6px;
   border-radius: 999px;
-  font-size: 10px; line-height: 12px;
+  font-size: 10px; line-height: 14px;
   color: var(--text-3);
   border: 1px solid var(--sep);
   white-space: nowrap;
