@@ -18,7 +18,7 @@
 // Same mock scaffolding as Sidebar.tags.mount.test.tsx (bindings / i18n /
 // tooltip / clipboard stubbed; no real backend calls during mount).
 
-import { describe, test, expect, beforeEach } from "bun:test";
+import { describe, test, expect, mock, beforeEach } from "bun:test";
 import { Window } from "happy-dom";
 import { readFileSync } from "node:fs";
 import React from "react";
@@ -30,7 +30,6 @@ const document = window.document;
 globalThis.window = window;
 globalThis.document = document;
 globalThis.navigator = window.navigator;
-import { describe, test, expect, mock, beforeEach } from "bun:test";
 globalThis.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 0);
 globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
 globalThis.MouseEvent = window.MouseEvent;
