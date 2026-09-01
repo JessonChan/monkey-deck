@@ -10,6 +10,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -29,18 +30,20 @@ type fakeChat struct {
 	prompts    []string
 	promptAtts [][]acp.Attachment // attachments per Prompt call (#126A assertions)
 	cancelled  int
-	block      chan struct{}    // 关闭则所有阻塞 Prompt 返回 end_turn
-	started    chan struct{}    // 每次 Prompt 进入时发信号(buffered,防丢)
-	title      string           // SessionTitle 返回值(模拟 harness 经 session/list 给的标题)
-	emitHook   func(msg string) // 成功返回前回调(模拟 agent 产出一条消息,避免空 turn)
-	configSets []string         // 记录 SetConfigOption 调用("configId=value")
-	promptErr  error            // 非空则 Prompt 立即返回该错(模拟 peer 断连 / 崩溃,触发 emitError 路由)
-	errSeq     []error          // per-attempt Prompt error sequence consumed in order (#46 retry tests): one popped per Prompt call; falls back to promptErr once exhausted; both empty → normal block flow
-	alive      atomic.Bool      // IsAlive 返回值(默认 true;kill 置 false 模拟 harness 死)
-	declined   atomic.Bool      // ElicitDeclined 返回值(模拟用户主动 decline elicitation 后的空 turn)
-	canFork    bool             // CanFork 返回值(模拟 harness 声明 sessionCapabilities.fork 与否)
-	forkResult acp.ForkResult   // Fork 成功时返回值(fork 测试断言落库内容用)
-	forkErr    error            // Fork 非空则立即返回该错(模拟 harness 拒绝 / 断连)
+	block      chan struct{}      // 关闭则所有阻塞 Prompt 返回 end_turn
+	started    chan struct{}      // 每次 Prompt 进入时发信号(buffered,防丢)
+	title      string             // SessionTitle 返回值(模拟 harness 经 session/list 给的标题)
+	emitHook   func(msg string)   // 成功返回前回调(模拟 agent 产出一条消息,避免空 turn)
+	configSets []string           // 记录 SetConfigOption 调用("configId=value")
+	configOpts []acp.ConfigOption // FlatConfigOptions return value (resume-response state, #183 replay tests); nil keeps the historic always-nil behavior
+	failSet    map[string]bool    // configIds SetConfigOption must refuse (#183 scenario 2: per-key harness-side failure)
+	promptErr  error              // 非空则 Prompt 立即返回该错(模拟 peer 断连 / 崩溃,触发 emitError 路由)
+	errSeq     []error            // per-attempt Prompt error sequence consumed in order (#46 retry tests): one popped per Prompt call; falls back to promptErr once exhausted; both empty → normal block flow
+	alive      atomic.Bool        // IsAlive 返回值(默认 true;kill 置 false 模拟 harness 死)
+	declined   atomic.Bool        // ElicitDeclined 返回值(模拟用户主动 decline elicitation 后的空 turn)
+	canFork    bool               // CanFork 返回值(模拟 harness 声明 sessionCapabilities.fork 与否)
+	forkResult acp.ForkResult     // Fork 成功时返回值(fork 测试断言落库内容用)
+	forkErr    error              // Fork 非空则立即返回该错(模拟 harness 拒绝 / 断连)
 }
 
 func newFakeChat() *fakeChat {
@@ -96,14 +99,42 @@ func (f *fakeChat) RespondElicitation(_ string, _ acp.ElicitationResponse) bool 
 func (f *fakeChat) ElicitDeclined() bool                                        { return f.declined.Load() }
 func (f *fakeChat) ResetElicitDeclined()                                        { f.declined.Store(false) }
 func (f *fakeChat) SessionTitle(_ context.Context) (string, error)              { return f.title, nil }
-func (f *fakeChat) FlatConfigOptions() []acp.ConfigOption                       { return nil }
-func (f *fakeChat) SupportsImage() bool                                         { return false }
-func (f *fakeChat) SupportsAudio() bool                                         { return false }
-func (f *fakeChat) SupportsEmbeddedContext() bool                               { return false }
+func (f *fakeChat) FlatConfigOptions() []acp.ConfigOption {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.configOpts
+}
+func (f *fakeChat) SupportsImage() bool           { return false }
+func (f *fakeChat) SupportsAudio() bool           { return false }
+func (f *fakeChat) SupportsEmbeddedContext() bool { return false }
+
+// errFakeSetRefused is returned by SetConfigOption for configIds in failSet
+// (#183 scenario 2: simulated harness-side refusal).
+var errFakeSetRefused = errors.New("fake set_config_option refused")
+
 func (f *fakeChat) SetConfigOption(_ context.Context, configId, value string) error {
 	f.mu.Lock()
 	f.configSets = append(f.configSets, configId+"="+value)
+	if !f.failSet[configId] {
+		// Mirror the runner contract (the set response's ConfigOptions replace the
+		// state): upsert the option so post-replay FlatConfigOptions reflects the
+		// restored keys.
+		merged := false
+		for i := range f.configOpts {
+			if f.configOpts[i].ID == configId {
+				f.configOpts[i].CurrentValue = value
+				merged = true
+				break
+			}
+		}
+		if !merged {
+			f.configOpts = append(f.configOpts, acp.ConfigOption{ID: configId, CurrentValue: value})
+		}
+	}
 	f.mu.Unlock()
+	if f.failSet[configId] {
+		return errFakeSetRefused
+	}
 	return nil
 }
 func (f *fakeChat) RefreshConfig(_ context.Context) ([]acp.ConfigOption, error) {

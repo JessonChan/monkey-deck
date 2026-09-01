@@ -54,6 +54,16 @@ func TestChatForkFakeAgentHelper(t *testing.T) {
 // fake-sess-1 with one model configOption; session/fork mints fake-sess-N and
 // echoes the same configOptions (probe ⑤ shape); prompts answer end_turn;
 // unknown methods get -32601.
+//
+// Resume-replay test surface (#183), env-configurable (inherited by the child):
+//   - MD_CHAT_FAKE_RESUME_OPTS: "" (default) → session/resume|load report ONLY
+//     the model option (the real-omp shape that drops thought/mode); "full" →
+//     the whole set with current values.
+//   - MD_CHAT_FAKE_SET_LOG: every received session/set_config_option attempt is
+//     appended to this path as "configId=value\n" (successful or refused), the
+//     exact replay call trace tests assert on.
+//   - MD_CHAT_FAKE_SET_FAIL: comma-separated configIds refused with -32602
+//     (simulated harness-side set failures).
 func chatFakeAgentMain() {
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
@@ -70,21 +80,54 @@ func chatFakeAgentMain() {
 		Method string          `json:"method"`
 		Params struct {
 			SessionId string `json:"sessionId"`
+			ConfigId  string `json:"configId"`
+			Value     string `json:"value"`
 		} `json:"params"`
 	}
 
 	sessions := map[string]bool{"fake-sess-1": true}
 	nextID := 2
 
+	resumeFull := os.Getenv("MD_CHAT_FAKE_RESUME_OPTS") == "full"
+	setLogPath := os.Getenv("MD_CHAT_FAKE_SET_LOG")
+	failSet := map[string]bool{}
+	for _, id := range strings.Split(os.Getenv("MD_CHAT_FAKE_SET_FAIL"), ",") {
+		if id != "" {
+			failSet[id] = true
+		}
+	}
+
+	// cur holds each select option's current value; set_config_option mutates it,
+	// so later responses echo the applied value (mirrors harness state).
+	cur := map[string]string{"model": "fake-model", "thought": "high", "mode": "code"}
+	allOpts := func() []any {
+		return []any{
+			map[string]any{
+				"type": "select", "id": "model", "name": "Model", "category": "model",
+				"currentValue": cur["model"],
+				"options":      []any{map[string]any{"value": "fake-model", "name": "Fake Model"}},
+			},
+			map[string]any{
+				"type": "select", "id": "thought", "name": "Thought", "category": "thought_level",
+				"currentValue": cur["thought"],
+				"options":      []any{map[string]any{"value": "high", "name": "High"}, map[string]any{"value": "low", "name": "Low"}},
+			},
+			map[string]any{
+				"type": "select", "id": "mode", "name": "Mode", "category": "mode",
+				"currentValue": cur["mode"],
+				"options":      []any{map[string]any{"value": "code", "name": "Code"}, map[string]any{"value": "plan", "name": "Plan"}},
+			},
+		}
+	}
+	optsFor := func(full bool) []any {
+		if full {
+			return allOpts()
+		}
+		return allOpts()[:1] // model only — the real-omp resume shape
+	}
+
 	sessionConfig := func() (opts []any, modes any) {
-		opts = []any{map[string]any{
-			"type":         "select",
-			"id":           "model",
-			"name":         "Model",
-			"category":     "model",
-			"currentValue": "fake-model",
-			"options":      []any{map[string]any{"value": "fake-model", "name": "Fake Model"}},
-		}}
+		opts = optsFor(false)
 		modes = map[string]any{
 			"currentModeId": "code",
 			"availableModes": []any{
@@ -202,11 +245,32 @@ func chatFakeAgentMain() {
 				})
 				continue
 			}
-			opts, _ := sessionConfig()
+			opts := optsFor(resumeFull)
 			enc(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      m.ID,
 				"result":  withModes(map[string]any{"configOptions": opts}),
+			})
+		case "session/set_config_option":
+			if setLogPath != "" {
+				if f, ferr := os.OpenFile(setLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); ferr == nil {
+					_, _ = f.WriteString(m.Params.ConfigId + "=" + m.Params.Value + "\n")
+					_ = f.Close()
+				}
+			}
+			if failSet[m.Params.ConfigId] {
+				enc(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      m.ID,
+					"error":   map[string]any{"code": -32602, "message": "set_config_option refused: " + m.Params.ConfigId},
+				})
+				continue
+			}
+			cur[m.Params.ConfigId] = m.Params.Value
+			enc(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      m.ID,
+				"result":  map[string]any{"configOptions": allOpts()},
 			})
 		case "session/close":
 			delete(sessions, m.Params.SessionId)

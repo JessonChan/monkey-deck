@@ -1783,6 +1783,15 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 		_ = s.st.UpdateSessionACP(s.ctx, se.ID, string(chat.SessionID), se.Title)
 	}
 	s.emitStatus(se.ID, "started", "")
+	// #183: a session/resume response from real harnesses (e.g. omp) often carries
+	// ONLY the model option, and the persistConfigCache tail below would overwrite
+	// the DB snapshot with that subset (it guards empty slices, not subset
+	// overwrites) — thought/mode selections were lost on every session reopen.
+	// Replay the snapshot keys missing from the resume response BEFORE the emit +
+	// persist tail so the frontend gets the full set in one shot (D1).
+	if resume {
+		s.replayResumeConfigGaps(chat, se.ID)
+	}
 	// 推送 agent 自报的 config options(model/mode/effort),前端据此渲染下拉。
 	// 同时附带 prompt 能力门控(image/audio/embeddedContext,前端据此决定各类附件入口,§3.5)。
 	// 即使无 config options 也要发,以投递能力标志(去掉 len>0 守卫)。
@@ -1799,6 +1808,51 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 	s.persistConfigCache(se.ID, flatOpts)
 	slog.Info("session live", "id", se.ID, "resume", resume, "cwd", proj.Path, "model", se.Model)
 	return nil
+}
+
+// replayResumeConfigGaps restores config options a harness dropped from its
+// session/resume response (#183). Real harnesses (omp) report only the model
+// option on resume; the startLive tail then persists that subset over the DB
+// snapshot (persistConfigCache guards empty slices only, not subset overwrites),
+// so thought/mode selections were lost on every session reopen. Contract:
+//   - D2: replay set = persisted snapshot keys (GetSessionCachedConfigOptions)
+//     missing from the resume response by configId. Resume-reported keys are
+//     authoritative and never replayed; "model" is never replayed.
+//   - D3: each missing key is restored via SetConfigOption with the snapshot's
+//     current value; snapshot entries without one are skipped.
+//   - D4: per-key best-effort — a refused set logs a warning and the loop moves
+//     on; the session open never blocks.
+//   - D5: cache repair rides the existing set_config_option pipeline (the
+//     runner swaps ConfigOptions for the set response; startLive's tail emits +
+//     persists it). No manual cache write-back here; if every set fails, the
+//     model-only status quo stands (no old-snapshot backfill).
+func (s *ChatService) replayResumeConfigGaps(conn chatConn, sessionID string) {
+	cached, err := s.GetSessionCachedConfigOptions(sessionID)
+	if err != nil {
+		slog.Warn("resume config replay: load snapshot", "session", sessionID, "err", err)
+		return
+	}
+	if len(cached) == 0 {
+		return
+	}
+	reported := make(map[string]bool, len(cached))
+	for _, o := range conn.FlatConfigOptions() {
+		reported[o.ID] = true
+	}
+	replayed := 0
+	for _, o := range cached {
+		if o.ID == "model" || reported[o.ID] || o.CurrentValue == "" {
+			continue // D2/D3: model never replayed; reported keys win; no value, nothing to restore
+		}
+		if err := conn.SetConfigOption(s.ctx, o.ID, o.CurrentValue); err != nil {
+			slog.Warn("resume config replay: set_config_option", "session", sessionID, "configId", o.ID, "value", o.CurrentValue, "err", err)
+			continue
+		}
+		replayed++
+	}
+	if replayed > 0 {
+		slog.Info("resume config replay restored missing options", "session", sessionID, "replayed", replayed, "snapshotKeys", len(cached))
+	}
 }
 
 // CloseSession 关闭活跃 ACP session(保留 db 记录,可再次 Open)。
