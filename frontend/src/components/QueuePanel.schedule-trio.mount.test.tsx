@@ -154,8 +154,8 @@ describe("QueuePanel schedule trio (#144/#145/#146)", () => {
     );
     await flush();
     await click(host, "queue-schedule");
-
-    // First click stages a future time: chip row + Reset appear.
+    // First click stages a future time: the placeholder swaps to the live
+    // readout, Reset activates (all resident since #182).
     await click(host, "queue-schedule-preset-5");
     const stagedRow = q(host, "queue-schedule-staged-row");
     expect(stagedRow).not.toBeNull();
@@ -175,9 +175,13 @@ describe("QueuePanel schedule trio (#144/#145/#146)", () => {
       await click(host, id);
       expect(presetRects(host)).toEqual(base);
     }
-    await click(host, "queue-schedule-reset"); // chip row + Reset drop
+    await click(host, "queue-schedule-reset"); // chip drops; slot row persists
     expect(presetRects(host)).toEqual(base);
-    expect(q(host, "queue-schedule-staged-row")).toBeNull();
+    // #182: the slot row NEVER unmounts while the row is open — it flips back
+    // to the placeholder (no live readout left behind).
+    expect(q(host, "queue-schedule-staged-row")).not.toBeNull();
+    expect(q(host, "queue-schedule-pending")).toBeNull();
+    expect(q(host, "queue-schedule-pending-placeholder")).not.toBeNull();
   });
 
   test("+60 preset: parameterized label (no +1h special case), stacks to ~105min (#145)", async () => {
@@ -233,9 +237,13 @@ describe("QueuePanel schedule trio (#144/#145/#146)", () => {
     );
     await flush();
     await click(host, "queue-schedule");
-    // Empty staging: no Reset, no staged row, no chip.
-    expect(q(host, "queue-schedule-reset")).toBeNull();
-    expect(q(host, "queue-schedule-staged-row")).toBeNull();
+    // Empty staging (#182 residency): Reset occupies its slot but is
+    // visibility:hidden (out of hit-testing/a11y); the slot row shows the
+    // placeholder; no live readout.
+    expect(q(host, "queue-schedule-reset")).not.toBeNull();
+    expect((q(host, "queue-schedule-reset") as HTMLElement).style.visibility).toBe("hidden");
+    expect(q(host, "queue-schedule-staged-row")).not.toBeNull();
+    expect(q(host, "queue-schedule-pending-placeholder")).not.toBeNull();
     expect(q(host, "queue-schedule-pending")).toBeNull();
 
     // +5 +10 → chip, staged row and Reset all show.
@@ -251,10 +259,12 @@ describe("QueuePanel schedule trio (#144/#145/#146)", () => {
     await click(host, "queue-schedule-reset");
     const resetAfter = Date.now();
     expect(calls).toHaveLength(0);
-    expect(q(host, "queue-schedule-input")).not.toBeNull();
-    expect(q(host, "queue-schedule-staged-row")).toBeNull();
+    // #182 residency: the slot row persists (placeholder back), Reset returns
+    // to its hidden empty-state slot.
+    expect(q(host, "queue-schedule-staged-row")).not.toBeNull();
     expect(q(host, "queue-schedule-pending")).toBeNull();
-    expect(q(host, "queue-schedule-reset")).toBeNull();
+    expect(q(host, "queue-schedule-pending-placeholder")).not.toBeNull();
+    expect((q(host, "queue-schedule-reset") as HTMLElement).style.visibility).toBe("hidden");
     const input = q(host, "queue-schedule-input") as HTMLInputElement;
     const snapped = Date.parse(input.value);
     expect(Number.isNaN(snapped)).toBe(false);

@@ -95,10 +95,12 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   // Also tick while the schedule row is open with a staged future time, so the
   // staged chip counts down live (issue #130).
   const staging = schedulingId !== null && pendingAt !== null && pendingAt > now;
-  // A future time is staged -> the chip row and the explicit Reset button both
-  // show (#144/#145). Reset sits at the END of the actions row (#146) so its
-  // conditional render never shifts the preset buttons — the layout invariant
-  // (preset getBoundingClientRect constant across consecutive clicks).
+  // A future time is staged -> the readout replaces the placeholder slot and
+  // the explicit Reset activates (#144/#145). Both live resident while the row
+  // is open (#182): the slot row always renders (placeholder when empty) and
+  // Reset is always the actions row's LAST child (#146), visibility:hidden
+  // when empty — so neither the first nor any later preset click shifts the
+  // preset buttons (preset getBoundingClientRect constant, #144).
   const stagedVisible = pendingAt !== null && pendingAt > now;
   useEffect(() => {
     if (!hasPending && !staging) return;
@@ -452,34 +454,47 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                     {t("queue.clearSchedule")}
                   </button>
                 )}
-                {/* Explicit Reset at the row END (#145/#146, issue #130 wrap-up 2):
-                    same handler as the chip's ✕ — drops the staged accumulation
-                    back to the baseline without touching the item's schedule or
-                    closing the row. Icon-only (the row is width-scarce with four
-                    presets); the tooltip explains. LAST child on purpose: its
-                    conditional render never shifts anything rendered before it. */}
-                {stagedVisible && (
-                  <button
-                    className="queue-btn reset"
-                    data-testid="queue-schedule-reset"
-                    data-tooltip-id="md-tip"
-                    data-tooltip-content={t("queue.scheduleResetTip")}
-                    aria-label={t("queue.scheduleResetTip")}
-                    onClick={resetStagedTime}
-                  >
-                    <RotateCcw size={12} />
-                  </button>
-                )}
+                {/* Explicit Reset at the row END (#145/#146, issue #130
+                    wrap-up 2; #182 residency): same handler as the chip's ✕ —
+                    drops the staged accumulation back to the baseline without
+                    touching the item's schedule or closing the row. Icon-only
+                    (the row is width-scarce with four presets); the tooltip
+                    explains. LAST child on purpose: its renders never shift
+                    anything rendered before it. #182: the slot is ALWAYS
+                    rendered while the row is open — visibility:hidden when
+                    nothing is staged — so the row's geometry never changes
+                    when staging begins (preset rects stay constant across the
+                    FIRST click too, extending #144). visibility (not
+                    display/conditional render) keeps the width reserved and
+                    takes the button out of hit-testing + a11y tree. */}
+                <button
+                  className="queue-btn reset"
+                  data-testid="queue-schedule-reset"
+                  data-tooltip-id="md-tip"
+                  data-tooltip-content={t("queue.scheduleResetTip")}
+                  aria-label={t("queue.scheduleResetTip")}
+                  onClick={resetStagedTime}
+                  style={stagedVisible ? undefined : { visibility: "hidden" }}
+                >
+                  <RotateCcw size={12} />
+                </button>
               </div>
-              {/* Staged-time chip in its OWN row (#144, issue #130): the live
+              {/* Staged-time slot in its OWN row (#144, issue #130): the live
                   "+mins → clock" readout sits OUTSIDE .queue-item-actions so
                   preset clicks never reflow the row's buttons — layout
                   invariant: preset getBoundingClientRect stays constant across
                   consecutive clicks. Its ✕ resets the staging in place (issue
                   #130 wrap-up 2) — row stays open, presets re-base on now,
-                  input snaps back to the default. */}
-              {stagedVisible && (
-                <div className="queue-schedule-staged-row" data-testid="queue-schedule-staged-row">
+                  input snaps back to the default.
+                  #182: the slot row is ALWAYS rendered while the schedule row
+                  is open — with nothing staged it holds an equal-height
+                  placeholder span (faint hint copy, .placeholder) so opening
+                  the row and the FIRST preset click are both pixel-stable; the
+                  placeholder is display-only (no ✕, no tooltip). Save still
+                  closes the whole edit row, so the residency never adds height
+                  to non-editing queue items. */}
+              <div className="queue-schedule-staged-row" data-testid="queue-schedule-staged-row">
+                {stagedVisible ? (
                   <span
                     className="queue-schedule-pending"
                     data-testid="queue-schedule-pending"
@@ -500,8 +515,12 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                       <X size={10} />
                     </button>
                   </span>
-                </div>
-              )}
+                ) : (
+                  <span className="queue-schedule-pending placeholder" data-testid="queue-schedule-pending-placeholder">
+                    {t("queue.schedulePendingEmpty")}
+                  </span>
+                )}
+              </div>
               {scheduleError && (
                 <span className="queue-schedule-error" data-testid="queue-schedule-error">
                   {scheduleError}

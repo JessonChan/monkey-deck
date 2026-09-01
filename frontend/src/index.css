@@ -1792,6 +1792,17 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
   cursor: pointer; line-height: 1;
 }
 .queue-schedule-pending .queue-schedule-reset:hover { background: var(--hover); color: var(--text); }
+/* Empty-staging placeholder (#182): the staged slot row is resident while the
+   schedule row is open, holding this faint hint instead of the readout until a
+   preset/datetime stages a time. Shares the chip's .queue-schedule-pending
+   box (same mono 10px inline-flex shape); overrides only the voice — muted
+   color, normal weight — and pins min-height to the chip's rendered height
+   (✕ button 10px glyph + 2×3px padding = 16px) so the readout swap never
+   changes the row's height (#144 zero-jump, including the FIRST preset
+   click). */
+.queue-schedule-pending.placeholder {
+  color: var(--text-3); font-weight: 400; min-height: 16px;
+}
 .queue-schedule-cap { color: var(--amber); font-size: 11px; flex-shrink: 0; font-weight: 600; }
 /* Recurring badge (#111): same mono/amber family as the scheduled badge; the
    inline ✕ is the one-click cancel (mirrors the staged chip's reset). */
@@ -3437,6 +3448,9 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
      so the 40px rule above does not reach it). */
   .queue-schedule-pending .queue-schedule-reset { padding: 6px; }
   .queue-repeat-badge .queue-repeat-reset { padding: 6px; }
+  /* Placeholder keeps equal height with the touch-sized chip (glyph 10px +
+     2×6px padding = 22px there), same zero-jump contract as desktop (#182). */
+  .queue-schedule-pending.placeholder { min-height: 22px; }
 
   /* Header: session title + status only. Project name, terminal / model /
      branch / merge chips are desktop density on a phone. */

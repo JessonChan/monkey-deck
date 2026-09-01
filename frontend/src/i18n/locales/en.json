@@ -429,6 +429,7 @@
     "schedulePreset": "+{{mins}}m",
     "schedulePresetTip": "Schedule: add {{mins}} minutes on top of the staged time (clicks stack; Save applies)",
     "schedulePending": "+{{mins}}m → {{time}}",
+    "schedulePendingEmpty": "Pick a preset or a time to see the schedule preview here",
     "schedulePendingTip": "Time staged by stacking presets (base = the staged time or now, at most 24h ahead — beyond that is ignored); applies only on Save",
     "scheduleResetTip": "Clear the staged time: presets start over from now (row stays open)",
     "scheduleCap": "Up to 24 hours",
