@@ -725,6 +725,31 @@ func (cs *ChatSession) Fork(ctx context.Context, mcps []store.McpServer) (ForkRe
 	if len(skipped) > 0 {
 		slog.Warn("mcp servers skipped (transport unsupported by harness)", "cwd", cs.WorkDir, "skipped", skipped)
 	}
+	// Fork-window replay suppression (same shape as ResumeChatSession's, #79
+	// neighborhood): opencode replays the forked session's recent messages as
+	// session/update DURING the fork RPC. Those updates carry the NEW fork
+	// session id — they belong to the fork's transcript, not the source's. Our
+	// handler flattens with the wire session id and chat.handleEvent pins
+	// events onto the SOURCE liveSession, so unsuppressed replay would (a)
+	// flash duplicate bubbles in the source UI and (b) pollute the source
+	// in-memory timeline index. Only content kinds are dropped; session-level
+	// metadata (available_commands / config_option / usage) passes through.
+	// The fork row's own history comes from the DB lineage query (#172
+	// Phase 3), never from this replay — so dropping is lossless for us.
+	if cs.Handler != nil {
+		realOnEvent := cs.Handler.OnEvent
+		cs.Handler.OnEvent = func(e SessionEvent) {
+			switch e.Kind {
+			case "agent_message_chunk", "agent_thought_chunk", "user_message_chunk",
+				"tool_call", "tool_call_update", "plan", "plan_update", "plan_removed":
+				return // forked-session replay: not the source's transcript
+			}
+			if realOnEvent != nil {
+				realOnEvent(e)
+			}
+		}
+		defer func() { cs.Handler.OnEvent = realOnEvent }()
+	}
 	resp, err := cs.Conn.UnstableForkSession(ctx, acp.UnstableForkSessionRequest{
 		SessionId:  cs.SessionID,
 		Cwd:        cs.WorkDir,
