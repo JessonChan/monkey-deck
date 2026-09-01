@@ -82,6 +82,15 @@ func newForkTestSource(t *testing.T) (*ChatService, *store.Project, *store.Sessi
 	if err := st.SetSessionWorktree(svc.ctx, se.ID, wtPath, "md/srcbranch"); err != nil {
 		t.Fatal(err)
 	}
+	// #172 Phase 3: the empty-conversation guard rejects sources with no
+	// messages — seed one exchange so forking is meaningful (and so the fork
+	// row's watermark is a real seq).
+	if _, err := st.AppendMessage(svc.ctx, se.ID, "user", "", "hello", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendMessage(svc.ctx, se.ID, "agent", "", "hi", ""); err != nil {
+		t.Fatal(err)
+	}
 	// Keep the in-memory view aligned with the DB row (production CreateSession
 	// does the same after SetSessionWorktree) — assertions compare against it.
 	se.WorktreePath, se.Branch = wtPath, "md/srcbranch"

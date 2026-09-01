@@ -265,6 +265,14 @@ func TestForkSessionFakeAgentDeclared(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// #172 Phase 3: empty-conversation guard — seed an exchange first.
+	if _, err := st.AppendMessage(svc.ctx, se.ID, "user", "", "hello", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendMessage(svc.ctx, se.ID, "agent", "", "hi", ""); err != nil {
+		t.Fatal(err)
+	}
+
 	fresh, err := svc.ForkSession(se.ID)
 	if err != nil {
 		t.Fatalf("ForkSession: %v", err)
@@ -310,5 +318,27 @@ func TestForkSessionFakeAgentDeclared(t *testing.T) {
 	// configOptions cache from the fork response (echoed model option).
 	if !strings.Contains(got.ConfigOptionsCache, "fake-model") {
 		t.Fatalf("config cache should carry the fork response's model option, got %q", got.ConfigOptionsCache)
+	}
+
+	// #172 Phase 3 lineage: the fork row carries a real watermark and its
+	// transcript view = source prefix (offsets -N..-1) + its own rows; source
+	// rows appended AFTER the fork must not leak into the fork's view.
+	if got.ForkBaseSeq != 2 {
+		t.Fatalf("fork_base_seq = %d, want 2 (source max seq at fork time)", got.ForkBaseSeq)
+	}
+	st.AppendMessage(svc.ctx, se.ID, "user", "", "post-fork source-only", "")
+	view, err := svc.LoadMessagesPage(fresh.ID, 0, 50)
+	if err != nil {
+		t.Fatalf("fork transcript view: %v", err)
+	}
+	joined := ""
+	for _, m := range view {
+		joined += m.Content
+	}
+	if joined != "hellohi" {
+		t.Fatalf("fork transcript = %q, want %q (post-fork source message excluded)", joined, "hellohi")
+	}
+	if len(view) > 0 && view[len(view)-1].SessionID != fresh.ID {
+		t.Fatalf("base rows must be presented under the fork's session id")
 	}
 }

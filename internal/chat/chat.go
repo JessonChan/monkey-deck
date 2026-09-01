@@ -1068,7 +1068,13 @@ func (s *ChatService) DeleteSession(sessionID string) error {
 
 // errForkSourceBusy 源 session 一轮对话进行中(prompting/executing)拒绝 fork(#172 铁律③:
 // forked session 串行使用 —— 源忙拒绝在先;fork 之后源与 fork 的并发 prompt 不做运行时互斥)。
+
+// errForkSourceEmpty the source session has no messages yet (#172 Phase 3):
+// forking an empty conversation replicates nothing — a new session is the
+// same thing. Human-readable per §4.4 (surfaces verbatim in the error toast).
+var errForkSourceEmpty = errors.New("会话还没有任何对话,直接新建会话即可")
 var errForkSourceBusy = errors.New("源会话正在对话中,请等回合结束后再分叉")
+
 
 // ForkSession forks a session (#172 Phase 2): replicates the source ACP session
 // at its CURRENT conversation end (the protocol has no position parameter) into
@@ -1099,6 +1105,17 @@ func (s *ChatService) ForkSession(sourceSessionID string) (*store.Session, error
 	if s.isBusy(sourceSessionID) {
 		return nil, errForkSourceBusy
 	}
+	// #172 Phase 3: forking an empty conversation is meaningless — the harness
+	// would replicate a context-less session and the row would carry a fork
+	// badge with nothing under it. A brand-new session is the same thing.
+	// (Rejected BEFORE ensureLive: no reason to spawn a harness for this.)
+	hasMsgs, err := s.st.SessionHasMessages(s.ctx, sourceSessionID)
+	if err != nil {
+		return nil, fmt.Errorf("fork: check source messages: %w", err)
+	}
+	if !hasMsgs {
+		return nil, errForkSourceEmpty
+	}
 	// Fork needs a live harness holding the source ACP session: lazily spawn +
 	// resume when not active (readonly / after restart). This also yields the
 	// authoritative declared bit behind CanFork.
@@ -1117,6 +1134,17 @@ func (s *ChatService) ForkSession(sourceSessionID string) (*store.Session, error
 	mcps, err := s.st.GetSessionMcpServers(s.ctx, sourceSessionID)
 	if err != nil {
 		return nil, fmt.Errorf("fork: load source mcp selection: %w", err)
+	}
+	// Watermark (#172 Phase 3): capture the source's max message seq at the
+	// last moment before the RPC — the fork's shared prefix is exactly the
+	// source messages with seq <= this value. The source is idle (busy guard
+	// above), so no new rows can appear between here and the fork RPC; a
+	// queued message cannot start a turn while we hold nothing else, and even
+	// if a turn raced in AFTER the fork, those later seqs are excluded by the
+	// watermark — which is the point of recording it.
+	srcMaxSeq, err := s.st.MaxSessionMessageSeq(s.ctx, sourceSessionID)
+	if err != nil {
+		return nil, fmt.Errorf("fork: read source watermark: %w", err)
 	}
 	res, err := ls.chat.Fork(s.ctx, mcps)
 	if err != nil {
@@ -1142,15 +1170,24 @@ func (s *ChatService) ForkSession(sourceSessionID string) (*store.Session, error
 	} else {
 		fresh.ForkedFrom = se.ID
 	}
+	if err := s.st.SetSessionForkBaseSeq(s.ctx, fresh.ID, srcMaxSeq); err != nil {
+		slog.Warn("persist fork watermark", "err", err)
+	} else {
+		fresh.ForkBaseSeq = srcMaxSeq
+	}
 	// Pin the fork's ACP session id immediately: the forked context lives
-	// harness-side (our DB copies no messages), so the next open must RESUME
-	// into the forked session — not spawn a fresh, context-less one.
+	// harness-side, so the next open must RESUME into the forked session —
+	// not spawn a fresh, context-less one. FATAL on failure (#172 Phase 3):
+	// an unpinned row would silently open as a NEW session (empty context)
+	// while wearing a fork badge — worse than surfacing the error. The row
+	// may already exist; best-effort cleanup, the error is the return value.
 	if err := s.st.UpdateSessionACP(s.ctx, fresh.ID, res.NewSessionID, fresh.Title); err != nil {
-		slog.Warn("persist fork acp session id", "err", err)
+		_ = s.st.DeleteSession(s.ctx, fresh.ID)
+		return nil, fmt.Errorf("fork: persist acp session id: %w", err)
 	}
 	fresh.ACPSession = res.NewSessionID
 	s.persistConfigCache(fresh.ID, res.ConfigOptions)
-	slog.Info("session forked", "source", sourceSessionID, "fork", fresh.ID, "acpSession", res.NewSessionID)
+	slog.Info("session forked", "source", sourceSessionID, "fork", fresh.ID, "acpSession", res.NewSessionID, "watermark", srcMaxSeq)
 	return fresh, nil
 }
 
@@ -2079,15 +2116,95 @@ func (s *ChatService) awaitStability(sessionID string, stop <-chan struct{}) boo
 	}
 }
 
-// LoadMessages 取某 session 的全部历史消息(打开 session 时渲染)。
+// LoadMessages returns a session's OWN messages (no lineage merge). It is not
+// used to render a fork's transcript — that goes through LoadMessagesPage
+// (forkLineagePage), which presents the fork's view as source prefix + its own
+// messages. Kept as the raw-read helper for callers that want a session's real
+// rows only.
 func (s *ChatService) LoadMessages(sessionID string) ([]store.Message, error) {
 	return s.st.ListMessages(s.ctx, sessionID)
 }
 
 // LoadMessagesPage 分页取历史消息(beforeSeq<=0 取最新一页)。返回 limit+1 条:
 // 前端用 len > limit 判断 hasMore,多出的那条 slice 掉。首次打开 session 用此方法做懒加载。
+//
+// #172 Phase 3 lineage view: a fork row's transcript = the SOURCE's messages
+// up to the recorded watermark (fork_base_seq) followed by the fork's own.
+// The base prefix is presented with NEGATIVE seq offsets (m.seq - watermark - 1
+// ∈ [-N,-1]) so the merged list is globally ascending under one cursor and the
+// frontend's pagination (beforeSeq cursor, hasMore, prepend) works unchanged.
 func (s *ChatService) LoadMessagesPage(sessionID string, beforeSeq int64, limit int) ([]store.Message, error) {
-	return s.st.ListMessagesBefore(s.ctx, sessionID, beforeSeq, limit)
+	se, err := s.st.GetSession(s.ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if se == nil || se.ForkedFrom == "" || se.ForkBaseSeq <= 0 {
+		return s.st.ListMessagesBefore(s.ctx, sessionID, beforeSeq, limit)
+	}
+	return s.forkLineagePage(se, beforeSeq, limit)
+}
+
+// forkLineagePage pages through a fork's merged transcript: own messages
+// first (newest backwards), then the source's watermarked prefix. Rows are
+// returned ascending; the caller's +1 probe semantics are preserved (the
+// combined result may be limit+1 long).
+func (s *ChatService) forkLineagePage(fork *store.Session, beforeSeq int64, limit int) ([]store.Message, error) {
+	const pre = 1 // probe extra
+	// Own rows live in seq space [1,∞). A NEGATIVE cursor has already paged
+	// past every own row → skip the own query entirely (asking with cursor 0
+	// would re-fetch the newest own page and loop the cursor back up).
+	var own []store.Message
+	if beforeSeq >= 0 {
+		ownBefore := beforeSeq
+		var err error
+		own, err = s.st.ListMessagesBefore(s.ctx, fork.ID, ownBefore, limit+pre)
+		if err != nil {
+			return nil, err
+		}
+		if len(own) > limit+pre {
+			own = own[:limit+pre]
+		}
+	}
+	// Base rows: needed when the own page runs dry (or the cursor has already
+	// crossed into the negative range). Base seq offset: m.seq - watermark - 1,
+	// so the newest base row maps to -1, older ones to -2, -3, …
+	need := limit + pre - len(own)
+	cursorInBase := beforeSeq < 0
+	var base []store.Message
+	if need > 0 || cursorInBase {
+		srcBefore := fork.ForkBaseSeq
+		if cursorInBase {
+			// beforeSeq is an offset (m.seq - watermark - 1); the source rows
+			// STRICTLY older than the cursor row are seq < offset+watermark+1,
+			// i.e. seq <= offset+watermark — no +1 here, ListMessagesUpToSeq
+			// is inclusive and the cursor row itself must be excluded.
+			srcBefore = beforeSeq + fork.ForkBaseSeq
+		}
+		var err error
+		base, err = s.st.ListMessagesUpToSeq(s.ctx, fork.ForkedFrom, srcBefore)
+		if err != nil {
+			return nil, err
+		}
+		// base arrives ASCENDING (oldest→newest). Keep the NEWEST `need` rows
+		// (the tail) — paging backwards through the base wants its newest
+		// rows first. Still ascending after the tail-cut; offset in place.
+		if len(base) > need {
+			base = base[len(base)-need:]
+		}
+		for i := range base {
+			base[i].SessionID = fork.ID
+			base[i].Seq = base[i].Seq - fork.ForkBaseSeq - 1
+		}
+	}
+	// Merge ASCENDING: base (negative offsets) strictly precedes own (positive
+	// seqs) — chronological order — then trim to limit+pre from the HEAD
+	// (keep the newest window; the head rows are older than the cursor's page
+	// and are fetched by the next page).
+	merged := append(base, own...)
+	if len(merged) > limit+pre {
+		merged = merged[len(merged)-(limit+pre):]
+	}
+	return merged, nil
 }
 
 // ListUserMessages 取某 session 全部用户消息文本(按时间升序,无长度限制)。
