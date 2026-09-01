@@ -144,6 +144,57 @@ func forkRows(f *ForkReport) map[string]CheckResult {
 	}
 }
 
+// TestResumeChatSessionUndeclaredResumeWorks — CodeBuddy-like harness that
+// implements session/resume but omits the capability declaration (under-declare).
+// The recovery path must NOT hard-fail on the declaration gate; it attempts
+// session/resume anyway and succeeds. Regression for the CodeBuddy
+// "resume session: harness does not advertise sessionCapabilities.resume" error.
+func TestResumeChatSessionUndeclaredResumeWorks(t *testing.T) {
+	cs := resumeAgainstFake(t, "undeclared-resume-works")
+	defer cs.Close()
+	if cs == nil {
+		t.Fatal("expected a ChatSession (resume succeeded without declaration)")
+	}
+}
+
+// TestResumeChatSessionFallsBackToLoad — a harness that neither declares nor
+// implements session/resume (RPC fails with -32601) but declares loadSession.
+// The recovery path must degrade to session/load (context-preserving) instead
+// of failing the reopen and dropping conversation history.
+func TestResumeChatSessionFallsBackToLoad(t *testing.T) {
+	cs := resumeAgainstFake(t, "load-only")
+	defer cs.Close()
+	if cs == nil {
+		t.Fatal("expected a ChatSession recovered via session/load fallback")
+	}
+}
+
+// resumeAgainstFake spawns the fake harness child in the given mode and drives
+// ResumeChatSession for the seeded fake session. Returns the resulting
+// ChatSession (or fails the test on error).
+func resumeAgainstFake(t *testing.T, mode string) *ChatSession {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(exe, " \t") {
+		t.Skipf("test binary path contains spaces: %s", exe)
+	}
+	t.Setenv("MD_FAKE_HARNESS_CHILD", "1")
+	t.Setenv("MD_FAKE_HARNESS_MODE", mode)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	runner := NewRunner(fmt.Sprintf("%s -test.run=^TestFakeAgentHelper$ --", exe), nil)
+	cs, err := runner.ResumeChatSession(ctx, t.TempDir(), "fake-sess-1", nil, func(SessionEvent) {}, nil, nil)
+	if err != nil {
+		t.Fatalf("ResumeChatSession (mode=%s): %v", mode, err)
+	}
+	return cs
+}
+
 // TestFakeAgentHelper is not a real test: with MD_FAKE_HARNESS_CHILD=1 it acts
 // as the fake harness child process; without the env var it returns
 // immediately so normal test runs are unaffected.
@@ -177,6 +228,17 @@ func TestFakeAgentHelper(t *testing.T) {
 // unknown gets -32601.
 func fakeAgentMain() {
 	declared := os.Getenv("MD_FAKE_HARNESS_MODE") == "declared"
+	// Scenario knobs (beyond the two fork-probe modes):
+	//   undeclared-resume-works — CodeBuddy-like: resume NOT declared in
+	//     initialize, but the session/resume RPC actually succeeds (under-declare).
+	//   load-only — resume NOT declared AND session/resume fails on the wire, but
+	//     loadSession is declared and session/load succeeds (the true fallback case).
+	// Both default to false for the ""/undeclared and "declared" modes.
+	mode := os.Getenv("MD_FAKE_HARNESS_MODE")
+	resumeWorks := declared || mode == "undeclared-resume-works"
+	loadWorks := declared || mode == "undeclared-resume-works" || mode == "load-only"
+	loadDeclared := declared || mode == "undeclared-resume-works" || mode == "load-only"
+
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	out := bufio.NewWriter(os.Stdout)
@@ -261,7 +323,7 @@ func fakeAgentMain() {
 					"protocolVersion": 1,
 					// agentInfo intentionally omitted — the regression scenario.
 					"agentCapabilities": map[string]any{
-						"loadSession":         declared,
+						"loadSession":         loadDeclared,
 						"promptCapabilities":  map[string]any{},
 						"sessionCapabilities": sessCaps,
 					},
@@ -342,8 +404,27 @@ func fakeAgentMain() {
 				"id":      m.ID,
 				"result":  map[string]any{"sessions": list},
 			})
-		case "session/load", "session/resume":
-			if !declared {
+		case "session/resume":
+			if !resumeWorks {
+				defaultErr()
+				continue
+			}
+			if !sessions[m.Params.SessionId] {
+				enc(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      m.ID,
+					"error":   map[string]any{"code": -32602, "message": "unknown session: " + m.Params.SessionId},
+				})
+				continue
+			}
+			opts, _ := sessionConfig()
+			enc(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      m.ID,
+				"result":  withModes(map[string]any{"configOptions": opts}),
+			})
+		case "session/load":
+			if !loadWorks {
 				defaultErr()
 				continue
 			}

@@ -166,12 +166,14 @@ func (r *Runner) ResumeChatSession(ctx context.Context, workDir, sessionID strin
 	if err != nil {
 		return nil, err
 	}
-	// Protocol MUST: verify session/resume capability before calling it
-	// (session-setup.mdx — Clients MUST check sessionCapabilities.resume, MUST NOT call otherwise).
-	if initResp.AgentCapabilities.SessionCapabilities.Resume == nil {
-		proc.shutdown()
-		return nil, fmt.Errorf("resume session: harness does not advertise sessionCapabilities.resume")
-	}
+	// Preferred recovery path is session/resume (§1.4). A few harnesses (CodeBuddy)
+	// implement session/resume but under-declare it — they omit sessionCapabilities.resume
+	// (or even the whole sessionCapabilities block) yet their resume RPC succeeds and
+	// restores full context. So declaring the capability is not a hard prerequisite: we
+	// always attempt session/resume, and only degrade when its RPC actually fails
+	// (see the load fallback below). Note the protocol only says clients MUST NOT call
+	// session/resume when UNSUPPORTED — attempting it is a best-effort that costs nothing
+	// and succeeds for these under-declaring harnesses.
 	// Suppress history events the harness replays during resume: the frontend already
 	// loaded them from the DB, replay would render duplicates. Never a blanket drop —
 	// available_commands is session-level metadata (not in the load response, not in the
@@ -200,23 +202,46 @@ func (r *Runner) ResumeChatSession(ctx context.Context, workDir, sessionID strin
 	if len(skipped) > 0 {
 		slog.Warn("mcp servers skipped (transport unsupported by harness)", "cwd", workDir, "skipped", skipped)
 	}
-	resumeResp, err := conn.ResumeSession(ctx, acp.ResumeSessionRequest{
+	resumeResp, resumeErr := conn.ResumeSession(ctx, acp.ResumeSessionRequest{
 		SessionId:  acp.SessionId(sessionID),
 		Cwd:        workDir,
 		McpServers: acpServers,
 	})
-	handler.OnEvent = liveOnEvent // keep rotate-once tagging active for post-resume chunks (#79)
-	if err != nil {
-		proc.shutdown()
-		return nil, fmt.Errorf("load session: %w", err)
+	configOptions := []acp.SessionConfigOption(nil)
+	if resumeErr != nil {
+		// session/resume is the preferred recovery path; when its RPC genuinely
+		// fails, degrade to session/load (context-preserving replay) if the harness
+		// advertises loadSession. Never fall back to a context-less session/new —
+		// that would silently drop the conversation history (§1.4/§7).
+		// The suppression window stays armed through this fallback so the replayed
+		// history (which the frontend already has from the DB) is still dropped.
+		if !initResp.AgentCapabilities.LoadSession {
+			proc.shutdown()
+			return nil, fmt.Errorf("load session: %w", resumeErr)
+		}
+		loadResp, lerr := conn.LoadSession(ctx, acp.LoadSessionRequest{
+			SessionId:  acp.SessionId(sessionID),
+			Cwd:        workDir,
+			McpServers: acpServers,
+		})
+		if lerr != nil {
+			proc.shutdown()
+			return nil, fmt.Errorf("resume session: resume: %w; load fallback: %w", resumeErr, lerr)
+		}
+		configOptions = loadResp.ConfigOptions
+		slog.Info("session/resume failed, recovered via session/load",
+			"sessionId", sessionID, "resumeErr", resumeErr.Error())
+	} else {
+		configOptions = resumeResp.ConfigOptions
 	}
+	handler.OnEvent = liveOnEvent // keep rotate-once tagging active for post-resume chunks (#79)
 	slog.Info("chat session loaded", "sessionId", sessionID, "cwd", workDir)
 	cs := &ChatSession{
 		Runner: r, proc: proc, Conn: conn, Handler: handler, SessionID: acp.SessionId(sessionID), WorkDir: workDir,
 		CanListSessions:    initResp.AgentCapabilities.SessionCapabilities.List != nil,
 		canFork:            initResp.AgentCapabilities.SessionCapabilities.Fork != nil,
 		mcpCaps:            initResp.AgentCapabilities.McpCapabilities,
-		ConfigOptions:      resumeResp.ConfigOptions,
+		ConfigOptions:      configOptions,
 		PromptCapabilities: initResp.AgentCapabilities.PromptCapabilities,
 	}
 	registerHarness(proc.pgid)
