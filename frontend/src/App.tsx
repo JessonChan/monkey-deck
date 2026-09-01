@@ -1407,11 +1407,26 @@ export default function App() {
   // clears the stop intent). The cancelled turn emits no idle, so status stays
   // prompting and auto-continue is not falsely triggered. attachments reuse the
   // array stored verbatim in the queue snapshot (built at enqueue time).
+  // Recurring items (#184) never take that path: revoking deletes the row and
+  // loses repeatEveryMs/sentCount/scheduledAt (= silently cancelling the loop),
+  // and a manual InterruptAndSend would double-send (the queued row drains again
+  // from the tail). ScheduleQueueItem(now) marks the item due immediately; the
+  // backend then sends it with the loop state intact — right away when idle, at
+  // the current turn's tail drain when busy — and the post-send reschedule
+  // re-anchors from the real send (#176).
   const interruptQueue = useCallback(async (id: string) => {
     const sid = selectedSessionIdRef.current;
     if (!sid) return;
     const item = (queueBySessionRef.current[sid] || []).find((x) => x.id === id);
     if (!item) return;
+    if ((item.repeatEveryMs ?? 0) > 0) {
+      try {
+        await ChatService.ScheduleQueueItem(sid, item.id, Date.now());
+      } catch (e) {
+        setErrorMessage(extractErrMsg(e));
+      }
+      return;
+    }
     setErrorMessage(null); setNotice(null);
     setStatusBySession((prev) => ({ ...prev, [sid]: "prompting" }));
     try {
