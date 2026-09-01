@@ -1,13 +1,14 @@
-// Mount-test Sidebar session renamed marker (#154, phase 2 state-typed).
+// Mount-test Sidebar session renamed marker (#178 revert of the #154 phase-2
+// state-typed slotting).
 //
 // Pins the rename-indicator contract end-to-end from props down to what a user
 // can see and hover:
-//  1. Idle renamed rows (custom_title set, statusBySession !== "prompting")
-//     show the quiet pencil at the title TAIL — the label's next sibling,
-//     ahead of the meta cluster.
-//  2. Prompting rows keep the pencil AHEAD of the title (front slot constant
-//     for the whole turn).
-//  3. Both slots wire the md-tip tooltip to the sidebar.renamedTip key; the
+//  1. Renamed rows (custom_title set) show the quiet pencil AHEAD of the
+//     title — the label's previous sibling — in EVERY state, idle included
+//     (#178 reverted the idle tail slot).
+//  2. Prompting rows hold the same position: one constant slot, no state
+//     typing.
+//  3. The marker wires the md-tip tooltip to the sidebar.renamedTip key; the
 //     real zh/en locale copy is pinned too (「用户重命名」 / "Renamed by user").
 //  4. Native (auto-titled) rows render zero marker in either state.
 //  5. Coexistence: a renamed+pinned row keeps the same height as a plain row
@@ -158,8 +159,8 @@ beforeEach(() => {
   localStorage.clear();
 });
 
-describe("Sidebar session renamed marker (#154)", () => {
-  test("1. idle renamed row: pencil at title tail, ahead of the meta cluster", async () => {
+describe("Sidebar session renamed marker (#178 revert)", () => {
+  test("1. idle renamed row: pencil ahead of the title (#178 reverted tail slot)", async () => {
     const { host } = await mounted({ p1: [sess("s1", "p1", { customTitle: "my title" })] });
 
     const mark = host.querySelector<HTMLElement>('[data-testid="renamed-s1"]');
@@ -168,11 +169,11 @@ describe("Sidebar session renamed marker (#154)", () => {
     expect(mark!.querySelector("svg")).not.toBeNull();
 
     // Idle (no status entry → st !== "prompting"): the marker is the label's
-    // direct NEXT sibling inside the row main button (dot → title → pencil),
-    // ahead of the meta cluster occupying the tail slots.
+    // direct PREVIOUS sibling inside the row main button (dot → pencil →
+    // title) — #178 put the pencil back ahead of the title in every state.
     const main = host.querySelector<HTMLElement>('[data-testid="session-s1"] .session-item-main')!;
     const label = main.querySelector<HTMLElement>(".session-label")!;
-    expect(label.nextElementSibling).toBe(mark);
+    expect(label.previousElementSibling).toBe(mark);
 
     // Tooltip payload: the marker requests exactly the renamedTip key.
     expect(mark!.getAttribute("data-tooltip-id")).toBe("md-tip");
@@ -183,7 +184,7 @@ describe("Sidebar session renamed marker (#154)", () => {
     expect((en as Record<string, any>).sidebar.renamedTip).toBe("Renamed by user");
   });
 
-  test("2. prompting renamed row: pencil ahead of the title — front slot constant", async () => {
+  test("2. prompting renamed row: pencil ahead of the title — same constant slot", async () => {
     const { host } = await mounted(
       { p1: [sess("s1", "p1", { customTitle: "my title" })] },
       { statusBySession: { s1: "prompting" } },
@@ -198,7 +199,7 @@ describe("Sidebar session renamed marker (#154)", () => {
     const label = main.querySelector<HTMLElement>(".session-label")!;
     expect(label.previousElementSibling).toBe(mark);
 
-    // Same tooltip contract in the front slot.
+    // Same tooltip contract.
     expect(mark!.getAttribute("data-tooltip-id")).toBe("md-tip");
     expect(mark!.getAttribute("data-tooltip-content")).toBe("sidebar.renamedTip");
   });
@@ -217,7 +218,7 @@ describe("Sidebar session renamed marker (#154)", () => {
   });
 
   test("4. coexists with pin: row height unchanged in both states + CSS family contract", async () => {
-    // Idle (tail slot): renamed+pinned row present, geometry matches a plain row.
+    // Idle: renamed+pinned row present, geometry matches a plain row.
     const { host } = await mounted({
       p1: [sess("s1", "p1", { customTitle: "renamed", pinned: true }), sess("s2", "p1")],
     });
@@ -231,7 +232,7 @@ describe("Sidebar session renamed marker (#154)", () => {
     const r2 = host.querySelector<HTMLElement>('[data-testid="session-s2"]')!;
     expect(r1.offsetHeight).toBe(r2.offsetHeight);
 
-    // Prompting (front slot): same height discipline.
+    // Prompting: same height discipline.
     const act = await mounted(
       { p1: [sess("s3", "p1", { customTitle: "renamed", pinned: true }), sess("s4", "p1")] },
       { statusBySession: { s3: "prompting" } },
