@@ -162,7 +162,7 @@ func TestMigration0022ColumnShape(t *testing.T) {
 // read-path test above; this pins the expected count so an accidental edit
 // cannot pass unnoticed.
 func TestSessionColumnsCount(t *testing.T) {
-	if got := len(strings.Split(sessionColumns, ",")); got != 27 {
-		t.Fatalf("sessionColumns has %d columns, want 27 (0001..0023)", got)
+	if got := len(strings.Split(sessionColumns, ",")); got != 28 {
+		t.Fatalf("sessionColumns has %d columns, want 28 (0001..0024)", got)
 	}
 }

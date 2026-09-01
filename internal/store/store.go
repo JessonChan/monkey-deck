@@ -99,6 +99,11 @@ type Session struct {
 	// Empty = not a fork. Lineage only this phase — no UI marking, no cascade
 	// semantics; the fork shares the source's worktree (same-cwd fork).
 	ForkedFrom string `json:"forkedFrom,omitempty"`
+	// ForkBaseSeq:the source session's max message seq at fork time (0024,
+	// #172 Phase 3). The fork's transcript = source messages seq <= ForkBaseSeq
+	// plus its own messages (lineage query, no copies). 0 = no watermark
+	// (non-fork, or a pre-v24 fork row).
+	ForkBaseSeq int64 `json:"forkBaseSeq,omitempty"`
 }
 
 // New 打开(或创建)SQLite 并跑迁移。dbPath 为空时用内存库(测试用)。

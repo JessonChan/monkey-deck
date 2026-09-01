@@ -11,7 +11,7 @@ import (
 )
 
 // sessionColumns / scanSession:统一 session 的列与扫描,避免多处 SELECT/Scan 漂移(§1.5)。
-const sessionColumns = `id,project_id,acp_session_id,title,custom_title,model,harness,worktree_path,branch,base_ref,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,config_options_cache,tags,commands_cache,forked_from`
+const sessionColumns = `id,project_id,acp_session_id,title,custom_title,model,harness,worktree_path,branch,base_ref,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,config_options_cache,tags,commands_cache,forked_from,fork_base_seq`
 
 func scanSession(r interface {
 	Scan(dest ...any) error
@@ -21,7 +21,7 @@ func scanSession(r interface {
 		&se.WorktreePath, &se.Branch, &se.BaseRef,
 		&se.UsedTokens, &se.SizeTokens, &se.Cost,
 		&se.CachedReadTokens, &se.CachedWriteTokens, &se.InputTokens, &se.OutputTokens, &se.ThoughtTokens, &se.TotalTokens,
-		&se.CreatedAt, &se.UpdatedAt, &se.PromptedAt, &se.Pinned, &se.ConfigOptionsCache, &tags, &commandsCache, &se.ForkedFrom)
+		&se.CreatedAt, &se.UpdatedAt, &se.PromptedAt, &se.Pinned, &se.ConfigOptionsCache, &tags, &commandsCache, &se.ForkedFrom, &se.ForkBaseSeq)
 	if err != nil {
 		return err
 	}
@@ -269,6 +269,42 @@ func (s *Store) SetSessionForkedFrom(ctx context.Context, id, forkedFrom string)
 		`UPDATE sessions SET forked_from=? WHERE id=?`,
 		forkedFrom, id)
 	return err
+}
+
+// SetSessionForkBaseSeq records the fork watermark (0024, #172 Phase 3): the
+// source session's max message seq at fork time. Written together with
+// forked_from in the same fork flow. 0 = unset.
+func (s *Store) SetSessionForkBaseSeq(ctx context.Context, id string, seq int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET fork_base_seq=? WHERE id=?`,
+		seq, id)
+	return err
+}
+
+// ListMessagesUpToSeq lists a session's messages with seq <= maxSeq, in seq
+// ascending order (same shape as ListMessages). Powers the fork lineage
+// transcript: the fork's shared prefix is the source's messages up to the
+// recorded watermark. maxSeq <= 0 returns nothing (no watermark, no prefix).
+func (s *Store) ListMessagesUpToSeq(ctx context.Context, sessionID string, maxSeq int64) ([]Message, error) {
+	if maxSeq <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id,session_id,role,kind,content,tool_call_id,turn_id,entry_key,seq,created_at FROM messages WHERE session_id=? AND seq<=? ORDER BY seq ASC`,
+		sessionID, maxSeq)
+	if err != nil {
+		return nil, fmt.Errorf("list messages up to seq: %w", err)
+	}
+	defer rows.Close()
+	var out []Message
+	for rows.Next() {
+		var m Message
+		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Kind, &m.Content, &m.ToolCallID, &m.TurnID, &m.EntryKey, &m.Seq, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // SessionsByWorktreePath lists every session mounted at worktreePath under projectID

@@ -110,6 +110,19 @@ func (s *Store) SessionHasMessages(ctx context.Context, sessionID string) (bool,
 	return exists == 1, nil
 }
 
+// MaxSessionMessageSeq returns the session's current max message seq (0 when
+// the session has no messages). Powers the fork watermark (#172 Phase 3): the
+// value captured at fork time bounds the fork's lineage query into the source.
+func (s *Store) MaxSessionMessageSeq(ctx context.Context, sessionID string) (int64, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(seq),0) FROM messages WHERE session_id=?`, sessionID)
+	var seq int64
+	if err := row.Scan(&seq); err != nil {
+		return 0, fmt.Errorf("max session message seq: %w", err)
+	}
+	return seq, nil
+}
+
 // ListMessages 列出某 session 全部消息(按 seq 升序)。
 func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx,
