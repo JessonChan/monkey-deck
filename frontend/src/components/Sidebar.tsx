@@ -1033,26 +1033,44 @@ export default function Sidebar(props: Props) {
                               <GitFork size={12} />
                             </span>
                           ) : null}
-                          {/* #174 inline tag dot family: up to 3 hash-colored dots
-                              in the meta cluster, same tagColor() source as the
-                              filter panel and the ctx menu (three surfaces, one
-                              palette). Tags beyond 3 fold into the wrapper
-                              tooltip; no tags → no footprint. 6px dots keep the
-                              row height untouched. */}
+                          {/* #181 inline tag chips: revives #150's named chips,
+                              replacing #174's dot family. Up to 3 named chips
+                              in the meta cluster (after the fork badge, before
+                              pin), same tagColor() source as the filter panel
+                              and the ctx menu (three surfaces, one palette).
+                              Tags beyond 3 fold into one +N overflow chip
+                              whose tooltip lists the full set; no tags → no
+                              footprint. 14px chips keep the row height
+                              untouched. Chip tooltip = the tag name, so an
+                              ellipsized chip still reveals its full text. */}
                           {(() => {
                             const rowTags = s.tags ?? [];
                             if (rowTags.length === 0) return null;
                             return (
-                              <span
-                                className="session-tag-dots"
-                                data-testid={`tag-dots-${s.id}`}
-                                data-tooltip-id="md-tip"
-                                data-tooltip-content={t("sidebar.tagDotsTip", { tags: rowTags.join(", ") })}
-                              >
+                              <>
                                 {rowTags.slice(0, 3).map((tag) => (
-                                  <span key={tag} className="session-tag-dot" style={{ background: tagColor(tag) }} />
+                                  <span
+                                    key={tag}
+                                    className="session-tag-chip"
+                                    style={{ background: tagColor(tag) }}
+                                    data-tooltip-id="md-tip"
+                                    data-tooltip-content={tag}
+                                    data-testid={`tagchip-${s.id}-${tag}`}
+                                  >
+                                    {tag}
+                                  </span>
                                 ))}
-                              </span>
+                                {rowTags.length > 3 && (
+                                  <span
+                                    className="session-tag-more"
+                                    data-tooltip-id="md-tip"
+                                    data-tooltip-content={t("sidebar.tagDotsTip", { tags: rowTags.join(", ") })}
+                                    data-testid={`tagchip-more-${s.id}`}
+                                  >
+                                    +{rowTags.length - 3}
+                                  </span>
+                                )}
+                              </>
                             );
                           })()}
                           {s.pinned && (
