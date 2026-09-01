@@ -195,6 +195,9 @@ export default function Sidebar(props: Props) {
   // model. null = no keyboard cursor (mouse-only / idle).
   const [kbdSelectIdx, setKbdSelectIdx] = useState<number | null>(null);
   const kbdActiveRef = useRef<HTMLDivElement>(null);
+  // Component-root ref (#180): scopes the selected-session row lookup to this
+  // sidebar's own DOM (both render branches share the `session-<id>` testid).
+  const rootRef = useRef<HTMLElement>(null);
 
   // Scheduled-send due-soon wake (#141): re-render exactly when the nearest pending
   // schedule crosses the DUE_SOON_MS threshold so the alarm chip gains .is-due-soon
@@ -697,6 +700,46 @@ export default function Sidebar(props: Props) {
     kbdActiveRef.current?.scrollIntoView({ block: "nearest" });
   }, [kbdSelectIdx]);
 
+  // #180: keep the selected session's row visible the same way — the selection
+  // can change without any pointer interaction near the sidebar (tab-bar
+  // switching, restore on mount), leaving the row scrolled away or beyond the
+  // rendered pagination slice. The row is located by its actual DOM node (both
+  // render branches share the `session-<id>` testid on .session-item-row);
+  // an unlocatable row (collapsed project / filtered out / unknown id) is a
+  // silent no-op — never an error. Cross-pagination: when the row is not
+  // rendered but its project hides more pages, open ONE page per effect run
+  // with the exact setSessionLimit increment (and visibility guards) the
+  // manual "load more" button uses, then re-run via scrollTick until the row
+  // appears or the list is exhausted. An id absent from the full list never
+  // paginates.
+  const [scrollTick, setScrollTick] = useState(0);
+  useEffect(() => {
+    const id = props.selectedSessionId;
+    if (!id) return;
+    const row = rootRef.current?.querySelector<HTMLElement>(`[data-testid="session-${id}"]`);
+    if (row) {
+      row.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    // Row not rendered. Pagination can reveal it only if some project holds
+    // the id (unknown id → zero pagination), that project is expanded, no
+    // search/tag filter bypasses the slice (same precondition as the
+    // load-more button) and pages remain hidden.
+    let projId: string | null = null;
+    for (const [pid, list] of Object.entries(props.sessionsByProject)) {
+      if (list.some((s) => s.id === id)) { projId = pid; break; }
+    }
+    const pid = projId;
+    if (pid == null || !expanded.has(pid)) return;
+    if ((searchProj === pid && searchQ.trim() !== "") || (tagFilter[pid] ?? []).length > 0) return;
+    const hiddenCount = Math.max(0, (props.sessionsByProject[pid]?.length ?? 0) - (sessionLimit[pid] ?? SESSION_PAGE));
+    if (hiddenCount <= 0) return;
+    // Same one-page step as the load-more button; scrollTick re-runs this
+    // effect after the slice grows (one page per run bounds the loop).
+    setSessionLimit((prev) => ({ ...prev, [pid]: (prev[pid] ?? SESSION_PAGE) + SESSION_PAGE }));
+    setScrollTick((n) => n + 1);
+  }, [props.selectedSessionId, scrollTick]);
+
   // ↑/↓ + Tab drive the keyboard cursor; Enter activates the cursor row. Attached to <aside> so
   // it only fires while focus is within the sidebar (no global hijack of Arrow/Tab/Enter while
   // the user is in the composer). Tab/Enter are intercepted ONLY once navigation is active
@@ -772,7 +815,7 @@ export default function Sidebar(props: Props) {
   };
 
   return (
-    <aside className="sidebar" data-testid="sidebar" onKeyDown={onSidebarKeyDown}>
+    <aside className="sidebar" data-testid="sidebar" ref={rootRef} onKeyDown={onSidebarKeyDown}>
       <div className="sidebar-header" onDoubleClick={onTitleDoubleClick}>
         <span className="sidebar-title">{t("app.brand")}</span>
         <span className="sidebar-header-acts">
