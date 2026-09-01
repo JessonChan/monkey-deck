@@ -333,18 +333,40 @@ input, textarea { font-family: inherit; }
    never competes with status accents. */
 .session-fork-mark { flex-shrink: 0; display: inline-flex; color: var(--text-3); }
 .session-fork-mark svg { color: var(--text-3); }
-/* Inline tag dot family (#174): rolls back #160a's zero-footprint decision for
-   dot-level identity only — no text chips return. Up to 3 hash-colored dots
-   per row, same tagColor() source as the filter panel and the ctx menu; tags
-   beyond 3 fold into the wrapper tooltip. Persistent-marker family:
-   flex-shrink:0 + inline-flex + 6px dots keep the row height untouched. */
-.session-tag-dots { flex-shrink: 0; display: inline-flex; align-items: center; gap: 3px; }
-.session-tag-dot { width: 6px; height: 6px; border-radius: 50%; }
+/* Inline tag chips (#181): revives #150's named mini-chips, replacing #174's
+   dot family. Up to 3 hash-colored chips in the row meta cluster (after the
+   fork badge, before pin), same tagColor() source as the filter panel and the
+   ctx menu; tags beyond 3 fold into one +N overflow chip whose tooltip lists
+   the full set. 12px discipline: fixed 14px height / 12px line-height / 10px
+   font so a tagged row never grows taller than a plain one; flex-shrink:0
+   keeps chips intact while the label ellipsizes instead. Chip text is fixed
+   dark ink — legible on every palette color. */
+.session-tag-chip {
+  flex-shrink: 0;
+  display: inline-flex; align-items: center;
+  max-width: 72px; height: 14px; padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px; line-height: 12px;
+  color: #2d2e30;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Overflow chip (+N): same capsule shape, neutral chrome — no tagColor
+   background, hairline border + dimmest text tier (global border-box keeps
+   the border inside the fixed 14px height). Tooltip carries the full list. */
+.session-tag-more {
+  flex-shrink: 0;
+  display: inline-flex; align-items: center;
+  max-width: 72px; height: 14px; padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px; line-height: 12px;
+  color: var(--text-3);
+  border: 1px solid var(--sep);
+  white-space: nowrap;
+}
 /* Per-project filter chip row (#150; gated by the project-row tag button as of
-   #160b — the row expands only while that project's tag panel is open; text
-   chips on session rows stay removed (#160a), inline identity is dot-level
-   only (#174)). Single-select: the active chip gets a ring. Pure CSS
-   states, no layout impact on session rows. */
+   #160b — the row expands only while that project's tag panel is open; session
+   rows regained named chips with #181). Single-select: the active chip gets a
+   ring. Pure CSS states, no layout impact on session rows. */
 .session-tags-row {
   display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
   margin: 2px 2px 4px 0;

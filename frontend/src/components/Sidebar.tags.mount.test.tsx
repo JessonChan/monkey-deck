@@ -1,12 +1,13 @@
-// Mount-test Sidebar session tags (#150 MVP; #160 interaction realignment).
+// Mount-test Sidebar session tags (#150 MVP; #160 interaction realignment,
+// #181 named-chip revival).
 //
 // Pins the tag contract end-to-end from props/state down to what a user can
 // see and click:
-//  1. Inline dot family (#174 — explicit rollback of #160a's zero-footprint,
-//     dot-level identity only, no text chips): tagged rows render up to 3
-//     hash-colored dots in the meta cluster (same tagColor() as everywhere),
-//     overflow folds into the wrapper tooltip, untagged rows stay bare; the
-//     .session-tag-chip rule stays gone from index.css.
+//  1. Inline named chips (#181 — revives #150's text chips, replacing
+//     #174's dot family): tagged rows render up to 3 named chips in the
+//     meta cluster (same tagColor() as everywhere), tags beyond 3 fold
+//     into one +N overflow chip whose tooltip lists the full set, untagged
+//     rows stay bare; the dot rules stay gone from index.css.
 //  2. Ctx「标签 ›」submenu: Enter on the new-tag input appends to the LIVE tag
 //     set (onSetSessionTags(id, [...live, value])), input clears for rapid entry.
 //  3. Removal: clicking a checked tag row calls onSetSessionTags without it.
@@ -200,7 +201,7 @@ beforeEach(() => {
 });
 
 describe("Sidebar session tags (#150 MVP)", () => {
-  test("1. inline dot family (#174): ≤3 hash dots per row, overflow in tooltip, untagged bare", async () => {
+  test("1. inline named chips (#181): ≤3 chips per row, +N overflow with full tooltip, untagged bare", async () => {
     const { host } = await mounted({
       p1: [
         sess("s1", "p1", { tags: ["api", "db"] }),
@@ -209,26 +210,40 @@ describe("Sidebar session tags (#150 MVP)", () => {
       ],
     });
 
-    // Tagged rows carry the dot family, untagged rows none.
-    const dots1 = host.querySelectorAll('[data-testid="tag-dots-s1"] .session-tag-dot');
-    expect(dots1.length).toBe(2);
-    // Colors come from the shared palette math (filter panel / ctx menu / dots).
-    expect(dots1[0].getAttribute("style")).toContain(tagColor("api"));
-    expect(dots1[1].getAttribute("style")).toContain(tagColor("db"));
+    // Tagged rows carry named chips keyed tagchip-<sid>-<tag>; untagged none.
+    const chipApi = host.querySelector('[data-testid="tagchip-s1-api"]')!;
+    const chipDb = host.querySelector('[data-testid="tagchip-s1-db"]')!;
+    expect(host.querySelectorAll('[data-testid^="tagchip-s1-"]').length).toBe(2);
+    expect(chipApi.textContent).toBe("api");
+    // Colors come from the shared palette math (filter panel / ctx menu / chips).
+    expect(chipApi.getAttribute("style")).toContain(tagColor("api"));
+    expect(chipDb.getAttribute("style")).toContain(tagColor("db"));
     expect(TAG_PALETTE).toContain(tagColor("api"));
     expect(tagColor("api")).toBe(tagColor("api")); // deterministic
-    // Cap 3: five tags render exactly three dots…
-    expect(host.querySelectorAll('[data-testid="tag-dots-s2"] .session-tag-dot').length).toBe(3);
-    // …with the full list — overflow included — merged into the tooltip.
-    expect(host.querySelector('[data-testid="tag-dots-s2"]')!.getAttribute("data-tooltip-content"))
+    // Cap 3: five tags render exactly three chips — the first three only…
+    expect(host.querySelectorAll('[data-testid^="tagchip-s2-"]').length).toBe(3);
+    expect(host.querySelector('[data-testid="tagchip-s2-a"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="tagchip-s2-b"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="tagchip-s2-c"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="tagchip-s2-d"]')).toBeNull();
+    expect(host.querySelector('[data-testid="tagchip-s2-e"]')).toBeNull();
+    // …plus one +N overflow chip whose tooltip carries the FULL list.
+    const more = host.querySelector('[data-testid="tagchip-more-s2"]')!;
+    expect(more.textContent).toBe("+2");
+    expect(more.getAttribute("data-tooltip-content"))
       .toBe('sidebar.tagDotsTip {"tags":"a, b, c, d, e"}');
-    expect(host.querySelector('[data-testid="tag-dots-s3"]')).toBeNull();
-    // Text chips stay gone (rollback scope is dot-level only).
-    expect(host.querySelectorAll('[data-testid^="tagchip-"]').length).toBe(0);
-    expect(host.querySelectorAll(".session-tag-chip").length).toBe(0);
+
+    // Untagged rows stay bare (no chips, no overflow chip).
+    expect(host.querySelector('[data-testid^="tagchip-s3-"]')).toBeNull();
+    expect(host.querySelector('[data-testid="tagchip-more-s3"]')).toBeNull();
+    expect(host.querySelectorAll(".session-tag-chip").length).toBe(5); // 2 + 3
+    expect(host.querySelectorAll(".session-tag-more").length).toBe(1);
+    // The dot family stays gone (chip revival replaces dots entirely).
+    expect(host.querySelectorAll('[data-testid^="tag-dots-"]').length).toBe(0);
     const css = readFileSync(new URL("../index.css", import.meta.url), "utf8");
-    expect(css).not.toMatch(/\.session-tag-chip\s*\{/);
-    expect(css).toMatch(/\.session-tag-dot\s*\{/);
+    expect(css).toMatch(/\.session-tag-chip\s*\{/);
+    expect(css).toMatch(/\.session-tag-more\s*\{/);
+    expect(css).not.toMatch(/\.session-tag-dots?\s*\{/);
   });
 
   test("2. ctx「标签 ›」Enter appends to the live set and clears the input", async () => {
