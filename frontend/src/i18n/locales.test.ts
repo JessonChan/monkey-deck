@@ -35,6 +35,24 @@ test("zh / en leaf key 集合完全一致(无 zh-only / en-only)", () => {
   expect(z.length).toBe(e.length);
 });
 
+test("queue.schedulePendingEmpty copy fits the 320px phone budget (#182)", () => {
+  // The staged-row placeholder is display copy; if it gets too long it
+  // overflows .queue-item and gives .chat-footer a horizontal scrollbar on
+  // phones (review finding on the original EN copy, fixed in Task #28951).
+  // Budget on a 320px viewport: 320 − 56 (.queue-panel) − 24 (.queue-item
+  // padding/border) = 240px. At 10px mono that is ~40 latin chars
+  // (~6px each) or ~24 CJK chars (full-width, 10px each). The CSS ellipsis
+  // clamp on .queue-schedule-pending.placeholder is the structural backstop;
+  // this pins the copy itself so the clamp never has to engage.
+  type QueueLocale = { queue?: { schedulePendingEmpty?: string } };
+  const enCopy = (en as QueueLocale).queue?.schedulePendingEmpty;
+  const zhCopy = (zh as QueueLocale).queue?.schedulePendingEmpty;
+  expect(enCopy).toBeDefined();
+  expect(zhCopy).toBeDefined();
+  expect(enCopy!.length).toBeLessThanOrEqual(40);
+  expect(zhCopy!.length).toBeLessThanOrEqual(24);
+});
+
 type ChatLocale = { chat?: { dropMentionTitle?: string } };
 
 test("panel-drag overlay copy pinned (issue #149)", () => {

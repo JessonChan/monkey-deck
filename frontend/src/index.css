@@ -1802,6 +1802,15 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
    click). */
 .queue-schedule-pending.placeholder {
   color: var(--text-3); font-weight: 400; min-height: 16px;
+  /* Overflow clamp (#182 review): the hint is display copy, never worth a
+     horizontal scrollbar — shrink as a flex item (the chip sets flex-shrink:0)
+     and ellipsize instead of widening the chat footer. display:block lets
+     text-overflow apply (ellipsis ignores a flex container's anonymous text
+     items); line-height pins the glyph to the same centered position the
+     inline-flex readout chip renders, so the placeholder↔readout swap stays
+     pixel-stable at both breakpoints. */
+  display: block; flex-shrink: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; line-height: 16px;
 }
 .queue-schedule-cap { color: var(--amber); font-size: 11px; flex-shrink: 0; font-weight: 600; }
 /* Recurring badge (#111): same mono/amber family as the scheduled badge; the
@@ -3449,8 +3458,9 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
   .queue-schedule-pending .queue-schedule-reset { padding: 6px; }
   .queue-repeat-badge .queue-repeat-reset { padding: 6px; }
   /* Placeholder keeps equal height with the touch-sized chip (glyph 10px +
-     2×6px padding = 22px there), same zero-jump contract as desktop (#182). */
-  .queue-schedule-pending.placeholder { min-height: 22px; }
+     2×6px padding = 22px there), same zero-jump contract as desktop (#182);
+     line-height re-centers the glyph inside the taller box (clamp rule). */
+  .queue-schedule-pending.placeholder { min-height: 22px; line-height: 22px; }
 
   /* Header: session title + status only. Project name, terminal / model /
      branch / merge chips are desktop density on a phone. */
