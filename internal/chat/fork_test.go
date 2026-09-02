@@ -130,6 +130,9 @@ func TestForkSessionDeclaredCreatesRow(t *testing.T) {
 	if fresh.Title != "source title (fork)" {
 		t.Fatalf("title = %q, want %q", fresh.Title, "source title (fork)")
 	}
+	if fresh.CustomTitle != "" {
+		t.Fatalf("custom_title = %q, want empty (source has no rename; legacy title-only path)", fresh.CustomTitle)
+	}
 	if fresh.ACPSession != "fork-acp-1" {
 		t.Fatalf("acp session = %q, want fork-acp-1 (pinned from fork response)", fresh.ACPSession)
 	}

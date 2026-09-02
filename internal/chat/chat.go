@@ -1091,9 +1091,12 @@ var errForkSourceBusy = errors.New("源会话正在对话中,请等回合结束�
 //     worklog-documented; omp crashed on concurrent prompts).
 //
 // The new row inherits project / model / harness / worktree from the source,
-// carries forked_from = source id and a " (fork)" title suffix, and pins the
-// fork response's OWN configOptions as the read-only model-select cache
-// (consume-from-response per probe ⑤, never assume an echo).
+// carries forked_from = source id, and pins the fork response's OWN
+// configOptions as the read-only model-select cache (consume-from-response
+// per probe ⑤, never assume an echo). Title inheritance (#190): a renamed
+// source hands its name down as custom_title+" (fork)" — immune to harness
+// title churn, which only ever writes the title column; without a rename the
+// legacy title+" (fork)" suffix lands in the title column.
 func (s *ChatService) ForkSession(sourceSessionID string) (*store.Session, error) {
 	se, err := s.st.GetSession(s.ctx, sourceSessionID)
 	if err != nil {
@@ -1157,13 +1160,28 @@ func (s *ChatService) ForkSession(sourceSessionID string) (*store.Session, error
 	if err != nil {
 		return nil, err
 	}
-	displayTitle := se.CustomTitle
-	if displayTitle == "" {
-		displayTitle = se.Title
+	// Title inheritance (#190): with a user rename on the source, the fork's
+	// inherited name goes into custom_title as "<custom> (fork)" — immune to
+	// harness title churn (syncSessionTitle / session_info_update only write
+	// the title column), while the bare harness title stays in title as the
+	// fallback display. Without a rename the legacy behavior stands: title =
+	// "<source title> (fork)", custom_title empty.
+	forkTitle := se.Title
+	if se.CustomTitle == "" {
+		forkTitle += " (fork)"
 	}
-	fresh, err := s.st.CreateSession(s.ctx, se.ProjectID, displayTitle+" (fork)", se.Model, se.Harness)
+	fresh, err := s.st.CreateSession(s.ctx, se.ProjectID, forkTitle, se.Model, se.Harness)
 	if err != nil {
 		return nil, err
+	}
+	if se.CustomTitle != "" {
+		if err := s.st.UpdateSessionCustomTitle(s.ctx, fresh.ID, se.CustomTitle+" (fork)"); err != nil {
+			// Best-effort: a failed inherit degrades to the bare title column
+			// and must never block the fork itself.
+			slog.Warn("persist fork custom title", "err", err)
+		} else {
+			fresh.CustomTitle = se.CustomTitle + " (fork)"
+		}
 	}
 	if se.WorktreePath != "" {
 		if err := s.st.SetSessionWorktree(s.ctx, fresh.ID, se.WorktreePath, se.Branch); err != nil {
