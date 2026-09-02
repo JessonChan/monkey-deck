@@ -1146,6 +1146,13 @@ func (s *ChatService) ForkSession(sourceSessionID string) (*store.Session, error
 	if err != nil {
 		return nil, fmt.Errorf("fork: read source watermark: %w", err)
 	}
+	// Defensive guard (#189): the empty-source check above passed, so in
+	// practice seq >= 1 here — but a row built with watermark 0 would wear
+	// the fork badge with an empty lineage prefix (the guard falls back to
+	// own-only). Intercept BEFORE the RPC and any row creation.
+	if srcMaxSeq <= 0 {
+		return nil, fmt.Errorf("fork: source watermark unavailable (seq=%d)", srcMaxSeq)
+	}
 	res, err := ls.chat.Fork(s.ctx, mcps)
 	if err != nil {
 		return nil, err
@@ -1170,11 +1177,15 @@ func (s *ChatService) ForkSession(sourceSessionID string) (*store.Session, error
 	} else {
 		fresh.ForkedFrom = se.ID
 	}
+	// Watermark persist is FATAL (#189), same argument as the UpdateSessionACP
+	// fatal below: a row wearing the fork badge with fork_base_seq=0 reopens
+	// own-only (empty history) — worse than surfacing the error. Best-effort
+	// row cleanup; the error is the return value.
 	if err := s.st.SetSessionForkBaseSeq(s.ctx, fresh.ID, srcMaxSeq); err != nil {
-		slog.Warn("persist fork watermark", "err", err)
-	} else {
-		fresh.ForkBaseSeq = srcMaxSeq
+		_ = s.st.DeleteSession(s.ctx, fresh.ID)
+		return nil, fmt.Errorf("fork: persist fork watermark: %w", err)
 	}
+	fresh.ForkBaseSeq = srcMaxSeq
 	// Pin the fork's ACP session id immediately: the forked context lives
 	// harness-side, so the next open must RESUME into the forked session —
 	// not spawn a fresh, context-less one. FATAL on failure (#172 Phase 3):
