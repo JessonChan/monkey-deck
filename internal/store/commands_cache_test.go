@@ -163,6 +163,6 @@ func TestMigration0022ColumnShape(t *testing.T) {
 // cannot pass unnoticed.
 func TestSessionColumnsCount(t *testing.T) {
 	if got := len(strings.Split(sessionColumns, ",")); got != 28 {
-		t.Fatalf("sessionColumns has %d columns, want 28 (0001..0024)", got)
+		t.Fatalf("sessionColumns has %d columns, want 28 (0001..0025; 0025 is data-only)", got)
 	}
 }

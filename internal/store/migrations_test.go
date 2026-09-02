@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 )
 
@@ -82,3 +83,127 @@ func assertPaths(t *testing.T, s *Store, ctx context.Context, want map[string]st
 
 // sqlDB exposes the underlying handle for raw-SQL assertions (tests only).
 func sqlDB(s *Store) *sql.DB { return s.db }
+
+// TestMigration0025ForkWatermarkBackfill validates the 0025 migration SQL against
+// legacy fork rows (#189): forks created before the watermark mechanism (0024,
+// a7c9b9b) carry forked_from with fork_base_seq=0, and LoadMessagesPage's guard
+// (ForkBaseSeq <= 0) falls back to own-only — the fork reopens with an empty
+// history. The backfill reconstructs the watermark as the source's max message
+// seq at/before the fork's created_at (inclusive), so post-fork source messages
+// never leak into the lineage prefix. Sources with no messages at/before the
+// boundary keep 0 (lineage stays off, same as today). Rows already carrying a
+// real watermark and non-fork rows are untouched; re-running is a no-op.
+//
+// Same replay pattern as TestMigration0020ReadBasenameRewrite: the runner applies
+// the file inside New on empty tables, so the test re-runs the real SQL (through
+// the same embed FS) over seeded legacy-shaped rows.
+func TestMigration0025ForkWatermarkBackfill(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	proj, err := s.CreateProject(ctx, "p", t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := s.CreateSession(ctx, proj.ID, "src", "", "omp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fork, err := s.CreateSession(ctx, proj.ID, "src (fork)", "", "omp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphanFork, err := s.CreateSession(ctx, proj.ID, "src (fork)", "", "omp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	watermarked, err := s.CreateSession(ctx, proj.ID, "src (fork)", "", "omp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := s.CreateSession(ctx, proj.ID, "plain", "", "omp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Pin every timestamp/seq: the backfill is pure boundary arithmetic, so the
+	// test must not depend on wall-clock now() collisions.
+	db := sqlDB(s)
+	pinSessionAt := func(id string, ts int64) {
+		t.Helper()
+		if _, err := db.Exec(`UPDATE sessions SET created_at=? WHERE id=?`, ts, id); err != nil {
+			t.Fatalf("pin created_at %s: %v", id, err)
+		}
+	}
+	pinSessionAt(src.ID, 1000)
+	// Boundary sits mid-history: source messages exist on both sides of the fork.
+	pinSessionAt(fork.ID, 5000)
+	// Before any source message: no in-boundary rows → stays 0.
+	pinSessionAt(orphanFork.ID, 1500)
+	pinSessionAt(watermarked.ID, 5000)
+	pinSessionAt(plain.ID, 9000)
+
+	for _, f := range []struct{ id, from string }{
+		{fork.ID, src.ID}, {orphanFork.ID, src.ID}, {watermarked.ID, src.ID},
+	} {
+		if err := s.SetSessionForkedFrom(ctx, f.id, f.from); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A fork that already carries a real watermark must not be rewritten.
+	if err := s.SetSessionForkBaseSeq(ctx, watermarked.ID, 7); err != nil {
+		t.Fatal(err)
+	}
+
+	// Source history spanning the boundary; seq 3 sits exactly ON it (the
+	// predicate is inclusive), seq 4 after (must be excluded).
+	insertMsg := func(seq, ts int64) {
+		t.Helper()
+		_, err := db.Exec(`INSERT INTO messages(id,session_id,role,kind,content,seq,created_at) VALUES(?,?,?,?,?,?,?)`,
+			fmt.Sprintf("m%d", seq), src.ID, "user", "", fmt.Sprintf("msg-%d", seq), seq, ts)
+		if err != nil {
+			t.Fatalf("seed message %d: %v", seq, err)
+		}
+	}
+	insertMsg(1, 2000)
+	insertMsg(2, 4000)
+	insertMsg(3, 5000)
+	insertMsg(4, 6000)
+
+	// Replay the real migration file over the seeded rows.
+	b, err := migrationFS.ReadFile("migrations/0025_session_fork_watermark_backfill.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	if _, err := db.Exec(string(b)); err != nil {
+		t.Fatalf("apply migration: %v", err)
+	}
+
+	assertForkBaseSeq := func(id string, want int64) {
+		t.Helper()
+		got, err := s.GetSession(ctx, id)
+		if err != nil || got == nil {
+			t.Fatalf("get session %s: %v", id, err)
+		}
+		if got.ForkBaseSeq != want {
+			t.Errorf("session %s fork_base_seq = %d, want %d", id, got.ForkBaseSeq, want)
+		}
+	}
+	// MAX(seq) at/before the boundary = 3 (the exactly-at-boundary row counts).
+	assertForkBaseSeq(fork.ID, 3)
+	// Source has no messages at/before the fork → keeps 0 (lineage stays off).
+	assertForkBaseSeq(orphanFork.ID, 0)
+	// Real watermark untouched by the <= 0 guard.
+	assertForkBaseSeq(watermarked.ID, 7)
+	// Non-fork row untouched.
+	assertForkBaseSeq(plain.ID, 0)
+
+	// Idempotency: second run changes nothing.
+	if _, err := db.Exec(string(b)); err != nil {
+		t.Fatalf("re-apply migration: %v", err)
+	}
+	assertForkBaseSeq(fork.ID, 3)
+	assertForkBaseSeq(orphanFork.ID, 0)
+	assertForkBaseSeq(watermarked.ID, 7)
+	assertForkBaseSeq(plain.ID, 0)
+}
