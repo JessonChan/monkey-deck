@@ -69,6 +69,8 @@ func TestProbeAllHarnesses(t *testing.T) {
 				rep.Fork.NewID.Note, rep.Fork.SourceAlive.Note, rep.Fork.InList.Note,
 				rep.Fork.Resumable.Note, rep.Fork.Echo.Note, rep.Fork.Cwd.Note,
 				rep.Fork.Chain.Note, rep.Fork.Concurrent.Note, rep.Fork.Error)
+			t.Logf("busy-fork(#191): ①fork=%+v\n②snap=%+v\n③src=%+v\n④use=%+v err=%q",
+				rep.Fork.BusyFork, rep.Fork.BusySnap, rep.Fork.BusySrcOK, rep.Fork.BusyForkUse, rep.Fork.Error)
 			if rep.Error != "" {
 				t.Logf("probe self-error: %s", rep.Error)
 				return
@@ -84,5 +86,27 @@ func TestProbeAllHarnesses(t *testing.T) {
 				t.Logf("⚠ %s: session/set_config_option round-trip failed", h.id)
 			}
 		})
+	}
+}
+
+// TestProbeBusyForkHarness — #191: focused busy-fork measurement against ONE
+// harness command (no user-DB enumeration). Default "omp acp"; override with
+// MD_PROBE_CMD. Prints the full report + the four busy-fork rows so the raw
+// notes (含失败原文) can be transcribed into the worklog verbatim.
+//
+//	go test -tags integration -run TestProbeBusyForkHarness -v ./internal/acp/ -timeout 20m
+func TestProbeBusyForkHarness(t *testing.T) {
+	cmd := os.Getenv("MD_PROBE_CMD")
+	if cmd == "" {
+		cmd = "omp acp"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	rep := ProbeHarness(ctx, cmd)
+	t.Log("\n" + rep.Summary())
+	t.Logf("busy-fork(#191): declared=%v\n①fork=%+v\n②snap=%+v\n③src=%+v\n④use=%+v err=%q",
+		rep.Fork.Declared, rep.Fork.BusyFork, rep.Fork.BusySnap, rep.Fork.BusySrcOK, rep.Fork.BusyForkUse, rep.Fork.Error)
+	if rep.Error != "" {
+		t.Logf("probe self-error: %s", rep.Error)
 	}
 }

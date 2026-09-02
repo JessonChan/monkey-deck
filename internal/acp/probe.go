@@ -109,6 +109,13 @@ type ForkReport struct {
 	Chain       CheckResult `json:"chain"`       // ⑦ fork 链(对 fork 结果再 fork)
 	Concurrent  CheckResult `json:"concurrent"`  // ⑧ 源/fork 并发各一发 prompt 互扰观察
 
+	// Busy-fork 四项实测(issue #191):源 turn 进行中 fork 的行为。
+	// 任何一项失败都是「停在探针」的判据(实现卡 #28965 的硬前置门)。
+	BusyFork    CheckResult `json:"busyFork"`    // ① 源 turn 进行中 fork RPC 成功(新 id ≠ 源)
+	BusySnap    CheckResult `json:"busySnap"`    // ② fork 上下文快照点(load/resume 回放观察,如实记录)
+	BusySrcOK   CheckResult `json:"busySrcOk"`   // ③ 源 turn 不受干扰(end_turn + fork 后流式延续)
+	BusyForkUse CheckResult `json:"busyForkUse"` // ④ fork 后串行 prompt fork 行可用(end_turn)
+
 	// Error fork 探针自身异常(panic 兜底等);空 = 正常收敛出报告。
 	Error string `json:"error,omitempty"`
 }
@@ -139,6 +146,9 @@ func (r ConformanceReport) Summary() string {
 			forkMark(r.Fork.NewID), forkMark(r.Fork.SourceAlive), forkMark(r.Fork.InList),
 			forkMark(r.Fork.Resumable), forkMark(r.Fork.Echo), forkMark(r.Fork.Cwd),
 			forkMark(r.Fork.Chain), forkMark(r.Fork.Concurrent))
+		fmt.Fprintf(&b, "[fork] busy 中fork=%s 快照=%s 源无扰=%s fork可用=%s\n",
+			forkMark(r.Fork.BusyFork), forkMark(r.Fork.BusySnap),
+			forkMark(r.Fork.BusySrcOK), forkMark(r.Fork.BusyForkUse))
 	} else if r.Fork.Force != "" {
 		fmt.Fprintf(&b, "undeclared %s(%s)\n", r.Fork.Force, r.Fork.ForceClass)
 	} else {
@@ -209,6 +219,69 @@ const (
 	probeForkTimeout = 20 * time.Second // fork/list/load 单次 RPC 硬超时(#172;undeclared 强 fork 同样适用)
 )
 
+// evCapture busy-fork 探针(#191)的事件取证:按到达顺序留存流式 chunk 事件,
+// 并提供「等待下一个 chunk」的就绪信号(fork 触发时机锚定真实流式开始,不靠固定延时)。
+// 全部方法并发安全(ACP 回调在独立 goroutine 触发)。
+type evCapture struct {
+	mu   sync.Mutex
+	log  []SessionEvent
+	wait chan struct{} // 非 nil 时,下一个 chunk 事件向其发一次信号(容量 1,不阻塞)
+}
+
+// record 留存一条流式 chunk 事件(message/thought),并唤醒等待者。
+func (c *evCapture) record(e SessionEvent) {
+	if e.Kind != "agent_message_chunk" && e.Kind != "agent_thought_chunk" {
+		return
+	}
+	c.mu.Lock()
+	c.log = append(c.log, e)
+	w := c.wait
+	c.mu.Unlock()
+	if w != nil {
+		select {
+		case w <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// arm 装备就绪信号,返回信号 channel(调用方在发出 prompt 后等待它)。
+func (c *evCapture) arm() chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.wait = make(chan struct{}, 1)
+	return c.wait
+}
+
+// mark 返回当前日志长度(作为 since 的基准点)。
+func (c *evCapture) mark() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.log)
+}
+
+// since 返回 mark 之后的 chunk 事件快照。
+func (c *evCapture) since(mark int) []SessionEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]SessionEvent(nil), c.log[mark:]...)
+}
+
+// chunkTail 摘取 sid 会话(可选按 messageId 过滤)在快照里最长一条累积全文。
+// 供报告 Note 预览快照点内容(人话呈现,§4.4);n = 过滤命中的事件数。
+func chunkTail(evs []SessionEvent, sid acp.SessionId, msgID string) (text string, n int) {
+	for _, e := range evs {
+		if e.SessionID != string(sid) || (msgID != "" && e.MessageID != msgID) {
+			continue
+		}
+		if len(e.Text) >= len(text) {
+			text = e.Text // 累积全文:取最长一条
+		}
+		n++
+	}
+	return text, n
+}
+
 // ProbeHarness 对 command 指定的 ACP harness 跑一次受控 conformance 探针。
 //
 // 流程:临时目录隔离 → spawn+Initialize(抓能力矩阵)→ NewSession → Prompt(无害消息,
@@ -232,8 +305,11 @@ func ProbeHarness(ctx context.Context, command string) *ConformanceReport {
 	kinds := make(map[string]struct{})
 	var sawChunk, sawMessageID, sawThoughts, sawTools, sawUsage bool
 
+	evlog := &evCapture{} // busy-fork 探针取证(#191);onEvent 并发回调,record 自带锁
+
 	var handler *Handler
 	onEvent := func(e SessionEvent) {
+		evlog.record(e) // busy-fork 取证(#191)
 		mu.Lock()
 		defer mu.Unlock()
 		kinds[e.Kind] = struct{}{}
@@ -427,6 +503,18 @@ func ProbeHarness(ctx context.Context, command string) *ConformanceReport {
 		}
 		rep.ResumeReplays = replayed
 	}
+
+	// 3.w busy-fork 探针(issue #191):源 turn 进行中 fork 的四项实测。
+	// 先于 3.x 的 P3 往返执行:P3 ⑧ 的并发双 prompt 在旧版 omp 上稳定杀进程(#172 实测),
+	// busy 段前置可避免 ⑧ 的既有崩溃污染 busy 四项的归因。recover 兜底同 3.x。
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				rep.Fork.Error = truncate(fmt.Sprintf("busy-fork panic: %v", r), 200)
+			}
+		}()
+		runBusyForkProbe(ctx, conn, rep, sess.SessionId, workDir, initResp.AgentCapabilities.LoadSession, evlog)
+	}()
 
 	// 3.x fork 探针(issue #172 Phase 1):undeclared 强 fork 错误码锚定 / declared 最小往返。
 	// recover 兜底:任何 SDK/协议层异常都收敛为报告行,探针自身永不 panic(UNSTABLE 红线)。
@@ -682,6 +770,141 @@ func forkOnce(ctx context.Context, conn *acp.ClientSideConnection, srcID acp.Ses
 		SessionId: srcID,
 		Cwd:       cwd,
 	})
+}
+
+// runBusyForkProbe busy-fork 四项实测(issue #191):源 turn 进行中 fork 的行为。
+//
+// 时序:发起一轮长 prompt(流式中)→ 等「第一个 chunk 到达」再发 fork(锚定真实
+// 流式开始,不靠固定延时)→ fork RPC(①)→ load/resume fork 观察回放快照点(②)
+// → 等源 prompt 收敛判源是否被扰(③)→ 串行 prompt fork 判 fork 行可用(④)。
+// ④ 有意排在源 turn 结束之后:铁律③「forked session 串行使用」,④ 测的是 fork 行
+// 本身可用,不与 ⑧ 的并发互扰混淆。undeclared 全部落 N/A(声明位门控,铁律①)。
+// 任何单步失败只落报告行,探针必收敛(UNSTABLE 红线)。
+func runBusyForkProbe(ctx context.Context, conn *acp.ClientSideConnection, rep *ConformanceReport,
+	srcID acp.SessionId, workDir string, loadDeclared bool, lg *evCapture) {
+
+	na := func(reason string) CheckResult { return CheckResult{Pass: false, Note: "N/A: " + reason} }
+	if !rep.Fork.Declared {
+		rep.Fork.BusyFork = na("fork 未声明")
+		rep.Fork.BusySnap = na("fork 未声明")
+		rep.Fork.BusySrcOK = na("fork 未声明")
+		rep.Fork.BusyForkUse = na("fork 未声明")
+		return
+	}
+
+	// 发起长 prompt(流式中),等第一个 chunk 到达即视为 turn 真正在途。
+	// busyStart 先于 arm:本轮(第 N 轮)的 chunk 归区从这里起算,不含此前各轮。
+	busyStart := lg.mark()
+	wait := lg.arm()
+	type promptOutcome struct {
+		resp acp.PromptResponse
+		err  error
+	}
+	outcome := make(chan promptOutcome, 1)
+	go func() {
+		resp, err := promptSession(ctx, conn, srcID, "Count from 1 to 40, one number per line, nothing else.")
+		outcome <- promptOutcome{resp, err}
+	}()
+	select {
+	case <-wait:
+	case <-time.After(probeTurnTimeout):
+		rep.Fork.BusyFork = CheckResult{Pass: false, Note: "N/A: 源 turn 未流式产出(无 chunk),busy 前提不成立"}
+		rep.Fork.BusySnap = na("源 turn 未流式产出")
+		rep.Fork.BusySrcOK = na("源 turn 未流式产出")
+		rep.Fork.BusyForkUse = na("源 turn 未流式产出")
+		return
+	}
+	// 本轮(进行中 turn)的 messageId:回放快照观察的过滤锚(§5.4 #10 主键归并)。
+	// 无 messageId 的 harness 退化为全量观察(如实记录,不假设)。
+	busyMsgID := ""
+	if evs := lg.since(busyStart); len(evs) > 0 {
+		busyMsgID = evs[0].MessageID
+	}
+
+	// ① 源 turn 进行中 fork。
+	fr, ferr := forkOnce(ctx, conn, srcID, workDir)
+	if ferr != nil {
+		rep.Fork.BusyFork = CheckResult{Pass: false, Note: "fork error: " + truncate(ferr.Error(), 160)}
+		rep.Fork.BusySnap = na("前置 busy fork 失败")
+		rep.Fork.BusySrcOK = na("前置 busy fork 失败")
+		rep.Fork.BusyForkUse = na("前置 busy fork 失败")
+		// 源 turn 仍在途:等它收敛,避免泄漏一个挂着的 prompt 到后续探针段。
+		<-outcome
+		return
+	}
+	forkID := fr.SessionId
+	rep.Fork.BusyFork = CheckResult{
+		Pass: forkID != srcID,
+		Note: fmt.Sprintf("source=%s fork=%s (turn 进行中)", safeID(srcID), safeID(forkID)),
+	}
+
+	// ② fork 上下文快照点:load(或 resume)fork,观察窗口内的内容回放。
+	// 回放内容 = harness 侧复刻给 fork 的上下文;如实记录快照落在哪
+	// (含流式中内容 / 只到上一条完整消息 / 无回放不可观察)。
+	snapMark := lg.mark()
+	switch {
+	case loadDeclared:
+		lctx, cancel := context.WithTimeout(ctx, probeForkTimeout)
+		_, lerr := conn.LoadSession(lctx, acp.LoadSessionRequest{
+			SessionId:  forkID,
+			Cwd:        workDir,
+			McpServers: []acp.McpServer{},
+		})
+		cancel()
+		rep.Fork.BusySnap = busySnapVerdict(lg, snapMark, forkID, busyMsgID, lerr, "load")
+	default:
+		rctx, cancel := context.WithTimeout(ctx, probeForkTimeout)
+		_, rerr := conn.ResumeSession(rctx, acp.ResumeSessionRequest{
+			SessionId:  forkID,
+			Cwd:        workDir,
+			McpServers: []acp.McpServer{},
+		})
+		cancel()
+		rep.Fork.BusySnap = busySnapVerdict(lg, snapMark, forkID, busyMsgID, rerr, "resume")
+	}
+
+	// ③ 源 turn 是否被扰:等 prompt 收敛,end_turn + fork 后流式延续 = 无扰。
+	postForkMark := lg.mark() // fork 返回后的 chunk = fork 后流式延续
+	out := <-outcome
+	switch {
+	case out.err != nil:
+		rep.Fork.BusySrcOK = CheckResult{Pass: false, Note: "源 prompt error: " + truncate(out.err.Error(), 160)}
+	case out.resp.StopReason != acp.StopReasonEndTurn:
+		rep.Fork.BusySrcOK = CheckResult{Pass: false, Note: fmt.Sprintf("源 stopReason=%s(被扰?)", out.resp.StopReason)}
+	default:
+		time.Sleep(2 * time.Second) // drain:收尾 chunk 可能晚于 Prompt 返回
+		tail, total := chunkTail(lg.since(busyStart), srcID, "")
+		_, post := chunkTail(lg.since(postForkMark), srcID, "")
+		rep.Fork.BusySrcOK = CheckResult{
+			Pass: true,
+			Note: fmt.Sprintf("end_turn; 本轮 chunk 事件=%d(fork 后=%d) tail=%q", total, post, truncate(tail, 60)),
+		}
+	}
+
+	// ④ fork 后串行 prompt fork 行(fork 行可用)。
+	rep.Fork.BusyForkUse = promptVerdict(ctx, conn, forkID, "hi")
+}
+
+// busySnapVerdict ② 的判定:RPC 成功即 pass,Note 如实记录快照点
+// (含流式中内容 / 只到上一条完整消息 / 无内容回放不可观察)。
+// 同 messageId 过滤 = 回放保留原 id 的 harness(omp/fakeagent)的精确观察;
+// 过滤空但全量有回放时如实标注(回放换发新 messageId 的 harness,如 opencode)。
+func busySnapVerdict(lg *evCapture, from int, forkID acp.SessionId, busyMsgID string, rpcErr error, verb string) CheckResult {
+	if rpcErr != nil {
+		return CheckResult{Pass: false, Note: fmt.Sprintf("%s error: %s", verb, truncate(rpcErr.Error(), 160))}
+	}
+	time.Sleep(2 * time.Second) // drain:部分 harness 的回放晚于 RPC 响应(异步)
+	evs := lg.since(from)
+	text, n := chunkTail(evs, forkID, "")
+	ftext, fn := chunkTail(evs, forkID, busyMsgID)
+	switch {
+	case fn > 0:
+		return CheckResult{Pass: true, Note: fmt.Sprintf("%s ok; replay=%d(同msgId=%d) 快照=%q", verb, n, fn, truncate(ftext, 80))}
+	case n > 0:
+		return CheckResult{Pass: true, Note: fmt.Sprintf("%s ok; replay=%d(同msgId=0,回放未携带原 messageId) tail=%q", verb, n, truncate(text, 80))}
+	default:
+		return CheckResult{Pass: true, Note: fmt.Sprintf("%s ok; 无内容回放,快照点不可经 %s 观察", verb, verb)}
+	}
 }
 
 // promptSession 单发一轮最小 prompt(turn 级硬超时;诊断场景,与 §3.3 无关)。

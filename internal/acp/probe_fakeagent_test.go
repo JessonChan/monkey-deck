@@ -21,6 +21,10 @@ package acp
 //	roundtrip must pass all eight report rows (new id distinct, source still
 //	promptable, new id listed, resumable, configOptions/modes echoed, cwd
 //	semantics recorded, chain forked, concurrent prompts both end_turn).
+//	"busy-fork" — #191: concurrent dispatch + slow turns (6 chunks, 400ms
+//	apart, messageId mt-<n>, text s<n>-<i>) so the busy-fork probe can fork
+//	mid-turn; fork snapshots the source transcript at the fork instant;
+//	session/load|resume replays the transcript before responding.
 
 import (
 	"bufio"
@@ -30,6 +34,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -125,12 +130,15 @@ func TestProbeHarnessDeclaredFork(t *testing.T) {
 			t.Fatalf("fork row %s failed: %+v\nreport:\n%s", name, cr, rep.Summary())
 		}
 	}
-	if !strings.Contains(rep.Fork.NewID.Note, "fake-sess-2") {
-		t.Fatalf("expected fork id fake-sess-2 in NewID.Note, got %q", rep.Fork.NewID.Note)
+	// #191: the busy-fork section runs BEFORE the P3 roundtrip and mints
+	// fake-sess-2 (mid-turn fork); the P3 idle fork is therefore fake-sess-3.
+	if !strings.Contains(rep.Fork.NewID.Note, "fake-sess-3") {
+		t.Fatalf("expected P3 fork id fake-sess-3 in NewID.Note, got %q", rep.Fork.NewID.Note)
 	}
 }
 
-// forkRows returns the eight P3 report rows keyed by human-readable name.
+// forkRows returns the report rows keyed by human-readable name: the eight P3
+// roundtrip rows plus the four #191 busy-fork rows.
 func forkRows(f *ForkReport) map[string]CheckResult {
 	return map[string]CheckResult{
 		"newId":       f.NewID,
@@ -141,6 +149,10 @@ func forkRows(f *ForkReport) map[string]CheckResult {
 		"cwd":         f.Cwd,
 		"chain":       f.Chain,
 		"concurrent":  f.Concurrent,
+		"busyFork":    f.BusyFork,
+		"busySnap":    f.BusySnap,
+		"busySrcOk":   f.BusySrcOK,
+		"busyForkUse": f.BusyForkUse,
 	}
 }
 
@@ -227,6 +239,10 @@ func TestFakeAgentHelper(t *testing.T) {
 // stopReason=cancelled; every other prompt ends with end_turn. Everything
 // unknown gets -32601.
 func fakeAgentMain() {
+	if os.Getenv("MD_FAKE_HARNESS_MODE") == "busy-fork" {
+		fakeAgentBusyForkMain()
+		return
+	}
 	declared := os.Getenv("MD_FAKE_HARNESS_MODE") == "declared"
 	// Scenario knobs (beyond the two fork-probe modes):
 	//   undeclared-resume-works — CodeBuddy-like: resume NOT declared in
@@ -463,5 +479,299 @@ func fakeAgentMain() {
 		default:
 			defaultErr()
 		}
+	}
+}
+
+// TestProbeHarnessBusyFork — #191: the busy-fork scenario (source turn in
+// flight). The fake streams a slow turn; the probe forks mid-turn and must
+// observe: ① fork RPC succeeds; ② the fork's replayed context contains the
+// IN-FLIGHT partial reply (busy turn = turn 3 after main+cancel probes, so the
+// snapshot carries "s3-*" chunks but not the final "s3-6"); ③ the source turn
+// completes undisturbed (end_turn, full output); ④ a serial prompt on the
+// fork row works. The P3 rows must stay green on the same session afterwards.
+func TestProbeHarnessBusyFork(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(exe, " \t") {
+		t.Skipf("test binary path contains spaces: %s", exe)
+	}
+	t.Setenv("MD_FAKE_HARNESS_CHILD", "1")
+	t.Setenv("MD_FAKE_HARNESS_MODE", "busy-fork")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	rep := ProbeHarness(ctx, fmt.Sprintf("%s -test.run=^TestFakeAgentHelper$ --", exe))
+
+	if rep.Error != "" {
+		t.Fatalf("probe error: %s", rep.Error)
+	}
+	if !rep.CanAdd() {
+		t.Fatalf("expected CanAdd=true, got report:\n%s", rep.Summary())
+	}
+	if !rep.Fork.Declared {
+		t.Fatalf("expected fork declared, got report:\n%s", rep.Summary())
+	}
+	if rep.Fork.Error != "" {
+		t.Fatalf("fork probe self-error: %s", rep.Fork.Error)
+	}
+	// Row notes are the worklog evidence for the four-item measurement.
+	t.Logf("busy-fork(#191): ①fork=%+v\n②snap=%+v\n③src=%+v\n④use=%+v",
+		rep.Fork.BusyFork, rep.Fork.BusySnap, rep.Fork.BusySrcOK, rep.Fork.BusyForkUse)
+	// ① mid-turn fork RPC succeeded.
+	if !rep.Fork.BusyFork.Pass {
+		t.Fatalf("busy fork failed: %+v\nreport:\n%s", rep.Fork.BusyFork, rep.Summary())
+	}
+	// ② snapshot point includes the in-flight partial (s3-* prefix, not s3-6).
+	if !rep.Fork.BusySnap.Pass {
+		t.Fatalf("busy snapshot check failed: %+v", rep.Fork.BusySnap)
+	}
+	if !strings.Contains(rep.Fork.BusySnap.Note, "s3-1") || strings.Contains(rep.Fork.BusySnap.Note, "s3-6") {
+		t.Fatalf("snapshot must contain the in-flight partial (s3-1, not s3-6), got %q", rep.Fork.BusySnap.Note)
+	}
+	// ③ source turn undisturbed: end_turn + full output (s3-6 in the tail).
+	if !rep.Fork.BusySrcOK.Pass || !strings.Contains(rep.Fork.BusySrcOK.Note, "s3-6") {
+		t.Fatalf("source turn disturbed: %+v", rep.Fork.BusySrcOK)
+	}
+	// ④ serial prompt on the fork row works.
+	if !rep.Fork.BusyForkUse.Pass {
+		t.Fatalf("fork row unusable after busy fork: %+v", rep.Fork.BusyForkUse)
+	}
+	// The P3 idle roundtrip must stay green on the same session afterwards.
+	for name, cr := range forkRows(&rep.Fork) {
+		if !cr.Pass {
+			t.Fatalf("fork row %s failed: %+v\nreport:\n%s", name, cr, rep.Summary())
+		}
+	}
+}
+
+// fakeAgentBusyForkMain speaks the same minimal ACP dialect as the declared
+// scenario, modeling a BUSY source (#191 busy-fork probe):
+//
+//   - Requests dispatch concurrently (one goroutine each), so session/fork can
+//     arrive while a turn is streaming; shared state + the stdout writer are
+//     mutex-guarded.
+//   - Turns are slow: 6 agent_message_chunk updates, text "s<n>-<i>" (n = turn
+//     seq), 400ms apart, all sharing messageId "mt-<n>"; session/cancel aborts
+//     the in-flight turn with stopReason=cancelled (the probe's cancel probe).
+//   - Each session carries a transcript of streamed chunks. session/fork
+//     snapshots the source transcript AT THE FORK INSTANT into the fork, and
+//     session/load|resume replays the transcript before responding — that
+//     replay is the client-side observation surface for the fork's context
+//     snapshot point.
+func fakeAgentBusyForkMain() {
+	sc := bufio.NewScanner(os.Stdin)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	out := bufio.NewWriter(os.Stdout)
+
+	type transEntry struct{ text, msgID string }
+	var (
+		stMu     sync.Mutex
+		outMu    sync.Mutex
+		sessions = map[string]*[]transEntry{"fake-sess-1": {}}
+		cancels  = map[string]chan struct{}{}
+		nextID   = 2
+		turnSeq  = 0
+	)
+	enc := func(v any) {
+		b, _ := json.Marshal(v)
+		outMu.Lock()
+		out.Write(b)
+		out.WriteByte('\n')
+		_ = out.Flush()
+		outMu.Unlock()
+	}
+	errResp := func(id json.RawMessage, code int, msg string) {
+		enc(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": msg}})
+	}
+	opts := func() []any {
+		return []any{map[string]any{
+			"type": "select", "id": "model", "name": "Model", "category": "model",
+			"currentValue": "fake-model",
+			"options":      []any{map[string]any{"value": "fake-model", "name": "Fake Model"}},
+		}}
+	}
+	withModes := func(result map[string]any) map[string]any {
+		result["modes"] = map[string]any{
+			"currentModeId":  "code",
+			"availableModes": []any{map[string]any{"id": "code", "name": "Code"}},
+		}
+		return result
+	}
+
+	for sc.Scan() {
+		var m struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params struct {
+				SessionId string `json:"sessionId"`
+			} `json:"params"`
+		}
+		if json.Unmarshal(sc.Bytes(), &m) != nil || m.Method == "" {
+			continue
+		}
+		// session/cancel is a notification: abort the session's in-flight turn.
+		if m.Method == "session/cancel" {
+			stMu.Lock()
+			ch := cancels[m.Params.SessionId]
+			stMu.Unlock()
+			if ch != nil {
+				close(ch)
+			}
+			continue
+		}
+		if len(m.ID) == 0 {
+			continue
+		}
+		go func() {
+			switch m.Method {
+			case "initialize":
+				enc(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      m.ID,
+					"result": map[string]any{
+						"protocolVersion": 1,
+						"agentCapabilities": map[string]any{
+							"loadSession":        true,
+							"promptCapabilities": map[string]any{},
+							"sessionCapabilities": map[string]any{
+								"fork": map[string]any{}, "list": map[string]any{},
+								"resume": map[string]any{}, "close": map[string]any{},
+							},
+						},
+					},
+				})
+			case "session/new":
+				enc(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      m.ID,
+					"result":  withModes(map[string]any{"sessionId": "fake-sess-1", "configOptions": opts()}),
+				})
+			case "session/prompt":
+				sid := m.Params.SessionId
+				if sid == "" {
+					sid = "fake-sess-1"
+				}
+				stMu.Lock()
+				tr, ok := sessions[sid]
+				if !ok {
+					stMu.Unlock()
+					errResp(m.ID, -32602, "unknown session: "+sid)
+					return
+				}
+				turnSeq++
+				n := turnSeq
+				cancel := make(chan struct{})
+				cancels[sid] = cancel
+				stMu.Unlock()
+				msgID := fmt.Sprintf("mt-%d", n)
+				stop := "end_turn"
+			loop:
+				for i := 1; i <= 6; i++ {
+					text := fmt.Sprintf("s%d-%d", n, i)
+					stMu.Lock()
+					*tr = append(*tr, transEntry{text, msgID})
+					stMu.Unlock()
+					enc(map[string]any{
+						"jsonrpc": "2.0",
+						"method":  "session/update",
+						"params": map[string]any{
+							"sessionId": sid,
+							"update": map[string]any{
+								"sessionUpdate": "agent_message_chunk",
+								"content":       map[string]any{"type": "text", "text": text},
+								"messageId":     msgID,
+							},
+						},
+					})
+					select {
+					case <-cancel:
+						stop = "cancelled"
+						break loop
+					case <-time.After(400 * time.Millisecond):
+					}
+				}
+				stMu.Lock()
+				delete(cancels, sid)
+				stMu.Unlock()
+				enc(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{"stopReason": stop}})
+			case "session/fork":
+				stMu.Lock()
+				src, ok := sessions[m.Params.SessionId]
+				if !ok {
+					stMu.Unlock()
+					errResp(m.ID, -32602, "unknown session: "+m.Params.SessionId)
+					return
+				}
+				// Snapshot the source transcript at the fork instant: chunks
+				// streamed AFTER this point belong to the source alone.
+				snap := append([]transEntry(nil), *src...)
+				id := fmt.Sprintf("fake-sess-%d", nextID)
+				nextID++
+				sessions[id] = &snap
+				stMu.Unlock()
+				enc(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      m.ID,
+					"result":  withModes(map[string]any{"sessionId": id, "configOptions": opts()}),
+				})
+			case "session/list":
+				stMu.Lock()
+				ids := make([]string, 0, len(sessions))
+				for id := range sessions {
+					ids = append(ids, id)
+				}
+				stMu.Unlock()
+				sort.Strings(ids)
+				list := make([]any, 0, len(ids))
+				for _, id := range ids {
+					list = append(list, map[string]any{"sessionId": id, "cwd": "/tmp/fake-agent"})
+				}
+				enc(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{"sessions": list}})
+			case "session/load", "session/resume":
+				stMu.Lock()
+				tr, ok := sessions[m.Params.SessionId]
+				if !ok {
+					stMu.Unlock()
+					errResp(m.ID, -32602, "unknown session: "+m.Params.SessionId)
+					return
+				}
+				replay := append([]transEntry(nil), *tr...)
+				stMu.Unlock()
+				// Replay history BEFORE the response (deterministic window).
+				for _, e := range replay {
+					enc(map[string]any{
+						"jsonrpc": "2.0",
+						"method":  "session/update",
+						"params": map[string]any{
+							"sessionId": m.Params.SessionId,
+							"update": map[string]any{
+								"sessionUpdate": "agent_message_chunk",
+								"content":       map[string]any{"type": "text", "text": e.text},
+								"messageId":     e.msgID,
+							},
+						},
+					})
+				}
+				enc(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      m.ID,
+					"result":  withModes(map[string]any{"configOptions": opts()}),
+				})
+			case "session/set_config_option":
+				enc(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{"configOptions": opts()}})
+			case "session/close":
+				stMu.Lock()
+				delete(sessions, m.Params.SessionId)
+				if ch := cancels[m.Params.SessionId]; ch != nil {
+					delete(cancels, m.Params.SessionId)
+				}
+				stMu.Unlock()
+				enc(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{}})
+			default:
+				errResp(m.ID, -32601, "method not found: "+m.Method)
+			}
+		}()
 	}
 }
