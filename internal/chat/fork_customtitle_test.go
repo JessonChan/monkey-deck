@@ -89,13 +89,18 @@ func TestForkSessionCustomTitleInherits(t *testing.T) {
 	if fresh.Title != "source title" {
 		t.Fatalf("title = %q, want the bare source harness title %q (no suffix)", fresh.Title, "source title")
 	}
-	// DB round-trip: written, not just echoed.
+	// Badge coexistence (#190 spec item 4): the fork row must carry BOTH badge
+	// sources at once — forked_from (fork badge) and custom_title (rename
+	// pencil) — or the sidebar tells only half the story.
+	if fresh.ForkedFrom != se.ID {
+		t.Fatalf("forked_from = %q, want %q (fork badge must coexist with the rename badge)", fresh.ForkedFrom, se.ID)
+	}
 	got, err := svc.st.GetSession(svc.ctx, fresh.ID)
 	if err != nil || got == nil {
 		t.Fatalf("fork row missing in db: %v", err)
 	}
-	if got.CustomTitle != "my custom name (fork)" || got.Title != "source title" {
-		t.Fatalf("db row mismatch: custom_title=%q title=%q", got.CustomTitle, got.Title)
+	if got.CustomTitle != "my custom name (fork)" || got.Title != "source title" || got.ForkedFrom != se.ID {
+		t.Fatalf("db row mismatch: custom_title=%q title=%q forked_from=%q", got.CustomTitle, got.Title, got.ForkedFrom)
 	}
 	// Immunity: a harness-side title regeneration writes the title column only.
 	if err := svc.st.UpdateSessionTitle(svc.ctx, fresh.ID, "harness regenerated"); err != nil {
