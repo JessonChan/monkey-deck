@@ -3152,6 +3152,14 @@ func (s *ChatService) ProbeNewHarness(command string) (*acp.ConformanceReport, e
 	return acp.ProbeHarness(ctx, command), nil
 }
 
+// MatchKnownHarness 按启动命令关键词匹配「已知 harness 目录」(harness.KnownCatalog),
+// 返回最匹配项(nil = 无命中)。前端「添加 harness」弹窗:用户输入命令时实时调本 binding
+// 自动选中有名 harness,据返回的 ID 展示图标(HarnessIcon 自行解析)并预填 Name(用户可覆盖)。
+// 与 Supported 注册表(omp/opencode)无关 —— 这里只做已知的 README agent 目录匹配。
+func (s *ChatService) MatchKnownHarness(command string) *harness.KnownHarness {
+	return harness.MatchKnownHarness(command)
+}
+
 // harnessCommandID 从启动命令派生 harness id:首个 token 的 basename。
 // "junie acp" → "junie";"/usr/local/bin/goose --stdio acp" → "goose"。id 是内部主键
 // (session 钉它、查找用它),用户无需也不该手填——从命令自动派生即可(§4.4 不裸露技术格式)。

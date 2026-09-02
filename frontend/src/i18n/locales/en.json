@@ -804,6 +804,7 @@
       "addGapThought": "no thoughts",
       "addWarnPrefix": "Limited: ",
       "addNeedProbe": "Run \"Self-check\" above and pass before adding",
+      "addMatched": "Matched known agent: {{name}} (auto-filled, editable)",
       "editTitle": "Edit harness",
       "editDesc": "Change display name or start command. The ID cannot change (sessions pin to it); re-run self-check after editing the command.",
       "editSave": "Save",

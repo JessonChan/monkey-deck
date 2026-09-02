@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { ConformanceReport } from "../../bindings/github.com/jessonchan/monkey-deck/internal/acp/models";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
+import type { KnownHarness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import { Loader2, ShieldCheck, X } from "lucide-react";
+import HarnessIcon from "./HarnessIcon";
 import ProbeReport, { canAddFromReport } from "./ProbeReport";
 
 interface Props {
@@ -27,6 +29,10 @@ export default function AddHarnessModal({ onDone, onCancel }: Props) {
   const [report, setReport] = useState<ConformanceReport | null>(null);
   const [probing, setProbing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // 命令实时匹配已知 harness 目录的结果;命中后据其 ID 展示图标并预填 Name。
+  const [matched, setMatched] = useState<KnownHarness | null>(null);
+  // 用户是否手动改过 Name:改过则不再自动覆盖(§4.4 不替用户做主)。
+  const nameTouched = useRef(false);
 
   // Esc 关闭(§4.2)。
   useEffect(() => {
@@ -36,6 +42,26 @@ export default function AddHarnessModal({ onDone, onCancel }: Props) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
+
+  // 命令 → 实时匹配已知 harness 目录(后端 MatchKnownHarness):命中即自动选该 harness。
+  useEffect(() => {
+    const c = command.trim();
+    if (!c) {
+      setMatched(null);
+      if (!nameTouched.current) setName("");
+      return;
+    }
+    let cancelled = false;
+    ChatService.MatchKnownHarness(c)
+      .then((r) => { if (!cancelled) setMatched(r ?? null); })
+      .catch(() => { if (!cancelled) setMatched(null); });
+    return () => { cancelled = true; };
+  }, [command]);
+
+  // 命中已知 harness 且用户未手填名称时,自动填 Name(用户可改)。
+  useEffect(() => {
+    if (!nameTouched.current) setName(matched?.name ?? "");
+  }, [matched]);
 
   const cmd = command.trim();
   // 体检单有效性:存在且针对当前命令(命令改了 → 失效)。
@@ -120,6 +146,16 @@ export default function AddHarnessModal({ onDone, onCancel }: Props) {
             data-testid="ah-command"
             disabled={probing || submitting}
           />
+          {matched && (
+            <div
+              className="ah-matched"
+              data-testid="ah-matched"
+              style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "var(--text-dim, #8a8a8a)" }}
+            >
+              <HarnessIcon harnessId={matched.id} size={16} />
+              <span>{t("settings.harness.addMatched", { name: matched.name })}</span>
+            </div>
+          )}
         </div>
 
         <div className="ah-field">
@@ -130,7 +166,7 @@ export default function AddHarnessModal({ onDone, onCancel }: Props) {
             id="ah-name"
             className="modal-input"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => { nameTouched.current = true; setName(e.target.value); }}
             placeholder={t("settings.harness.addNamePlaceholder")}
             data-testid="ah-name"
             disabled={probing || submitting}
