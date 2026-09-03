@@ -968,13 +968,39 @@ export default function App() {
       }).catch(() => {});
   }, [isPopout, sessionsByProject]);
 
-  // 多项目同时展开:项目列表就绪后,把每个项目的 sessions 都加载进 map(本地 SQLite,快)。
+  // Multi-project expand-all: once the project list lands, load every project's
+  // sessions into the map (local SQLite, fast).
+  // In-flight dedup (request-storm fix): each landed response re-runs this
+  // effect via the sessionsByProject dep; without the guard below it re-fired
+  // ListSessions for every project whose response had not landed yet — 7
+  // overlapping rounds (~163 calls for 31 projects, O(P²) worst case). The
+  // guard marks a project as pending until its response lands, so each project
+  // is fetched exactly once per boot. Event/refresh paths (chat:status, resync,
+  // selectProject) do NOT go through this guard and always re-pull.
+  const bootSessionsFetchingRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     // Popout windows render exactly one session (their own); the all-project
     // list load is main-window bookkeeping (O2 — P wasted requests per boot).
     if (isPopout) return;
     for (const p of projects) {
-      if (!(p.id in sessionsByProject)) void refreshSessions(p.id);
+      if (p.id in sessionsByProject) continue;
+      if (bootSessionsFetchingRef.current.has(p.id)) continue;
+      bootSessionsFetchingRef.current.add(p.id);
+      void (async () => {
+        try {
+          await refreshSessions(p.id);
+          // Success: the entry stays as a boot-once tombstone. Deleting it in
+          // a finally races React's async passive effects — the finally can run
+          // between this response's setState and the effect pass that re-reads
+          // the map, making the project look neither loaded nor in-flight and
+          // re-firing it (observed as a full refire round in the boot test).
+        } catch {
+          // refreshSessions has no internal catch — swallow to avoid an
+          // unhandled rejection, and free the entry so later effect runs
+          // re-attempt the failed project (resync/manual refresh backstop).
+          bootSessionsFetchingRef.current.delete(p.id);
+        }
+      })();
     }
   }, [projects, sessionsByProject, refreshSessions, isPopout]);
 
