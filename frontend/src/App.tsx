@@ -273,6 +273,11 @@ export default function App() {
   const selectedSessionIdRef = useRef<string | null>(null);
   const chatViewRef = useRef<ChatViewHandle>(null);
   selectedSessionIdRef.current = selectedSessionId;
+  // selectedProjectId's ref twin: the resync listener registers once (its
+  // effect's deps do not include selectedProjectId), so reading the state in
+  // that closure would freeze the mount-time value (null). Refs stay current.
+  const selectedProjectIdRef = useRef<string | null>(selectedProjectId);
+  selectedProjectIdRef.current = selectedProjectId;
   // openTabs ref: closeTab reads the "neighbor" tab through the ref's latest value instead of
   // adding it to effect deps (re-creating closeTab on every tab add/remove would re-render the
   // whole TabBar tree). Same rationale as selectedSessionIdRef below.
@@ -610,15 +615,39 @@ export default function App() {
     );
   }, []);
 
-  // 启动:加载项目 + 订阅事件。
-  // R3: marks that the mount-effect boot pulls have started, so the FIRST
-  // WS-connect resync (which races along initial boot) can skip duplicating
-  // the project/harness list refresh. Later resyncs always refresh.
-  const bootListsStartedRef = useRef(false);
+  // Boot session-map load. Fast path: ONE ListAllSessions bulk snapshot fills
+  // every project's sessions in a single request (request-storm fix step 3).
+  // Boot session-map load. Fast path: ONE ListAllSessions bulk snapshot fills
+  // every project's sessions in a single request (request-storm fix step 3).
+  // Fallback: the per-project loop further below — it covers snapshot failure,
+  // projects added after boot, and per-project retries; on the happy path it
+  // fires ZERO requests because every key already landed. snapshotSettled
+  // gates the fallback so the two paths never race at mount (ungated, the
+  // loop would fan out one request per project before the snapshot response
+  // arrives). Declared before the subscription effect: that effect's deps
+  // array references refreshAllSessions at render time (TDZ otherwise).
+  const [snapshotSettled, setSnapshotSettled] = useState(false);
+  const refreshAllSessions = useCallback(async () => {
+    try {
+      const map = await ChatService.ListAllSessions();
+      setSessionsByProject((prev) => ({ ...prev, ...(map ?? {}) }));
+    } catch {
+      /* bulk unavailable — the per-project fallback loop takes over */
+    } finally {
+      setSnapshotSettled(true);
+    }
+  }, []);
+  useEffect(() => {
+    // Popout windows render exactly one session (their own); the all-project
+    // load is main-window bookkeeping (O2 — P wasted requests per boot).
+    if (isPopout) { setSnapshotSettled(true); return; }
+    void refreshAllSessions();
+  }, [isPopout, refreshAllSessions]);
+
+  // Boot: load the project list and subscribe to events.
   useEffect(() => {
     void refreshProjects();
     ChatService.ListHarnesses().then((h) => setHarnesses(h ?? [])).catch(() => {});
-    bootListsStartedRef.current = true; // first-connect resync skips these (R3)
     // 后端异步发现 harness 完成后推 chat:harnesses 事件,据此重拉 enriched 列表(含版本/可升级)。
     const offHarnesses = Events.On("chat:harnesses", () => {
       ChatService.ListHarnesses().then((h) => setHarnesses(h ?? [])).catch(() => {});
@@ -798,24 +827,26 @@ export default function App() {
     // desktop process. Desktop never sees it (custom.js 404s there). Re-pull the
     // server-side snapshots only — live streaming state is intentionally not
     // replayed (WS reconnects resync, never backfill).
-    // Debounce + first-boot dedup (R3): custom.js may deliver resync bursts
-    // (visibilitychange + onopen raced before the root-cause fix; multiple
-    // tabs each fire their own). A 300ms trailing debounce coalesces them,
-    // and the first WS connect rides along the mount-effect boot pulls
-    // below — skipping the list refresh for it avoids a full duplicate.
+    // Always full-refresh (request-storm fix step 4): cross-device new-session
+    // visibility is ONLY served by this pull (chat:status / chat:session-meta
+    // handlers touch sessions already in the map, never insert), so a
+    // first-connect skip would drop sessions created on another device. With
+    // the bulk snapshot this refresh is ~5 requests, so no special-casing.
+    // The previous bootListsStartedRef guard was dead code anyway — it was set
+    // synchronously at mount, and every WS connect lands after mount.
+    // A 300ms trailing debounce coalesces resync bursts (visibilitychange +
+    // onopen can race; multiple tabs each fire their own).
     let resyncTimer: ReturnType<typeof window.setTimeout> | undefined;
     const offResync = Events.On("remote:resync", () => {
       clearTimeout(resyncTimer);
       resyncTimer = setTimeout(() => {
-        if (bootListsStartedRef.current) {
-          void refreshProjects();
-          ChatService.ListHarnesses().then((h) => setHarnesses(h ?? [])).catch(() => {});
-        }
-        // else: first WS connect rides along the mount-effect boot pulls
-        // (ref set there) — the list refresh would be a full duplicate.
-        for (const pid of Object.keys(sessionsByProjectRef.current)) {
-          void refreshSessions(pid, true);
-        }
+        void refreshProjects();
+        ChatService.ListHarnesses().then((h) => setHarnesses(h ?? [])).catch(() => {});
+        void refreshAllSessions();
+        // Re-probe the SELECTED project's git context only (step 2): keeps
+        // "agent ran git init mid-session" visible on the phone without the
+        // old all-projects re-probe storm.
+        void probeGit(selectedProjectIdRef.current);
         // Status snapshot merge: chat:status events pushed while the WS was
         // down are gone for good (no replay, §1.8) — pull the backend truth
         // so both stuck "prompting" (#134) and missed "prompting" (#127)
@@ -891,7 +922,7 @@ export default function App() {
       offDrop();
       offResync();
     };
-  }, [refreshProjects, applyEvent, refreshSessions, syncSessionStatuses, isPopout, popoutMode]);
+  }, [refreshProjects, applyEvent, refreshSessions, refreshAllSessions, probeGit, syncSessionStatuses, isPopout, popoutMode]);
 
   // popout 启动标记:目标 session 在本 popout 窗口 open 成功后置 true(快照 effect 据此触发)。
   // 用 state 而非 ref:快照还原 effect 依赖它——openSession 异步完成后 state 变化触发 effect 重跑。
@@ -979,30 +1010,7 @@ export default function App() {
       .catch(() => {});
   }, [isPopout, sessionsByProject, projects]);
 
-  // Boot session-map load. Fast path: ONE ListAllSessions bulk snapshot fills
-  // every project's sessions in a single request (request-storm fix step 3).
-  // Fallback: the per-project loop below — it covers snapshot failure, projects
-  // added after boot, and per-project retries; on the happy path it fires ZERO
-  // requests because every key already landed. snapshotSettled gates the
-  // fallback so the two paths never race at mount (ungated, the loop would fan
-  // out one request per project before the snapshot response arrives).
-  const [snapshotSettled, setSnapshotSettled] = useState(false);
-  const refreshAllSessions = useCallback(async () => {
-    try {
-      const map = await ChatService.ListAllSessions();
-      setSessionsByProject((prev) => ({ ...prev, ...(map ?? {}) }));
-    } catch {
-      /* bulk unavailable — the per-project fallback loop below takes over */
-    } finally {
-      setSnapshotSettled(true);
-    }
-  }, []);
-  useEffect(() => {
-    // Popout windows render exactly one session (their own); the all-project
-    // load is main-window bookkeeping (O2 — P wasted requests per boot).
-    if (isPopout) { setSnapshotSettled(true); return; }
-    void refreshAllSessions();
-  }, [isPopout, refreshAllSessions]);
+
 
   // Multi-project expand-all: once the project list lands, load every project's
   // sessions into the map (local SQLite, fast).

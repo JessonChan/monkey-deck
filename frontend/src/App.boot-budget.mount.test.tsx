@@ -86,7 +86,10 @@ mock.module("./bindings/github.com/jessonchan/monkey-deck/internal/chat/chatserv
   const stubs: Record<string, unknown> = Object.fromEntries([
 'AddHarness', 'AddProject', 'BrowseDir', 'BrowseRoots', 'CloseSessionWindow', 'ContinueSession', 'CreateGuestSession', 'CreateMcpServer', 'CreatePermissionRule', 'CreateSession', 'DeleteMcpServer', 'DeletePermissionRule', 'DeleteSession', 'DeleteWorktree', 'DetachWorktreeGuests', 'EditQueueItem', 'EnqueueMessage', 'ExpandSessionWindow', 'ExportSession', 'FocusSessionWindow', 'GenerateRemotePairingCode', 'GetConfig', 'GetLastHarness', 'GetRemoteInfo', 'GetSessionCachedCommands', 'GetSessionCachedConfigOptions', 'GetSessionMcpServers', 'GetSessionProjectID', 'GetSessionSnapshot', 'HasGitContext', 'ImportMcpConfig', 'InterruptAndSend', 'IsGitProject', 'IsSessionWindowPopped', 'ListHarnessCapabilities', 'ListHarnesses', 'ListMcpServers', 'ListPermissionRules', 'ListProjects', 'ListSessions', 'ListUserMessages', 'ListWorktrees', 'LoadMessagesPage', 'MergeSession', 'OpenSession', 'OpenSessionWindow', 'OpenURL', 'PickDirectory', 'PickFiles', 'ProbeNewHarness', 'RecentBaseRefs', 'RefreshHarnesses', 'RefreshSessionConfig', 'RegenerateRemoteToken', 'RemoteListSessions', 'RemoteRevokeSession', 'RemoveProject', 'ReorderPermissionRules', 'ReorderProjects', 'ReorderQueueItem', 'ResetPermissionRules', 'ResolveBaseRefDefault', 'RespondElicitation', 'RespondPermission', 'RevealPath', 'RevokeQueueItem', 'SaveSessionSnapshot', 'ScheduleQueueItem', 'SearchBaseRefs', 'SearchSessionContent', 'SendMessage', 'SessionAICommit', 'SessionChanges', 'SessionCommit', 'SessionCreateDir', 'SessionCreateFile', 'SessionCurrentBranch', 'SessionDeletePath', 'SessionDiscard', 'SessionFileDiff', 'SessionFuzzyFind', 'SessionListDir', 'SessionMergeable', 'SessionReadFile', 'SessionReadImage', 'SessionRenamePath', 'SessionStage', 'SessionStatuses', 'SessionUnstage', 'SessionWriteFile', 'SetAutoHarnessUpgrade', 'SetCheckHarnessUpdates', 'SetQueueItemRepeat', 'SetRemoteEnabled', 'SetRemotePort', 'SetRemotePublicURL', 'SetSessionConfigOption', 'SetSessionPinned', 'SetSessionWindowOnTop', 'ShrinkSessionWindow', 'StopSession', 'ToggleMaximise', 'UpdateMcpServer', 'UpdatePermissionRule', 'UpdateSessionCustomTitle', 'UpdateSessionTags', 'UpdateUserHarness', 'UpgradeHarness', 'WorktreeGuests', 'WorktreeKind',
   ].map((n) => [n, async () => null]));
-  stubs.ListProjects = async () => PROJECTS;
+  stubs.ListProjects = async () => {
+    calls.push("ListProjects");
+    return PROJECTS;
+  };
   stubs.ListSessions = (pid: string) => {
     calls.push(`ListSessions:${pid}`);
     return listSessionsImpl(pid);
@@ -372,6 +375,85 @@ describe("App boot request budget (request-storm fix)", () => {
     document.body.innerHTML = "";
     localStorage.removeItem("md:sidebar-expanded");
     listPoppedReturn = [];
+  });
+
+  test("T8: resync burst coalesces into one full refresh; first connect is not skipped", async () => {
+    calls.length = 0;
+    listAllSessionsImpl = async () => bulkFixture();
+    listSessionsImpl = async (pid) => sessionsOf(pid);
+    const root = await mountApp();
+    await flush();
+    expect(countCalls("ListAllSessions")).toBe(1);
+    expect(countCalls("ListProjects")).toBe(1);
+
+    // Two rapid resync dispatches (WS onopen + visibilitychange racing) must
+    // coalesce behind the 300ms trailing debounce into ONE full refresh — and
+    // the first resync refreshes too (cross-device visibility depends on it).
+    const resync = eventHandlers.get("remote:resync");
+    expect(resync).toBeDefined();
+    resync!({ data: null });
+    resync!({ data: null });
+    await new Promise((r) => setTimeout(r, 450));
+    await flush();
+    expect(countCalls("ListAllSessions")).toBe(2);
+    expect(countCalls("ListProjects")).toBe(2);
+
+    root.unmount();
+    await flush();
+    document.body.innerHTML = "";
+  });
+
+  test("T14: session created on another device becomes visible after resync", async () => {
+    calls.length = 0;
+    localStorage.setItem("md:sidebar-expanded", JSON.stringify(["p01"]));
+    // Boot fixture: p01 has one session; the OTHER device creates one while
+    // this client is away — the next bulk snapshot carries it.
+    listAllSessionsImpl = async () => bulkFixture();
+    const root = await mountApp();
+    await flush();
+    expect(document.querySelector('[data-testid="session-s-p01"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="session-s-new"]')).toBeNull();
+
+    const withNew = bulkFixture();
+    withNew.p01 = [
+      { id: "s-new", projectId: "p01", title: "created elsewhere", harness: "omp" },
+      ...withNew.p01,
+    ];
+    listAllSessionsImpl = async () => withNew;
+    const resync = eventHandlers.get("remote:resync");
+    resync!({ data: null });
+    await new Promise((r) => setTimeout(r, 450));
+    await flush();
+    expect(document.querySelector('[data-testid="session-s-new"]')).not.toBeNull();
+
+    root.unmount();
+    await flush();
+    document.body.innerHTML = "";
+    localStorage.removeItem("md:sidebar-expanded");
+  });
+
+  test("T14b: resync re-probes only the selected project's git context", async () => {
+    calls.length = 0;
+    listAllSessionsImpl = async () => bulkFixture();
+    listSessionsImpl = async (pid) => sessionsOf(pid);
+    hasGitContextImpl = async () => false; // non-git: not cached, re-probed per ask
+    const root = await mountApp();
+    await flush();
+    await clickProject("p01");
+    expect(calls.filter((c) => c === "HasGitContext:p01").length).toBe(1);
+
+    const resync = eventHandlers.get("remote:resync");
+    resync!({ data: null });
+    await new Promise((r) => setTimeout(r, 450));
+    await flush();
+    // Selected project re-probed (mid-session git init stays visible)…
+    expect(calls.filter((c) => c === "HasGitContext:p01").length).toBe(2);
+    // …and ONLY it: the other 30 projects are untouched by the resync.
+    expect(countCalls("HasGitContext:")).toBe(2);
+
+    root.unmount();
+    await flush();
+    document.body.innerHTML = "";
   });
 
   test("T9: no boot git fan-out; selection probes once and true is cached", async () => {
