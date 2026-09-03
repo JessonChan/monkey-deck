@@ -22,12 +22,8 @@ func TestEmptyTurnDetectedAsNotice(t *testing.T) {
 	fc.emitHook = nil
 
 	// 注入 emit 捕获,记录最终 status payload(含 Code / Detail)。
-	var lastPayload StatusPayload
-	svc.emitHook = func(name string, data any) {
-		if name == EventStatus {
-			lastPayload = data.(StatusPayload)
-		}
-	}
+	// 经 statusRecorder 读(线程安全):emit 来自 runPrompt goroutine,裸变量会被 -race 抓。
+	rec := captureStatuses(svc, sessionID)
 
 	if err := svc.SendMessage(sessionID, "hello", nil); err != nil {
 		t.Fatalf("send: %v", err)
@@ -37,7 +33,12 @@ func TestEmptyTurnDetectedAsNotice(t *testing.T) {
 
 	// 等 runPrompt 收尾(跳过中间 prompting,等终态 notice/idle)。
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && (lastPayload.Status == "" || lastPayload.Status == "prompting") {
+	var lastPayload StatusPayload
+	for time.Now().Before(deadline) {
+		lastPayload = lastPayloadOf(rec)
+		if lastPayload.Status != "" && lastPayload.Status != "prompting" {
+			break
+		}
 		time.Sleep(2 * time.Millisecond)
 	}
 	// 非异常的零输出 end_turn 推 notice(温和提示,前端蓝色条),不推 error(红色,吓人)。
@@ -73,13 +74,7 @@ func TestEmptyTurnAfterElicitDeclineIsSilentIdle(t *testing.T) {
 	// emitHook 在 release(Prompt 返回前)触发:模拟用户在 turn 进行中 decline 了 elicitation。
 	// 不产出任何 SessionUpdate(emitHook 本就不 emit),保持空 turn 语义。
 	fc.emitHook = func(_ string) { fc.declined.Store(true) }
-
-	var lastPayload StatusPayload
-	svc.emitHook = func(name string, data any) {
-		if name == EventStatus {
-			lastPayload = data.(StatusPayload)
-		}
-	}
+	rec := captureStatuses(svc, sessionID)
 
 	if err := svc.SendMessage(sessionID, "hello", nil); err != nil {
 		t.Fatalf("send: %v", err)
@@ -89,7 +84,12 @@ func TestEmptyTurnAfterElicitDeclineIsSilentIdle(t *testing.T) {
 
 	// 等终态(应直接到 idle,不经 notice/error)。
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && (lastPayload.Status == "" || lastPayload.Status == "prompting") {
+	var lastPayload StatusPayload
+	for time.Now().Before(deadline) {
+		lastPayload = lastPayloadOf(rec)
+		if lastPayload.Status != "" && lastPayload.Status != "prompting" {
+			break
+		}
 		time.Sleep(2 * time.Millisecond)
 	}
 	if lastPayload.Status != "idle" {

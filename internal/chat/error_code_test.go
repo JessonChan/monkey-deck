@@ -20,16 +20,19 @@ import (
 	"time"
 )
 
-// waitErrorStatus 轮询等终态 error status(跳过中间 prompting),返回该 payload。
-func waitErrorStatus(t *testing.T, last *StatusPayload) {
+// waitErrorStatus 轮询等终态 status(跳过中间 prompting),返回该 payload。
+// 经 statusRecorder 读(线程安全):emit 来自 runPrompt goroutine,裸变量会被 -race 抓。
+func waitErrorStatus(t *testing.T, rec *statusRecorder) StatusPayload {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && (last.Status == "" || last.Status == "prompting") {
+	for time.Now().Before(deadline) {
+		if p := lastPayloadOf(rec); p.Status != "" && p.Status != "prompting" {
+			return p
+		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	if last.Status != "error" {
-		t.Fatalf("disconnect should emit error status, got %q", last.Status)
-	}
+	t.Fatalf("timeout waiting for terminal status, got %q", lastPayloadOf(rec).Status)
+	return StatusPayload{}
 }
 
 // assertDisconnectedCode 断言 disconnect error 必须走 code 驱动(Code 填、Detail 空)。
@@ -50,20 +53,13 @@ func TestRunPromptDisconnectEmitsCode(t *testing.T) {
 	svc, sessionID, fc := newTestService(t)
 	// 模拟 SDK 在 harness 进程崩溃时返回的 peer disconnected 错。
 	fc.promptErr = errors.New("peer disconnected before response")
-
-	var lastPayload StatusPayload
-	svc.emitHook = func(name string, data any) {
-		if name == EventStatus {
-			lastPayload = data.(StatusPayload)
-		}
-	}
+	rec := captureStatuses(svc, sessionID)
 
 	if err := svc.SendMessage(sessionID, "hello", nil); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	waitStarted(t, fc, 1)
-
-	waitErrorStatus(t, &lastPayload)
+	lastPayload := waitErrorStatus(t, rec)
 	assertDisconnectedCode(t, lastPayload)
 
 	if svc.isActive(sessionID) {
@@ -77,20 +73,13 @@ func TestRunPromptDisconnectEmitsCode(t *testing.T) {
 func TestRunPromptBrokenPipeEmitsCode(t *testing.T) {
 	svc, sessionID, fc := newTestService(t)
 	fc.promptErr = errors.New(`write |1: broken pipe`)
-
-	var lastPayload StatusPayload
-	svc.emitHook = func(name string, data any) {
-		if name == EventStatus {
-			lastPayload = data.(StatusPayload)
-		}
-	}
+	rec := captureStatuses(svc, sessionID)
 
 	if err := svc.SendMessage(sessionID, "hello", nil); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	waitStarted(t, fc, 1)
-
-	waitErrorStatus(t, &lastPayload)
+	lastPayload := waitErrorStatus(t, rec)
 	assertDisconnectedCode(t, lastPayload)
 }
 
