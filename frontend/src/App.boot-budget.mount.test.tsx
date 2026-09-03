@@ -86,6 +86,10 @@ mock.module("./bindings/github.com/jessonchan/monkey-deck/internal/chat/chatserv
     calls.push(`HasGitContext:${pid}`);
     return hasGitContextImpl(pid);
   };
+  stubs.IsGitProject = async (pid: string) => {
+    calls.push(`IsGitProject:${pid}`);
+    return false;
+  };
   stubs.IsSessionWindowPopped = async (sid: string) => {
     calls.push(`IsSessionWindowPopped:${sid}`);
     return false;
@@ -139,6 +143,13 @@ async function mountApp(): Promise<Root> {
 const countCalls = (prefix: string) => calls.filter((c) => c.startsWith(prefix)).length;
 const distinctPids = () =>
   new Set(calls.filter((c) => c.startsWith("ListSessions:")).map((c) => c.slice("ListSessions:".length)));
+
+const clickProject = async (pid: string) => {
+  const el = document.querySelector(`[data-testid="project-${pid}"]`) as HTMLElement | null;
+  if (!el) throw new Error(`project row not found: ${pid}`);
+  el.click();
+  await flush();
+};
 
 describe("App boot request budget (request-storm fix)", () => {
   test("T1: staggered responses — exactly one ListSessions per project (no refire rounds)", async () => {
@@ -236,6 +247,90 @@ describe("App boot request budget (request-storm fix)", () => {
     expect(calls.filter((c) => c === "ListSessions:p02").length).toBeGreaterThanOrEqual(2);
     // And the rest still loaded exactly once each.
     expect(countCalls("ListSessions:")).toBeLessThanOrEqual(31 + 1); // 31 first round + 1 retry
+    root.unmount();
+    await flush();
+    document.body.innerHTML = "";
+  });
+
+  test("T9: no boot git fan-out; selection probes once and true is cached", async () => {
+    calls.length = 0;
+    const gitTrue = new Set(["p01"]);
+    hasGitContextImpl = async (pid) => gitTrue.has(pid);
+    listSessionsImpl = async (pid) => sessionsOf(pid);
+    const root = await mountApp();
+    await flush();
+
+    // Boot must not probe ANY project (the old code probed all 31 here).
+    expect(countCalls("HasGitContext:")).toBe(0);
+
+    await clickProject("p01");
+    expect(calls.filter((c) => c === "HasGitContext:p01").length).toBe(1);
+    // Re-selecting a known-true project skips the probe (R4 cache semantics).
+    await clickProject("p01");
+    expect(calls.filter((c) => c === "HasGitContext:p01").length).toBe(1);
+
+    root.unmount();
+    await flush();
+    document.body.innerHTML = "";
+  });
+
+  test("T10: non-git projects re-probe per selection (false is not cached)", async () => {
+    calls.length = 0;
+    hasGitContextImpl = async () => false;
+    listSessionsImpl = async (pid) => sessionsOf(pid);
+    const root = await mountApp();
+    await flush();
+
+    await clickProject("p02");
+    expect(calls.filter((c) => c === "HasGitContext:p02").length).toBe(1);
+    await clickProject("p03");
+    await clickProject("p02");
+    // p02 selected twice → probed twice (agents may git init between selections).
+    expect(calls.filter((c) => c === "HasGitContext:p02").length).toBe(2);
+    expect(calls.filter((c) => c === "HasGitContext:p03").length).toBe(1);
+
+    root.unmount();
+    await flush();
+    document.body.innerHTML = "";
+  });
+
+  test("T11: in-flight probe dedup — double-click while pending fires one request", async () => {
+    calls.length = 0;
+    const pendingGit = new Map<string, (v: boolean) => void>();
+    hasGitContextImpl = (pid) =>
+      new Promise<boolean>((res) => {
+        if (!pendingGit.has(pid)) pendingGit.set(pid, res);
+      });
+    listSessionsImpl = async (pid) => sessionsOf(pid);
+    const root = await mountApp();
+    await flush();
+
+    await clickProject("p04");
+    await clickProject("p04"); // still pending → dropped
+    expect(calls.filter((c) => c === "HasGitContext:p04").length).toBe(1);
+    pendingGit.get("p04")!(true);
+    await flush();
+    await clickProject("p04"); // now true-cached → still 1
+    expect(calls.filter((c) => c === "HasGitContext:p04").length).toBe(1);
+
+    root.unmount();
+    await flush();
+    document.body.innerHTML = "";
+  });
+
+  test("T12: selection never touches the STRICT worktree gate (IsGitProject)", async () => {
+    calls.length = 0;
+    hasGitContextImpl = async () => true;
+    listSessionsImpl = async (pid) => sessionsOf(pid);
+    const root = await mountApp();
+    await flush();
+    await clickProject("p01");
+    await clickProject("p02");
+    await clickProject("p01");
+    // IsGitProject is createSession's on-demand strict gate — not the boot or
+    // selection path.
+    expect(countCalls("IsGitProject:")).toBe(0);
+
     root.unmount();
     await flush();
     document.body.innerHTML = "";

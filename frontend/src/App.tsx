@@ -315,39 +315,41 @@ export default function App() {
   projectsRef.current = projects;
   const imageSupportedBySessionRef = useRef(imageSupportedBySession);
   imageSupportedBySessionRef.current = imageSupportedBySession;
-  // gitByProject 的 ref:refreshProjects 增量探测时读当前缓存(true 项跳过),
-  // 不进依赖。与 sessionsByProjectRef 同款 render 期赋值模式。
+  // gitByProject ref: probeGit reads the current cache (known-true skips the
+  // probe) without entering deps. Same render-phase assignment pattern as
+  // sessionsByProjectRef.
   const gitByProjectRef = useRef(gitByProject);
   gitByProjectRef.current = gitByProject;
+
+  // Per-selection lazy git probe (request-storm fix step 2): gitByProject's
+  // ONLY consumer is the selected project's SidePanel SCM tab, so probing
+  // every project on every refreshProjects was pure waste (boot = one git
+  // exec + fs walk per project; remote resync re-probed non-git projects
+  // forever). Probe on selection instead; `true` stays cached for the mount
+  // (same R4 semantics), in-flight duplicates are dropped, failures free the
+  // slot so the next selection re-attempts. RELAXED semantics (wrapper dir
+  // with a git subdir counts) still come from the backend HasGitContext
+  // binding; the STRICT IsGitProject worktree gate in createSession is a
+  // separate on-demand call and is untouched.
+  const gitProbingRef = useRef<Set<string>>(new Set());
+  const probeGit = useCallback(async (pid: string | null) => {
+    if (!pid || gitByProjectRef.current[pid] === true) return;
+    if (gitProbingRef.current.has(pid)) return;
+    gitProbingRef.current.add(pid);
+    try {
+      const v = await ChatService.HasGitContext(pid);
+      setGitByProject((prev) => ({ ...prev, [pid]: v }));
+    } catch {
+      // leave unset: the next selection of this project re-attempts
+    } finally {
+      gitProbingRef.current.delete(pid);
+    }
+  }, []);
+  useEffect(() => { void probeGit(selectedProjectId); }, [selectedProjectId, probeGit]);
 
   const refreshProjects = useCallback(async () => {
     const list = await ChatService.ListProjects();
     setProjects(list || []);
-    // 加载项目级 hasGitContext 信息供 SCM 可见性判定(对齐 orca / VS Code repo-kind 判定,
-    // 跟 session 是否有独立 worktree 解耦).RELAXED:wrapper 目录非 git 但子目录是 repo 也算,
-    // 与 scmDir 的 FindSubRepo fallback 语义一致。
-    // 注:worktree 门控(createSession)用 STRICT 的 IsGitProject,不是这个。
-    //
-    // Incremental probe (R4): `true` is cached for the process lifetime
-    // (each probe = 1 git exec + FindSubRepo fs walk); `false` entries are
-    // RE-PROBED every refresh — false→true is the only real flip direction
-    // (agents run `git init`/`git clone` mid-session; true→false needs the
-    // user to delete .git). Caching `false` forever would hide a project's
-    // whole SCM surface until restart. Merge, never replace: a replace would
-    // wipe entries this pass skipped.
-    if (list && list.length > 0) {
-      const toProbe = list.filter((p) => gitByProjectRef.current[p.id] !== true);
-      if (toProbe.length === 0) return;
-      const entries = await Promise.all(toProbe.map(async (p) => {
-        try { return [p.id, await ChatService.HasGitContext(p.id)] as [string, boolean]; }
-        catch { return [p.id, false] as [string, boolean]; }
-      }));
-      setGitByProject((prev) => {
-        const next = { ...prev };
-        for (const [id, v] of entries) next[id] = v;
-        return next;
-      });
-    }
   }, []);
 
   const refreshSessions = useCallback(async (projectId: string, keepFields = false) => {
