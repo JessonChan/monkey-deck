@@ -391,6 +391,21 @@ func spliceQueueRows(rows []store.QueueItem, idx int) []store.QueueItem {
 	return out
 }
 
+// insertAtSuccessor inserts row immediately before successorID in the current
+// list; an absent successor ("" or revoked mid-window) means the tail. This is
+// the #184 fix: re-insertion after the lock-free send window anchors on the
+// dequeue-time successor's ID instead of the by-then-stale index.
+func insertAtSuccessor(rows []store.QueueItem, successorID string, row store.QueueItem) []store.QueueItem {
+	if idx := queueIndexOf(rows, successorID); idx >= 0 {
+		out := make([]store.QueueItem, 0, len(rows)+1)
+		out = append(out, rows[:idx]...)
+		out = append(out, row)
+		out = append(out, rows[idx:]...)
+		return out
+	}
+	return append(rows, row)
+}
+
 // ─── drain (auto-continue) ──────────────────────────────────────────────────
 
 // drainQueue sends the next DUE queue item for the session as a fresh turn.
@@ -425,21 +440,24 @@ func (s *ChatService) drainQueue(sessionID string) {
 		s.queueMu.Unlock()
 	}()
 
-	next, dueIdx, ok := s.dequeueDue(sessionID)
+	next, anchor, ok := s.dequeueDue(sessionID)
 	if !ok {
 		return
 	}
 	// Send OUTSIDE every queue lock: SendMessage may block on spawn (spawnMu)
 	// and on the session's sendMu while the ending turn finishes its tail.
+	// User mutations (Revoke/Reorder/Enqueue/Schedule) can land inside that
+	// window, so both re-insertions below anchor on the successor's ID — the
+	// dequeued index would be stale by then (#184).
 	if err := s.SendMessage(sessionID, next.Text, unmarshalQueueAttachments(next.Attachments)); err != nil {
 		slog.Warn("queue drain send failed, re-queueing", "session", sessionID, "err", err)
-		s.requeueAt(sessionID, dueIdx, next)
+		s.requeueAt(sessionID, anchor, next)
 		return
 	}
 	// Recurring item (#111): a successful send does NOT consume it — re-arm
 	// at max(now, prev+interval) with sentCount+1 (unless maxSends caps out).
 	if next.RepeatEveryMs > 0 {
-		s.rescheduleRepeat(sessionID, dueIdx, next)
+		s.rescheduleRepeat(sessionID, anchor, next)
 	}
 }
 
@@ -454,7 +472,13 @@ func (s *ChatService) drainQueue(sessionID string) {
 //   - sentCount + 1 — counts successful sends only (failed requeues keep it);
 //   - maxSends reached (sentCount would reach N) → the item stays consumed:
 //     the repeat auto-clears and the row is not re-inserted at all.
-func (s *ChatService) rescheduleRepeat(sessionID string, idx int, row store.QueueItem) {
+//
+// Position: successorID is the ID of the row that followed the dequeued one
+// (captured at dequeue time). The row is re-inserted immediately before that
+// successor in the CURRENT list; a vanished successor (or no successor at
+// dequeue) means the tail. Anchoring by ID, not by the recorded index, is
+// what keeps the position stable across the lock-free send window (#184).
+func (s *ChatService) rescheduleRepeat(sessionID, successorID string, row store.QueueItem) {
 	s.queueMu.Lock()
 	defer s.queueMu.Unlock()
 	sent := row.SentCount + 1
@@ -476,13 +500,7 @@ func (s *ChatService) rescheduleRepeat(sessionID string, idx int, row store.Queu
 	}
 	row.SentCount = sent
 	row.ScheduledAt = nextAt
-	if idx > len(rows) {
-		idx = len(rows)
-	}
-	out := make([]store.QueueItem, 0, len(rows)+1)
-	out = append(out, rows[:idx]...)
-	out = append(out, row)
-	out = append(out, rows[idx:]...)
+	out := insertAtSuccessor(rows, successorID, row)
 	if err := s.st.ReplaceQueueItems(s.ctx, sessionID, out); err != nil {
 		slog.Warn("queue repeat reschedule: persist", "session", sessionID, "err", err)
 		return
@@ -492,14 +510,18 @@ func (s *ChatService) rescheduleRepeat(sessionID string, idx int, row store.Queu
 }
 
 // dequeueDue atomically removes and persists the first due item. Returns the
-// removed row and its original index (for requeue-on-send-failure).
-func (s *ChatService) dequeueDue(sessionID string) (store.QueueItem, int, bool) {
+// removed row and its re-insertion anchor: the ID of the row that followed it
+// ("" when the dequeued row was last). Both post-send re-insertions
+// (requeueAt / rescheduleRepeat) locate the anchor by ID in the CURRENT list —
+// the raw index would be stale once the lock-free send window let user
+// mutations shift the queue (#184).
+func (s *ChatService) dequeueDue(sessionID string) (store.QueueItem, string, bool) {
 	s.queueMu.Lock()
 	defer s.queueMu.Unlock()
 	rows, err := s.st.ListQueueItems(s.ctx, sessionID)
 	if err != nil {
 		slog.Warn("queue drain: list", "session", sessionID, "err", err)
-		return store.QueueItem{}, 0, false
+		return store.QueueItem{}, "", false
 	}
 	nowMs := time.Now().UnixMilli()
 	dueIdx := -1
@@ -512,22 +534,27 @@ func (s *ChatService) dequeueDue(sessionID string) (store.QueueItem, int, bool) 
 	if dueIdx < 0 {
 		// Everything is future-scheduled: keep the queue alive via the timer.
 		s.armQueueTimerLocked(sessionID, rows)
-		return store.QueueItem{}, 0, false
+		return store.QueueItem{}, "", false
 	}
 	next := rows[dueIdx]
 	rest := spliceQueueRows(rows, dueIdx)
 	if err := s.st.ReplaceQueueItems(s.ctx, sessionID, rest); err != nil {
 		// Dequeue failed → do NOT send (would duplicate on retry).
 		slog.Warn("queue drain: dequeue", "session", sessionID, "err", err)
-		return store.QueueItem{}, 0, false
+		return store.QueueItem{}, "", false
 	}
 	s.armQueueTimerLocked(sessionID, rest)
 	s.emitQueue(sessionID, rest)
-	return next, dueIdx, true
+	var anchor string
+	if dueIdx+1 < len(rows) {
+		anchor = rows[dueIdx+1].ID
+	}
+	return next, anchor, true
 }
 
-// requeueAt re-inserts an item at its original position after a failed send.
-func (s *ChatService) requeueAt(sessionID string, idx int, row store.QueueItem) {
+// requeueAt re-inserts an item at its original position after a failed send,
+// anchored on its dequeue-time successor (#184).
+func (s *ChatService) requeueAt(sessionID, successorID string, row store.QueueItem) {
 	s.queueMu.Lock()
 	defer s.queueMu.Unlock()
 	rows, err := s.st.ListQueueItems(s.ctx, sessionID)
@@ -535,13 +562,7 @@ func (s *ChatService) requeueAt(sessionID string, idx int, row store.QueueItem) 
 		slog.Warn("queue requeue: list", "session", sessionID, "err", err)
 		return
 	}
-	if idx > len(rows) {
-		idx = len(rows)
-	}
-	out := make([]store.QueueItem, 0, len(rows)+1)
-	out = append(out, rows[:idx]...)
-	out = append(out, row)
-	out = append(out, rows[idx:]...)
+	out := insertAtSuccessor(rows, successorID, row)
 	if err := s.st.ReplaceQueueItems(s.ctx, sessionID, out); err != nil {
 		slog.Warn("queue requeue: persist", "session", sessionID, "err", err)
 		return
