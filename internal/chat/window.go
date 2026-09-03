@@ -169,6 +169,25 @@ func (s *ChatService) IsSessionWindowPopped(sessionID string) bool {
 	return ok
 }
 
+// ListPoppedSessions batch-reports which of the given sessions currently live
+// in a popout window (boot reconcile fast path — replaces one
+// IsSessionWindowPopped RPC per session). Same truth source as the singular
+// variant: the WindowManager lookup by popout window name. Returns a non-nil
+// slice (empty = none popped).
+func (s *ChatService) ListPoppedSessions(sessionIDs []string) []string {
+	out := []string{}
+	app := application.Get()
+	if app == nil {
+		return out
+	}
+	for _, sid := range sessionIDs {
+		if _, ok := app.Window.GetByName(popoutWindowName(sid)); ok {
+			out = append(out, sid)
+		}
+	}
+	return out
+}
+
 // GetSessionProjectID 返回某 session 所属的 project ID。
 // 供 popout 窗口启动时设 selectedProjectId(不依赖前端 sessionsByProject 的加载时序)。
 // session 不存在时返回空串(popout effect 据此跳过 openSession)。

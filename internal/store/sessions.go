@@ -226,6 +226,52 @@ func (s *Store) ListSessions(ctx context.Context, projectID string) ([]Session, 
 	return out, rows.Err()
 }
 
+// ListAllSessions lists every project's sessions in one query, grouped by
+// project id — the boot fast path replacing one ListSessions round-trip per
+// project (request-storm fix step 3).
+//
+// Per-project ordering is identical to ListSessions (pinned DESC, prompted_at
+// DESC, updated_at DESC); rows tying on all three keys keep SQLite's scan
+// order within their bucket, same as the per-project query.
+//
+// Contract: the map has a key for EVERY project and values are always
+// non-nil — 0-session projects map to an empty slice. A nil slice would
+// marshal to JSON null and break the frontend invariant that every
+// sessionsByProject value is an array.
+func (s *Store) ListAllSessions(ctx context.Context) (map[string][]Session, error) {
+	out := make(map[string][]Session)
+	projRows, err := s.db.QueryContext(ctx, `SELECT id FROM projects`)
+	if err != nil {
+		return nil, fmt.Errorf("list all sessions (projects): %w", err)
+	}
+	defer projRows.Close()
+	for projRows.Next() {
+		var pid string
+		if err := projRows.Scan(&pid); err != nil {
+			return nil, err
+		}
+		out[pid] = []Session{}
+	}
+	if err := projRows.Err(); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+sessionColumns+` FROM sessions ORDER BY project_id, pinned DESC, prompted_at DESC, updated_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list all sessions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var se Session
+		if err := scanSession(rows, &se); err != nil {
+			return nil, err
+		}
+		out[se.ProjectID] = append(out[se.ProjectID], se)
+	}
+	return out, rows.Err()
+}
+
 // GetSession 取单个 session。
 func (s *Store) GetSession(ctx context.Context, id string) (*Session, error) {
 	var se Session

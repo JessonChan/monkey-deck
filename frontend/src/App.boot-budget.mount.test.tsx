@@ -72,6 +72,15 @@ type SessionStub = { id: string; projectId: string; title: string; harness: stri
 const pendingResolvers = new Map<string, Array<(v: SessionStub[]) => void>>();
 let listSessionsImpl: (pid: string) => Promise<SessionStub[]> = async () => [];
 let hasGitContextImpl: (pid: string) => Promise<boolean> = async () => false;
+// Step-3 fast path stubs: bulk snapshot + batch popout. Default = bulk fixture
+// from the same per-project fixture data (mirrors the Go contract: a key for
+// EVERY project, empty arrays included). Tests that exercise the per-project
+// fallback make the bulk REJECT.
+const bulkFixture = (): Record<string, SessionStub[]> =>
+  Object.fromEntries(PROJECTS.map((p) => [p.id, sessionsOf(p.id)]));
+let listAllSessionsImpl: () => Promise<Record<string, SessionStub[]>> = async () => bulkFixture();
+let listPoppedReturn: string[] = [];
+let lastPoppedArg: string[] | null = null;
 
 mock.module("./bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice", () => {
   const stubs: Record<string, unknown> = Object.fromEntries([
@@ -81,6 +90,15 @@ mock.module("./bindings/github.com/jessonchan/monkey-deck/internal/chat/chatserv
   stubs.ListSessions = (pid: string) => {
     calls.push(`ListSessions:${pid}`);
     return listSessionsImpl(pid);
+  };
+  stubs.ListAllSessions = () => {
+    calls.push("ListAllSessions");
+    return listAllSessionsImpl();
+  };
+  stubs.ListPoppedSessions = async (sids: string[]) => {
+    calls.push(`ListPoppedSessions:${sids.length}`);
+    lastPoppedArg = sids;
+    return listPoppedReturn;
   };
   stubs.HasGitContext = (pid: string) => {
     calls.push(`HasGitContext:${pid}`);
@@ -152,9 +170,10 @@ const clickProject = async (pid: string) => {
 };
 
 describe("App boot request budget (request-storm fix)", () => {
-  test("T1: staggered responses — exactly one ListSessions per project (no refire rounds)", async () => {
+  test("T1: bulk down + staggered responses — exactly one ListSessions per project", async () => {
     calls.length = 0;
     pendingResolvers.clear();
+    listAllSessionsImpl = async () => { throw new Error("bulk down"); };
     listSessionsImpl = (pid) =>
       new Promise<SessionStub[]>((res) => {
         const q = pendingResolvers.get(pid) ?? [];
@@ -179,18 +198,21 @@ describe("App boot request budget (request-storm fix)", () => {
     document.body.innerHTML = "";
   });
 
-  test("T2: happy path — every project loads, 0-session projects included", async () => {
+  test("T2: happy path — one bulk snapshot fills everything, fallback stays silent", async () => {
     calls.length = 0;
+    listAllSessionsImpl = async () => bulkFixture();
     listSessionsImpl = async (pid) => sessionsOf(pid);
     const root = await mountApp();
     await flush();
 
-    expect(countCalls("ListSessions:")).toBe(31);
-    expect(distinctPids().size).toBe(31);
-    // 0-session projects (p10/p20/p30) were requested too, not skipped.
-    for (const zero of ["p10", "p20", "p30"]) {
-      expect(calls).toContain(`ListSessions:${zero}`);
-    }
+    // The fast path is the ONLY session-list request; the per-project loop
+    // fires zero calls because every key landed in one commit.
+    expect(countCalls("ListAllSessions")).toBe(1);
+    expect(countCalls("ListSessions:")).toBe(0);
+    // Completeness: the reconcile fired (allLoaded was true) and asked about
+    // every session (28 = 31 projects − 3 empty ones) in ONE bulk call.
+    expect(calls.filter((c) => c.startsWith("ListPoppedSessions:")).length).toBe(1);
+    expect(lastPoppedArg?.length).toBe(28);
     root.unmount();
     await flush();
     document.body.innerHTML = "";
@@ -198,27 +220,30 @@ describe("App boot request budget (request-storm fix)", () => {
 
   test("T3: chat:status prompting forces a refresh that bypasses the boot guard", async () => {
     calls.length = 0;
+    listAllSessionsImpl = async () => bulkFixture();
     listSessionsImpl = async (pid) => sessionsOf(pid);
     const root = await mountApp();
     await flush();
-    expect(countCalls("ListSessions:p01")).toBe(1);
+    expect(countCalls("ListSessions:p01")).toBe(0);
 
     // A prompting turn on a session of p01 must re-pull that project even
-    // though it already loaded — event refreshes never go through the boot guard.
+    // though the bulk snapshot already loaded it — event refreshes never go
+    // through the boot guard.
     const onStatus = eventHandlers.get("chat:status");
     expect(onStatus).toBeDefined();
     onStatus!({ data: { sessionId: "s-p01", status: "prompting" } });
     await flush();
-    expect(countCalls("ListSessions:p01")).toBeGreaterThanOrEqual(2);
+    expect(countCalls("ListSessions:p01")).toBeGreaterThanOrEqual(1);
 
     root.unmount();
     await flush();
     document.body.innerHTML = "";
   });
 
-  test("T4: a rejected ListSessions is retried by later effect runs, no unhandled rejection", async () => {
+  test("T4: bulk down + a rejected ListSessions is retried, no unhandled rejection", async () => {
     calls.length = 0;
     pendingResolvers.clear();
+    listAllSessionsImpl = async () => { throw new Error("bulk down"); };
     let p02Failures = 0;
     listSessionsImpl = (pid) => {
       if (pid === "p02") {
@@ -250,6 +275,103 @@ describe("App boot request budget (request-storm fix)", () => {
     root.unmount();
     await flush();
     document.body.innerHTML = "";
+  });
+
+  test("T5: bulk snapshot and per-project loads produce the identical session sequence", async () => {
+    // p01 gets two sessions, pinned first — order must survive both paths.
+    const withPinned = (pid: string): SessionStub[] =>
+      pid === "p01"
+        ? [
+            { id: "s-p01-pin", projectId: pid, title: "pinned", harness: "omp" },
+            ...sessionsOf(pid),
+          ]
+        : sessionsOf(pid);
+    const bulkMap = Object.fromEntries(PROJECTS.map((p) => [p.id, withPinned(p.id)]));
+
+    // Mode A: bulk snapshot.
+    calls.length = 0;
+    lastPoppedArg = null;
+    listAllSessionsImpl = async () => bulkMap;
+    listSessionsImpl = async (pid) => withPinned(pid);
+    const rootA = await mountApp();
+    await flush();
+    const seqA = lastPoppedArg ?? [];
+    rootA.unmount();
+    await flush();
+    document.body.innerHTML = "";
+
+    // Mode B: bulk down, per-project loads in project order.
+    calls.length = 0;
+    lastPoppedArg = null;
+    listAllSessionsImpl = async () => { throw new Error("bulk down"); };
+    const rootB = await mountApp();
+    for (const p of PROJECTS) {
+      const q = pendingResolvers.get(p.id);
+      if (q && q.length > 0) (q.shift()!)(withPinned(p.id));
+      await flush(1);
+    }
+    await flush();
+    const seqB = lastPoppedArg ?? [];
+    rootB.unmount();
+    await flush();
+    document.body.innerHTML = "";
+
+    expect(seqB.length).toBe(seqA.length);
+    expect(seqB).toEqual(seqA);
+    // The pinned session of p01 leads its bucket in both modes.
+    expect(seqA[0]).toBe("s-p01-pin");
+  });
+
+  test("T6: boot reconcile batches — IsSessionWindowPopped never fires", async () => {
+    calls.length = 0;
+    listAllSessionsImpl = async () => bulkFixture();
+    const root = await mountApp();
+    await flush();
+
+    // happy-dom is not a remote client, so the reconcile DOES run here — and
+    // must use exactly one bulk call instead of one RPC per session (432 on
+    // the real dataset).
+    expect(countCalls("IsSessionWindowPopped:")).toBe(0);
+    expect(calls.filter((c) => c.startsWith("ListPoppedSessions:")).length).toBe(1);
+    root.unmount();
+    await flush();
+    document.body.innerHTML = "";
+  });
+
+  test("T7: bulk snapshot failure falls back to the per-project loop (all 31 load)", async () => {
+    calls.length = 0;
+    pendingResolvers.clear();
+    listAllSessionsImpl = async () => { throw new Error("bulk down"); };
+    listSessionsImpl = async (pid) => sessionsOf(pid);
+    const root = await mountApp();
+    await flush();
+
+    expect(countCalls("ListSessions:")).toBe(31);
+    expect(distinctPids().size).toBe(31);
+    root.unmount();
+    await flush();
+    document.body.innerHTML = "";
+  });
+
+  test("T13: reconcile seeds poppedSessionIds — popped session hidden, sibling visible", async () => {
+    calls.length = 0;
+    localStorage.setItem("md:sidebar-expanded", JSON.stringify(["p01", "p02"]));
+    listAllSessionsImpl = async () => bulkFixture();
+    listPoppedReturn = ["s-p01"];
+    const root = await mountApp();
+    await flush();
+
+    expect(calls.filter((c) => c.startsWith("ListPoppedSessions:")).length).toBe(1);
+    // poppedSessionIds seeded from the bulk reply: the popped session's row
+    // carries the popout marker, its sibling's does not.
+    expect(document.querySelector('[data-testid="popout-s-p01"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="popout-s-p02"]')).toBeNull();
+
+    root.unmount();
+    await flush();
+    document.body.innerHTML = "";
+    localStorage.removeItem("md:sidebar-expanded");
+    listPoppedReturn = [];
   });
 
   test("T9: no boot git fan-out; selection probes once and true is cached", async () => {

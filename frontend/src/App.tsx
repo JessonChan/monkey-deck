@@ -950,25 +950,59 @@ export default function App() {
     return () => { offPopout(); };
   }, [isPopout, registerTab]);
 
-  // 主窗口 boot 对账:覆盖「主窗口重启但 popout 窗口仍开着」的场景。
-  // sessionsByProject 就绪后,对每个 session 查后端是否已 popout,同步进 poppedSessionIds。
-  // 仅执行一次(hasReconciled 守卫),后续由 popout-changed 事件实时维护。
+  // Main-window boot reconcile: covers "the main window restarted while a
+  // popout window is still open". Runs ONCE after the session map is complete,
+  // asks the backend in ONE bulk call which sessions are popped, and seeds
+  // poppedSessionIds; popout-changed events maintain it live afterwards.
   const popoutReconciledRef = useRef(false);
   useEffect(() => {
     // Remote clients have no popout windows at all (OpenSessionWindow is a
     // no-op without GUI, window.go), and a popout window never needs the
-    // main-window reconcile. Skip both — otherwise boot fires one
-    // IsSessionWindowPopped per session (S requests) that all return false.
+    // main-window reconcile.
     if (isRemoteClient() || isPopout || popoutReconciledRef.current) return;
-    const allSids = Object.values(sessionsByProject).flat().map((s) => s.id);
-    if (allSids.length === 0) return;
+    // Gate on completeness, not on "first data landed": firing at the first
+    // non-empty snapshot reconciled only a PARTIAL session set and latched the
+    // guard forever, permanently missing other projects' popout states
+    // (double permission/error prompts for those sessions). allLoaded holds on
+    // both the bulk-snapshot path and the per-project fallback path.
+    const allLoaded =
+      projectsRef.current.length > 0 &&
+      projectsRef.current.every((p) => p.id in sessionsByProjectRef.current);
+    if (!allLoaded) return;
     popoutReconciledRef.current = true;
-    void Promise.all(allSids.map((sid) => ChatService.IsSessionWindowPopped(sid).then((p) => [sid, p] as const)))
-      .then((res) => {
-        const popped = res.filter(([, p]) => p).map(([sid]) => sid);
-        if (popped.length > 0) setPoppedSessionIds(new Set(popped));
-      }).catch(() => {});
-  }, [isPopout, sessionsByProject]);
+    const allSids = Object.values(sessionsByProjectRef.current).flat().map((s) => s.id);
+    // One bulk RPC replaces one IsSessionWindowPopped per session — with the
+    // bulk snapshot filling the map in one commit, the per-session fan-out
+    // would fire S requests at once (432 on the real dataset).
+    void Promise.resolve(ChatService.ListPoppedSessions(allSids))
+      .then((popped) => { if (popped?.length) setPoppedSessionIds(new Set(popped)); })
+      .catch(() => {});
+  }, [isPopout, sessionsByProject, projects]);
+
+  // Boot session-map load. Fast path: ONE ListAllSessions bulk snapshot fills
+  // every project's sessions in a single request (request-storm fix step 3).
+  // Fallback: the per-project loop below — it covers snapshot failure, projects
+  // added after boot, and per-project retries; on the happy path it fires ZERO
+  // requests because every key already landed. snapshotSettled gates the
+  // fallback so the two paths never race at mount (ungated, the loop would fan
+  // out one request per project before the snapshot response arrives).
+  const [snapshotSettled, setSnapshotSettled] = useState(false);
+  const refreshAllSessions = useCallback(async () => {
+    try {
+      const map = await ChatService.ListAllSessions();
+      setSessionsByProject((prev) => ({ ...prev, ...(map ?? {}) }));
+    } catch {
+      /* bulk unavailable — the per-project fallback loop below takes over */
+    } finally {
+      setSnapshotSettled(true);
+    }
+  }, []);
+  useEffect(() => {
+    // Popout windows render exactly one session (their own); the all-project
+    // load is main-window bookkeeping (O2 — P wasted requests per boot).
+    if (isPopout) { setSnapshotSettled(true); return; }
+    void refreshAllSessions();
+  }, [isPopout, refreshAllSessions]);
 
   // Multi-project expand-all: once the project list lands, load every project's
   // sessions into the map (local SQLite, fast).
@@ -981,9 +1015,7 @@ export default function App() {
   // selectProject) do NOT go through this guard and always re-pull.
   const bootSessionsFetchingRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    // Popout windows render exactly one session (their own); the all-project
-    // list load is main-window bookkeeping (O2 — P wasted requests per boot).
-    if (isPopout) return;
+    if (isPopout || !snapshotSettled) return;
     for (const p of projects) {
       if (p.id in sessionsByProject) continue;
       if (bootSessionsFetchingRef.current.has(p.id)) continue;
@@ -1004,7 +1036,7 @@ export default function App() {
         }
       })();
     }
-  }, [projects, sessionsByProject, refreshSessions, isPopout]);
+  }, [projects, sessionsByProject, refreshSessions, isPopout, snapshotSettled]);
 
   // 把持久化消息转成展示 items。
   const messagesToItems = useCallback((msgs: Message[]): ChatItem[] => {

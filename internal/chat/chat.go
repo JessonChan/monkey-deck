@@ -698,6 +698,14 @@ func (s *ChatService) ListSessions(projectID string) ([]store.Session, error) {
 	return s.st.ListSessions(s.ctx, projectID)
 }
 
+// ListAllSessions returns every project's sessions in one call, grouped by
+// project id (boot fast path — replaces one ListSessions per project). The
+// map carries a key for every project; 0-session projects map to an empty
+// slice, never nil.
+func (s *ChatService) ListAllSessions() (map[string][]store.Session, error) {
+	return s.st.ListAllSessions(s.ctx)
+}
+
 // SearchSessionContent 返回某项目下消息内容包含 query(大小写不敏感)的 session id 列表。
 // 供侧栏会话搜索:与标题命中(前端本地子串)做并集,实现「按标题或内容找会话」(§4.1)。
 func (s *ChatService) SearchSessionContent(projectID, query string) ([]string, error) {
