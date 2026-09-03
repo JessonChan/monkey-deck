@@ -629,8 +629,20 @@ export default function App() {
   const [snapshotSettled, setSnapshotSettled] = useState(false);
   const refreshAllSessions = useCallback(async () => {
     try {
-      const map = await ChatService.ListAllSessions();
-      setSessionsByProject((prev) => ({ ...prev, ...(map ?? {}) }));
+      // Explicit boundary cast: the binding generators on different wails3
+      // CLI lines type this map differently (alpha2: Session[] | null;
+      // beta: opaque {}), while our consumption contract is stable — assert
+      // it once here instead of depending on the generated typings.
+      const map = (await ChatService.ListAllSessions()) as Record<string, Session[] | null> | null;
+      // Normalize at this single ingestion boundary: nullish values (Go map
+      // marshaling) become [], preserving the state invariant — every
+      // sessionsByProject value is an array — for consumers like
+      // .flat()/findIndex.
+      setSessionsByProject((prev) => {
+        const next = { ...prev };
+        for (const [pid, list] of Object.entries(map ?? {})) next[pid] = list ?? [];
+        return next;
+      });
     } catch {
       /* bulk unavailable — the per-project fallback loop takes over */
     } finally {
