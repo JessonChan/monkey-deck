@@ -132,6 +132,7 @@
   "newSession": {
     "title": "New session",
     "selectAgent": "Select agent",
+    "notInstalled": "Not installed",
     "workdir": "Working directory",
     "required": "(required)",
     "existingTitle": "Use an existing directory",

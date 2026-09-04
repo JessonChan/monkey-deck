@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import type { BranchInfo, WorktreeInfo } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
@@ -6,6 +7,10 @@ import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/i
 import type { McpServer } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import HarnessIcon from "./HarnessIcon";
 
+// Mirrors harness.DefaultID on the backend (internal/harness/harness.go): the default
+// harness leads the installed group in the picker grid. Frontend literal — the backend
+// constant is not part of the generated bindings.
+const DEFAULT_HARNESS_ID = "omp";
 // What the modal hands back on confirm. mode drives which backend create path App.tsx uses:
 //   "project" → CreateSession(useWorktree=false)   — run in the project's main worktree.
 //   "enter"   → CreateGuestSession(enterPath)      — pin to an EXISTING linked worktree (guest).
@@ -224,6 +229,15 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
     return parts.length > 1 ? "…/" + parts[parts.length - 1] : p;
   };
 
+  // Grid display order (#188): installed first, default harness (omp) at the head of its
+  // group, otherwise the backend's stable order preserved (Array.sort is stable). Discovery
+  // (#187) appends catalog entries after the static registry, so re-ranking here keeps
+  // installed tools findable when the uninstalled tail grows.
+  const sortedHarnesses = useMemo(() => {
+    const rank = (h: Harness) => (h.installed ? 0 : 2) + (h.id === DEFAULT_HARNESS_ID ? 0 : 1);
+    return [...harnesses].sort((a, b) => rank(a) - rank(b));
+  }, [harnesses]);
+
   // Shared base-ref option row. isDefault adds the ★ marker.
   const renderBranchOption = (b: DecoratedBranch, isDefault: boolean) => (
     <button
@@ -279,18 +293,35 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
             {t("newSession.selectAgent")}
             {harness === null && <span className="ns-required">{t("newSession.required")}</span>}
           </div>
-          <div className="ns-harness-list">
-            {harnesses.map((h) => (
+          <div className="ns-harness-list" data-testid="ns-harness-grid">
+            {sortedHarnesses.map((h) => (
               <button
                 key={h.id}
-                className={`ns-harness ${harness === h.id ? "active" : ""}`}
+                className={`ns-harness ${harness === h.id ? "active" : ""} ${h.installed ? "" : "uninstalled"}`}
                 onClick={() => setHarness(h.id)}
                 data-testid={`ns-harness-${h.id}`}
+                data-tooltip-id="md-tip"
+                data-tooltip-content={
+                  // Merged card tooltip (§4.4/§4.5): name + launch command + install
+                  // state. The command chip moved off the card face in #188, so this is
+                  // the command's only home; \n renders via pre-line on .react-tooltip.
+                  h.installed
+                    ? `${h.name}\n${h.command}`
+                    : `${h.name}\n${h.command}\n${t("newSession.notInstalled")}`
+                }
               >
-                <span className={`ns-radio ${harness === h.id ? "on" : ""}`} />
-                <HarnessIcon harnessId={h.id} size={16} className="ns-harness-icon" />
+                {!h.installed && (
+                  <span className="ns-harness-badge-uninstalled" data-testid={`ns-harness-uninstalled-${h.id}`}>
+                    {t("newSession.notInstalled")}
+                  </span>
+                )}
+                {harness === h.id && (
+                  <span className="ns-harness-check" data-testid="ns-harness-check">
+                    <Check size={12} strokeWidth={3} />
+                  </span>
+                )}
+                <HarnessIcon harnessId={h.id} size={36} className="ns-harness-icon" />
                 <span className="ns-harness-name">{h.name}</span>
-                <span className="ns-harness-cmd" data-tooltip-id="md-tip" data-tooltip-content={h.command}>{h.command}</span>
               </button>
             ))}
           </div>

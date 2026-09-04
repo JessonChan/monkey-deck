@@ -92,9 +92,12 @@ const WORKTREES: WorktreeInfo[] = [
   { path: "/proj/wt-a", branch: "md/aaa11111", isMain: false, date: 200 },
   { path: "/proj/wt-b", branch: "feat/x", isMain: false, date: 100 },
 ];
-// Only the static id/name/command fields are read by the modal; the binding's Harness type
-// also carries runtime install/version fields irrelevant to this DOM-level test.
-const HARNESS = [{ id: "omp", name: "omp", command: "omp" }] as unknown as Harness[];
+// id/name/command/installed are the fields the modal reads for the grid (#188); the
+// binding's Harness type carries more runtime discovery fields irrelevant to this
+// DOM-level test. lastHarness="" + >1 harness → nothing pre-selected.
+const h = (id: string, installed: boolean): Harness =>
+  ({ id, name: id, command: `${id} acp`, installed }) as unknown as Harness;
+const HARNESS = [h("omp", true)];
 
 describe("NewSessionModal workdir mode", () => {
   test("nothing pre-selected — Create disabled until mode + existing dir both picked (→ project)", async () => {
@@ -284,5 +287,67 @@ describe("NewSessionModal quick picks", () => {
     host.querySelector('[data-testid="ns-confirm"]')!.dispatchEvent(click());
     await flush();
     expect(onConfirm).toHaveBeenCalledWith({ harness: "omp", mode: "new", baseRef: "develop", mcpServerIDs: [] });
+  });
+});
+
+describe("NewSessionModal harness grid", () => {
+  // Deliberately unsorted input: installed {opencode, omp} then uninstalled {goose, claude}.
+  // Expected: omp (default) jumps to the head of the installed group; relative order is
+  // otherwise preserved (stable sort) — uninstalled tail keeps goose before claude.
+  const GRID = [h("opencode", true), h("omp", true), h("goose", false), h("claude", false)];
+
+  // Card testids in DOM order inside the grid container.
+  function gridIds(host: Element): string[] {
+    return Array.from(host.querySelectorAll('[data-testid="ns-harness-grid"] > button'))
+      .map((b) => b.getAttribute("data-testid")!.slice("ns-harness-".length));
+  }
+
+  test("renders every harness as a grid card; installed first, default (omp) at the head", async () => {
+    const { host } = mount(
+      <NewSessionModal harnesses={GRID} isGit={false} lastHarness="" defaultBaseRef="" recentRefs={[]} branches={[]} worktrees={[]} onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    await flush();
+    expect(gridIds(host)).toEqual(["omp", "opencode", "goose", "claude"]);
+  });
+
+  test("click selects a card: active class + check badge; confirm carries the picked id", async () => {
+    const onConfirm = mock((_c: NewSessionChoice) => {});
+    const { host } = mount(
+      <NewSessionModal harnesses={GRID} isGit={false} lastHarness="" defaultBaseRef="" recentRefs={[]} branches={[]} worktrees={[]} onConfirm={onConfirm} onCancel={() => {}} />,
+    );
+    await flush();
+    // Nothing pre-selected: no active card, no check badge anywhere.
+    expect(host.querySelector(".ns-harness.active")).toBeNull();
+    expect(host.querySelector('[data-testid="ns-harness-check"]')).toBeNull();
+
+    host.querySelector('[data-testid="ns-harness-opencode"]')!.dispatchEvent(click());
+    await flush();
+    const card = host.querySelector('[data-testid="ns-harness-opencode"]')!;
+    expect(card.classList.contains("active")).toBe(true);
+    expect(card.querySelector('[data-testid="ns-harness-check"]')).not.toBeNull();
+
+    host.querySelector('[data-testid="ns-confirm"]')!.dispatchEvent(click());
+    await flush();
+    expect(onConfirm).toHaveBeenCalledWith({ harness: "opencode", mode: "project", mcpServerIDs: [] });
+  });
+
+  test("uninstalled cards: dimmed + corner badge + command only in the merged tooltip", async () => {
+    const { host } = mount(
+      <NewSessionModal harnesses={GRID} isGit={false} lastHarness="" defaultBaseRef="" recentRefs={[]} branches={[]} worktrees={[]} onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    await flush();
+    const goose = host.querySelector('[data-testid="ns-harness-goose"]')!;
+    expect(goose.classList.contains("uninstalled")).toBe(true);
+    expect(goose.querySelector('[data-testid="ns-harness-uninstalled-goose"]')).not.toBeNull();
+    // Command chip is gone from the card face; the tooltip (t-mocked → key for the status
+    // line) carries name + command + install state instead.
+    expect(goose.querySelector(".ns-harness-cmd")).toBeNull();
+    expect(goose.getAttribute("data-tooltip-content")).toBe("goose\ngoose acp\nnewSession.notInstalled");
+
+    // Installed card: no dimming, no badge, tooltip = name + command only.
+    const omp = host.querySelector('[data-testid="ns-harness-omp"]')!;
+    expect(omp.classList.contains("uninstalled")).toBe(false);
+    expect(omp.querySelector(".ns-harness-badge-uninstalled")).toBeNull();
+    expect(omp.getAttribute("data-tooltip-content")).toBe("omp\nomp acp");
   });
 });

@@ -132,6 +132,7 @@
   "newSession": {
     "title": "新建对话",
     "selectAgent": "选择 agent",
+    "notInstalled": "未安装",
     "workdir": "工作目录",
     "required": "（请选择）",
     "existingTitle": "使用已有工作目录",
