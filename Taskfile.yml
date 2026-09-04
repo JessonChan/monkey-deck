@@ -32,9 +32,9 @@ tasks:
       - task: "{{OS}}:run"
 
   bindings:
-    summary: Regenerate frontend bindings from Go methods (not in git; needed by frontend)
+    summary: Regenerate frontend bindings from Go methods (not in git; needed by frontend) — version-pinned to go.mod via the common task (AGENTS §0.5)
     cmds:
-      - wails3 generate bindings
+      - task: common:generate:bindings
 
   dev:
     summary: Runs the application in development mode

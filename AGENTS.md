@@ -72,7 +72,7 @@
 | 前端 | React 19 + TypeScript + Vite（Wails3 官方 React 模板）,Bun 管理依赖 | 通过 Wails3 **binding（Go 方法暴露给前端）+ event（后端推前端）** 与 Go 交互 |
 | 配置 | 应用配置 SQLite 表 + 少量 YAML/JSON（`gopkg.in/yaml.v3`）| harness 命令、model、provider 等 |
 
-**Wails 版本纪律(硬约束)**:Wails3 跟进**最新 alpha**(**wails3 CLI、go module、生成的 bindings 三者版本必须同步**,升级时一起升,**禁止锁旧版**)。改 Go 导出方法签名后必须 `wails3 gen bindings`(dev 起的进程前端 binding 走运行时注入,不重新生成则前端用旧签名)。
+**Wails 版本纪律(硬约束)**:Wails3 跟进**最新 alpha**(**wails3 CLI、go module、生成的 bindings 三者版本必须同步**,升级时一起升,**禁止锁旧版**)。改 Go 导出方法签名后必须 `wails3 gen bindings`(dev 起的进程前端 binding 走运行时注入,不重新生成则前端用旧签名)。**bindings 生成必须走 `wails3 task bindings`**(2026-09-04 起该任务动态读 go.mod 的 wails 版本、用匹配版本的 CLI 生成——PATH 上的 wails3 可能处于不同 release 线(beta vs alpha2),其生成器输出格式/类型不兼容,直接跑 `wails3 generate bindings` 已实测产生跨线类型冲突);升级 wails 版本时只改 go.mod,bindings 任务自动跟随。
 
 **典型命令（脚手架后补全 Makefile）:**
 ```bash
