@@ -45,6 +45,13 @@ interface Props {
 // 调 onSetRepeat → 后端 SetQueueItemRepeat(1min~24h 硬校验)。循环项行内徽标(间隔人话 +
 // 已发 N 次,与 #97 倒计时并存),徽标上的 ✕ 一键取消循环。≤768px 触控沿用 #126B(actions 行
 // wrap + 40px 按钮)。
+//
+// Repeat Save without the stale-time false block (#192): saveSchedule branches
+// on the repeat pick — a tier picked with the datetime untouched (repeat-only)
+// skips the stale re-check and commits onSchedule(_, Date.now()) (first send
+// immediate, loop re-anchored from the commit); an explicitly edited datetime
+// keeps the full re-check in force (combination). Pure schedule mode and the
+// 24h cap are untouched.
 export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSchedule, onReorder, onSetRepeat }: Props) {
   const { t } = useTranslation();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -71,6 +78,22 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   // sets it, preset picks and row close reset it; the mirror's own odd-interval
   // "custom" (legacy seeding) keeps the input visible without the flag.
   const [customTierOpen, setCustomTierOpen] = useState(false);
+  // #192: datetime-dirty flag — true only after an EXPLICIT user edit of the
+  // datetime-local input (its input event; programmatic writes — the seeded
+  // default, preset stacking, reset/cap snap-backs — never set it). Carried by
+  // onInput, the ungated twin of onChange for inputs: same native event in
+  // production, but the only one React synthesis delivers in the happy-dom
+  // mount harness (documented env edge below). The stale re-check at Save
+  // applies to explicitly-edited values; an untouched input under a picked
+  // repeat tier takes the repeat path instead.
+  const [datetimeDirty, setDatetimeDirty] = useState(false);
+  // #192: the repeat tier picked while THIS row is open (epoch ms), staged
+  // synchronously — the server mirror lags behind the binding round-trip and
+  // Save must branch on the pick without waiting for it. null = untouched (no
+  // tier picked in this row session); 0 = 不重复 picked (repeat off); >0 =
+  // interval picked (repeat on). Reset with the rest of the staging state so
+  // nothing leaks out of a closed row.
+  const [repeatPickedMs, setRepeatPickedMs] = useState<number | null>(null);
   const repeatCustomRef = useRef<HTMLInputElement>(null);
   const [dragId, setDragId] = useState<string | null>(null);   // 正被拖拽的条目 id
   const [overId, setOverId] = useState<string | null>(null);   // 拖拽悬停的目标条目 id
@@ -102,6 +125,12 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   // when empty — so neither the first nor any later preset click shifts the
   // preset buttons (preset getBoundingClientRect constant, #144).
   const stagedVisible = pendingAt !== null && pendingAt > now;
+  // #192: repeat-only = a tier was picked in this row session and the datetime
+  // was never explicitly edited — the datetime control is disabled (a repeat
+  // needs no time pick: first send is immediate, the loop re-anchors from the
+  // commit) and its min floor is dropped with it. A combination (datetime
+  // edited first) keeps the control editable and the full validation in force.
+  const repeatOnly = repeatPickedMs !== null && repeatPickedMs > 0 && !datetimeDirty;
   useEffect(() => {
     if (!hasPending && !staging) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -186,6 +215,8 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
     setScheduleCapped(false);
     setRepeatError(null);
     setCustomTierOpen(false);
+    setDatetimeDirty(false);
+    setRepeatPickedMs(null);
   };
   // Closing the schedule row fully drops the staging state (issue #130 wrap-up):
   // pendingAt/scheduleCapped must not survive cancel/save/clear — startSchedule
@@ -196,6 +227,8 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
     setScheduleCapped(false);
     setRepeatError(null);
     setCustomTierOpen(false);
+    setDatetimeDirty(false);
+    setRepeatPickedMs(null);
   };
   const cancelSchedule = () => { setSchedulingId(null); setScheduleError(null); resetStaging(); };
   // ✕ on the staged chip (issue #130 wrap-up 2): drop the staging IN PLACE —
@@ -209,10 +242,31 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
   };
   const saveSchedule = () => {
     if (!schedulingId) return;
+    // #192 repeat-only branch (BEFORE the stale re-check): a tier picked in
+    // this row session with the datetime untouched means recurrence is being
+    // enabled — first send fires immediately and the loop re-anchors from that
+    // send (rescheduleRepeat: nextAt = send + interval), so the staged/default
+    // datetime value is irrelevant. The seeded default is minute-truncated and
+    // can sit under a few seconds ahead, so dwelling briefly would otherwise
+    // trip the stale re-check below and block a legitimate repeat commit.
+    // onSetRepeat is re-asserted at commit (idempotent; heals a dropped pick
+    // round-trip) and onSchedule(_, Date.now()) follows the clearSchedule
+    // due-now precedent.
+    if (repeatPickedMs !== null && repeatPickedMs > 0 && !datetimeDirty) {
+      onSetRepeat?.(schedulingId, repeatPickedMs);
+      onSchedule(schedulingId, Date.now());
+      setSchedulingId(null);
+      setScheduleError(null);
+      resetStaging();
+      return;
+    }
     const v = scheduleRef.current?.value;
     const ts = v ? fromLocalInput(v) : 0;
-    // 提交时复验过期:min=now 只是 UX 第一道防线(用户可手动键入过去时刻,或开着选择器
-    // 停留过久使原本合法的时刻变成过去)。此处再判一次,过期则拦截并提示,不调 onSchedule。
+    // Stale re-check at submit: min=now is only the first UX line of defense
+    // (a manual past pick, or a value going stale while the picker sits open).
+    // The repeat-only branch above already returned; this gate covers the pure
+    // schedule path and the datetime+repeat combination (#192). Past → block
+    // with a notice, no onSchedule call.
     if (ts > 0 && ts <= Date.now()) {
       setScheduleError(t("queue.scheduleExpired"));
       return;
@@ -281,6 +335,7 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
     if (!schedulingId || !onSetRepeat) return;
     if (v === "custom") { setCustomTierOpen(true); return; } // reveals the input; commits via applyRepeatCustom
     setCustomTierOpen(false);
+    setRepeatPickedMs(Number(v)); // #192: stage the pick synchronously (0 = "repeat off" pick)
     onSetRepeat(schedulingId, Number(v));
     setRepeatError(null);
   };
@@ -292,6 +347,7 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
       return;
     }
     onSetRepeat(schedulingId, mins * 60_000);
+    setRepeatPickedMs(mins * 60_000); // #192: custom tier committed → repeat on
     setRepeatError(null);
   };
   const cancelRepeat = (id: string) => onSetRepeat?.(id, 0);
@@ -383,10 +439,23 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
                 className="queue-schedule-input"
                 data-testid="queue-schedule-input"
                 type="datetime-local"
-                min={toLocalInput(Date.now())}
+                min={repeatOnly ? undefined : toLocalInput(Date.now())}
                 max={toLocalInput(Date.now() + SCHEDULE_CAP_MS)}
                 defaultValue={pending ? toLocalInput(item.scheduledAt) : defaultLocalInput()}
                 ref={scheduleRef}
+                // #192: repeat-only (tier picked, datetime never explicitly
+                // edited) — the control is disabled and its min floor is
+                // dropped with it: a repeat needs no time pick (first send is
+                // immediate, the loop re-anchors from the commit). A
+                // datetime+repeat combination keeps it editable and validated.
+                disabled={repeatOnly}
+                // #192: an EXPLICIT user edit marks the value dirty, so the
+                // stale re-check applies even with a repeat picked (combined
+                // state). onInput is the ungated twin of onChange for inputs —
+                // the same native event in production, but the only one React
+                // synthesis delivers in the happy-dom mount harness (env edge
+                // documented in the schedule mount test).
+                onInput={() => setDatetimeDirty(true)}
                 // Manual datetime pick overrides the staged value (two-way link
                 // with pendingAt, issue #130) and clears stale notices. Picks
                 // beyond now+24h are REJECTED (issue #130 wrap-up): pendingAt
