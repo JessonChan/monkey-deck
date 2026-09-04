@@ -33,8 +33,8 @@
 
 ## OPEN / 后续
 
-1. **ListAllSessions payload 2.27MB**：432 session 全列传输（含 `config_options_cache`/`commands_cache` 等列表视图不需要的重列）。手机慢 WiFi 下 boot/亮屏各一次可感。后续可做「瘦身列表列」或按需拉缓存（单开条目，本次不动——修复风暴是本刀 scope）。
-2. wails3 CLI 双线并存：PATH 上 beta.16 与 go.mod alpha2.106 不同线；本系列用 `/tmp/md-wails-bin/wails3`（alpha2.106）生成 bindings。建议择期统一（升级 go.mod 到 beta 线或钉住 CLI），AGENTS §0.5「三者同步」目前靠人工。**已实测咬人（2026-09-04）**：用户 `wails3 task package` 用 PATH 的 beta.16 再生成 bindings，两条 CLI 线对 `ListAllSessions` 返回 map 的类型标注不同（alpha2: `Session[]|null`；beta: 不透明 `{}`），边界处直接写 `...map` 或 `list ?? []` 都会在另一条线下 tsc 报错。已修：`refreshAllSessions` 在唯一摄入边界显式 `as Record<string, Session[] | null> | null` 契约断言 + nullish 归一 `?? []`，两条生成线下均编译（557 测试 + 生产构建双验）。
+1. ~~**ListAllSessions payload 2.27MB**~~ **已解决（2026-09-04，见 [OPEN 清算条目](./2026-09-04-open-cleanup-cli-pin-and-slim-list.md)）**：列表投影剔除两个按需加载的缓存列，payload 2.27MB → 262KB（8.7×），boot 仍 6 请求。
+2. ~~wails3 CLI 双线并存~~ **已解决（2026-09-04，commit `80d908f`，见 [OPEN 清算条目](./2026-09-04-open-cleanup-cli-pin-and-slim-list.md)）**：bindings 生成两入口统一动态钉版到 go.mod 版本（`wails3 task bindings`），AGENTS §0.5 已补硬约束注记。**历史记录（2026-09-04 实测咬人）**：`wails3 task package` 用 PATH 的 beta.16 再生成 bindings，两条 CLI 线对 `ListAllSessions` 返回 map 的类型标注不同（alpha2: `Session[]|null`；beta: 不透明 `{}`），边界处直接写 `...map` 或 `list ?? []` 都会在另一条线下 tsc 报错。已修：`refreshAllSessions` 在唯一摄入边界显式 `as Record<string, Session[] | null> | null` 契约断言 + nullish 归一 `?? []`，两条生成线下均编译（557 测试 + 生产构建双验）。
 3. SCM tab 冷态抖动（选中后 1 roundtrip 出现）：已知 cosmetic，单开 issue 再议（tab 恒渲染+置灰）。
 4. `__mdRemote` 异步时序依赖：步 3 后最坏代价 = 1 次无害 ListPoppedSessions，未加固（定稿方案 §5）。
 

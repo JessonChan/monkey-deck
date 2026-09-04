@@ -41,9 +41,40 @@ func TestListAllSessionsMatchesPerProject(t *testing.T) {
 	}
 	c1 := mustCreate(pc.ID, "only")
 
+	// The two on-demand cache columns live in the row but must NOT be carried
+	// by list queries (they dominate the bulk payload); GetSession keeps
+	// returning them.
+	const cfgBlob, cmdBlob = `{"models":["x"]}`, `[{"name":"model"}]`
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET config_options_cache=?, commands_cache=? WHERE id=?`,
+		cfgBlob, cmdBlob, a1); err != nil {
+		t.Fatal(err)
+	}
+
 	got, err := s.ListAllSessions(ctx)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, se := range got[pa.ID] {
+		if se.ConfigOptionsCache != "" || se.CommandsCache != "" {
+			t.Fatalf("bulk list leaked cache columns: cfg=%q cmd=%q", se.ConfigOptionsCache, se.CommandsCache)
+		}
+	}
+	perList, err := s.ListSessions(ctx, pa.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, se := range perList {
+		if se.ConfigOptionsCache != "" || se.CommandsCache != "" {
+			t.Fatalf("per-project list leaked cache columns: cfg=%q cmd=%q", se.ConfigOptionsCache, se.CommandsCache)
+		}
+	}
+	full, err := s.GetSession(ctx, a1)
+	if err != nil || full == nil {
+		t.Fatalf("GetSession: %v %v", full, err)
+	}
+	if full.ConfigOptionsCache != cfgBlob || full.CommandsCache != cmdBlob {
+		t.Fatalf("GetSession lost caches: cfg=%q cmd=%q", full.ConfigOptionsCache, full.CommandsCache)
 	}
 
 	// Key set == project set; 0-session project has an empty NON-nil slice.

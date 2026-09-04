@@ -13,6 +13,15 @@ import (
 // sessionColumns / scanSession:统一 session 的列与扫描,避免多处 SELECT/Scan 漂移(§1.5)。
 const sessionColumns = `id,project_id,acp_session_id,title,custom_title,model,harness,worktree_path,branch,base_ref,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,config_options_cache,tags,commands_cache,forked_from,fork_base_seq`
 
+// sessionListColumns is the LIST projection (ListSessions / ListAllSessions):
+// the two per-session caches are substituted with ''. They are fetched on
+// demand via their dedicated bindings (openSession path) and the frontend
+// never reads them off a list row — while on the real dataset they dominate
+// the bulk payload (config_options_cache 1.48MB + commands_cache 0.31MB of a
+// 2.27MB response for 432 sessions). Same column order/arity so scanSession
+// stays single-shaped.
+const sessionListColumns = `id,project_id,acp_session_id,title,custom_title,model,harness,worktree_path,branch,base_ref,used_tokens,size_tokens,cost,cached_read_tokens,cached_write_tokens,input_tokens,output_tokens,thought_tokens,total_tokens,created_at,updated_at,prompted_at,pinned,'' AS config_options_cache,tags,'' AS commands_cache,forked_from,fork_base_seq`
+
 func scanSession(r interface {
 	Scan(dest ...any) error
 }, se *Session) error {
@@ -207,9 +216,10 @@ func (s *Store) SetSessionPinned(ctx context.Context, id string, pinned bool) er
 
 // ListSessions 列出某项目的全部 session。
 // 排序:pinned DESC(置顶恒在顶)→ prompted_at DESC(用户最后发消息时间)→ updated_at DESC(二级兜底)。
+// 列表投影(sessionListColumns):不携带两个按需加载的缓存列。
 func (s *Store) ListSessions(ctx context.Context, projectID string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+sessionColumns+` FROM sessions WHERE project_id=? ORDER BY pinned DESC, prompted_at DESC, updated_at DESC`,
+		`SELECT `+sessionListColumns+` FROM sessions WHERE project_id=? ORDER BY pinned DESC, prompted_at DESC, updated_at DESC`,
 		projectID)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
@@ -257,7 +267,7 @@ func (s *Store) ListAllSessions(ctx context.Context) (map[string][]Session, erro
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+sessionColumns+` FROM sessions ORDER BY project_id, pinned DESC, prompted_at DESC, updated_at DESC`)
+		`SELECT `+sessionListColumns+` FROM sessions ORDER BY project_id, pinned DESC, prompted_at DESC, updated_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list all sessions: %w", err)
 	}

@@ -50,8 +50,11 @@ func TestUpdateSessionCommandsCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 1 || list[0].CommandsCache != wantCmdJSON {
-		t.Fatalf("ListSessions commandsCache = %q, want %q", list[0].CommandsCache, wantCmdJSON)
+	// Lists use the slim projection (sessionListColumns): the cache columns
+	// ride only on GetSession / the dedicated cache bindings, never on list
+	// rows (they dominate the bulk payload; no product path reads them there).
+	if len(list) != 1 || list[0].CommandsCache != "" {
+		t.Fatalf("ListSessions commandsCache = %q, want empty (slim list projection)", list[0].CommandsCache)
 	}
 
 	// State 3 — seeded-but-empty: the empty table is a legitimate full-table
