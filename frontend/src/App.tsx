@@ -617,8 +617,6 @@ export default function App() {
 
   // Boot session-map load. Fast path: ONE ListAllSessions bulk snapshot fills
   // every project's sessions in a single request (request-storm fix step 3).
-  // Boot session-map load. Fast path: ONE ListAllSessions bulk snapshot fills
-  // every project's sessions in a single request (request-storm fix step 3).
   // Fallback: the per-project loop further below — it covers snapshot failure,
   // projects added after boot, and per-project retries; on the happy path it
   // fires ZERO requests because every key already landed. snapshotSettled
