@@ -62,6 +62,37 @@ func TestMatchKnownHarness_LongerWins(t *testing.T) {
 	}
 }
 
+// BinaryName (= seed alias) must be carried at init for every catalog entry:
+// it is the PATH-discovery key (#187). Anchor a few known seeds to catch
+// drift between id and alias.
+func TestKnownCatalog_BinaryNameCarried(t *testing.T) {
+	for _, kh := range KnownCatalog {
+		if kh.BinaryName == "" {
+			t.Fatalf("catalog entry %s has empty BinaryName", kh.ID)
+		}
+	}
+	want := map[string]string{
+		"claude-agent":   "claude",
+		"github-copilot": "copilot",
+		"docker-cagent":  "cagent",
+		"goose":          "goose",
+	}
+	for _, kh := range KnownCatalog {
+		if exp, ok := want[kh.ID]; ok && kh.BinaryName != exp {
+			t.Fatalf("catalog entry %s BinaryName = %q, want %q", kh.ID, kh.BinaryName, exp)
+		}
+	}
+}
+
+func TestKnownHarnessByID(t *testing.T) {
+	if got := KnownHarnessByID("goose"); got == nil || got.Name != "Goose" {
+		t.Fatalf("KnownHarnessByID(goose) = %+v, want Goose entry", got)
+	}
+	if got := KnownHarnessByID("no-such-harness"); got != nil {
+		t.Fatalf("KnownHarnessByID(unknown) = %+v, want nil", got)
+	}
+}
+
 func TestKnownCatalog_ExcludesBuiltins(t *testing.T) {
 	for _, kh := range KnownCatalog {
 		if kh.ID == "omp" || kh.ID == "opencode" {

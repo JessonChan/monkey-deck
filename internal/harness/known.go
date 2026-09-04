@@ -8,13 +8,18 @@ import (
 	"strings"
 )
 
-// KnownHarness 已知 ACP harness 的轻量目录条目,仅供命令关键词匹配自动选。
+// KnownHarness 已知 ACP harness 的轻量目录条目。两个用途:
+//  1. 命令关键词匹配自动选(MatchKnownHarness,前端 Add Harness 弹窗);
+//  2. PATH 自动发现(#187):Discover 对 BinaryName 做 LookPath,命中即产出
+//     「可用」harness 条目(Source=catalog 标记)。
+//
 // 前端 HarnessIcon 只用 ID 自行解析图标 URL(/harness-icons/<id>.<ext>,§2.1),故本
 // 结构不带 Icon 路径字段(图标文件已落地 assets/harness-icons/<id>.<ext>)。
 type KnownHarness struct {
-	ID       string   `json:"id"`
-	Name     string   `json:"name"`
-	Keywords []string `json:"keywords"`
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	BinaryName string   `json:"binaryName"` // canonical executable name for PATH lookup (= seed alias)
+	Keywords   []string `json:"keywords"`
 }
 
 // knownSeed 目录种子:id + 显示名 + 主命令别名(用户最可能在启动命令里敲的词)。
@@ -89,9 +94,10 @@ func init() {
 	KnownCatalog = make([]KnownHarness, 0, len(knownSeed))
 	for _, s := range knownSeed {
 		KnownCatalog = append(KnownCatalog, KnownHarness{
-			ID:       s.ID,
-			Name:     s.Name,
-			Keywords: deriveKeywords(s.ID, s.Alias),
+			ID:         s.ID,
+			Name:       s.Name,
+			BinaryName: s.Alias,
+			Keywords:   deriveKeywords(s.ID, s.Alias),
 		})
 	}
 }
@@ -129,6 +135,18 @@ func splitTokens(s string) []string {
 	return strings.FieldsFunc(s, func(r rune) bool {
 		return r == '-' || r == '_' || r == ' ' || r == '/' || r == '.' || r == '@'
 	})
+}
+
+// KnownHarnessByID returns the catalog entry with the given id, or nil.
+// Linear scan is fine: the catalog is ~50 entries and lookups are rare
+// (session creation / AddHarness collision checks).
+func KnownHarnessByID(id string) *KnownHarness {
+	for i := range KnownCatalog {
+		if KnownCatalog[i].ID == id {
+			return &KnownCatalog[i]
+		}
+	}
+	return nil
 }
 
 // MatchKnownHarness 按启动命令做关键词匹配,返回最匹配的已知 harness;无命中返回 nil。

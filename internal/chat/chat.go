@@ -48,8 +48,8 @@ const (
 	// server-side message queue (#126A, queue.go). Emitted on every mutation
 	// (enqueue/revoke/edit/schedule/reorder/drain-dequeue) and on OpenSession;
 	// the frontend is a degraded consumer that only renders what arrives here.
-	EventQueue = "chat:queue"
-	EventHarnesses           = "chat:harnesses"    // harness 发现/版本变更(前端据此重拉 ListHarnesses)
+	EventQueue     = "chat:queue"
+	EventHarnesses = "chat:harnesses" // harness 发现/版本变更(前端据此重拉 ListHarnesses)
 	// EventHarnessCapabilities:harness 能力探测完成(ProbeCapabilities 后),前端据此重拉
 	// ListHarnessCapabilities。异步触发(Discover 之后),独立于 EventHarnesses。
 	EventHarnessCapabilities = "chat:harness-capabilities"
@@ -413,10 +413,10 @@ type ChatService struct {
 	// Server-side per-session queue (#126A, queue.go): FIFO buffer of messages
 	// not yet sent, persisted in the queue_items table. All runtime state below
 	// is guarded by queueMu, which is never held while acquiring s.mu/sendMu.
-	queueMu       sync.Mutex                // serializes queue mutations + drain decisions
-	userStopped   map[string]bool           // sessionID → one-shot stop intent (StopSession sets; the next drain consumes and skips)
-	queueDraining map[string]bool           // sessionID → a drain is in flight (collapses concurrent triggers)
-	queueTimers   map[string]*time.Timer    // sessionID → one-shot timer at the earliest future scheduledAt (#97)
+	queueMu       sync.Mutex             // serializes queue mutations + drain decisions
+	userStopped   map[string]bool        // sessionID → one-shot stop intent (StopSession sets; the next drain consumes and skips)
+	queueDraining map[string]bool        // sessionID → a drain is in flight (collapses concurrent triggers)
+	queueTimers   map[string]*time.Timer // sessionID → one-shot timer at the earliest future scheduledAt (#97)
 }
 
 // NewChatService 构造(尚未启动;ServiceStartup 时 open store)。
@@ -424,9 +424,9 @@ func NewChatService(cfg *config.Config) *ChatService {
 	return &ChatService{
 		cfg: cfg, active: map[string]*liveSession{}, idleTimeout: 5 * time.Minute,
 		reconnects: map[string]*reconnectCtl{}, reconnectGiveUp: map[string]bool{},
-		userStopped:   map[string]bool{},
-		queueDraining: map[string]bool{},
-		queueTimers:   map[string]*time.Timer{},
+		userStopped:            map[string]bool{},
+		queueDraining:          map[string]bool{},
+		queueTimers:            map[string]*time.Timer{},
 		healthInterval:         3 * time.Second,
 		reconnMaxAttempt:       5,
 		reconnInitBackoff:      1 * time.Second,
@@ -755,6 +755,10 @@ func (s *ChatService) CreateSession(projectID, title, harnessID string, useWorkt
 	if model == "" {
 		model = s.cfg.DefaultModel
 	}
+	// #187: a catalog PATH hit has no user row yet — materialize it silently
+	// (AddHarness-equivalent) so Normalize/Command resolve the id through the
+	// standard view instead of bouncing it to the default harness.
+	s.ensureCatalogHarness(harnessID)
 	hid := harness.Normalize(harnessID)
 	// 记住本次选择的 harness,下次新建对话默认选中(§5.3 本地是真相来源)。
 	if err := s.st.SetSetting(s.ctx, "lastHarness", hid); err != nil {
@@ -894,6 +898,8 @@ func (s *ChatService) CreateGuestSession(projectID, title, harnessID, enterPath 
 	if model == "" {
 		model = s.cfg.DefaultModel
 	}
+	// #187: same materialization as CreateSession (see there).
+	s.ensureCatalogHarness(harnessID)
 	hid := harness.Normalize(harnessID)
 	if err := s.st.SetSetting(s.ctx, "lastHarness", hid); err != nil {
 		slog.Warn("persist lastHarness", "err", err)
@@ -913,6 +919,42 @@ func (s *ChatService) CreateGuestSession(projectID, title, harnessID, enterPath 
 		se.WorktreePath, se.Branch = enterPath, branch
 	}
 	return se, nil
+}
+
+// ensureCatalogHarness materializes a KnownCatalog PATH hit (#187) as a real
+// user harness row so session creation resolves it through the standard
+// effectiveSupported view (Normalize/Command/spawn). AddHarness-equivalent,
+// silent and idempotent: without it harness.Normalize would bounce the catalog
+// id to the default (omp) and silently run the wrong agent. Runs before
+// Normalize in Create[Guest]Session. Not gated on install state: the UI only
+// offers discovered hits, and a stale id failing to spawn surfaces loudly,
+// which beats silently substituting the default harness.
+func (s *ChatService) ensureCatalogHarness(harnessID string) {
+	kh := harness.KnownHarnessByID(harnessID)
+	if kh == nil || harness.IsBuiltin(kh.ID) || s.st == nil {
+		return
+	}
+	existing, err := s.st.GetUserHarness(s.ctx, kh.ID)
+	if err != nil {
+		slog.Warn("catalog harness lookup", "id", kh.ID, "err", err)
+		return
+	}
+	if existing != nil {
+		return // already materialized (or user-added earlier): nothing to do
+	}
+	// Command = canonical spawn form; BinaryName (= seed alias) is the first
+	// token, so effectiveRegistry derives the same binary for discovery.
+	if _, err := s.st.CreateUserHarness(s.ctx, kh.ID, kh.Name, kh.BinaryName+" acp", ""); err != nil {
+		slog.Warn("catalog harness persist", "id", kh.ID, "err", err)
+		return
+	}
+	// Same refresh sequence as AddHarness: the id is now a first-class user
+	// harness (editable/deletable) and joins capability probing on the next pass.
+	s.reloadUserHarnesses()
+	refreshed := harness.Discover(s.ctx)
+	s.harnessCache.Store(&refreshed)
+	s.emit(EventHarnesses, nil)
+	go s.probeCapabilitiesAsync()
 }
 
 // persistSessionMcp 落某 session 的 MCP 选择(catalog 子集)。Create[Guest]Session 调用。
@@ -1082,7 +1124,6 @@ func (s *ChatService) DeleteSession(sessionID string) error {
 // same thing. Human-readable per §4.4 (surfaces verbatim in the error toast).
 var errForkSourceEmpty = errors.New("会话还没有任何对话,直接新建会话即可")
 var errForkSourceBusy = errors.New("源会话正在对话中,请等回合结束后再分叉")
-
 
 // ForkSession forks a session (#172 Phase 2): replicates the source ACP session
 // at its CURRENT conversation end (the protocol has no position parameter) into
@@ -1336,7 +1377,6 @@ func aiCommitPrompt() string {
 func (s *ChatService) SessionAICommit(sessionID string) error {
 	return s.SendMessage(sessionID, aiCommitPrompt(), nil)
 }
-
 
 // SessionChanges 返回该 session 的文件级变更列表(VS Code 风格:逐文件 + M/A/D/U 状态)。
 func (s *ChatService) SessionChanges(sessionID string) ([]worktree.FileChange, error) {
@@ -3250,12 +3290,28 @@ func (s *ChatService) AddHarness(command, name string) ([]harness.Harness, error
 // resolveHarnessID 把派生 id 解析成不冲突的最终 id:被内置 / 已有用户占用时依次试 -2/-3… 后缀,
 // 返回首个空位。上限纯防御(实际撞 2-3 次顶天);超限报错而非死循环。name 兜底由 store 层按最终 id 处理。
 func (s *ChatService) resolveHarnessID(derived string) (string, error) {
+	// #187: catalog PATH hits currently own their plain id in the harness list;
+	// a manual add colliding with one gets the -2 suffix (catalog keeps the id).
+	// Best-effort via the discovery cache: a stale cache may miss a fresh
+	// install, but Discover's own dedup (existing entry wins, catalog entry
+	// skipped) still guarantees no duplicate ids in the list.
+	catalogHits := map[string]struct{}{}
+	if p := s.harnessCache.Load(); p != nil {
+		for _, h := range *p {
+			if h.Source == harness.SourceCatalog {
+				catalogHits[h.ID] = struct{}{}
+			}
+		}
+	}
 	for n := 1; n < 100; n++ {
 		id := derived
 		if n > 1 {
 			id = fmt.Sprintf("%s-%d", derived, n)
 		}
 		if harness.IsBuiltin(id) {
+			continue
+		}
+		if _, hit := catalogHits[id]; hit {
 			continue
 		}
 		existing, err := s.st.GetUserHarness(s.ctx, id)
@@ -3353,6 +3409,11 @@ func (s *ChatService) probeCapabilitiesAsync() {
 	}
 	var installed []harness.Harness
 	for _, h := range *p {
+		if h.Source == harness.SourceCatalog {
+			// #187: catalog PATH hits are "available" only — deep capability
+			// probing would spawn an unvetted binary. Excluded by design.
+			continue
+		}
 		if h.Installed {
 			installed = append(installed, h)
 		}

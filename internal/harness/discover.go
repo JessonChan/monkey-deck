@@ -148,6 +148,8 @@ func SwapRegistryForTest(next []Spec) (restore func()) {
 //   - Path/Installed/InstalledVersion 经 Probe(默认 exec.LookPath + 真跑版本命令)得到。
 //   - LatestVersion 经 Spec.Source(可空)异步查;无 Source 或失败 → 空 + 不报错(降级)。
 //   - UpgradeAvailable = Installed 且 LatestVersion 非空 且 compareVersions(Installed, Latest) < 0。
+//   - 阶段 4 追加 KnownCatalog PATH 命中项(#187,Source=catalog 标记):仅「可用」,
+//     不设默认、不进升级链、不进能力深探;与既有条目撞 id 时已有条目优先,目录条目跳过。
 //
 // Discover 不写包级状态(纯函数):用户 harness 经 SetUserHarnesses 注入,Discover 只读合并视图。
 // LatestVersion 的网络查询由 ctx 控制超时/取消(默认由调用方包)。
@@ -220,6 +222,43 @@ func Discover(ctx context.Context) []Harness {
 	}
 
 	out = append(out, inst...)
+	// Stage 4: KnownCatalog PATH scan (#187). A LookPath hit yields an
+	// "available" entry appended after the Registry results, marked
+	// Source=catalog. Catalog entries carry no Spec: no upstream Source (so
+	// LatestVersion/UpgradeAvailable stay zero), no Upgrader, and chat-side
+	// deep probing filters on the marker. Selection materializes a real user
+	// harness row (chat.ensureCatalogHarness) — the spawn pipeline is untouched.
+	seen := make(map[string]struct{}, len(inst))
+	for i := range inst {
+		seen[inst[i].ID] = struct{}{}
+	}
+	for i := range KnownCatalog {
+		kh := &KnownCatalog[i]
+		if _, dup := seen[kh.ID]; dup {
+			// id already owned by a builtin / user harness entry: existing wins,
+			// catalog entry skipped (no duplicate ids in the list).
+			continue
+		}
+		path, err := p.LookPath(kh.BinaryName)
+		if err != nil || path == "" {
+			continue // not on PATH: absent from the list
+		}
+		seen[kh.ID] = struct{}{}
+		h := Harness{
+			ID:        kh.ID,
+			Name:      kh.Name,
+			Command:   kh.BinaryName + " acp",
+			Path:      path,
+			Installed: true,
+			Source:    SourceCatalog,
+		}
+		// Best-effort version (--version): failure stays silent — Installed
+		// remains true with an empty version (enhancement, never a gate).
+		if v, verr := p.Version(ctx, path, []string{"--version"}); verr == nil {
+			h.InstalledVersion = v
+		}
+		out = append(out, h)
+	}
 	return out
 }
 

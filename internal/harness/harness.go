@@ -26,6 +26,12 @@ type Harness struct {
 	Icon        string `json:"icon"`        // 官方图标资源路径(如 "assets/harness-icons/omp.svg");空 = 无 / 走兜底
 	UserDefined bool   `json:"userDefined"` // 用户自添加(可改名/改命令/删除);内置为 false
 
+	// Source marks entry provenance (#187). Empty = a full-lifecycle member
+	// (static Supported or user harness). SourceCatalog = a KnownCatalog PATH
+	// hit: "available" only — never the default, never in the upgrade chain
+	// (no Spec/Source), excluded from capability deep-probing (chat side).
+	Source string `json:"source,omitempty"`
+
 	// 运行时(发现 + 版本检测填充)。Supported 静态默认里这些为零值。
 	Path             string `json:"path,omitempty"`             // 可执行文件绝对路径(空 = 未发现)
 	Installed        bool   `json:"installed"`                  // 本地是否已安装(能 LookPath 到)
@@ -48,6 +54,12 @@ var Supported = []Harness{
 
 // DefaultID 默认 harness(omp)。
 const DefaultID = "omp"
+
+// SourceCatalog marks a Harness entry discovered from KnownCatalog via PATH
+// lookup (#187). Such entries are selectable but inert: no default, no upgrade
+// chain, no capability probe; the first session created with one materializes
+// a real user harness row (chat side).
+const SourceCatalog = "catalog"
 
 // Normalize 把 harness id 归一化:空或未知回退到默认(omp)。
 // 在 effectiveSupported(静态 + 用户 harness 合并视图)上判定 —— 用户加的 harness 也算「已知」,
