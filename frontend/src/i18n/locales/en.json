@@ -762,6 +762,7 @@
       "empty": "No harnesses known.",
       "installed": "Installed",
       "notInstalled": "Not installed",
+      "needsAcpAdapter": "Needs an ACP adapter",
       "cmd": "Command",
       "cmdTip": "stdio ACP startup command",
       "current": "Current",

@@ -12,6 +12,12 @@ import { copyTextQuiet } from "../lib/clipboard";
 // harness leads the installed group in the picker grid. Frontend literal — the backend
 // constant is not part of the generated bindings.
 const DEFAULT_HARNESS_ID = "omp";
+// A card is selectable only when the binary is discovered AND the catalog pins a
+// verified ACP entry command (#196). needsAdapter entries stay listed (discovery
+// info is kept) but render disabled — the same "keep the info, dim the card"
+// contract the grid already applies to uninstalled binaries (#187). One definition
+// on purpose: preselection, sort ranking, and click gating must stay in lockstep.
+const isSelectable = (h: Harness) => h.installed && !h.needsAdapter;
 // What the modal hands back on confirm. mode drives which backend create path App.tsx uses:
 //   "project" → CreateSession(useWorktree=false)   — run in the project's main worktree.
 //   "enter"   → CreateGuestSession(enterPath)      — pin to an EXISTING linked worktree (guest).
@@ -59,8 +65,8 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
   const { t } = useTranslation();
   // harness 必须显式选择:null = 未选。lastHarness 仍可选时默认选它;单 harness 无歧义自动选;否则 null。
   const [harness, setHarness] = useState<string | null>(() => {
-    if (lastHarness && harnesses.some((h) => h.id === lastHarness)) return lastHarness;
-    if (harnesses.length === 1) return harnesses[0].id;
+    if (lastHarness && harnesses.some((h) => h.id === lastHarness && isSelectable(h))) return lastHarness;
+    if (harnesses.length === 1 && isSelectable(harnesses[0])) return harnesses[0].id;
     return null;
   });
   // workdir mode: null = unselected, "existing" = use an existing worktree, "new" = fork a new one.
@@ -230,12 +236,13 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
     return parts.length > 1 ? "…/" + parts[parts.length - 1] : p;
   };
 
-  // Grid display order (#188): installed first, default harness (omp) at the head of its
-  // group, otherwise the backend's stable order preserved (Array.sort is stable). Discovery
-  // (#187) appends catalog entries after the static registry, so re-ranking here keeps
-  // installed tools findable when the uninstalled tail grows.
+  // Grid display order (#188): usable harnesses first, default harness (omp) at the
+  // head of its group, otherwise the backend's stable order preserved (Array.sort is
+  // stable). Discovery (#187) appends catalog entries after the static registry, so
+  // re-ranking here keeps usable tools findable when the dimmed tail (uninstalled,
+  // plus #196 needs-adapter entries) grows.
   const sortedHarnesses = useMemo(() => {
-    const rank = (h: Harness) => (h.installed ? 0 : 2) + (h.id === DEFAULT_HARNESS_ID ? 0 : 1);
+    const rank = (h: Harness) => (isSelectable(h) ? 0 : 2) + (h.id === DEFAULT_HARNESS_ID ? 0 : 1);
     return [...harnesses].sort((a, b) => rank(a) - rank(b));
   }, [harnesses]);
 
@@ -369,36 +376,50 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
             {harness === null && <span className="ns-required">{t("newSession.required")}</span>}
           </div>
           <div className="ns-harness-list" data-testid="ns-harness-grid">
-            {sortedHarnesses.map((h) => (
-              <button
-                key={h.id}
-                className={`ns-harness ${harness === h.id ? "active" : ""} ${h.installed ? "" : "uninstalled"}`}
-                onClick={() => setHarness(h.id)}
-                data-testid={`ns-harness-${h.id}`}
-                data-tooltip-id="md-tip"
-                data-tooltip-content={
-                  // Merged card tooltip (§4.4/§4.5): name + launch command + install
-                  // state. The command chip moved off the card face in #188, so this is
-                  // the command's only home; \n renders via pre-line on .react-tooltip.
-                  h.installed
-                    ? `${h.name}\n${h.command}`
-                    : `${h.name}\n${h.command}\n${t("newSession.notInstalled")}`
-                }
-              >
-                {!h.installed && (
-                  <span className="ns-harness-badge-uninstalled" data-testid={`ns-harness-uninstalled-${h.id}`}>
-                    {t("newSession.notInstalled")}
-                  </span>
-                )}
-                {harness === h.id && (
-                  <span className="ns-harness-check" data-testid="ns-harness-check">
-                    <Check size={12} strokeWidth={3} />
-                  </span>
-                )}
-                <HarnessIcon harnessId={h.id} size={36} className="ns-harness-icon" />
-                <span className="ns-harness-name">{h.name}</span>
-              </button>
-            ))}
+            {sortedHarnesses.map((h) => {
+              // #196: installed but no verified ACP entry command → locked card:
+              // disabled, dimmed, corner chip + tooltip line naming the missing
+              // piece. Uninstalled cards stay selectable as before (#187 untouched).
+              const locked = h.installed && !!h.needsAdapter;
+              return (
+                <button
+                  key={h.id}
+                  className={`ns-harness ${harness === h.id ? "active" : ""} ${h.installed ? "" : "uninstalled"} ${locked ? "needs-adapter" : ""}`}
+                  disabled={locked || undefined}
+                  onClick={() => { if (!locked) setHarness(h.id); }}
+                  data-testid={`ns-harness-${h.id}`}
+                  data-tooltip-id="md-tip"
+                  data-tooltip-content={
+                    // Merged card tooltip (§4.4/§4.5): name + launch command + state
+                    // line. The command chip moved off the card face in #188, so this
+                    // is the command's only home; \n renders via pre-line on .react-tooltip.
+                    !h.installed
+                      ? `${h.name}\n${h.command}\n${t("newSession.notInstalled")}`
+                      : locked
+                        ? `${h.name}\n${h.command}\n${t("settings.harness.needsAcpAdapter")}`
+                        : `${h.name}\n${h.command}`
+                  }
+                >
+                  {locked && (
+                    <span className="ns-harness-badge-uninstalled" data-testid={`ns-harness-needs-adapter-${h.id}`}>
+                      {t("settings.harness.needsAcpAdapter")}
+                    </span>
+                  )}
+                  {!h.installed && (
+                    <span className="ns-harness-badge-uninstalled" data-testid={`ns-harness-uninstalled-${h.id}`}>
+                      {t("newSession.notInstalled")}
+                    </span>
+                  )}
+                  {harness === h.id && (
+                    <span className="ns-harness-check" data-testid="ns-harness-check">
+                      <Check size={12} strokeWidth={3} />
+                    </span>
+                  )}
+                  <HarnessIcon harnessId={h.id} size={36} className="ns-harness-icon" />
+                  <span className="ns-harness-name">{h.name}</span>
+                </button>
+              );
+            })}
           </div>
           {/* Detail card (#195): fixed strip under the grid, mirrors the current
               selection (placeholder when nothing is picked). Normal flow — it can

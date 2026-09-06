@@ -2928,6 +2928,12 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
   font-size: 9.5px; line-height: 1; padding: 2px 5px; border-radius: 4px;
   color: var(--text-3); background: var(--elev); border: 1px solid var(--sep);
 }
+/* No-ACP-channel cards (#196): binary discovered on PATH but the catalog pins no
+   verified ACP entry command — same dimming + corner chip as uninstalled, plus a
+   not-allowed cursor. The card is disabled (not selectable), so the #195 detail
+   card below never renders for it. */
+.ns-harness.needs-adapter { opacity: 0.55; }
+.ns-harness.needs-adapter:disabled { cursor: not-allowed; }
 /* ─── NewSessionModal harness 详情卡(#195) ─── */
 /* Fixed strip under the picker grid: plain label+value rows for the selected
    harness (command / path / versions / install state). In normal flow, so it

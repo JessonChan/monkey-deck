@@ -350,4 +350,42 @@ describe("NewSessionModal harness grid", () => {
     expect(omp.querySelector(".ns-harness-badge-uninstalled")).toBeNull();
     expect(omp.getAttribute("data-tooltip-content")).toBe("omp\nomp acp");
   });
+
+  // #196: installed binary but the catalog pins no verified ACP entry command
+  // (needsAdapter) — still listed, yet locked: disabled + dimmed + corner chip,
+  // tooltip names the missing piece, clicks never select it.
+  const lockedHarness = (id: string): Harness =>
+    ({ id, name: id, command: `${id} acp`, installed: true, needsAdapter: true }) as unknown as Harness;
+
+  test("needs-adapter cards: dimmed + chip + tooltip line, ranked to the tail, not selectable", async () => {
+    const { host } = mount(
+      <NewSessionModal harnesses={[lockedHarness("claude"), h("opencode", true)]} isGit={false} lastHarness="" defaultBaseRef="" recentRefs={[]} branches={[]} worktrees={[]} onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    await flush();
+    // Usable installed first; the locked card sinks into the dimmed tail (#188 rank).
+    expect(gridIds(host)).toEqual(["opencode", "claude"]);
+
+    const claude = host.querySelector('[data-testid="ns-harness-claude"]')!;
+    expect(claude.classList.contains("needs-adapter")).toBe(true);
+    expect(claude.classList.contains("uninstalled")).toBe(false);
+    expect(claude.getAttribute("disabled")).not.toBeNull();
+    expect(claude.querySelector('[data-testid="ns-harness-needs-adapter-claude"]')).not.toBeNull();
+    expect(claude.getAttribute("data-tooltip-content")).toBe(
+      "claude\nclaude acp\nsettings.harness.needsAcpAdapter",
+    );
+
+    // Clicking a locked card must not select it (no active class, no check badge).
+    claude.dispatchEvent(click());
+    await flush();
+    expect(claude.classList.contains("active")).toBe(false);
+    expect(host.querySelector('[data-testid="ns-harness-check"]')).toBeNull();
+  });
+
+  test("needs-adapter cards are skipped by preselection (single-card auto-select)", async () => {
+    const { host } = mount(
+      <NewSessionModal harnesses={[lockedHarness("claude")]} isGit={false} lastHarness="" defaultBaseRef="" recentRefs={[]} branches={[]} worktrees={[]} onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    await flush();
+    expect(host.querySelector(".ns-harness.active")).toBeNull();
+  });
 });

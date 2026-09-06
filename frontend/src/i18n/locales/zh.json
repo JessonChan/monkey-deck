@@ -762,6 +762,7 @@
       "empty": "暂无已知 harness。",
       "installed": "已安装",
       "notInstalled": "未安装",
+      "needsAcpAdapter": "需 ACP 适配器",
       "cmd": "命令",
       "cmdTip": "stdio ACP 启动命令",
       "current": "当前",
