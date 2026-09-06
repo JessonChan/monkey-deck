@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Harness } from "../../bindings/github.com/jessonchan/monkey-deck/internal/harness/models";
 import type { BranchInfo, WorktreeInfo } from "../../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import * as ChatService from "../../bindings/github.com/jessonchan/monkey-deck/internal/chat/chatservice";
 import type { McpServer } from "../../bindings/github.com/jessonchan/monkey-deck/internal/store/models";
 import HarnessIcon from "./HarnessIcon";
+import { copyTextQuiet } from "../lib/clipboard";
 
 // Mirrors harness.DefaultID on the backend (internal/harness/harness.go): the default
 // harness leads the installed group in the picker grid. Frontend literal — the backend
@@ -238,6 +239,80 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
     return [...harnesses].sort((a, b) => rank(a) - rank(b));
   }, [harnesses]);
 
+  // Currently picked harness object (null = none selected → placeholder card).
+  const selected = harness !== null ? harnesses.find((x) => x.id === harness) ?? null : null;
+
+  // Detail card body (#195): the selected harness in plain label+value rows (§4.4 —
+  // never raw JSON). Path row is omitted when the executable wasn't discovered.
+  const renderDetail = (h: Harness) => {
+    const path = h.path;
+    return (
+      <>
+        <div className="ns-detail-head">
+          <span className="ns-detail-name" data-testid="ns-detail-name">{h.name}</span>
+          {h.userDefined && (
+            <span className="ns-detail-chip" data-testid="ns-detail-chip">{t("newSession.userDefinedChip")}</span>
+          )}
+        </div>
+        <div className="ns-detail-row">
+          <span className="ns-detail-label">{t("newSession.detailCommand")}</span>
+          <span className="ns-detail-value ns-detail-cmd" data-testid="ns-detail-command">{h.command}</span>
+          <button
+            type="button"
+            className="copy-icon-btn ns-detail-copy"
+            data-testid="ns-detail-copy"
+            onClick={() => copyTextQuiet(h.command)}
+            data-tooltip-id="md-tip"
+            data-tooltip-content={t("common.copy")}
+          >
+            <Copy size={12} />
+          </button>
+        </div>
+        {path && (
+          <div className="ns-detail-row">
+            <span className="ns-detail-label">{t("newSession.detailPath")}</span>
+            <button
+              type="button"
+              className="ns-detail-path"
+              data-testid="ns-detail-path"
+              onClick={() => copyTextQuiet(path)}
+              data-tooltip-id="md-tip"
+              data-tooltip-content={path}
+            >
+              {path}
+            </button>
+          </div>
+        )}
+        <div className="ns-detail-row">
+          <span className="ns-detail-label">{t("newSession.detailVersion")}</span>
+          <span className="ns-detail-value" data-testid="ns-detail-version">
+            {h.installedVersion || "—"}
+            {h.latestVersion && <span> → {h.latestVersion}</span>}
+            {h.upgradeAvailable && (
+              <span
+                className="ns-detail-upgrade"
+                data-testid="ns-detail-upgrade"
+                data-tooltip-id="md-tip"
+                data-tooltip-content={t("newSession.upgradeHint")}
+              >
+                ↗
+              </span>
+            )}
+          </span>
+        </div>
+        <div className="ns-detail-row">
+          <span className="ns-detail-label">{t("newSession.detailInstall")}</span>
+          <span
+            className={`ns-detail-value ${h.installed ? "" : "ns-detail-muted"}`}
+            data-testid="ns-detail-install"
+          >
+            {h.installed ? t("newSession.detailInstalled") : t("newSession.notInstalled")}
+          </span>
+        </div>
+      </>
+    );
+  };
+
   // Shared base-ref option row. isDefault adds the ★ marker.
   const renderBranchOption = (b: DecoratedBranch, isDefault: boolean) => (
     <button
@@ -324,6 +399,16 @@ export default function NewSessionModal({ harnesses, isGit, lastHarness, default
                 <span className="ns-harness-name">{h.name}</span>
               </button>
             ))}
+          </div>
+          {/* Detail card (#195): fixed strip under the grid, mirrors the current
+              selection (placeholder when nothing is picked). Normal flow — it can
+              never cover or resize the grid above. */}
+          <div className="ns-harness-detail" data-testid="ns-harness-detail">
+            {selected ? renderDetail(selected) : (
+              <span className="ns-detail-placeholder" data-testid="ns-detail-placeholder">
+                {t("newSession.detailPlaceholder")}
+              </span>
+            )}
           </div>
         </div>
 

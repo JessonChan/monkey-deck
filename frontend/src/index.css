@@ -2928,6 +2928,43 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
   font-size: 9.5px; line-height: 1; padding: 2px 5px; border-radius: 4px;
   color: var(--text-3); background: var(--elev); border: 1px solid var(--sep);
 }
+/* ─── NewSessionModal harness 详情卡(#195) ─── */
+/* Fixed strip under the picker grid: plain label+value rows for the selected
+   harness (command / path / versions / install state). In normal flow, so it
+   can never cover or resize the grid; rows clamp with min-width:0 to survive
+   the 390px PWA viewport. */
+.ns-harness-detail {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 9px 11px; border-radius: 8px;
+  background: var(--elev); border: 1px solid var(--sep);
+  font-size: 12px; min-width: 0;
+}
+.ns-detail-placeholder { color: var(--text-3); }
+.ns-detail-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ns-detail-name {
+  font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* User-defined chip: same pill shape as the grid's uninstalled badge, accent tint. */
+.ns-detail-chip {
+  flex-shrink: 0; font-size: 9.5px; line-height: 1; padding: 2px 5px; border-radius: 4px;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid rgba(10, 132, 255, 0.3);
+}
+.ns-detail-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ns-detail-label { flex: 0 0 52px; color: var(--text-3); }
+.ns-detail-value { color: var(--text); min-width: 0; }
+/* Command shows in full (wraps); the copy button rides at the row end. */
+.ns-detail-cmd { flex: 1; word-break: break-all; }
+.ns-detail-copy { flex-shrink: 0; align-self: center; }
+/* Path: click-to-copy, ellipsis-clamped with the full path in the tooltip (§4.5). */
+.ns-detail-path {
+  flex: 1; min-width: 0; padding: 0; border: none; background: none; cursor: pointer;
+  color: var(--text); font: inherit; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ns-detail-path:hover { color: var(--accent); }
+.ns-detail-muted { color: var(--text-3); }
+.ns-detail-upgrade { margin-left: 2px; color: var(--amber); font-weight: 700; cursor: help; }
 .ns-worktree-group { display: flex; flex-direction: row; gap: 8px; }
 .ns-worktree {
   display: flex; align-items: flex-start; gap: 10px; flex: 1; min-width: 0;
