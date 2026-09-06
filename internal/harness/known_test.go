@@ -100,3 +100,40 @@ func TestKnownCatalog_ExcludesBuiltins(t *testing.T) {
 		}
 	}
 }
+
+// ACPCommand pins from the #196 phase-1 tier-1 matrix
+// (docs/worklog/2026-09-06-acp-matrix-196.md): exactly two catalog entries have a
+// verified ACP entry command, and claude-agent was judged unusable (`claude acp`
+// hangs) so it must stay empty — it surfaces gray, "needs an ACP adapter".
+func TestKnownCatalog_ACPCommandPins(t *testing.T) {
+	codex := KnownHarnessByID("codex-cli")
+	if codex == nil || codex.ACPCommand != "codex-acp" {
+		t.Fatalf("codex-cli ACPCommand = %+v, want codex-acp (Zed adapter, bare command)", codex)
+	}
+	codebuddy := KnownHarnessByID("codebuddy-code")
+	if codebuddy == nil || codebuddy.ACPCommand != "codebuddy --acp" {
+		t.Fatalf("codebuddy-code ACPCommand = %+v, want %q", codebuddy, "codebuddy --acp")
+	}
+	claude := KnownHarnessByID("claude-agent")
+	if claude == nil || claude.ACPCommand != "" {
+		t.Fatalf("claude-agent ACPCommand = %+v, want empty (matrix: unusable)", claude)
+	}
+}
+
+// Invariant: every knownACPCommand key must target a real catalog id and land on
+// its entry. A typo'd key would otherwise silently drop the ACP channel (compile
+// can't catch map keys).
+func TestKnownACPCommand_KeysAreCatalogIDs(t *testing.T) {
+	if len(knownACPCommand) == 0 {
+		t.Fatal("knownACPCommand is empty — matrix pins went missing")
+	}
+	for id, cmd := range knownACPCommand {
+		kh := KnownHarnessByID(id)
+		if kh == nil {
+			t.Fatalf("knownACPCommand key %q is not a catalog id", id)
+		}
+		if kh.ACPCommand != cmd {
+			t.Fatalf("catalog entry %s ACPCommand = %q, want %q (pin did not land)", id, kh.ACPCommand, cmd)
+		}
+	}
+}

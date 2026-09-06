@@ -32,13 +32,14 @@ func findHarnessByID(list []Harness, id string) *Harness {
 	return nil
 }
 
-// TestDiscover_CatalogHit 命中:目录项以「可用」条目追加在 Registry 结果之后,
-// Installed=true + Source=catalog 标记 + Command=<BinaryName> acp,版本正常解析。
+// TestDiscover_CatalogHit hit with a pinned ACPCommand (#196): the catalog entry
+// is appended after the Registry results, Installed=true + Source=catalog marker,
+// and Command carries the verified ACP entry — NOT the "<BinaryName> acp" default.
 func TestDiscover_CatalogHit(t *testing.T) {
 	prevProbe := currentProbe()
 	t.Cleanup(func() { SetProbe(prevProbe) })
 	swapCatalogForTest(t, []KnownHarness{
-		{ID: "mdcatgoose", Name: "Catalog Goose", BinaryName: "mdcatgoose", Keywords: []string{"mdcatgoose"}},
+		{ID: "mdcatgoose", Name: "Catalog Goose", BinaryName: "mdcatgoose", Keywords: []string{"mdcatgoose"}, ACPCommand: "mdgoose-acp"},
 	})
 	SetProbe(fakeProbe2{
 		paths: map[string]string{"mdcatgoose": "/fake/bin/mdcatgoose"},
@@ -63,8 +64,11 @@ func TestDiscover_CatalogHit(t *testing.T) {
 	if got.InstalledVersion != "2.1.0" {
 		t.Fatalf("InstalledVersion = %q, want 2.1.0", got.InstalledVersion)
 	}
-	if got.Command != "mdcatgoose acp" {
-		t.Fatalf("Command = %q, want %q", got.Command, "mdcatgoose acp")
+	if got.Command != "mdgoose-acp" {
+		t.Fatalf("Command = %q, want the pinned ACPCommand", got.Command)
+	}
+	if got.NeedsAdapter {
+		t.Fatalf("pinned ACPCommand must not set NeedsAdapter: %+v", got)
 	}
 	if got.Name != "Catalog Goose" {
 		t.Fatalf("Name = %q, want Catalog Goose", got.Name)
@@ -72,6 +76,38 @@ func TestDiscover_CatalogHit(t *testing.T) {
 	// 目录条目无 Spec:不进升级链(LatestVersion/UpgradeAvailable 恒零),非用户条目。
 	if got.LatestVersion != "" || got.UpgradeAvailable || got.UserDefined {
 		t.Fatalf("catalog entry must be inert: %+v", got)
+	}
+}
+
+// TestDiscover_CatalogHitWithoutACPCommandGray hit WITHOUT a pinned ACPCommand
+// (#196): the entry stays listed (discovery info is kept, not silently dropped) —
+// Installed=true, Source=catalog — but Command falls back to the conventional
+// "<BinaryName> acp" and NeedsAdapter flags the missing ACP channel for the UI
+// (gray + non-selectable).
+func TestDiscover_CatalogHitWithoutACPCommandGray(t *testing.T) {
+	prevProbe := currentProbe()
+	t.Cleanup(func() { SetProbe(prevProbe) })
+	swapCatalogForTest(t, []KnownHarness{
+		{ID: "mdcatgoose", Name: "Catalog Goose", BinaryName: "mdcatgoose", Keywords: []string{"mdcatgoose"}},
+	})
+	SetProbe(fakeProbe2{
+		paths: map[string]string{"mdcatgoose": "/fake/bin/mdcatgoose"},
+		vers:  map[string]string{"mdcatgoose": "mdcatgoose version 2.1.0\n"},
+	})
+
+	out := Discover(context.Background())
+	got := findHarnessByID(out, "mdcatgoose")
+	if got == nil {
+		t.Fatalf("no-ACP-channel hit must stay listed: %+v", out)
+	}
+	if !got.Installed || got.Source != SourceCatalog {
+		t.Fatalf("hit must stay Installed with the catalog marker: %+v", got)
+	}
+	if got.Command != "mdcatgoose acp" {
+		t.Fatalf("Command = %q, want the conventional fallback", got.Command)
+	}
+	if !got.NeedsAdapter {
+		t.Fatalf("missing ACPCommand must set NeedsAdapter: %+v", got)
 	}
 }
 

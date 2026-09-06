@@ -228,6 +228,12 @@ func Discover(ctx context.Context) []Harness {
 	// LatestVersion/UpgradeAvailable stay zero), no Upgrader, and chat-side
 	// deep probing filters on the marker. Selection materializes a real user
 	// harness row (chat.ensureCatalogHarness) — the spawn pipeline is untouched.
+	//
+	// #196: the spawn command is the catalog's verified ACPCommand when pinned
+	// (codex-cli → "codex-acp"), else the conventional "<BinaryName> acp".
+	// Hits without a pinned ACPCommand set NeedsAdapter: still listed (the
+	// discovery info is kept, not silently dropped), but the UI grays them out
+	// and disables selection.
 	seen := make(map[string]struct{}, len(inst))
 	for i := range inst {
 		seen[inst[i].ID] = struct{}{}
@@ -244,13 +250,18 @@ func Discover(ctx context.Context) []Harness {
 			continue // not on PATH: absent from the list
 		}
 		seen[kh.ID] = struct{}{}
+		cmd := kh.ACPCommand
+		if cmd == "" {
+			cmd = kh.BinaryName + " acp"
+		}
 		h := Harness{
-			ID:        kh.ID,
-			Name:      kh.Name,
-			Command:   kh.BinaryName + " acp",
-			Path:      path,
-			Installed: true,
-			Source:    SourceCatalog,
+			ID:           kh.ID,
+			Name:         kh.Name,
+			Command:      cmd,
+			Path:         path,
+			Installed:    true,
+			Source:       SourceCatalog,
+			NeedsAdapter: kh.ACPCommand == "",
 		}
 		// Best-effort version (--version): failure stays silent — Installed
 		// remains true with an empty version (enhancement, never a gate).

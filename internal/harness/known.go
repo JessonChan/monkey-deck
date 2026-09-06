@@ -1,5 +1,5 @@
 // Package harness 提供受支持的 ACP harness 注册表与运行时发现/版本检测/升级管理。
-// 本文件(known.go)承载一个「已知 ACP agent 目录」(KnownCatalog),与 Supported 注册表
+// 本文件(known.go)承载一个「已知 agent 目录」(KnownCatalog,ACP 可用性由 ACPCommand 表达),与 Supported 注册表
 // (omp/opencode,§1.x 默认 harness 契约)严格分离:KnownCatalog 只读、不参与进程回收、
 // 不进 SQLite、不 spawn,唯一用途是「按启动命令关键词匹配 → 自动选 harness」(Add Harness 弹窗)。
 package harness
@@ -8,18 +8,29 @@ import (
 	"strings"
 )
 
-// KnownHarness 已知 ACP harness 的轻量目录条目。两个用途:
-//  1. 命令关键词匹配自动选(MatchKnownHarness,前端 Add Harness 弹窗);
-//  2. PATH 自动发现(#187):Discover 对 BinaryName 做 LookPath,命中即产出
-//     「可用」harness 条目(Source=catalog 标记)。
+// KnownHarness is a lightweight catalog entry for a known agent harness. Two uses:
+//  1. command-keyword matching for auto-selection (MatchKnownHarness, Add Harness
+//     dialog);
+//  2. PATH auto-discovery (#187): Discover LookPaths BinaryName; a hit yields a
+//     harness entry (Source=catalog marker).
 //
-// 前端 HarnessIcon 只用 ID 自行解析图标 URL(/harness-icons/<id>.<ext>,§2.1),故本
-// 结构不带 Icon 路径字段(图标文件已落地 assets/harness-icons/<id>.<ext>)。
+// ACPCommand expresses ACP usability (#196): the verified stdio ACP entry command,
+// which may differ from both the discovery key (codex-cli → "codex-acp") and the
+// "<bin> acp" default form (codebuddy → "codebuddy --acp"). Empty = no known ACP
+// channel: the entry is still discovered and listed, but the UI grays it out as
+// "needs an ACP adapter" and it is not selectable. Display identity (ID/Name/icon)
+// always stays on the discovery-key side.
+//
+// The frontend HarnessIcon resolves icons from ID alone (/harness-icons/<id>.<ext>),
+// so this struct carries no icon path field (icon files live in
+// assets/harness-icons/<id>.<ext>).
 type KnownHarness struct {
 	ID         string   `json:"id"`
 	Name       string   `json:"name"`
 	BinaryName string   `json:"binaryName"` // canonical executable name for PATH lookup (= seed alias)
 	Keywords   []string `json:"keywords"`
+	// ACPCommand is the verified ACP entry command; "" = no ACP channel (gray state).
+	ACPCommand string `json:"acpCommand,omitempty"`
 }
 
 // knownSeed 目录种子:id + 显示名 + 主命令别名(用户最可能在启动命令里敲的词)。
@@ -87,6 +98,19 @@ var genericTokens = map[string]struct{}{
 	"agent": {}, "ai": {}, "cli": {}, "code": {}, "dev": {}, "build": {},
 }
 
+// knownACPCommand pins the verified stdio ACP entry command per catalog id
+// (#196 phase-1 tier-1 matrix, docs/worklog/2026-09-06-acp-matrix-196.md):
+//   - codex-cli: the `codex` binary has no ACP mode (immediate exit); the Zed
+//     adapter binary `codex-acp` (bare command) is the verified entry.
+//   - codebuddy-code: verified entry is `codebuddy --acp` (flag form, not `acp`).
+//
+// IDs absent from this map have no verified ACP channel (matrix-judged unusable,
+// e.g. claude-agent, or not covered by the matrix) and keep ACPCommand empty.
+var knownACPCommand = map[string]string{
+	"codebuddy-code": "codebuddy --acp",
+	"codex-cli":      "codex-acp",
+}
+
 // KnownCatalog 已知 harness 目录(README 列出的非内置 ACP agent,顺序稳定)。
 var KnownCatalog []KnownHarness
 
@@ -98,6 +122,7 @@ func init() {
 			Name:       s.Name,
 			BinaryName: s.Alias,
 			Keywords:   deriveKeywords(s.ID, s.Alias),
+			ACPCommand: knownACPCommand[s.ID],
 		})
 	}
 }

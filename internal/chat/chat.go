@@ -942,9 +942,16 @@ func (s *ChatService) ensureCatalogHarness(harnessID string) {
 	if existing != nil {
 		return // already materialized (or user-added earlier): nothing to do
 	}
-	// Command = canonical spawn form; BinaryName (= seed alias) is the first
-	// token, so effectiveRegistry derives the same binary for discovery.
-	if _, err := s.st.CreateUserHarness(s.ctx, kh.ID, kh.Name, kh.BinaryName+" acp", ""); err != nil {
+	// Command = canonical spawn form (#196): the catalog's verified ACPCommand
+	// when pinned (codex-cli → "codex-acp"), else the conventional
+	// "<BinaryName> acp". The first token doubles as the derived BinaryName in
+	// effectiveRegistry, so discovery of the materialized row LookPaths the
+	// binary that must actually be on PATH for this harness to work.
+	cmd := kh.ACPCommand
+	if cmd == "" {
+		cmd = kh.BinaryName + " acp"
+	}
+	if _, err := s.st.CreateUserHarness(s.ctx, kh.ID, kh.Name, cmd, ""); err != nil {
 		slog.Warn("catalog harness persist", "id", kh.ID, "err", err)
 		return
 	}

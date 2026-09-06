@@ -32,6 +32,12 @@ type Harness struct {
 	// (no Spec/Source), excluded from capability deep-probing (chat side).
 	Source string `json:"source,omitempty"`
 
+	// NeedsAdapter marks a SourceCatalog hit whose catalog entry has no verified
+	// ACP entry command (#196): the binary is on PATH but cannot be spawned as an
+	// ACP peer. The UI grays such entries out ("needs an ACP adapter") and makes
+	// them non-selectable. Always false for non-catalog entries.
+	NeedsAdapter bool `json:"needsAdapter,omitempty"`
+
 	// 运行时(发现 + 版本检测填充)。Supported 静态默认里这些为零值。
 	Path             string `json:"path,omitempty"`             // 可执行文件绝对路径(空 = 未发现)
 	Installed        bool   `json:"installed"`                  // 本地是否已安装(能 LookPath 到)

@@ -87,6 +87,48 @@ func TestCreateSessionMaterializesCatalogHarness(t *testing.T) {
 	}
 }
 
+// TestCreateSessionMaterializesCatalogHarnessWithACPCommand (#196): a catalog
+// entry with a pinned ACPCommand materializes a user harness row whose Command is
+// the verified ACP entry — NOT the "<BinaryName> acp" default (codex-cli case:
+// discovery key `codex`, spawn form `codex-acp`). Display identity (ID/Name)
+// stays on the discovery-key side.
+func TestCreateSessionMaterializesCatalogHarnessWithACPCommand(t *testing.T) {
+	resetUserHarnessesForTest(t)
+	kh := harness.KnownHarness{ID: "mdcatgoose", Name: "Catalog Goose", BinaryName: "mdcatgoose", ACPCommand: "mdgoose-acp"}
+	swapKnownCatalogForTest(t, []harness.KnownHarness{kh})
+	restore := harness.SetProbeForTest(fakeStubProbe{
+		paths: map[string]string{"mdgoose-acp": "/fake/mdgoose-acp"},
+		vers:  map[string]string{"mdgoose-acp": "mdgoose-acp version 0.9.0\n"},
+	})
+	t.Cleanup(restore)
+	svc := setupHarnessStoreSvc(t)
+
+	proj, err := svc.st.CreateProject(svc.ctx, "p", t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	se, err := svc.CreateSession(proj.ID, "t", kh.ID, false, "", nil)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if se.Harness != kh.ID {
+		t.Fatalf("session.Harness = %q, want %q", se.Harness, kh.ID)
+	}
+	row, err := svc.st.GetUserHarness(svc.ctx, kh.ID)
+	if err != nil {
+		t.Fatalf("GetUserHarness: %v", err)
+	}
+	if row == nil {
+		t.Fatal("catalog hit was not materialized as a user harness row")
+	}
+	if row.Command != kh.ACPCommand {
+		t.Fatalf("materialized Command = %q, want pinned ACPCommand %q", row.Command, kh.ACPCommand)
+	}
+	if row.Name != kh.Name {
+		t.Fatalf("materialized Name = %q, want catalog display name %q", row.Name, kh.Name)
+	}
+}
+
 // TestCreateSession_UnknownCatalogIDUntouched 非 catalog id 走原路径:不落任何 user 行,
 // 未知 id 照旧 Normalize 回退 omp。
 func TestCreateSession_UnknownCatalogIDUntouched(t *testing.T) {
