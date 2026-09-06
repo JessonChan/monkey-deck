@@ -90,12 +90,17 @@ Monkey Deck speaks pure ACP, so **every agent that implements the Agent Client P
 - [stdio Bus](https://github.com/stdiobus/stdiobus)
 - [VT Code](https://github.com/vinhnx/vtcode)
 
-**Via third-party adapters** (install the adapter, then add its ACP command)
+**Via third-party adapters** — these agents have no native ACP mode; a separate
+adapter binary speaks ACP on their behalf. Install the adapter and it is picked up
+automatically: once the adapter binary is on PATH, the agent is discovered and the
+pinned adapter command is spawned (Codex CLI → `codex-acp`; verified spawn +
+initialize). While the adapter is missing, a discovered entry still shows up in
+the agent picker — greyed out as "needs an ACP adapter" and not selectable.
 
-- **Claude Agent** — via Zed's [claude-agent-acp](https://github.com/zed-industries/claude-agent-acp)
-- **Codex CLI** — via Zed's [codex-acp](https://github.com/zed-industries/codex-acp)
-- **Pi** — via [pi-acp](https://github.com/svkozak/pi-acp)
-- **Bub** — via [bub-acp-server](https://github.com/bubbuild/bub-contrib/tree/main/packages/bub-acp-server)
+- **Codex CLI** — via Zed's [codex-acp](https://github.com/zed-industries/codex-acp) (the `codex` binary itself is not ACP-speaking)
+- **Claude Agent** — via Zed's [claude-agent-acp](https://github.com/zed-industries/claude-agent-acp) (requires installing the adapter; `claude acp` is not a working entry)
+- **Pi** — via [pi-acp](https://github.com/svkozak/pi-acp) (requires installing the adapter)
+- **Bub** — via [bub-acp-server](https://github.com/bubbuild/bub-contrib/tree/main/packages/bub-acp-server) (requires installing the adapter)
 
 Curated from the [ACP protocol site](https://agentclientprotocol.com/) — the [Agents](https://agentclientprotocol.com/get-started/agents) and [Registry](https://agentclientprotocol.com/get-started/registry) pages.
 
