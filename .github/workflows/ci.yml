@@ -40,6 +40,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # go:embed all:frontend/dist (main.go) fails on a fresh checkout: dist is
+      # a build artifact never present in git. Stub a minimal file so the Go
+      # build passes; release.yml does a real frontend build and is unaffected.
+      - name: Stub frontend/dist (go:embed needs the dir)
+        shell: bash
+        run: mkdir -p frontend/dist && echo stub > frontend/dist/index.html
       - name: Build backend
         env:
           GOOS: ${{ matrix.goos }}
