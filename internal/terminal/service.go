@@ -18,7 +18,6 @@ import (
 	"os/exec"
 	"runtime"
 	"sync"
-	"syscall"
 
 	"github.com/creack/pty"
 	"github.com/google/uuid"
@@ -268,10 +267,12 @@ func (s *TerminalService) readLoop(ts *termSession) {
 	}
 }
 
-// kill 关闭 PTY + 杀进程组(§3.2 思路)。幂等:已退出则直接返回。
-// 不设 Setpgid 的前提下仍可按组回收:交互式 shell 自身是组长(pgid==pid),
-// 且关闭 ptmx master 会令内核向 controlling session 发 SIGHUP —— 终端模拟器的标准清理路径,
-// 对终端内的 vim/前台进程同样有效。
+// kill closes the PTY and kills the process group (§3.2 idea). Idempotent:
+// returns immediately when already exited.
+// Reclaims by group even without Setpgid: an interactive shell makes itself
+// group leader (pgid==pid), and closing the ptmx master makes the kernel send
+// SIGHUP to the controlling session — the standard terminal-emulator cleanup
+// path, also effective for vim/foreground processes inside the terminal.
 func (s *TerminalService) kill(ts *termSession) {
 	ts.mu.Lock()
 	if ts.exited {
@@ -282,12 +283,9 @@ func (s *TerminalService) kill(ts *termSession) {
 	ts.mu.Unlock()
 	_ = ts.ptmx.Close() // SIGHUP 通道
 	if ts.cmd.Process != nil {
-		// 杀整个进程组(交互式 shell 自身会 setpgid;按组收 vim/子进程)。
-		if pgid, err := syscall.Getpgid(ts.cmd.Process.Pid); err == nil {
-			_ = syscall.Kill(-pgid, syscall.SIGKILL)
-		} else {
-			_ = ts.cmd.Process.Kill()
-		}
+		// Kill the whole process group (group semantics live in the platform
+		// files proc_unix.go/proc_windows.go).
+		killProcessGroup(ts.cmd)
 		// 不在这里 Wait:留给 readLoop(Read 因 ptmx 关闭而 error 后自然走到 Wait)。
 	}
 }

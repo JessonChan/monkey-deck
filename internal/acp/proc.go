@@ -38,15 +38,10 @@ import (
 	"time"
 )
 
-// setProcGroup 给 cmd 配置独立进程组(Setpgid=true),必须在 cmd.Start() 前调。
-// 这样该 harness 及其留在组内的子孙进程都属于同一进程组,结束 kill -PGID 整组回收。
-func setProcGroup(cmd *exec.Cmd) {
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.Setpgid = true
-}
-
+// Platform helpers (setProcGroup/termGroup/killGroup/groupAlive/probeAlive/
+// killProcessHard/isNoProcess) live in proc_unix.go (!windows) and
+// proc_windows.go (windows); this file carries only platform-neutral
+// orchestration and never calls raw syscall process APIs.
 // signalGroupDead 向进程组发 SIGTERM,3s 后仍存活则 SIGKILL,直到整组死。
 // 只负责「发信号 + 等死」,不做 Wait/reap —— harness 的 reap 由 harnessProcess 的
 // watcher 统一负责(单一 Wait,杜绝双 Wait 竞态,见 harnessProcess.watch)。幂等(组已死则 no-op)。
@@ -62,26 +57,6 @@ func signalGroupDead(pgid int) {
 	if groupAlive(pgid) {
 		killGroup(pgid)
 	}
-}
-
-func termGroup(pgid int) {
-	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil && !isNoProcess(err) {
-		slog.Warn("kill harness group SIGTERM", "pgid", pgid, "err", err)
-	}
-}
-
-func killGroup(pgid int) {
-	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && !isNoProcess(err) {
-		slog.Warn("kill harness group SIGKILL", "pgid", pgid, "err", err)
-	}
-}
-
-func groupAlive(pgid int) bool {
-	return syscall.Kill(-pgid, 0) == nil
-}
-
-func isNoProcess(err error) bool {
-	return err == syscall.ESRCH
 }
 
 // ─── harnessProcess:进程生命周期单主 + 结构化 exit 根因日志 ───────────────────
@@ -145,8 +120,10 @@ func (h *harnessProcess) shutdown() {
 	<-h.done
 }
 
-// IsAlive 报告 harness 进程是否仍存活。alive flag 是快路径(watcher 确认死后永返 false,
-// 省一次 signal syscall);flag 仍真时再用 signal 0 探活拿到实时结果。
+// IsAlive reports whether the harness process is still alive. The alive flag
+// is the fast path (permanently false once the watcher confirmed death,
+// saving a probe); while still true, probeAlive does a live liveness probe
+// for the real-time answer.
 func (h *harnessProcess) IsAlive() bool {
 	if !h.alive.Load() {
 		return false
@@ -155,7 +132,7 @@ func (h *harnessProcess) IsAlive() bool {
 	if p == nil {
 		return false
 	}
-	return p.Signal(syscall.Signal(0)) == nil
+	return probeAlive(p)
 }
 
 // exitCodeSignal 从 ProcessState 解出退出码与(若被信号杀)信号名。
@@ -364,7 +341,7 @@ func reapStrayHarnesses() int {
 		if isActiveHarness(p.pgid) {
 			continue
 		}
-		if err := syscall.Kill(p.pid, syscall.SIGKILL); err != nil && !isNoProcess(err) {
+		if err := killProcessHard(p.pid); err != nil && !isNoProcess(err) {
 			slog.Warn("reap kill stray harness", "pid", p.pid, "pgid", p.pgid, "err", err)
 			continue
 		}
