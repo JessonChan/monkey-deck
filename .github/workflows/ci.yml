@@ -46,13 +46,22 @@ jobs:
       - name: Stub frontend/dist (go:embed needs the dir)
         shell: bash
         run: mkdir -p frontend/dist && echo stub > frontend/dist/index.html
+      # GOOS=linux reaches the Wails GTK4/WebKitGTK cgo backend, which needs
+      # dev headers the runner does not ship. Superset of release.yml's
+      # install list; apt resolves the transitive deps.
+      - name: Install Linux GTK/WebKit dev deps
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev libglib2.0-dev
       - name: Build backend
         env:
           GOOS: ${{ matrix.goos }}
         run: go build . ./internal/...
 
-      # Linux Wails 需要 WebKitGTK dev 头才能 CGO 编译,CI 仅验证 Go 编译(不 CGO)。
-      # 完整 Wails 构建在 release.yml 跑(装齐 dev 依赖)。
+      # The linux leg now runs a real cgo build (Wails GTK4/WebKitGTK backend,
+      # headers installed above). Full packaging (deb/rpm/AppImage) still
+      # happens in release.yml.
       - name: Vet
         if: matrix.goos != 'windows'
         run: go vet ./internal/...
