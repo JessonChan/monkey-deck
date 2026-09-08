@@ -789,6 +789,27 @@ export default function App() {
           });
         }
         setLivePlanBySession((prev) => { if (!prev[s.sessionId]) return prev; const n = { ...prev }; delete n[s.sessionId]; return n; });
+        // The ref mirror is effect-committed and may still hold the pre-push
+        // value inside this handler tick; turn-end statuses are terminal for
+        // the turn, so mirror this push eagerly — openSession's busy gate
+        // (read by the deferred heal below) must see the turn as over.
+        statusBySessionRef.current[s.sessionId] = s.status;
+        // #197: a busy switch-back whose cache was dropped skipped the message
+        // pull (#208) — the session has no page, no oldestSeq cursor, no
+        // hasMore, so the load-more path (and with it a fork row's inherited
+        // base prefix) stays unreachable until the next idle re-open. The
+        // turn-end PUSH is the authoritative heal signal: the turn is fully
+        // persisted by then, so a full re-pull restores page + cursor +
+        // hasMore in one step. Snapshot merges deliberately do NOT heal — a
+        // stale snapshot must never clobber a live tail.
+        if (
+          !loadedSessionsRef.current.has(s.sessionId) &&
+          s.sessionId === selectedSessionIdRef.current
+        ) {
+          // Deferred to a macrotask: openSession reads state committed by
+          // this push (status mirror above is eager, the rest commits meanwhile).
+          setTimeout(() => openSessionRef.current(s.sessionId), 0);
+        }
         setActivityBySession((p) => { if (!p[s.sessionId]) return p; const n = { ...p }; delete n[s.sessionId]; return n; });
       }
       // 回合结束后刷新 Git 面板的 diff(agent 可能改了文件)
@@ -1268,14 +1289,24 @@ export default function App() {
     if (loadingMoreBySession[sessionId] || !hasMoreBySession[sessionId]) return;
     setLoadingMoreBySession((prev) => ({ ...prev, [sessionId]: true }));
     try {
-      const beforeSeq = oldestSeqRef.current[sessionId] || 0;
-      const msgs = await ChatService.LoadMessagesPage(sessionId, beforeSeq, PAGE_SIZE);
+      // #197: a missing cursor means the page cache's provenance is lost (the
+      // seed was never taken, or a drop/re-seed cycle was interrupted). The
+      // wire call stays beforeSeq=0 — the backend serves the NEWEST merged
+      // page (+1 probe) for cursor 0, and for a fork row that page is the
+      // base tail + own. But the response must then REPLACE the timeline
+      // (fresh-open semantics): prepending would duplicate the rows already
+      // on screen and — the reported bug — re-derive the same newest page on
+      // every click, leaving a fork row's inherited base prefix unreachable.
+      const seed = oldestSeqRef.current[sessionId];
+      const msgs = await ChatService.LoadMessagesPage(sessionId, seed ?? 0, PAGE_SIZE);
       const hasMorePage = (msgs?.length || 0) > PAGE_SIZE;
       const page = hasMorePage ? msgs!.slice(1) : (msgs || []);
       if (page.length > 0) oldestSeqRef.current[sessionId] = page[0].seq;
       setItemsBySession((prev) => ({
         ...prev,
-        [sessionId]: [...messagesToItems(page), ...(prev[sessionId] || [])],
+        [sessionId]: seed === undefined
+          ? messagesToItems(page)
+          : [...messagesToItems(page), ...(prev[sessionId] || [])],
       }));
       setHasMoreBySession((prev) => ({ ...prev, [sessionId]: hasMorePage }));
     } finally {

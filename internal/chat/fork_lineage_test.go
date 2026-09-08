@@ -6,6 +6,7 @@ package chat
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/jessonchan/monkey-deck/internal/config"
@@ -201,5 +202,139 @@ func TestNonForkSessionsUnaffected(t *testing.T) {
 	msgs, err := svc.LoadMessagesPage(se.ID, 0, 10)
 	if err != nil || len(msgs) != 1 || msgs[0].Content != "hello" || msgs[0].Seq != 1 {
 		t.Fatalf("plain session paging changed: %+v err=%v", msgs, err)
+	}
+}
+
+// TestForkLineagePageWalkNoDupNoGap pins the #197 pagination contract on the
+// user-reported shape: a fork with 3 own messages on top of a 50-message
+// source prefix (watermark 50), limit 20 — the walk crosses the merged page
+// boundary (base tail + own rows in ONE page), pages deep into the base, and
+// must terminate at the base top. Page-by-page assertions: seqs strictly
+// continuous (no duplicate, no gap), hasMore bits correct, final page exactly
+// the remainder (no +1). This empirically pins the backend half of the #197
+// fix: the cursor algebra itself is sound — the defect was the frontend's
+// missing-cursor fallback (App.tsx loadMoreMessages `|| 0`), which re-asked
+// for the newest merged page forever instead of continuing older.
+func TestForkLineagePageWalkNoDupNoGap(t *testing.T) {
+	svc, st := newLineageSvc(t)
+	proj, err := st.CreateProject(svc.ctx, "p", t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := st.CreateSession(svc.ctx, proj.ID, "src", "", "omp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 50; i++ {
+		if _, err := st.AppendMessage(svc.ctx, src.ID, "agent", "", fmt.Sprintf("src-%d", i), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fork, err := st.CreateSession(svc.ctx, proj.ID, "src (fork)", "", "omp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSessionForkedFrom(svc.ctx, fork.ID, src.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSessionForkBaseSeq(svc.ctx, fork.ID, 50); err != nil {
+		t.Fatal(err)
+	}
+	ownRoles := []string{"user", "agent", "agent"}
+	for i := 1; i <= 3; i++ {
+		if _, err := st.AppendMessage(svc.ctx, fork.ID, ownRoles[i-1], "", fmt.Sprintf("own-%d", i), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const limit = 20
+	// First-pull contract: beforeSeq<=0 fetches the NEWEST merged page as a
+	// limit+1 probe window. The frontend's first pull AND its missing-cursor
+	// recovery both rely on this — cursor 0 must never mean "continue older".
+	first, err := svc.LoadMessagesPage(fork.ID, 0, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != limit+1 {
+		t.Fatalf("first pull = %d rows, want %d (limit+1 probe window)", len(first), limit+1)
+	}
+	if first[0].Seq != -18 || first[len(first)-1].Seq != 3 {
+		t.Fatalf("first pull window = [%d..%d], want [-18..3]", first[0].Seq, first[len(first)-1].Seq)
+	}
+
+	// Walk upward exactly as App.tsx does: the probe row is msgs[0]; slice it
+	// off; the next cursor is the NEW first (displayed-oldest) row.
+	type page struct {
+		seqs    []int64
+		hasMore bool
+	}
+	var pages []page
+	before := int64(0)
+	for {
+		msgs, err := svc.LoadMessagesPage(fork.ID, before, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hasMore := len(msgs) > limit
+		if hasMore {
+			msgs = msgs[1:]
+		}
+		if len(msgs) == 0 {
+			t.Fatal("empty page mid-walk")
+		}
+		seqs := make([]int64, 0, len(msgs))
+		for _, m := range msgs {
+			seqs = append(seqs, m.Seq)
+		}
+		pages = append(pages, page{seqs, hasMore})
+		before = msgs[0].Seq
+		if !hasMore {
+			break
+		}
+		if len(pages) > 10 {
+			t.Fatal("pagination walk did not terminate")
+		}
+	}
+
+	// Page shapes: merged boundary page, pure base middle page, base top page.
+	if len(pages) != 3 {
+		t.Fatalf("walk = %d pages, want 3 (boundary, base middle, base top)", len(pages))
+	}
+	wantHasMore := []bool{true, true, false}
+	for i, p := range pages {
+		if p.hasMore != wantHasMore[i] {
+			t.Fatalf("pages[%d].hasMore = %v, want %v", i, p.hasMore, wantHasMore[i])
+		}
+		for j := 1; j < len(p.seqs); j++ {
+			if p.seqs[j] <= p.seqs[j-1] {
+				t.Fatalf("pages[%d] not strictly ascending at %d: %d then %d", i, j, p.seqs[j-1], p.seqs[j])
+			}
+		}
+	}
+	// Merged boundary page: base tail (negative offsets) and own rows in one page.
+	boundary := pages[0].seqs
+	if boundary[0] != -17 || boundary[len(boundary)-1] != 3 {
+		t.Fatalf("boundary page = [%d..%d], want [-17..3]", boundary[0], boundary[len(boundary)-1])
+	}
+	// Final page: exactly the 13 remaining base-head rows — no +1 probe leaked.
+	if len(pages[2].seqs) != 13 {
+		t.Fatalf("final page = %d rows, want exactly 13", len(pages[2].seqs))
+	}
+	if pages[2].seqs[0] != -50 {
+		t.Fatalf("final page starts at %d, want -50 (source seq 1 — base top reached)", pages[2].seqs[0])
+	}
+	// Assembled walk (pages prepended oldest-last) = the full transcript:
+	// [-50..-1] ∪ [1..3] — no duplicate, no gap, one seam at -1 → 1.
+	var flat []int64
+	for i := len(pages) - 1; i >= 0; i-- {
+		flat = append(flat, pages[i].seqs...)
+	}
+	if len(flat) != 53 {
+		t.Fatalf("assembled walk = %d rows, want 53", len(flat))
+	}
+	for i := 1; i < len(flat); i++ {
+		if flat[i]-flat[i-1] != 1 && !(flat[i-1] == -1 && flat[i] == 1) {
+			t.Fatalf("assembled walk not continuous at %d: %d → %d", i, flat[i-1], flat[i])
+		}
 	}
 }
