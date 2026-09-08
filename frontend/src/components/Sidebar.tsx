@@ -1366,7 +1366,7 @@ export default function Sidebar(props: Props) {
             <Braces size={13} /> {t("sidebar.exportAsJSON")}
           </button>
           <div className="ctx-sep" />
-          <button className="ctx-item danger" onClick={() => { setConfirm({ kind: "session", session: ctx.session }); setCtx(null); setDeleteErr(null); }}>
+          <button className="ctx-item danger" data-testid={`delete-session-${ctx.session.id}`} onClick={() => { setConfirm({ kind: "session", session: ctx.session }); setCtx(null); setDeleteErr(null); }}>
             <Trash2 size={13} /> {t("sidebar.deleteSession")}
           </button>
         </div>
@@ -1393,7 +1393,7 @@ export default function Sidebar(props: Props) {
             {deleteErr && <div className="modal-del-err">⚠ {deleteErr}</div>}
             <div className="modal-actions">
               <button className="modal-btn ghost" onClick={() => setConfirm(null)}>{t("common.cancel")}</button>
-              <button className="modal-btn danger" disabled={deleting} onClick={() => void onConfirmRemoveSession(confirm.session.id)}>{t("common.delete")}</button>
+              <button className="modal-btn danger" data-testid="confirm-remove-session" disabled={deleting} onClick={() => void onConfirmRemoveSession(confirm.session.id)}>{t("common.delete")}</button>
             </div>
           </div>
         </div>

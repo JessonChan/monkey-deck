@@ -1069,7 +1069,14 @@ func (s *ChatService) ImportMcpConfig(jsonData string) (McpImportResult, error) 
 // DeleteWorktree removes the owner's worktree + branch (atomic; 4 guardrails in
 // worktree.Remove). Owner-only: guest/project → error (no right to delete the worktree).
 // The frontend calls this in the owner-delete flow (alone, or after DeleteSession/Detach).
-func (s *ChatService) DeleteWorktree(sessionID string) error {
+//
+// Live-guest guard (#199): unless force, deletion is refused while other chats still
+// reference the worktree — a guest would lose its cwd out from under it mid-chat.
+// force=true skips ONLY this check (never the worktree.Remove guardrails); the frontend
+// passes it from the owner-with-guests dialog's "delete all" option, where the user has
+// already confirmed deleting every guest chat. The "keep" chain instead detaches the
+// guests first (DetachWorktreeGuests), so the unforced guard passes naturally.
+func (s *ChatService) DeleteWorktree(sessionID string, force bool) error {
 	se, err := s.st.GetSession(s.ctx, sessionID)
 	if err != nil {
 		return err
@@ -1079,6 +1086,15 @@ func (s *ChatService) DeleteWorktree(sessionID string) error {
 	}
 	if worktreeKindOf(se) != "owner" {
 		return fmt.Errorf("only the worktree owner can delete it (this session is a %s)", worktreeKindOf(se))
+	}
+	if !force {
+		guests, err := s.WorktreeGuests(sessionID)
+		if err != nil {
+			return fmt.Errorf("check worktree guests: %w", err)
+		}
+		if len(guests) > 0 {
+			return fmt.Errorf("%d chats still use this worktree", len(guests))
+		}
 	}
 	proj, err := s.st.GetProject(s.ctx, se.ProjectID)
 	if err != nil {

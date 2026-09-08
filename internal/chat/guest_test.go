@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jessonchan/monkey-deck/internal/config"
@@ -119,7 +120,7 @@ func TestDeleteSession_KeepsWorktree(t *testing.T) {
 }
 
 func TestDeleteWorktree_OwnerOnly(t *testing.T) {
-	svc, proj, _ := setupGuestService(t)
+	svc, proj, root := setupGuestService(t)
 	owner, err := svc.CreateSession(proj.ID, "owner", "", true, "", nil)
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
@@ -131,16 +132,93 @@ func TestDeleteWorktree_OwnerOnly(t *testing.T) {
 	wtPath := owner.WorktreePath
 
 	// Guest must NOT be able to delete the owner's worktree.
-	if err := svc.DeleteWorktree(guest.ID); err == nil {
+	if err := svc.DeleteWorktree(guest.ID, false); err == nil {
 		t.Fatal("DeleteWorktree on a guest must fail")
 	}
-	// Owner can.
-	if err := svc.DeleteWorktree(owner.ID); err != nil {
+	// Remove the guest chat first (the frontend's job in the real flow): with no live
+	// guests left, the unforced owner delete passes the #199 guard and removes it.
+	if err := svc.DeleteSession(guest.ID); err != nil {
+		t.Fatalf("DeleteSession guest: %v", err)
+	}
+	if err := svc.DeleteWorktree(owner.ID, false); err != nil {
 		t.Fatalf("DeleteWorktree owner: %v", err)
 	}
 	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
 		t.Fatalf("worktree dir still exists after owner DeleteWorktree: %v", err)
 	}
+	if gitSucceeds(t, root, "rev-parse", "--verify", owner.Branch) {
+		t.Fatalf("branch %s still exists after owner DeleteWorktree", owner.Branch)
+	}
+}
+
+// TestDeleteWorktree_GuestGuard locks #199 fix 1: an unforced DeleteWorktree with a LIVE
+// guest on the worktree is refused, the worktree directory AND branch survive untouched,
+// and the error carries the guest count (surfaced verbatim in the UI toast, §4.4).
+func TestDeleteWorktree_GuestGuard(t *testing.T) {
+	svc, proj, root := setupGuestService(t)
+	owner, err := svc.CreateSession(proj.ID, "owner", "", true, "", nil)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := svc.CreateGuestSession(proj.ID, "guest", "", owner.WorktreePath, nil); err != nil {
+		t.Fatalf("CreateGuestSession: %v", err)
+	}
+	wtPath := owner.WorktreePath
+
+	err = svc.DeleteWorktree(owner.ID, false)
+	if err == nil {
+		t.Fatal("unforced DeleteWorktree with a live guest must be refused")
+	}
+	if !strings.Contains(err.Error(), "1 chats still use this worktree") {
+		t.Fatalf("error must carry the guest count, got: %v", err)
+	}
+	// Rejected = atomic no-op: directory and branch both survive.
+	if _, err := os.Stat(wtPath); err != nil {
+		t.Fatalf("worktree dir must survive a refused delete: %v", err)
+	}
+	if !gitSucceeds(t, root, "rev-parse", "--verify", owner.Branch) {
+		t.Fatalf("branch %s must survive a refused delete", owner.Branch)
+	}
+}
+
+// TestDeleteWorktree_ForceBypassesGuestGuard locks the force escape hatch (#199): force=true
+// removes the worktree + branch even with live guests (the dialog's "delete all" option —
+// the user already confirmed). Current semantics: only worktree+branch go; guest ROWS are
+// the frontend's job (it deletes them via DeleteSession before calling with force).
+func TestDeleteWorktree_ForceBypassesGuestGuard(t *testing.T) {
+	svc, proj, root := setupGuestService(t)
+	owner, err := svc.CreateSession(proj.ID, "owner", "", true, "", nil)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	guest, err := svc.CreateGuestSession(proj.ID, "guest", "", owner.WorktreePath, nil)
+	if err != nil {
+		t.Fatalf("CreateGuestSession: %v", err)
+	}
+
+	if err := svc.DeleteWorktree(owner.ID, true); err != nil {
+		t.Fatalf("forced DeleteWorktree with a live guest must pass: %v", err)
+	}
+	if _, err := os.Stat(owner.WorktreePath); !os.IsNotExist(err) {
+		t.Fatalf("worktree dir still exists after forced DeleteWorktree: %v", err)
+	}
+	if gitSucceeds(t, root, "rev-parse", "--verify", owner.Branch) {
+		t.Fatalf("branch %s still exists after forced DeleteWorktree", owner.Branch)
+	}
+	// Guest row survives with a dangling ref — document current semantics.
+	se, err := svc.st.GetSession(svc.ctx, guest.ID)
+	if err != nil || se == nil {
+		t.Fatalf("guest row must survive a forced worktree delete: %v", err)
+	}
+}
+
+// gitSucceeds reports whether the git command exits 0 (test ⑤ helper: branch
+// existence probes must not fatal on the "gone" expectation).
+func gitSucceeds(t *testing.T, dir string, args ...string) bool {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	return cmd.Run() == nil
 }
 
 func TestDetachWorktreeGuests(t *testing.T) {

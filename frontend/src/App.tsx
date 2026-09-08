@@ -2076,22 +2076,37 @@ export default function App() {
     let kind = "project";
     try { kind = await ChatService.WorktreeKind(sessionId); } catch { /* treat as project */ }
     if (kind === "owner") {
-      let guests: Session[] = [];
-      try { guests = (await ChatService.WorktreeGuests(sessionId)) ?? []; } catch {}
+      let guests: Session[];
+      try {
+        guests = (await ChatService.WorktreeGuests(sessionId)) ?? [];
+      } catch {
+        // #199: a FAILED guest query is NOT proof of "no guests" — deleting the worktree
+        // here could pull it out from under a live guest (fork would die). Conservative
+        // path: delete the chat row only and leave the worktree as an orphan (forks stay
+        // alive); orphan cleanup is tracked separately.
+        await ChatService.DeleteSession(sessionId);
+        purgeSessionState(sessionId);
+        return;
+      }
       if (guests.length > 0) {
         setDeleteWt({ sessionId, projectId: projectIdOf(sessionId), guests });
         return; // the dialog drives the rest
       }
       // owner, no guests → delete the worktree (needs the owner row) then the chat.
-      await ChatService.DeleteWorktree(sessionId).catch(() => {});
+      // Unforced: the backend live-guest guard still backstops a guest racing in.
+      await ChatService.DeleteWorktree(sessionId, false).catch(() => {});
     }
     await ChatService.DeleteSession(sessionId);
     purgeSessionState(sessionId);
   }, [projectIdOf, purgeSessionState]);
 
   // confirmDeleteWorktree runs the owner-with-guests choice:
-  //   "all"  → delete owner + every guest + the worktree;
+  //   "all"  → delete owner + every guest + the worktree (force=true: the user already
+  //            confirmed deleting everything, so the live-guest guard is bypassed);
   //   "keep" → detach guests (keep their history, fall back to project dir) + delete owner + worktree.
+  // #199: the keep chain does NOT swallow errors — a failed detach leaves live guests on
+  // the worktree, and a failed worktree delete must not silently orphan it. Either failure
+  // surfaces and keeps the status quo (nothing deleted, dialog closed, retry possible).
   const confirmDeleteWorktree = useCallback(async (mode: "all" | "keep") => {
     const dw = deleteWt;
     if (!dw) return;
@@ -2105,13 +2120,14 @@ export default function App() {
           await ChatService.DeleteSession(g.id);
           purgeSessionState(g.id);
         }
-        await ChatService.DeleteWorktree(dw.sessionId).catch(() => {});
+        await ChatService.DeleteWorktree(dw.sessionId, true).catch(() => {});
         await ChatService.DeleteSession(dw.sessionId);
         purgeSessionState(dw.sessionId);
       } else {
-        // keep: detach guests (clear their worktree ref), remove worktree + owner chat.
-        await ChatService.DetachWorktreeGuests(dw.sessionId).catch(() => {});
-        await ChatService.DeleteWorktree(dw.sessionId).catch(() => {});
+        // keep: detach guests (clear their worktree ref) so the backend live-guest guard
+        // passes, then remove worktree + owner chat. Errors propagate to the catch below.
+        await ChatService.DetachWorktreeGuests(dw.sessionId);
+        await ChatService.DeleteWorktree(dw.sessionId, false);
         await ChatService.DeleteSession(dw.sessionId);
         purgeSessionState(dw.sessionId);
       }
