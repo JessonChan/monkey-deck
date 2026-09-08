@@ -34,7 +34,7 @@ import { Tooltip } from "react-tooltip";
 import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin } from "lucide-react";
 import type { FileChange, BranchInfo, WorktreeInfo } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import { applyEventToItems as applyEventToItemsPure } from "./lib/streamMerge";
-import { shouldDropOnSwitch } from "./lib/sessionDrop";
+import { shouldDropOnSwitch, BUSY_STATUS } from "./lib/sessionDrop";
 import { isNotifySoundEnabled, notifyPermissionOnce, playNotifySound } from "./lib/notifySound";
 import { extractErrMsg } from "./lib/errorMsg";
 import { renderChatError, type ChatErrorView, type DiagL10n } from "./lib/errorDiag";
@@ -448,6 +448,12 @@ export default function App() {
   const usage = (selectedSessionId ? usageBySession[selectedSessionId] : undefined) ?? EMPTY_USAGE;
   const status = (selectedSessionId ? statusBySession[selectedSessionId] : undefined) ?? "empty";
   useEffect(() => { statusRef.current = status; }, [status]);
+  // Full per-session status mirror for stable callbacks (#208): openSession's
+  // switch-back gate reads the TARGET session's status — not the selected one
+  // statusRef tracks. Same freshness contract as statusRef (effect-committed,
+  // user-scale fresh at click time).
+  const statusBySessionRef = useRef<Record<string, StatusPayload["status"] | "empty">>({});
+  useEffect(() => { statusBySessionRef.current = statusBySession; }, [statusBySession]);
   const statusDetail = (selectedSessionId ? statusDetailBySession[selectedSessionId] : undefined) ?? "";
   const permission = (selectedSessionId ? permissionBySession[selectedSessionId] : undefined) ?? null;
   const elicitation = (selectedSessionId ? elicitationBySession[selectedSessionId] : undefined) ?? null;
@@ -1179,7 +1185,15 @@ export default function App() {
       // LoadMessagesPage is the ONE un-caught pull: its rejection propagates
       // through Promise.all to openSession's caller (confirmNewSession surfaces
       // the error) — the other pulls all .catch to neutral defaults.
-      const pullMessages = !loadedSessionsRef.current.has(sessionId)
+      // #208: never re-pull a BUSY target. chat:event keeps writing
+      // itemsBySession[target] while the session is backgrounded (handlers key on
+      // the event's sessionId, not the selection); a DB page pull REPLACES that
+      // array and destroys the live streaming tail (mid-flight entry + segments
+      // not yet repulled). Skip the pull — the tail stays authoritative. The
+      // session is intentionally left OUT of loadedSessionsRef here, so the next
+      // switch-away drop + idle switch-back re-pulls full history as usual.
+      const targetBusy = statusBySessionRef.current[sessionId] === BUSY_STATUS;
+      const pullMessages = !loadedSessionsRef.current.has(sessionId) && !targetBusy
         ? ChatService.LoadMessagesPage(sessionId, 0, PAGE_SIZE)
         : null;
       if (pullMessages) loadedSessionsRef.current.add(sessionId);

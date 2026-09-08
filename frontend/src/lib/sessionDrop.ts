@@ -7,6 +7,10 @@
 //   2. 新旧相同(重复打开同一 session)→ 不丢(无意义且会丢当前内容)。
 //   3. 旧 session 正在 prompting(流式回合进行中)→ 绝不丢(事件还在往缓存灌)。
 //   其余(idle/empty/error,即空闲态)→ 可丢,切回时从 DB 重载(idx_messages_session 索引)。
+// #208: the single status treated as "turn in flight". Both consumers key on
+// it — the switch-away drop predicate below and App.openSession's switch-back
+// re-pull gate (a DB page pull would clobber the in-memory streaming tail).
+export const BUSY_STATUS = "prompting";
 
 /**
  * @param oldSession  切走前的 session id(null 表示之前无选中)
@@ -22,6 +26,6 @@ export function shouldDropOnSwitch(
   return (
     oldSession !== null &&
     oldSession !== newSession &&
-    oldStatus !== "prompting"
+    oldStatus !== BUSY_STATUS
   );
 }
