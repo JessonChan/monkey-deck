@@ -280,7 +280,6 @@ describe("App busy switch-back skips the re-pull, keeps the streaming tail (#208
     await openSession(host, "s2");
     emit("chat:event", chunk("live-tail-tail2"));
     await flush();
-    console.log("DBG s2 after bg chunk:", host.querySelector('[data-testid="chat-body"]')?.textContent?.slice(0, 120));
     await openSession(host, "s1");
 
     // Cache never dropped (loadedSessionsRef guard) → one pull total, and the
