@@ -75,10 +75,27 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      # frontend/bindings is a generated artifact, never present in git
+      # (.gitignore), but the frontend build imports it. Generate it here,
+      # pinned to the go.mod wails version — a PATH-installed wails3 may be on
+      # a different release line whose generator output is incompatible
+      # (same rationale as build/Taskfile.yml generate:bindings).
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
       - uses: oven-sh/setup-bun@v2
       - name: Install deps
         working-directory: frontend
         run: bun install --frozen-lockfile
+      # Verbatim equivalent of build/Taskfile.yml generate:bindings with
+      # BUILD_FLAGS default (empty). go:mod:tidy is intentionally skipped:
+      # CI's go.mod is already tidy and must not be modified.
+      - name: Generate bindings (pinned to go.mod wails version)
+        run: |
+          WAILS_VERSION="$(go list -m github.com/wailsapp/wails/v3 | cut -d' ' -f2)"
+          echo "bindings: using wails3 ${WAILS_VERSION} (pinned to go.mod)"
+          go run "github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}" generate bindings -f '' -clean=true -ts -i
       - name: Type check + build
         working-directory: frontend
         run: bun run build
