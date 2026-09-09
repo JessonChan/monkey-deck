@@ -19,6 +19,13 @@ if [[ ! -f "$SRC" ]]; then
   exit 1
 fi
 
+# Non-macOS hosts (Windows/Linux CI): skip instead of failing — icns is a
+# macOS-only artifact and wails3's own icon step already produced the .ico.
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "skip: icons.icns generation requires macOS (sips/iconutil); leaving wails3 output as-is" >&2
+  exit 0
+fi
+
 if ! command -v iconutil >/dev/null 2>&1 || ! command -v sips >/dev/null 2>&1; then
   echo "error: sips/iconutil not found (macOS only)." >&2
   exit 1

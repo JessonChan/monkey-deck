@@ -124,6 +124,8 @@ tasks:
       BUNDLE_SUFFIX: '{{.BUNDLE_SUFFIX | default ""}}'
     deps:
       - task: build
+        vars:
+          ARCH: '{{.ARCH}}'
     cmds:
       - task: create:app:bundle
         vars:

@@ -25,7 +25,6 @@ if [ ! -f "$REPO_ROOT/build/darwin/Info.plist" ] && [ -f "$(dirname "$0")/build/
   REPO_ROOT=$(cd "$(dirname "$0")" && pwd)
 fi
 APP_PATH="/Applications/Monkey Deck.app"
-SRV_PORT="${SRV_PORT:-8931}"
 INSTALLER="$REPO_ROOT/scripts/install.sh"
 [ -f "$INSTALLER" ] || INSTALLER="$(dirname "$0")/install.sh"
 PASS=0; FAIL=0
@@ -78,22 +77,25 @@ case "$ARCH" in
 esac
 say "runner arch: $ARCH (asset: monkey-deck-darwin-$ARCH.zip)"
 
-# ── local release server ──────────────────────────────────────────────────────
+# ── release "server": file:// URLs ───────────────────────────────────────────
+# Earlier versions spun up `python3 -m http.server`; on some CI runners the
+# loopback listener never became reachable (SYNs dropped, 75s curl timeout).
+# curl handles file:// natively and needs no listener at all, so the release
+# tree is served straight from a temp dir. MD_INSTALL_BASE takes any URL
+# prefix curl understands.
 SRV=$(mktemp -d /tmp/md-rel-XXXX)
 mkdir -p "$SRV/releases/latest/download"
 DL="$SRV/releases/latest/download"
 make_release "$DL" "9.9.9"
-python3 -m http.server "$SRV_PORT" --directory "$SRV" >/dev/null 2>&1 &
-SRV_PID=$!
-sleep 1
-curl -fsS -o /dev/null "http://127.0.0.1:$SRV_PORT/releases/latest/download/monkey-deck-darwin-$ARCH.zip" \
-  || { echo "local release server failed to start"; kill "$SRV_PID"; exit 1; }
+ls -la "$DL"
 
-export MD_INSTALL_BASE="http://127.0.0.1:$SRV_PORT/releases"
+export MD_INSTALL_BASE="file://$SRV/releases"
 export MD_INSTALL_TAG="v9.9.9"
 
-FINISH() { kill "$SRV_PID" 2>/dev/null; rm -rf "$SRV" "$APP_PATH.new" "$APP_PATH.bak"; }
+SRV_PID=""
+FINISH() { [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null; rm -rf "$SRV" "$APP_PATH.new" "$APP_PATH.bak"; }
 trap FINISH EXIT
+
 
 run_installer() { sh "$INSTALLER" </dev/null 2>&1; }
 
@@ -193,10 +195,9 @@ make_release "$DL" "9.9.9"
 
 # ══ 8. arch → asset mapping ═══════════════════════════════════════════════════
 say "8. arch/asset mapping"
-check "asset for this runner arch is fetchable" 0 \
-  curl -fsS -o /dev/null "http://127.0.0.1:$SRV_PORT/releases/latest/download/monkey-deck-darwin-$ARCH.zip"
+check "asset for this runner arch exists" 0 test -f "$DL/monkey-deck-darwin-$ARCH.zip"
 check "wrong-arch asset is absent (installer would fail on it)" 1 \
-  curl -fsS -o /dev/null "http://127.0.0.1:$SRV_PORT/releases/latest/download/monkey-deck-darwin-$([ "$ARCH" = arm64 ] && echo amd64 || echo arm64).zip"
+  test -f "$DL/monkey-deck-darwin-$([ "$ARCH" = arm64 ] && echo amd64 || echo arm64).zip"
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
