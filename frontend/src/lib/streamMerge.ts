@@ -108,7 +108,10 @@ export function applyEventToItems(cur: ChatItem[], ev: SessionEvent): ChatItem[]
     case "tool_call": {
       // 新工具开始 = 段边界:finalize 当前 agent/thought 段,再登记 tool。
       finalizeLast();
-      const id = ev.toolCallId || `tool-${Date.now()}`;
+      // Turn-scoped id (#209): resume replay re-emits the same toolCallId from
+      // an earlier turn; scoping by ev.turnId keeps the replayed copy distinct
+      // from the original (empty turnId falls back to the raw id).
+      const id = ev.turnId ? `${ev.turnId}:${ev.toolCallId || `tool-${Date.now()}`}` : (ev.toolCallId || `tool-${Date.now()}`);
       const idx = next.findIndex((it) => it.type === "tool" && it.id === id);
       const existing = idx >= 0 ? (next[idx] as Extract<ChatItem, { type: "tool" }>) : null;
       const toolItem = {
@@ -127,7 +130,7 @@ export function applyEventToItems(cur: ChatItem[], ev: SessionEvent): ChatItem[]
     case "tool_call_update": {
       // 仅更新已存在工具(omp 后台 onUpdate / 进度)。**不是段边界** —— 不调 finalize,
       // 不打断正在流式的 agent/thought。仅孤儿 update(无对应 tool_call)兜底建条。
-      const id = ev.toolCallId || `tool-${Date.now()}`;
+      const id = ev.turnId ? `${ev.turnId}:${ev.toolCallId || `tool-${Date.now()}`}` : (ev.toolCallId || `tool-${Date.now()}`);
       const idx = next.findIndex((it) => it.type === "tool" && it.id === id);
       if (idx >= 0) {
         const existing = next[idx] as Extract<ChatItem, { type: "tool" }>;
@@ -141,7 +144,7 @@ export function applyEventToItems(cur: ChatItem[], ev: SessionEvent): ChatItem[]
       } else {
         finalizeLast();
         next.push({
-          type: "tool" as const,
+          type: "tool",
           id,
           title: ev.toolTitle || "",
           status: ev.toolStatus || "pending",

@@ -1110,11 +1110,16 @@ export default function App() {
   }, [projects, sessionsByProject, refreshSessions, isPopout, snapshotSettled]);
 
   // 把持久化消息转成展示 items。
+  // 行 id 必须带 turn 维度(#209):harness resume 后重放历史(codebuddy 实证)会让同一
+  // toolCallId/messageId 跨 turn 重复出现 —— 裸 id 作行 id 会导致 React key 撞车、
+  // 虚拟列表高度模型按 id 错配行高、streamMerge 就地 patch 旧条目,页面渲染错乱。
+  // turnId 缺失(legacy user 行/空 turn)时回退裸 id,不破坏旧行为。
   const messagesToItems = useCallback((msgs: Message[]): ChatItem[] => {
     return msgs.map((m): ChatItem => {
+      const rowId = m.turnId ? `${m.turnId}:${m.toolCallId || m.id}` : (m.toolCallId || m.id);
       if (m.role === "user") return { type: "user", id: m.id, text: m.content, ts: m.createdAt };
-      if (m.role === "agent") return { type: "agent", id: m.id, text: m.content, ts: m.createdAt };
-      if (m.role === "thought") return { type: "thought", id: m.id, text: m.content, ts: m.createdAt };
+      if (m.role === "agent") return { type: "agent", id: rowId, text: m.content, ts: m.createdAt };
+      if (m.role === "thought") return { type: "thought", id: rowId, text: m.content, ts: m.createdAt };
       if (m.role === "plan") {
         // 历史 turn 的 plan 快照(role='plan' message,turn 结束时后端落库)。
         // content 是 JSON 序列化的 []PlanEntry;toolCallId 列存 turnID(= user message ID)。
@@ -1138,7 +1143,7 @@ export default function App() {
       } catch {
         title = m.content;
       }
-      return { type: "tool", id: m.toolCallId || m.id, title, status, kind, rawInput, rawOutput, ts: m.createdAt };
+      return { type: "tool", id: rowId, title, status, kind, rawInput, rawOutput, ts: m.createdAt };
     });
   }, []);
 

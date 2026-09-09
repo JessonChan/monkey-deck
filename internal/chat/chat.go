@@ -2855,6 +2855,15 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 		entry.text.WriteString(e.Text)
 		e.Text = entry.text.String()
 		s.markTurnDirty(ls, sessionID, entry.id)
+		// Turn-scoped identity (#209): a harness that replays history after
+		// resume (codebuddy) re-emits tool_call/message events carrying the
+		// SAME toolCallId/messageId from an earlier turn. The frontend merge
+		// keyed on the raw id would patch the OLD item in place (content in
+		// the wrong position) and duplicate React keys corrupt the virtual
+		// list. Stamping the turn on every content event lets both merge
+		// paths disambiguate; without a live turn (idle replay) the field
+		// stays empty and the frontend falls back to the raw id.
+		e.TurnID = ls.currentTurnID
 	case "tool_call":
 		ls.fallbackRole = "" // tool_call is a hard boundary: next chunk opens a new fallback entry
 		t, exists := ls.index[e.ToolCallID]
@@ -2869,6 +2878,7 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 			ls.appendEntry(&turnEntry{id: e.ToolCallID, kind: "tool", tool: ta})
 		}
 		s.markTurnDirty(ls, sessionID, e.ToolCallID)
+		e.TurnID = ls.currentTurnID
 	case "tool_call_update":
 		t, exists := ls.index[e.ToolCallID]
 		if exists && t.kind == "tool" && t.tool != nil {
@@ -2892,6 +2902,7 @@ func (s *ChatService) handleEvent(ls *liveSession, sessionID string, e acp.Sessi
 			ls.appendEntry(&turnEntry{id: e.ToolCallID, kind: "tool", tool: ta})
 		}
 		s.markTurnDirty(ls, sessionID, e.ToolCallID)
+		e.TurnID = ls.currentTurnID
 	case "plan":
 		// plan 按 turn 索引(协议无 turnId,client 用 user message ID 作 turnID,见 startTurn)。
 		// 整表替换:每条 plan 事件都是全量,直接覆盖 ls.currentPlan;turn 结束时落库。
