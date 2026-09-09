@@ -18,6 +18,11 @@
 //   6. A finished turn returns to the authoritative DB page.
 //   7. remote:resync event gap forces SQLite even while the tail is busy.
 //   8. A post-resync content event continues on the reloaded DB page.
+//   9. Busy gates the pull with a tool-only tail — no streaming marker, so the
+//      busy status mirror is the only signal (the reopen window-2 path).
+//  10. Turn ends while away, then switch back: the authoritative DB page
+//      replaces the rebuilt tail; the turn-end heal must not pull for a
+//      non-selected session (the reopen comment's idle switch-back variant).
 //
 // Scaffolding mirrors App.commands-seed.mount.test.tsx: ALL mocks (runtime +
 // full ChatService surface) are registered BEFORE the dynamic App import — a
@@ -388,6 +393,68 @@ describe("App busy switch-back skips the re-pull, keeps the streaming tail (#208
     expect(loadCount("s1")).toBe(2);
     expect(hasAgentText(host, "db-history")).toBe(true);
     expect(hasAgentText(host, "post-gap-tail")).toBe(true);
+
+    root.unmount();
+    document.body.innerHTML = "";
+  });
+  test("busy gates the pull with a tool-only tail (no streaming marker to help)", async () => {
+    resetFixtures();
+    const { root, host } = await mountApp();
+    await openProject(host);
+    await openSession(host, "s1");
+    expect(loadCount("s1")).toBe(1);
+
+    // Switch away BEFORE any prompting push: the cache is dropped (drift).
+    await openSession(host, "s2");
+
+    // The turn starts with a tool call: the prompting push and the tool event
+    // rebuild a cache whose tail has NO streaming agent/thought marker, so
+    // hasStreamingTail alone cannot gate — the busy status mirror must. Every
+    // other busy scenario here carries a streaming chunk; this pins the busy
+    // branch of the gate by itself (reopen window 2 signal path).
+    emit("chat:status", { sessionId: "s1", status: "prompting" });
+    emit("chat:event", {
+      sessionId: "s1", kind: "tool_call",
+      toolCallId: "call-1", toolTitle: "live-tool", toolStatus: "in_progress",
+    });
+    await flush();
+    await openSession(host, "s1");
+
+    expect(loadCount("s1")).toBe(1);
+    expect(host.textContent).toContain("live-tool");
+    expect(host.textContent).not.toContain("db-history");
+
+    root.unmount();
+    document.body.innerHTML = "";
+  });
+
+  test("turn ends while away, then switch back: authoritative DB page heals the rebuilt tail", async () => {
+    resetFixtures();
+    const { root, host } = await mountApp();
+    await openProject(host);
+    await openSession(host, "s1");
+
+    // Drift switch-away: cache dropped while the status still reads idle.
+    emit("chat:event", chunk("away-live-tail"));
+    await flush();
+    await openSession(host, "s2");
+
+    // The turn ENDS while away: a background chunk rebuilt a tail, then the
+    // idle push clears its streaming flags.
+    emit("chat:event", chunk("away-live-tail-2"));
+    emit("chat:status", { sessionId: "s1", status: "idle", detail: "stopReason=end_turn" });
+    await flush();
+    // The turn-end heal is selected-only: a background session's idle push
+    // must not trigger a pull while the user is away.
+    expect(loadCount("s1")).toBe(1);
+
+    // Switch back after idle: not busy, no streaming tail → authoritative DB.
+    // persistTurn precedes idle, so the page is final and replaces the rebuilt
+    // tail (matrix cell 2 — the reopen comment's idle switch-back variant).
+    await openSession(host, "s1");
+    expect(loadCount("s1")).toBe(2);
+    expect(hasAgentText(host, "db-history")).toBe(true);
+    expect(hasAgentText(host, "away-live-tail")).toBe(false);
 
     root.unmount();
     document.body.innerHTML = "";
