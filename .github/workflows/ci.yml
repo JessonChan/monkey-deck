@@ -84,6 +84,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # The bindings step below builds the wails3 CLI via `go run`, which
+      # links GTK4/WebKitGTK through cgo and fails on the bare runner without
+      # dev headers. Same package list as the backend job's install step; the
+      # backend's `if: matrix.goos == 'linux'` gate is dropped here because
+      # the frontend job is a single ubuntu-24.04 leg (no matrix).
+      - name: Install Linux GTK/WebKit dev deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev libglib2.0-dev
       - uses: oven-sh/setup-bun@v2
       - name: Install deps
         working-directory: frontend
