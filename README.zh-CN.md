@@ -99,6 +99,26 @@ Monkey Deck 只说纯 ACP,所以**任何实现了 ACP 的编码 agent 都能接�
 
 清单整理自 [ACP 协议官网](https://agentclientprotocol.com/)的 [Agents](https://agentclientprotocol.com/get-started/agents) 与 [Registry](https://agentclientprotocol.com/get-started/registry) 页面。
 
+## 安装
+
+**macOS / Linux(一行命令):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JessonChan/monkey-deck/main/scripts/install.sh | sh
+```
+
+- macOS 装到 `/Applications/Monkey Deck.app`(ad-hoc 签名——**不需要 Developer ID、
+  不需要公证、不上 App Store**;下载内容对照 release 的 `SHA256SUMS` 校验,不匹配即拒绝安装)。
+- Linux 按发行版装包(dpkg 系装 `.deb`,dnf/zypper/yum 系装 `.rpm`);装包一步需要 root。
+- 重复执行同一命令即原地升级(已有新版本时),已是最新则无操作。
+- Windows 暂不支持。
+
+手动下载:[GitHub Releases](https://github.com/JessonChan/monkey-deck/releases/latest)
+(macOS 拖拽安装的 DMG、Linux 的 `.deb` / `.rpm`)。
+
+装好之后,macOS 上的后续升级由内置更新器接管——安装器装的正是更新器消费的同一份
+分架构 zip 资产。
+
 ## 技术栈
 
 **Wails3** · Go · React 19 + TypeScript · SQLite(modernc.org/sqlite)· bun

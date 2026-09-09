@@ -104,6 +104,29 @@ the agent picker — greyed out as "needs an ACP adapter" and not selectable.
 
 Curated from the [ACP protocol site](https://agentclientprotocol.com/) — the [Agents](https://agentclientprotocol.com/get-started/agents) and [Registry](https://agentclientprotocol.com/get-started/registry) pages.
 
+## Installation
+
+**macOS / Linux (one line):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JessonChan/monkey-deck/main/scripts/install.sh | sh
+```
+
+- Installs to `/Applications/Monkey Deck.app` on macOS (ad-hoc signed — no
+  Developer ID, notarization, or App Store needed; checksums are verified
+  against the release's `SHA256SUMS` and the install fails closed on mismatch).
+- Installs the distro package (`deb` on dpkg systems, `rpm` on dnf/zypper/yum)
+  on Linux; root is required for the package step.
+- Re-running the same command upgrades in place when a newer release exists
+  and is a no-op when you're already up to date.
+- Windows is not supported yet.
+
+Manual download: [GitHub Releases](https://github.com/JessonChan/monkey-deck/releases/latest)
+(DMG for macOS drag-install, `.deb` / `.rpm` for Linux).
+
+The in-app updater (macOS) then handles upgrades on its own — the installer
+installs the exact same per-arch zip assets the updater consumes.
+
 ## Tech stack
 
 **Wails3** · Go · React 19 + TypeScript · SQLite (modernc.org/sqlite) · bun

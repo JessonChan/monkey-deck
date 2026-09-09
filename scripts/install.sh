@@ -1,7 +1,8 @@
 #!/bin/sh
 # monkey-deck installer / updater — macOS + Linux (Windows: not supported yet)
 #
-# Usage: curl -fsSL <distribution-url>/install.sh | sh
+# Canonical distribution URL (README references this):
+#   curl -fsSL https://raw.githubusercontent.com/JessonChan/monkey-deck/main/scripts/install.sh | sh
 #
 # Design notes:
 #  - Zero api.github.com calls. Version comes from the /releases/latest
