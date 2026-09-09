@@ -395,6 +395,9 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
           data-repeat={(item.repeatEveryMs ?? 0) > 0 ? "true" : "false"}
           key={item.id}
           onDragOver={(e) => {
+            // No active internal drag (grip dragstart never fired) → external
+            // drag (Finder file / text selection): no highlight, no drop cursor.
+            if (!dragId) return;
             e.preventDefault();
             if (overId !== item.id) setOverId(item.id);
           }}
