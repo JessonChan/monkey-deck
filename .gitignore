@@ -41,3 +41,4 @@ frontend/bindings/
 # RAK runtime (auto-managed, do not commit)
 .rak-env
 /bin/rak
+.rak/
