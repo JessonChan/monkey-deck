@@ -34,7 +34,7 @@ import { Tooltip } from "react-tooltip";
 import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin } from "lucide-react";
 import type { FileChange, BranchInfo, WorktreeInfo } from "../bindings/github.com/jessonchan/monkey-deck/internal/worktree/models";
 import { applyEventToItems as applyEventToItemsPure } from "./lib/streamMerge";
-import { shouldDropOnSwitch, BUSY_STATUS } from "./lib/sessionDrop";
+import { shouldDropOnSwitch, hasStreamingTail, BUSY_STATUS } from "./lib/sessionDrop";
 import { isNotifySoundEnabled, notifyPermissionOnce, playNotifySound } from "./lib/notifySound";
 import { extractErrMsg } from "./lib/errorMsg";
 import { renderChatError, type ChatErrorView, type DiagL10n } from "./lib/errorDiag";
@@ -384,6 +384,14 @@ export default function App() {
   // 事件入口:总是写入「事件所属 session」的缓存(不再过滤 selectedSessionId),
   // 这样切走时进行中的流式仍累积在缓存里,切回即见。
   const applyEvent = useCallback((ev: SessionEvent) => {
+    if (
+      ev.kind === "agent_message_chunk" ||
+      ev.kind === "agent_thought_chunk" ||
+      ev.kind === "tool_call" ||
+      ev.kind === "tool_call_update"
+    ) {
+      eventGapRef.current[ev.sessionId] = false;
+    }
     if (ev.kind === "usage_update") {
       setUsageBySession((prev) => {
         const old = prev[ev.sessionId] ?? EMPTY_USAGE;
@@ -445,15 +453,25 @@ export default function App() {
     () => (selectedSessionId ? itemsBySession[selectedSessionId] ?? [] : []),
     [itemsBySession, selectedSessionId]
   );
+  // Stable read for openSession: switching must inspect the TARGET cache before
+  // React commits a new selection, so deriving it from props/state in the
+  // callback would be one render stale.
+  const itemsBySessionRef = useRef<Record<string, ChatItem[]>>({});
+  itemsBySessionRef.current = itemsBySession;
   const usage = (selectedSessionId ? usageBySession[selectedSessionId] : undefined) ?? EMPTY_USAGE;
   const status = (selectedSessionId ? statusBySession[selectedSessionId] : undefined) ?? "empty";
   useEffect(() => { statusRef.current = status; }, [status]);
   // Full per-session status mirror for stable callbacks (#208): openSession's
   // switch-back gate reads the TARGET session's status — not the selected one
-  // statusRef tracks. Same freshness contract as statusRef (effect-committed,
-  // user-scale fresh at click time).
+  // statusRef tracks. Status pushes write this mirror eagerly (openSession may
+  // run in the same tick as the push); the effect remains the commit path for
+  // snapshot merges.
   const statusBySessionRef = useRef<Record<string, StatusPayload["status"] | "empty">>({});
   useEffect(() => { statusBySessionRef.current = statusBySession; }, [statusBySession]);
+  // #208/PWA: a WS reconnect creates an event gap. A cached tail is newer than
+  // SQLite only while no gap has occurred; content events clear the target's
+  // marker as proof that its stream is live again.
+  const eventGapRef = useRef<Record<string, boolean>>({});
   const statusDetail = (selectedSessionId ? statusDetailBySession[selectedSessionId] : undefined) ?? "";
   const permission = (selectedSessionId ? permissionBySession[selectedSessionId] : undefined) ?? null;
   const elicitation = (selectedSessionId ? elicitationBySession[selectedSessionId] : undefined) ?? null;
@@ -707,6 +725,7 @@ export default function App() {
       const s = e.data;
       if (!s) return;
       statusPushAtRef.current[s.sessionId] = Date.now();
+      statusBySessionRef.current[s.sessionId] = s.status;
       // 懒 spawn:发消息触发的 spawn 会推 started(再紧跟 prompting)。不把活跃 turn 降级回 ready,
       // 避免「只读态发消息 → started 闪烁 → prompting」的瞬态(§3.x 懒 spawn)。
       setStatusBySession((prev) => {
@@ -789,11 +808,8 @@ export default function App() {
           });
         }
         setLivePlanBySession((prev) => { if (!prev[s.sessionId]) return prev; const n = { ...prev }; delete n[s.sessionId]; return n; });
-        // The ref mirror is effect-committed and may still hold the pre-push
-        // value inside this handler tick; turn-end statuses are terminal for
-        // the turn, so mirror this push eagerly — openSession's busy gate
-        // (read by the deferred heal below) must see the turn as over.
-        statusBySessionRef.current[s.sessionId] = s.status;
+        // The eager statusBySessionRef write above is load-bearing here: the
+        // deferred heal must classify this terminal push as no longer busy.
         // #197: a busy switch-back whose cache was dropped skipped the message
         // pull (#208) — the session has no page, no oldestSeq cursor, no
         // hasMore, so the load-more path (and with it a fork row's inherited
@@ -875,6 +891,16 @@ export default function App() {
     // onopen can race; multiple tabs each fire their own).
     let resyncTimer: ReturnType<typeof window.setTimeout> | undefined;
     const offResync = Events.On("remote:resync", () => {
+      // A reconnect invalidates event-stream continuity for every known cached
+      // session. openSession combines this marker with its cache check, so
+      // unknown sessions can safely carry a marker too.
+      const gaps: Record<string, boolean> = {};
+      for (const sid of loadedSessionsRef.current) gaps[sid] = true;
+      if (selectedSessionIdRef.current) gaps[selectedSessionIdRef.current] = true;
+      for (const list of Object.values(sessionsByProjectRef.current)) {
+        for (const session of list) gaps[session.id] = true;
+      }
+      eventGapRef.current = gaps;
       clearTimeout(resyncTimer);
       resyncTimer = setTimeout(() => {
         void refreshProjects();
@@ -1206,15 +1232,20 @@ export default function App() {
       // LoadMessagesPage is the ONE un-caught pull: its rejection propagates
       // through Promise.all to openSession's caller (confirmNewSession surfaces
       // the error) — the other pulls all .catch to neutral defaults.
-      // #208: never re-pull a BUSY target. chat:event keeps writing
-      // itemsBySession[target] while the session is backgrounded (handlers key on
-      // the event's sessionId, not the selection); a DB page pull REPLACES that
-      // array and destroys the live streaming tail (mid-flight entry + segments
-      // not yet repulled). Skip the pull — the tail stays authoritative. The
-      // session is intentionally left OUT of loadedSessionsRef here, so the next
-      // switch-away drop + idle switch-back re-pulls full history as usual.
+      // #208: trust the in-memory tail only when (1) a cache exists, (2) no WS
+      // reconnect created an event gap, and (3) the target is busy or still has
+      // a streaming tail. chat:event keeps writing the background cache; a DB
+      // page pull REPLACES that array and destroys the live tail. The streaming
+      // check does not depend on status-push/effect timing, while eventGapRef
+      // forces PWA reconnect paths back to SQLite (missed events are not
+      // replayed). A skipped session is intentionally left OUT of
+      // loadedSessionsRef; turn-end healing or the next idle switch-back then
+      // restores the full page and pagination cursor.
       const targetBusy = statusBySessionRef.current[sessionId] === BUSY_STATUS;
-      const pullMessages = !loadedSessionsRef.current.has(sessionId) && !targetBusy
+      const cachedItems = itemsBySessionRef.current[sessionId];
+      const eventsAlive = eventGapRef.current[sessionId] !== true;
+      const trustMemory = cachedItems != null && eventsAlive && (targetBusy || hasStreamingTail(cachedItems));
+      const pullMessages = !loadedSessionsRef.current.has(sessionId) && !trustMemory
         ? ChatService.LoadMessagesPage(sessionId, 0, PAGE_SIZE)
         : null;
       if (pullMessages) loadedSessionsRef.current.add(sessionId);

@@ -1,11 +1,12 @@
-// App-level mount tests for #208: switching back to a BUSY session must skip
+// App-level mount tests for #208: switching back to a LIVE session must skip
 // the LoadMessagesPage re-pull so the in-memory streaming tail survives.
 //
 // Background: chat:event handlers write itemsBySession[sid] keyed on the
 // EVENT's sessionId, not the selection — a backgrounded mid-turn session keeps
 // accumulating its streaming tail in memory. openSession's pull REPLACES that
-// array, so re-pulling a busy target clobbers the tail (mid-flight entry +
-// segments not repulled). The gate: target status "prompting" → skip the pull.
+// array, so re-pulling a live target clobbers the tail (mid-flight entry +
+// segments not repulled). Trust memory only with a cache, a live event
+// stream, and either busy status or a streaming tail.
 //
 // Scenarios (real App → Sidebar → openSession wiring, bindings mocked):
 //   1. Busy target, first open: no DB pull at all; the event-built tail renders.
@@ -13,6 +14,10 @@
 //      by background events survives the switch-back — one pull total, no clobber.
 //   3. Idle switch-back still re-pulls (2026-07-18 memory-saver reload intact).
 //   4. Protected busy switch-back (cache never dropped): tail intact, one pull.
+//   5. A streaming tail gates the pull without any status push.
+//   6. A finished turn returns to the authoritative DB page.
+//   7. remote:resync event gap forces SQLite even while the tail is busy.
+//   8. A post-resync content event continues on the reloaded DB page.
 //
 // Scaffolding mirrors App.commands-seed.mount.test.tsx: ALL mocks (runtime +
 // full ChatService surface) are registered BEFORE the dynamic App import — a
@@ -163,6 +168,13 @@ async function flush(rounds = 8) {
   for (let i = 0; i < rounds; i++) await delay(0);
 }
 
+async function flushResync() {
+  emit("remote:resync", {});
+  // App debounces remote:resync work for 300ms.
+  await delay(340);
+  await flush();
+}
+
 async function mountApp(): Promise<{ root: Root; host: HTMLElement }> {
   const host = document.createElement("div");
   document.body.appendChild(host);
@@ -287,6 +299,95 @@ describe("App busy switch-back skips the re-pull, keeps the streaming tail (#208
     expect(loadCount("s1")).toBe(1);
     expect(hasAgentText(host, "db-history")).toBe(true);
     expect(hasAgentText(host, "live-tail-tail2")).toBe(true);
+
+    root.unmount();
+    document.body.innerHTML = "";
+  });
+
+  test("streaming tail gates the pull without any status push", async () => {
+    resetFixtures();
+    const { root, host } = await mountApp();
+    await openProject(host);
+    await openSession(host, "s1");
+    expect(loadCount("s1")).toBe(1);
+
+    // The content event lands before any prompting status. Switch-away drops
+    // the cache under the stale idle status, then the background event rebuilds
+    // a streaming-only cache. The tail marker itself must keep DB away.
+    emit("chat:event", chunk("statusless-live-tail"));
+    await flush();
+    await openSession(host, "s2");
+    emit("chat:event", chunk("statusless-live-tail-2"));
+    await flush();
+    await openSession(host, "s1");
+
+    expect(loadCount("s1")).toBe(1);
+    expect(hasAgentText(host, "statusless-live-tail-2")).toBe(true);
+    expect(host.textContent).not.toContain("db-history");
+
+    root.unmount();
+    document.body.innerHTML = "";
+  });
+
+  test("finished turn switches back to the authoritative DB page", async () => {
+    resetFixtures();
+    const { root, host } = await mountApp();
+    await openProject(host);
+    await openSession(host, "s1");
+    emit("chat:status", { sessionId: "s1", status: "prompting" });
+    emit("chat:event", chunk("finished-live-tail"));
+    await flush();
+    emit("chat:status", { sessionId: "s1", status: "idle", detail: "stopReason=end_turn" });
+    await flush();
+
+    await openSession(host, "s2");
+    await openSession(host, "s1");
+
+    expect(loadCount("s1")).toBe(2);
+    expect(hasAgentText(host, "db-history")).toBe(true);
+    expect(hasAgentText(host, "finished-live-tail")).toBe(false);
+
+    root.unmount();
+    document.body.innerHTML = "";
+  });
+
+  test("remote resync event gap forces DB even while the tail is busy", async () => {
+    resetFixtures();
+    const { root, host } = await mountApp();
+    await openProject(host);
+    await openSession(host, "s1");
+    emit("chat:status", { sessionId: "s1", status: "prompting" });
+    emit("chat:event", chunk("pre-gap-live-tail"));
+    await flush();
+
+    await flushResync();
+
+    // A reconnect may have missed chunks; memory is no longer trusted and the
+    // selected conversation must reload from SQLite.
+    expect(loadCount("s1")).toBe(2);
+    expect(hasAgentText(host, "db-history")).toBe(true);
+    expect(hasAgentText(host, "pre-gap-live-tail")).toBe(false);
+
+    root.unmount();
+    document.body.innerHTML = "";
+  });
+
+  test("content event after resync continues on the reloaded DB page", async () => {
+    resetFixtures();
+    const { root, host } = await mountApp();
+    await openProject(host);
+    await openSession(host, "s1");
+    emit("chat:status", { sessionId: "s1", status: "prompting" });
+    emit("chat:event", chunk("old-gap-tail"));
+    await flush();
+
+    await flushResync();
+    emit("chat:event", chunk("post-gap-tail"));
+    await flush();
+
+    expect(loadCount("s1")).toBe(2);
+    expect(hasAgentText(host, "db-history")).toBe(true);
+    expect(hasAgentText(host, "post-gap-tail")).toBe(true);
 
     root.unmount();
     document.body.innerHTML = "";

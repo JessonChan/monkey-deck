@@ -10,7 +10,26 @@
 // #208: the single status treated as "turn in flight". Both consumers key on
 // it — the switch-away drop predicate below and App.openSession's switch-back
 // re-pull gate (a DB page pull would clobber the in-memory streaming tail).
+import type { ChatItem } from "../types";
+
 export const BUSY_STATUS = "prompting";
+
+// #208: only inspect the conversation tail for a live message. A streaming
+// marker farther back is not evidence that the current turn is still in flight.
+const STREAMING_TAIL_WINDOW = 8;
+
+/**
+ * Reports whether an agent/thought item near the cache tail is still streaming.
+ * This is deliberately independent of chat:status timing: the first content
+ * event can arrive before the prompting status commits (or a status push can be
+ * missed), while the streaming marker is maintained by the event stream itself.
+ */
+export function hasStreamingTail(items: readonly ChatItem[] | undefined): boolean {
+  if (!items) return false;
+  return items.slice(-STREAMING_TAIL_WINDOW).some(
+    (it) => (it.type === "agent" || it.type === "thought") && it.streaming === true,
+  );
+}
 
 /**
  * @param oldSession  切走前的 session id(null 表示之前无选中)
