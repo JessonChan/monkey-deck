@@ -3593,6 +3593,40 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
      line-height re-centers the glyph inside the taller box (clamp rule). */
   .queue-schedule-pending.placeholder { min-height: 22px; line-height: 22px; }
 
+  /* ─── QueuePanel mobile visual pass (#148 phase 2, screenshot-driven) ───
+     Before: every card wore the desktop 3px amber rail, and scheduled vs
+     repeat vs plain badges were all the same amber — a wall of amber with no
+     state hierarchy, prompts truncated to ~1 line while nowrap badges ate the
+     width, and uneven vertical rhythm (3 stacked rows in a repeat card).
+     After, ≤768px only (desktop keeps the amber rail and one-line text):
+     1. Three-tier rail + badge colors keyed off the row's data attributes:
+        gray = plain queued, cyan (--accent-2, the schedule-action family) =
+        future schedule armed, violet (empty-logo's #bf5af2 family) = repeat
+        loop armed. A row with both armed shows the violet rail (repeat is the
+        "louder" state; both badges stay visible with their own colors).
+     2. Text first: prompts wrap to a 3-line clamp instead of one nowrap line —
+        the queued prompt is the content the user is reviewing.
+     3. Rhythm: card padding 10×12 (was 7×10), gaps 10/8 to match the 40px tap
+        family; read badges bump 10→11px. */
+  .queue-list { gap: 8px; }
+  .queue-item { padding: 10px 12px; gap: 10px; border-left-color: var(--sep-strong); }
+  .queue-item[data-scheduled="true"] { border-left-color: var(--accent-2); }
+  .queue-item[data-repeat="true"] { border-left-color: rgba(191, 90, 242, 0.8); }
+  .queue-item-text {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    line-height: 1.45;
+  }
+  /* Width floor: when a nowrap badge would squeeze the prompt under 140px, the
+     badge wraps to its own line instead (flex-wrap above) — text stays the
+     widest thing on the card; short prompts with narrow badges stay inline. */
+  .queue-item-text { min-width: 140px; }
+  .queue-scheduled.future { color: var(--accent-2); }
+  .queue-repeat-badge { color: rgb(191, 90, 242); }
+  .queue-scheduled.future, .queue-repeat-badge { font-size: 11px; }
+
   /* Header: session title + status only. Project name, terminal / model /
      branch / merge chips are desktop density on a phone. */
   .chat-project, .chat-sep { display: none; }
