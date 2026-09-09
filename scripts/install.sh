@@ -232,9 +232,11 @@ elif [ "$OS" = "Linux" ]; then
   ASSET="monkey-deck-linux-$ASSET_ARCH.$PKG"
 
   # ── installed version ──────────────────────────────────────────────────────
+  # Debian convention appends a packagement release ("9.9.9-1"); strip it so
+  # the comparison matches our bare semver tags (rpm %{VERSION} is already bare).
   INSTALLED_VER=""
   if [ "$PKG" = "deb" ]; then
-    INSTALLED_VER=$(dpkg -s "$BIN_NAME" 2>/dev/null | sed -n 's/^Version: //p' | head -1)
+    INSTALLED_VER=$(dpkg -s "$BIN_NAME" 2>/dev/null | sed -n 's/^Version: //p' | head -1 | sed 's/-[0-9][0-9]*$//')
   else
     INSTALLED_VER=$(rpm -q --queryformat '%{VERSION}' "$BIN_NAME" 2>/dev/null || true)
   fi

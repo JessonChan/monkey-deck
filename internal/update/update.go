@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -53,12 +54,82 @@ func newProvider() (*github.Provider, error) {
 	return github.New(github.Config{
 		Repository:    GitHubRepository,
 		ChecksumAsset: ChecksumAsset,
+		AssetMatcher:  archiveOnlyAssetMatcher,
 	})
+}
+
+// archiveOnlyAssetMatcher picks the first archive asset (.zip / .tar.gz /
+// .tar) matching the platform+arch, skipping package-manager artifacts
+// (.deb / .rpm). Wails3 releases on Linux currently ship deb/rpm only, and
+// the updater swap path renames the downloaded file into place without
+// unpacking package formats — installing a .deb as the app binary would
+// brick the installation. Returning -1 makes Check fail with a clear
+// "no asset for linux/amd64" error instead.
+func archiveOnlyAssetMatcher(req updater.CheckRequest, assets []github.ReleaseAsset) int {
+	plat := strings.ToLower(req.Platform)
+	arch := strings.ToLower(req.Arch)
+	for i, a := range assets {
+		name := strings.ToLower(a.Name)
+		switch {
+		case strings.HasSuffix(name, ".deb"), strings.HasSuffix(name, ".rpm"),
+			strings.HasSuffix(name, ".apk"), strings.HasSuffix(name, ".pkg"),
+			strings.HasSuffix(name, ".exe"), strings.HasSuffix(name, ".msi"),
+			strings.HasSuffix(name, ".dmg"), strings.HasSuffix(name, ".sig"),
+			strings.HasSuffix(name, ".asc"):
+			continue
+		}
+		if isChecksumAssetName(name) {
+			continue
+		}
+		if plat != "" && !strings.Contains(name, plat) {
+			continue
+		}
+		if arch != "" && !archContains(name, arch) {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+// isChecksumAssetName matches checksum sidecars we publish (SHA256SUMS) and
+// common aliases. These must never be picked as the download artifact.
+func isChecksumAssetName(name string) bool {
+	return strings.Contains(name, "sha256sum") ||
+		strings.Contains(name, "checksums") ||
+		strings.Contains(name, "checksum") ||
+		strings.Contains(name, "sums.txt")
+}
+
+// archContains mirrors the upstream DefaultAssetMatcher's arch aliasing
+// (amd64 ↔ x86_64/x64, arm64 ↔ aarch64) in BOTH directions: a request for
+// amd64 must match "x86_64" asset names, and a request for x86_64 must match
+// "amd64" names — GitHub runners and userspace name arches inconsistently.
+func archContains(name, arch string) bool {
+	canonical := func(a string) string {
+		switch a {
+		case "x86_64", "x64":
+			return "amd64"
+		case "aarch64":
+			return "arm64"
+		default:
+			return a
+		}
+	}
+	want := canonical(arch)
+	for _, token := range strings.FieldsFunc(name, func(r rune) bool {
+		return r == '-' || r == '_' || r == '.' || r == '/'
+	}) {
+		if canonical(token) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // ShouldAutoCheck 判断该版本是否应启用后台自动检查。
 //
-// 开发构建(version=="dev" 或空)不启用:semver 把 "dev" 视为低于任何正式版,
+// 开发构建(version=="dev" 或空)不启用:semver 把 "dev" 形态视为低于任何正式版,
 // 会把首个 release 误判成「有更新」并在后台循环里反复弹窗。
 func ShouldAutoCheck(version string) bool {
 	return version != "" && version != "dev"

@@ -18,13 +18,17 @@
 
 set -u
 
+# Repo layout (CI) or flat deployment (scripts + build/ copied next to each
+# other, e.g. ~/md-test on a remote machine).
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-INSTALLER="$REPO_ROOT/scripts/install.sh"
+if [ ! -f "$REPO_ROOT/build/darwin/Info.plist" ] && [ -f "$(dirname "$0")/build/darwin/Info.plist" ]; then
+  REPO_ROOT=$(cd "$(dirname "$0")" && pwd)
+fi
 APP_PATH="/Applications/Monkey Deck.app"
 SRV_PORT="${SRV_PORT:-8931}"
-
+INSTALLER="$REPO_ROOT/scripts/install.sh"
+[ -f "$INSTALLER" ] || INSTALLER="$(dirname "$0")/install.sh"
 PASS=0; FAIL=0
-say() { printf '\033[1;34m[TEST]\033[0m %s\n' "$1"; }
 ok()  { printf '\033[1;32m  PASS\033[0m %s\n' "$1"; PASS=$((PASS+1)); }
 bad() { printf '\033[1;31m  FAIL\033[0m %s\n' "$1"; FAIL=$((FAIL+1)); }
 
@@ -40,26 +44,30 @@ installed_version() {
 }
 
 # build a signed mini-app (version $1) under directory $2
+ma_version=""; ma_dir=""; mr_dir=""; mr_version=""
 make_app() { # make_app <version> <destdir>
-  v="$1"; d="$2"
-  rm -rf "$d"
-  mkdir -p "$d/Monkey Deck.app/Contents/MacOS" "$d/Monkey Deck.app/Contents/Resources"
-  printf '#!/bin/sh\nwhile true; do sleep 1; done\n' > "$d/Monkey Deck.app/Contents/MacOS/monkey-deck"
-  chmod +x "$d/Monkey Deck.app/Contents/MacOS/monkey-deck"
-  cp "$REPO_ROOT/build/darwin/Info.plist" "$d/Monkey Deck.app/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $v" \
-                          -c "Set :CFBundleVersion $v" \
-                          "$d/Monkey Deck.app/Contents/Info.plist"
-  codesign --force --deep --sign - "$d/Monkey Deck.app" >/dev/null 2>&1
+  ma_version="$1"; ma_dir="$2"
+  rm -rf "$ma_dir"
+  mkdir -p "$ma_dir/Monkey Deck.app/Contents/MacOS" "$ma_dir/Monkey Deck.app/Contents/Resources"
+  printf '#!/bin/sh\nwhile true; do sleep 1; done\n' > "$ma_dir/Monkey Deck.app/Contents/MacOS/monkey-deck"
+  chmod +x "$ma_dir/Monkey Deck.app/Contents/MacOS/monkey-deck"
+  cp "$REPO_ROOT/build/darwin/Info.plist" "$ma_dir/Monkey Deck.app/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $ma_version" \
+                          -c "Set :CFBundleVersion $ma_version" \
+                          "$ma_dir/Monkey Deck.app/Contents/Info.plist"
+  codesign --force --deep --sign - "$ma_dir/Monkey Deck.app" >/dev/null 2>&1
 }
 
 # fabricate the release tree: <dir>/monkey-deck-darwin-<arch>.zip + SHA256SUMS
+# NOTE: POSIX sh functions share global scope — make_release must not reuse
+# the same variable names that make_app assigns, or the callee clobbers the
+# caller's state (this bit us as "cd: x/x: No such file").
 make_release() { # make_release <dir> <version>
-  d="$1"; v="$2"
-  make_app "$v" "$d/x"
-  ( cd "$d/x" && zip -r -y -q "$d/monkey-deck-darwin-$ARCH.zip" "Monkey Deck.app" )
-  ( cd "$d" && shasum -a 256 "monkey-deck-darwin-$ARCH.zip" > SHA256SUMS )
-  rm -rf "$d/x"
+  mr_dir="$1"; mr_version="$2"
+  make_app "$mr_version" "$mr_dir/x"
+  ( cd "$mr_dir/x" && zip -r -y -q "$mr_dir/monkey-deck-darwin-$ARCH.zip" "Monkey Deck.app" )
+  ( cd "$mr_dir" && shasum -a 256 "monkey-deck-darwin-$ARCH.zip" > SHA256SUMS )
+  rm -rf "$mr_dir/x"
 }
 
 ARCH=$(uname -m)
@@ -108,13 +116,6 @@ sleep 2
 if kill -0 "$LPID" 2>/dev/null; then ok "installed binary executes"; kill "$LPID" 2>/dev/null; else bad "binary fails to execute"; fi
 wait "$LPID" 2>/dev/null
 
-# ══ 3. up-to-date (non-interactive, must not hang) ════════════════════════════
-say "3. up-to-date re-run"
-timeout 30 sh "$INSTALLER" </dev/null >/tmp/up-to-date.log 2>&1
-RC=$?
-[ $RC -eq 0 ] && ok "exit 0 within 30s (no tty hang)" || bad "exit $RC or hang"
-grep -q "already up to date" /tmp/up-to-date.log && ok "reports up-to-date" || bad "missing up-to-date message"
-
 # ══ 2. upgrade path ═══════════════════════════════════════════════════════════
 say "2. upgrade v0.0.1 → v9.9.9"
 make_app "0.0.1" /tmp/md-old
@@ -126,6 +127,20 @@ OUT=$(run_installer); RC=$?
 [ "$(installed_version)" = "9.9.9" ] && ok "upgraded to 9.9.9" || bad "upgrade landed '$(installed_version)'"
 [ ! -d "$APP_PATH.bak" ] && ok "backup cleaned" || bad "backup left behind"
 check "post-upgrade seal" 0 codesign --verify --deep --strict "$APP_PATH"
+
+# ══ 3. up-to-date (non-interactive, must not hang) ════════════════════════════
+say "3. up-to-date re-run"
+# No `timeout` on macOS — run the installer under a manual watchdog.
+sh "$INSTALLER" </dev/null >/tmp/up-to-date.log 2>&1 &
+TSTPID=$!
+( sleep 30; kill -TERM "$TSTPID" 2>/dev/null ) &
+WDPID=$!
+wait "$TSTPID"
+RC=$?
+kill "$WDPID" 2>/dev/null
+wait "$WDPID" 2>/dev/null
+[ $RC -eq 0 ] && ok "exit 0 within 30s (no tty hang)" || bad "exit $RC or hang"
+grep -q "already up to date" /tmp/up-to-date.log && ok "reports up-to-date" || bad "missing up-to-date message"
 
 # ══ 4. checksum mismatch → fail closed ════════════════════════════════════════
 say "4. corrupted SHA256SUMS → must fail"
@@ -149,8 +164,11 @@ mv "$SRV/SHA256SUMS.bak" "$DL/SHA256SUMS"
 say "6. zip without .app → must fail"
 rm -rf "$APP_PATH"
 D=$(mktemp -d /tmp/md-noapp-XXXX); mkdir -p "$D/junk"
+# rm first: `zip -r` UPDATES an existing archive, and the previous scenario
+# left the good zip in place — junk/ would be ADDED while Monkey Deck.app
+# stayed inside, and the installer would rightly accept it.
+rm -f "$DL/monkey-deck-darwin-$ARCH.zip"
 ( cd "$D" && echo hi > junk/hi.txt && zip -r -y -q "$DL/monkey-deck-darwin-$ARCH.zip" junk )
-( cd "$DL" && shasum -a 256 "monkey-deck-darwin-$ARCH.zip" > SHA256SUMS )
 rm -rf "$D"
 OUT=$(run_installer); RC=$?
 [ $RC -ne 0 ] && ok "installer refuses (exit $RC)" || bad "installer accepted archive without .app"

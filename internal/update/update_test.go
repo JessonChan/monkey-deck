@@ -1,6 +1,11 @@
 package update
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/wailsapp/wails/v3/pkg/updater"
+	"github.com/wailsapp/wails/v3/pkg/updater/providers/github"
+)
 
 func TestShouldAutoCheck(t *testing.T) {
 	cases := []struct {
@@ -55,4 +60,43 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestArchiveOnlyAssetMatcher(t *testing.T) {
+	assets := []github.ReleaseAsset{
+		{Name: "SHA256SUMS"},
+		{Name: "monkey-deck-linux-amd64.deb"},
+		{Name: "monkey-deck-linux-amd64.rpm"},
+		{Name: "monkey-deck-linux-arm64.deb"},
+		{Name: "monkey-deck-linux-arm64.rpm"},
+		{Name: "monkey-deck-darwin-arm64.zip"},
+		{Name: "monkey-deck-darwin-amd64.zip"},
+		{Name: "monkey-deck-linux-amd64.zip"},
+	}
+	pick := func(plat, arch string) string {
+		idx := archiveOnlyAssetMatcher(updater.CheckRequest{Platform: plat, Arch: arch}, assets)
+		if idx < 0 {
+			return ""
+		}
+		return assets[idx].Name
+	}
+	cases := []struct {
+		name       string
+		plat, arch string
+		want       string
+	}{
+		{"linux amd64 picks zip not deb", "linux", "amd64", "monkey-deck-linux-amd64.zip"},
+		{"linux arm64 no archive → none", "linux", "arm64", ""},
+		{"darwin arm64 zip", "darwin", "arm64", "monkey-deck-darwin-arm64.zip"},
+		{"darwin amd64 zip", "darwin", "amd64", "monkey-deck-darwin-amd64.zip"},
+		{"x86_64 alias matches amd64 asset", "linux", "x86_64", "monkey-deck-linux-amd64.zip"},
+		{"aarch64 alias matches arm64 asset", "linux", "aarch64", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := pick(c.plat, c.arch); got != c.want {
+				t.Fatalf("matcher(%s/%s) = %q, want %q", c.plat, c.arch, got, c.want)
+			}
+		})
+	}
 }
