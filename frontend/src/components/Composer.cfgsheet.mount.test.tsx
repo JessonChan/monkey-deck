@@ -19,6 +19,9 @@ import { describe, test, expect, mock, afterEach } from "bun:test";
 import { Window } from "happy-dom";
 import React from "react";
 import { createRoot } from "react-dom/client";
+// Real locale JSONs — pin zh+en copy for the chip tooltip key (dead-key guard).
+import zh from "../i18n/locales/zh.json";
+import en from "../i18n/locales/en.json";
 
 const window = new Window();
 const document = window.document;
@@ -301,5 +304,71 @@ describe("MobileConfigSelect chip + bottom sheet", () => {
     click(host.querySelector('[data-testid="cfg-chip"]') as HTMLElement);
     await flush();
     expect(refreshes).toBe(1);
+  });
+
+  test("chip tooltip consumes composer.cfgChipTip (zh+en both define it)", async () => {
+    const { host } = mount(
+      <MobileConfigSelect configOptions={CFG_OPTS} disabled={false} onSetConfig={() => {}} onRefreshConfig={() => {}} />
+    );
+    await flush();
+    const chip = host.querySelector('[data-testid="cfg-chip"]') as HTMLElement;
+    // The i18n mock returns the key verbatim, so the attribute must be the
+    // exact cfgChipTip key — not the old `${cfgLabel.model}: ${shortName}`
+    // concatenation (review #29245 defect 3: the key existed in zh+en but had
+    // zero TSX consumers).
+    expect(chip.getAttribute("data-tooltip-id")).toBe("md-tip");
+    expect(chip.getAttribute("data-tooltip-content")).toBe("composer.cfgChipTip");
+    // zh + en both carry real copy for the consumed key.
+    expect(zh.composer.cfgChipTip.length).toBeGreaterThan(0);
+    expect(en.composer.cfgChipTip.length).toBeGreaterThan(0);
+  });
+
+  test("Esc keydown listener is removed on close and on unmount (no document-level leak)", async () => {
+    // happy-dom has no getEventListeners; count document keydown registrations
+    // through a spy pair instead. Only MobileConfigSelect touches document
+    // keydown in this harness, so the counter tracks exactly its effect.
+    const origAdd = document.addEventListener.bind(document);
+    const origRemove = document.removeEventListener.bind(document);
+    let live = 0;
+    document.addEventListener = ((type: string, fn: EventListener, opts?: AddEventListenerOptions | boolean) => {
+      if (type === "keydown") live++;
+      origAdd(type, fn, opts);
+    }) as typeof document.addEventListener;
+    document.removeEventListener = ((type: string, fn: EventListener, opts?: EventListenerOptions | boolean) => {
+      if (type === "keydown") live--;
+      origRemove(type, fn, opts);
+    }) as typeof document.removeEventListener;
+    try {
+      const { host, root } = mount(
+        <MobileConfigSelect configOptions={CFG_OPTS} disabled={false} onSetConfig={() => {}} onRefreshConfig={() => {}} />
+      );
+      await flush();
+      expect(live).toBe(0); // closed → effect short-circuits, no listener
+
+      click(host.querySelector('[data-testid="cfg-chip"]') as HTMLElement);
+      await flush();
+      expect(live).toBe(1); // open → exactly one document keydown listener
+
+      // Close via Esc → effect cleanup must remove the listener (was: one
+      // zombie listener per open/close cycle, review #29245 defect 2).
+      document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await flush();
+      expect(document.querySelector('[data-testid="cfg-sheet"]')).toBeNull();
+      expect(live).toBe(0);
+
+      // Re-open, then unmount while open → cleanup must still fire.
+      click(host.querySelector('[data-testid="cfg-chip"]') as HTMLElement);
+      await flush();
+      expect(live).toBe(1);
+      const at = mounted.findIndex((m) => m.root === root);
+      mounted.splice(at, 1); // unmounted here; keep afterEach from double-unmounting
+      host.remove();
+      root.unmount();
+      await flush();
+      expect(live).toBe(0);
+    } finally {
+      document.addEventListener = origAdd as typeof document.addEventListener;
+      document.removeEventListener = origRemove as typeof document.removeEventListener;
+    }
   });
 });

@@ -1430,6 +1430,7 @@ export function MobileConfigSelect({ configOptions, disabled, onSetConfig, onRef
       if (e.key === "Escape") setOpen(false);
     };
     document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
   }, [open]);
   if (!modelOpt) return null;
   // Short name for the chip: drop the provider prefix.
@@ -1471,7 +1472,7 @@ export function MobileConfigSelect({ configOptions, disabled, onSetConfig, onRef
         data-testid="cfg-chip"
         disabled={disabled}
         data-tooltip-id="md-tip"
-        data-tooltip-content={`${t("composer.cfgLabel.model")}: ${shortName}`}
+        data-tooltip-content={t("composer.cfgChipTip")}
         onClick={() => setOpen(true)}
       >
         <span className="cfg-chip-text">{shortName}</span>
