@@ -397,6 +397,8 @@
     "noMatch": "No match",
     "recentUsed": "Recently used",
     "searchPlaceholder": "Search…",
+    "cfgSheetTitle": "Model & options",
+    "cfgChipTip": "Current model · tap to switch model/mode/thinking",
     "cfgLabel": {
       "model": "Model",
       "mode": "Mode",

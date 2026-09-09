@@ -397,6 +397,8 @@
     "noMatch": "无匹配",
     "recentUsed": "最近使用",
     "searchPlaceholder": "搜索…",
+    "cfgSheetTitle": "模型与参数",
+    "cfgChipTip": "当前模型 · 点按切换模型/模式/思考",
     "cfgLabel": {
       "model": "模型",
       "mode": "模式",

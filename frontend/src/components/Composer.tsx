@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, forwardRef, useImperativeHandle, type KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import * as Popover from "@radix-ui/react-popover";
 import { Command } from "cmdk";
@@ -268,6 +269,10 @@ export default forwardRef<ComposerHandle, Props>(function Composer({ value, onCh
   // exit threshold stays decidable while collapsed (the dot row hides the real width).
   const composeBarRef = useRef<HTMLDivElement | null>(null);
   const cfgFullWRef = useRef(0);
+  // ≤768px mobile gate (issue #148 phase 2): the config chip + bottom sheet replace
+  // the CSS-hidden desktop cfg-triggers. Mount-gated so the >768px DOM (desktop) is
+  // byte-identical to before — the chip simply does not exist there.
+  const mdMobile = useMobileViewport();
 
   // --- 长文本折叠(展示态)---
   // isLong:超过行/字符阈值即为长文本;collapsed:是否折叠成紧凑预览块。
@@ -1231,6 +1236,9 @@ useEffect(() => {
           </div>
           <div className="compose-right">
             <ModelSelect configOptions={configOptions} disabled={disabled} onSetConfig={onSetConfig} onRefreshConfig={onRefreshConfig} contextTokens={usage.used} />
+            {/* ≤768px only (mount-gated by mdMobile): compact chip opening the config
+                bottom sheet — the mobile replacement for the CSS-hidden cfg-triggers. */}
+            {mdMobile && <MobileConfigSelect configOptions={configOptions} disabled={disabled} onSetConfig={onSetConfig} onRefreshConfig={onRefreshConfig} />}
             <ComposerUsage usage={usage} draftTokens={estimateTokens(value)} />
             {(attachments.length > 0 || mentions.length > 0 || images.length > 0 || audios.length > 0) && (
               <span className="composer-count">{t("composer.referencesCount", { count: attachments.length + mentions.length + images.length + audios.length })}</span>
@@ -1369,6 +1377,156 @@ export function ModelSelect({ configOptions, disabled, onSetConfig, onRefreshCon
       {modeOpt && <ConfigSelect label={t("composer.cfgLabel.mode")} currentValue={modeOpt.currentValue} options={modeOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(modeOpt.id, v)} dotLetter="E" />}
       {effortOpt && <ConfigSelect label={t("composer.cfgLabel.thought")} currentValue={effortOpt.currentValue} options={effortOpt.options} disabled={disabled} onSelect={(v) => onSetConfig(effortOpt.id, v)} dotLetter="T" />}
     </div>
+  );
+}
+
+// ≤768px viewport gate (same convention as App's mdViewport): matchMedia read at
+// mount, change listener keeps resize across the breakpoint live. Callers mount
+// mobile-only affordances under this flag so the >768px DOM stays untouched.
+const MOBILE_BP = 768;
+export function useMobileViewport(): boolean {
+  const [mobile, setMobile] = useState(
+    () => typeof window !== "undefined" && typeof window.matchMedia === "function"
+      && window.matchMedia(`(max-width: ${MOBILE_BP}px)`).matches,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia(`(max-width: ${MOBILE_BP}px)`);
+    const fn = () => setMobile(mq.matches);
+    mq.addEventListener("change", fn);
+    return () => mq.removeEventListener("change", fn);
+  }, []);
+  return mobile;
+}
+
+// Mobile config entry (issue #148 phase 2): on phones (≤768px) the desktop
+// cfg-trigger row is CSS-hidden; this chip + bottom sheet replace that void.
+// Chip shows the current model's short name ("zai/glm-5.1" → "glm-5.1"); the
+// sheet carries all three groups — model keeps cmdk search (multi-model lists
+// need it), mode and thought_level degrade to NATIVE selects: touch-native
+// pickers, no Radix Popover positioning/focus-trap risk inside a sheet (KISS).
+// Data channel is unchanged — every selection goes through onSetConfig(configId, value).
+// Mounted ONLY under the mobile breakpoint (Composer's mdMobile gate).
+export function MobileConfigSelect({ configOptions, disabled, onSetConfig, onRefreshConfig }: {
+  configOptions: ConfigOption[];
+  disabled: boolean;
+  onSetConfig: (configId: string, value: string) => void;
+  onRefreshConfig: () => void;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const modelOpt = configOptions.find((c) => c.category === "model");
+  const effortOpt = configOptions.find((c) => c.category === "thought_level");
+  const modeOpt = configOptions.find((c) => c.category === "mode");
+  // Same freshness contract as the desktop popover: opening the sheet re-pulls
+  // configOptions so externally-changed provider/model lists show up.
+  useEffect(() => {
+    if (open && onRefreshConfig) onRefreshConfig();
+  }, [open, onRefreshConfig]);
+  // Esc closes (§4.2: every dialog must).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: DocumentEventMap["keydown"]): void => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+  }, [open]);
+  if (!modelOpt) return null;
+  // Short name for the chip: drop the provider prefix.
+  const shortName = modelOpt.currentValue.includes("/") ? modelOpt.currentValue.split("/").pop()! : modelOpt.currentValue;
+
+  // Simple group → native select row (mode / thought_level). The sheet stays
+  // open after a pick: the two usually change together (e.g. plan + high), and
+  // the native wheel picker closing into a dismissed sheet reads like a glitch.
+  const selectRow = (labelText: string, opt: ConfigOption, testid: string) => (
+    <div className="cfg-sheet-section">
+      <label className="cfg-sheet-label" htmlFor={testid}>{labelText}</label>
+      <select
+        id={testid}
+        className="cfg-sheet-select"
+        data-testid={testid}
+        value={opt.currentValue}
+        disabled={disabled}
+        onChange={(e) => onSetConfig(opt.id, e.target.value)}
+      >
+        {opt.options.map((o) => (
+          <option key={o.value} value={o.value}>{o.name}</option>
+        ))}
+      </select>
+    </div>
+  );
+
+  // provider 分组与桌面 popover 同构:value 形如 "zai/glm-4.6",按 "/" 前缀聚合。
+  const g: Record<string, { value: string; name: string }[]> = {};
+  for (const o of modelOpt.options) {
+    const prov = o.value.split("/")[0] || "other";
+    (g[prov] ??= []).push(o);
+  }
+  const groups = Object.entries(g).sort(([a], [b]) => a.localeCompare(b));
+
+  return (
+    <>
+      <button
+        className="cfg-chip"
+        data-testid="cfg-chip"
+        disabled={disabled}
+        data-tooltip-id="md-tip"
+        data-tooltip-content={`${t("composer.cfgLabel.model")}: ${shortName}`}
+        onClick={() => setOpen(true)}
+      >
+        <span className="cfg-chip-text">{shortName}</span>
+        <ChevronDown size={11} className="cfg-chevron" />
+      </button>
+      {open && createPortal(
+        <div className="cfg-sheet-layer" role="dialog" aria-modal="true" aria-label={t("composer.cfgSheetTitle")}>
+          <div className="cfg-sheet-scrim" data-testid="cfg-sheet-scrim" onClick={() => setOpen(false)} />
+          <div className="cfg-sheet" data-testid="cfg-sheet">
+            <div className="cfg-sheet-grab" aria-hidden="true" />
+            <div className="cfg-sheet-head">
+              <span className="cfg-sheet-title">{t("composer.cfgSheetTitle")}</span>
+              <button
+                className="cfg-sheet-close"
+                data-testid="cfg-sheet-close"
+                aria-label={t("common.close")}
+                onClick={() => setOpen(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="cfg-sheet-body">
+              <div className="cfg-sheet-section">
+                <div className="cfg-sheet-label">{t("composer.cfgLabel.model")}</div>
+                <Command label={t("composer.cfgLabel.model")} className="cfg-sheet-command">
+                  <Command.Input placeholder={t("composer.searchPlaceholder")} className="cfg-sheet-search" data-testid="cfg-sheet-search" />
+                  <Command.List className="cfg-sheet-list">
+                    <Command.Empty className="cfg-empty">{t("composer.noMatch")}</Command.Empty>
+                    {groups.map(([prov, opts]) => (
+                      <Command.Group key={prov} heading={prov} className="cfg-group-block">
+                        {opts.map((o) => (
+                          <Command.Item
+                            key={o.value}
+                            value={`${o.name} ${o.value}`}
+                            onSelect={() => { onSetConfig(modelOpt.id, o.value); setOpen(false); }}
+                            className={`cfg-option ${o.value === modelOpt.currentValue ? "active" : ""}`}
+                            data-testid={`cfg-option-${o.value}`}
+                          >
+                            <span className="cfg-option-name">{o.name}</span>
+                            {o.value !== o.name && <span className="cfg-option-value">{o.value}</span>}
+                          </Command.Item>
+                        ))}
+                      </Command.Group>
+                    ))}
+                  </Command.List>
+                </Command>
+              </div>
+              {modeOpt && selectRow(t("composer.cfgLabel.mode"), modeOpt, "cfg-sheet-mode")}
+              {effortOpt && selectRow(t("composer.cfgLabel.thought"), effortOpt, "cfg-sheet-thought")}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 
