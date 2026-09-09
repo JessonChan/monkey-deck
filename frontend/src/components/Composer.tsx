@@ -351,13 +351,15 @@ export default forwardRef<ComposerHandle, Props>(function Composer({ value, onCh
     return { all, head: all, tail: [], foldCount: 0 };
   }, [expandedSnippet, pasteSnippets]);
 
-  // --- 上下键翻历史 ---
-  // navIdx = -1:未翻历史(显示当前草稿);否则指向 history 数组的下标(当前展示的那条)。
-  // history 按时间升序(末尾=最新)。↑ 向旧、↓ 向新,翻过最新恢复草稿。
-  // navRef:事件处理中同步读写的权威值;navDisplay:镜像到 state 仅用于驱动徽标渲染
-  // (ref 变化不触发重渲染,徽标要随翻阅即时更新,必须有 state)。
+  // --- Arrow-key history navigation ---
+  // navRef = -1: not browsing (current draft shown); otherwise the index into
+  // history of the entry currently displayed. history is chronological (last
+  // = newest): ↑ walks older, ↓ walks newer, past newest restores the draft.
+  // navRef is the authoritative value read/written synchronously during event
+  // handling. It used to mirror into a navDisplay state that drove the
+  // compose-tools navigation badge; that visual layer was removed (#198)
+  // together with the state mirror (nothing consumes it anymore).
   const navRef = useRef(-1);
-  const [navDisplay, setNavDisplay] = useState(-1);
   const draftRef = useRef("");
 
   // --- @autocomplete ---
@@ -554,7 +556,6 @@ useEffect(() => {
     setExpandedSnippet(null);
     setSnippetFullyExpanded(false);
     navRef.current = -1;
-    setNavDisplay(-1);
     setMentionOpen(false);
     setSlashOpen(false);
     requestAnimationFrame(() => { if (ref.current) ref.current.style.height = "auto"; });
@@ -782,11 +783,10 @@ useEffect(() => {
       navRef.current = history.length - 1;
     } else {
       const next = navRef.current + dir; // dir=-1(↑向旧) → idx 减;dir=1(↓向新) → idx 增
-      if (next >= history.length) { navRef.current = -1; setNavDisplay(-1); onChange(draftRef.current); moveCursorEnd(); return; }
+      if (next >= history.length) { navRef.current = -1; onChange(draftRef.current); moveCursorEnd(); return; }
       if (next < 0) { navRef.current = 0; }
       else { navRef.current = next; }
     }
-    setNavDisplay(navRef.current);
     onChange(history[navRef.current]);
     moveCursorEnd();
   };
@@ -801,8 +801,7 @@ useEffect(() => {
     cursorRef.current = e.target.selectionEnd ?? 0;
     setCursorPos(cursorRef.current);
     navRef.current = -1; // 真实输入(非翻历史)→ 退出翻历史模式
-    setNavDisplay(-1);
-    setSlashWarn(null); // 编辑输入 → 撤销未知命令提示
+    setSlashWarn(null); // editing input clears the unknown-command warning
     onChange(e.target.value);
   };
   const handleSelect = () => {
@@ -1210,33 +1209,6 @@ useEffect(() => {
             >
               <Slash size={17} />
             </button>
-            {/* ↑↓ 翻历史:placeholder 瘦身后,把这条最隐晦(无可视入口)的快捷键提为 compose-tools chip。
-                未翻历史 → 可点 chip(点击等价 ↑,进入翻历史);翻历史中 → 徽标显示当前位置(1-indexed,旧→新)。 */}
-            {history.length > 0 && (
-              navDisplay >= 0 ? (
-                <span
-                  className="compose-history-badge"
-                  data-testid="composer-history-badge"
-                  data-tooltip-id="md-tip"
-                  data-tooltip-content={t("composer.historyBadgeTip")}
-                  data-tooltip-place="top"
-                >
-                  {t("composer.historyBadge", { idx: navDisplay + 1, total: history.length })}
-                </span>
-              ) : (
-                <button
-                  className="compose-history-chip"
-                  data-testid="composer-history-chip"
-                  onClick={() => { navigateHistory(-1); requestAnimationFrame(() => ref.current?.focus()); }}
-                  disabled={disabled}
-                  data-tooltip-id="md-tip"
-                  data-tooltip-content={t("composer.historyHintTip")}
-                  data-tooltip-place="top"
-                >
-                  {t("composer.historyHint")}
-                </button>
-              )
-            )}
             {/* 当前分支:与右上用量/历史并列的指示,点击从此分支新建对话(fork 一个新 worktree)。
                  空(非 git / 未取到)不渲染。§4.5 用 react-tooltip(md-tip),禁原生 title;§4.4 不裸露字段名。 */}
             {branch && (

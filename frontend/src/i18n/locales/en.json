@@ -368,10 +368,6 @@
   "composer": {
     "placeholderNormal": "Message monkey-deck…",
     "placeholderQueued": "Queue next message… (Enter to enqueue · auto-sent after this turn)",
-    "historyHint": "↑↓ History",
-    "historyHintTip": "Use arrow keys to browse past messages of this session; edit or press Enter to resend",
-    "historyBadge": "History {{idx}}/{{total}}",
-    "historyBadgeTip": "↑ older · ↓ newer · past latest restores draft",
     "branchTip": "Current git branch · click to start a new chat from here",
     "lineCharCount": "{{lines}} lines · {{chars}} chars",
     "linesFolded": "{{count}} lines folded",
