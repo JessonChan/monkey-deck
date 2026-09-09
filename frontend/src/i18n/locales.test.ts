@@ -67,3 +67,12 @@ test("已删的 addIcon* key 不复活(regression for Task #23726)", () => {
     expect(k in harnessEn).toBe(false);
   }
 });
+test("deleted composer history chip/badge keys stay gone (regression for #198)", () => {
+  type ComposerLocale = { composer?: Record<string, unknown> };
+  const composerZh = (zh as ComposerLocale).composer ?? {};
+  const composerEn = (en as ComposerLocale).composer ?? {};
+  for (const k of ["historyHint", "historyHintTip", "historyBadge", "historyBadgeTip"]) {
+    expect(k in composerZh).toBe(false);
+    expect(k in composerEn).toBe(false);
+  }
+});
