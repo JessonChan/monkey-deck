@@ -2309,14 +2309,17 @@ func (s *ChatService) forkLineagePage(fork *store.Session, beforeSeq int64, limi
 	// would re-fetch the newest own page and loop the cursor back up).
 	var own []store.Message
 	if beforeSeq >= 0 {
-		ownBefore := beforeSeq
+		// The store adds its own +1 probe row on top of `limit` (see
+		// ListMessagesBefore), so asking for `limit` yields at most limit+1
+		// rows — exactly the page budget limit+pre. Passing limit+pre here
+		// asked for limit+pre+1 rows; the then-reachable truncate below cut
+		// the NEWEST row off the ascending slice, so every fresh DB load of a
+		// fork with ≥ limit+2 own rows hid the turn's final agent reply
+		// (#208 reopen, production forensic 2026-09-09).
 		var err error
-		own, err = s.st.ListMessagesBefore(s.ctx, fork.ID, ownBefore, limit+pre)
+		own, err = s.st.ListMessagesBefore(s.ctx, fork.ID, beforeSeq, limit)
 		if err != nil {
 			return nil, err
-		}
-		if len(own) > limit+pre {
-			own = own[:limit+pre]
 		}
 	}
 	// Base rows: needed when the own page runs dry (or the cursor has already
