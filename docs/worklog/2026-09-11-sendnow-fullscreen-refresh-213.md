@@ -1,7 +1,7 @@
 # #213 Repeat 点 Send Now 整屏刷新感:Profiler 取证 + 渲染收敛
 
 日期:2026-09-11
-状态:进行中(取证完成,修复实施中)
+状态:完成(修复 + fe-reviewer 复核 APPROVE,2026-09-11)
 任务:Task #29261(issue #213,流程 coder→fe-reviewer→APPROVE)
 
 ## 起因
@@ -90,3 +90,15 @@ click → ScheduleQueueItem(now)
 ## 下一步
 
 - 流程走 fe-reviewer,APPROVE 后本卡 completed-ready。
+
+## fe-reviewer 复核(Task #29263,APPROVE)
+
+逐项独立复验,不沿 coder 叙述:
+
+1. **取证断言与代码事实对账**:`scrollToBottom` 全仓仅 2 处调用(App.tsx `sendMessage` 内两分支),Send Now 处理器(`ScheduleQueueItem` 调用点)确无滚动调用;`restoreScroll` 确按 `rows.findIndex(r => r.id === iid)` 解析锚点(virtualList.ts),id 碰撞→错行→拽滚动的机制成立,streamMerge 改 messageId 主键对症。
+2. **forkBusy 收敛(反模式核查)**:`forkBusy` 在 ChatRow 内唯一消费点是 `fork={canFork ? { busy: forkBusy, onFork } : undefined}`——非 fork 行本来就是 undefined,收敛后 UI 行为零差异;`canFork` 表达式原样保留(#172 语义不变)。AgentMarkdown memo 四 prop 全部稳定或内容驱动(`onOpenFilePreview` 走 ChatView 既有 ref-stabilize `useCallback([])`,sessionId 稳定,text 字符串浅比较,streaming 每段至多翻一次),memo 真实生效非空壳。
+3. **App 收口**:值不变保身份 + 全不变返回 `prev`(整树 bailout);终态 tool 不动的语义与改前一致。
+4. **测试锚定值**:streamMerge 新测试断言精确 id(`u-uA`/`u-uB`)与替换后文本;爆发契约测试断言 scrollTop 逐阶段不变 + FAB 常驻,非字段存在性断言。
+5. **门禁独立复跑**(本 worktree 重装依赖 + `wails3 task bindings` 后):`bunx tsc --noEmit` 0 错;streamMerge 18/18;全量 603 pass / 4 fail,4 条失败逐条确认全在 `App.worktree-guard.mount.test.tsx`(#199 删除链),且在改动前基线(2ae1f7a)临时 worktree 上复跑同样 0 pass / 4 fail——**既有失败实锤,与本卡无关**;ChatView.virtual 12/12(基线 11 + 新增 1)。探针残留 grep 为零。
+
+非阻塞备忘:①无 messageId harness 的回退 id `u-${Date.now()}` 同毫秒碰撞仍在(与 agent 分支回退同形的既有语义,主路径已走协议 id);②App 收口的值恒等分支无直接单测,行为证据依赖爆发契约测试 + Profiler 前后对比,逻辑仅 8 行,可接受。
