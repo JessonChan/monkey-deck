@@ -216,3 +216,23 @@ test("#79 rotateOnce + messageId:主键归并路径零回归", () => {
   expect(bubbles.length).toBe(1);
   expect(bubbles[0].text).toBe("ABC");
 });
+
+test("#213 user id 基于 messageId(虚拟列表锚点的稳定主键,免同毫秒碰撞)", () => {
+  // The virtual list's anchor restore resolves a row by id (findIndex); two
+  // user bubbles created in the same millisecond used to share `u-${Date.now()}`,
+  // so restoring the scroll anchor could land on the wrong row and yank the
+  // viewport. The id must derive from the protocol messageId instead.
+  let items: ChatItem[] = [];
+  items = applyEventToItems(items, ev({ kind: "user_message_chunk", text: "第一条", messageId: "uA" }));
+  items = applyEventToItems(items, ev({ kind: "agent_message_chunk", text: "回复", messageId: "mA", seq: 1 }));
+  items = applyEventToItems(items, ev({ kind: "user_message_chunk", text: "第二条", messageId: "uB" }));
+  const users = items.filter((i) => i.type === "user") as Extract<ChatItem, { type: "user" }>[];
+  expect(users.length).toBe(2);
+  expect(users[0].id).toBe("u-uA");
+  expect(users[1].id).toBe("u-uB");
+  // Same-shape guarantee as the agent branch: stable across re-merge chunks.
+  items = applyEventToItems(items, ev({ kind: "user_message_chunk", text: "第二条补发", messageId: "uB" }));
+  const users2 = items.filter((i) => i.type === "user") as Extract<ChatItem, { type: "user" }>[];
+  expect(users2[1].id).toBe("u-uB");
+  expect(users2[1].text).toBe("第二条补发");
+});
