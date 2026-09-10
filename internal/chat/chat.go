@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1916,8 +1917,14 @@ func (s *ChatService) startLive(se *store.Session, proj *store.Project, acpSessi
 // snapshot (persistConfigCache guards empty slices only, not subset overwrites),
 // so thought/mode selections were lost on every session reopen. Contract:
 //   - D2: replay set = persisted snapshot keys (GetSessionCachedConfigOptions)
-//     missing from the resume response by configId. Resume-reported keys are
-//     authoritative and never replayed; "model" is never replayed.
+//     missing from the resume response by configId. Reported non-model keys are
+//     authoritative and never replayed. The model key is value-difference
+//     driven (#183r): codebuddy resume self-reports its default model instead
+//     of the session's pick, so a reported key-hit alone must not suppress
+//     replay — a differing cached value still present in the reported options
+//     list is replayed; equal values skip naturally (opencode/omp self-recover);
+//     a cached value absent from the reported list is kept off (warn log)
+//     rather than forcing an illegal set.
 //   - D3: each missing key is restored via SetConfigOption with the snapshot's
 //     current value; snapshot entries without one are skipped.
 //   - D4: per-key best-effort — a refused set logs a warning and the loop moves
@@ -1935,14 +1942,28 @@ func (s *ChatService) replayResumeConfigGaps(conn chatConn, sessionID string) {
 	if len(cached) == 0 {
 		return
 	}
-	reported := make(map[string]bool, len(cached))
+	reported := make(map[string]acp.ConfigOption, len(cached))
 	for _, o := range conn.FlatConfigOptions() {
-		reported[o.ID] = true
+		reported[o.ID] = o
 	}
 	replayed := 0
 	for _, o := range cached {
-		if o.ID == "model" || reported[o.ID] || o.CurrentValue == "" {
-			continue // D2/D3: model never replayed; reported keys win; no value, nothing to restore
+		if o.CurrentValue == "" {
+			continue // D3: no snapshot value, nothing to restore
+		}
+		if rep, ok := reported[o.ID]; ok {
+			if o.ID != "model" {
+				continue // D3: reported keys win — the harness owns its session state
+			}
+			// D2 (#183r): value-difference-driven model replay — see contract above.
+			if rep.CurrentValue == o.CurrentValue {
+				continue // harness already resumed on the cached model (opencode/omp)
+			}
+			if !slices.ContainsFunc(rep.Options, func(e acp.ConfigOptionEntry) bool { return e.Value == o.CurrentValue }) {
+				slog.Warn("resume config replay: cached model not in reported options, keeping reported value",
+					"session", sessionID, "cachedModel", o.CurrentValue, "reportedModel", rep.CurrentValue)
+				continue
+			}
 		}
 		if err := conn.SetConfigOption(s.ctx, o.ID, o.CurrentValue); err != nil {
 			slog.Warn("resume config replay: set_config_option", "session", sessionID, "configId", o.ID, "value", o.CurrentValue, "err", err)
