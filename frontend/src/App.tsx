@@ -775,14 +775,24 @@ export default function App() {
         setItemsBySession((prev) => {
           const cur = prev[s.sessionId];
           if (!cur) return prev;
-          return {
-            ...prev,
-            [s.sessionId]: cur.map((it) => {
-              if (it.type === "agent" || it.type === "thought") return { ...it, streaming: false };
-              if (it.type === "tool" && (it.status === "in_progress" || it.status === "pending")) return { ...it, status: toolFinal };
-              return it;
-            }),
-          };
+          // #213: only replace items whose value actually changes. Rebuilding
+          // every agent/thought object here used to hand ChatRow a fresh
+          // identity per turn end, re-rendering (and re-parsing markdown for)
+          // the whole visible window on each idle/error/closed push.
+          let changed = false;
+          const next = cur.map((it) => {
+            if (it.type === "agent" || it.type === "thought") {
+              if (!it.streaming) return it;
+              changed = true;
+              return { ...it, streaming: false };
+            }
+            if (it.type === "tool" && (it.status === "in_progress" || it.status === "pending")) {
+              changed = true;
+              return { ...it, status: toolFinal };
+            }
+            return it;
+          });
+          return changed ? { ...prev, [s.sessionId]: next } : prev;
         });
         // turn 结束:把实时 plan 转为持久化 plan item(append 到 items 末尾,即 turn 末尾)。
         // 后端在 emit idle 前已把同样的快照落库为 role='plan' message,故重开会话时该 plan 会
