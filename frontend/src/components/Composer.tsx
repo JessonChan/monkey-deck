@@ -371,6 +371,12 @@ export default forwardRef<ComposerHandle, Props>(function Composer({ value, onCh
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionIdx, setMentionIdx] = useState(0);
   const [mentionItems, setMentionItems] = useState<FileNode[]>([]);
+  // Keyboard-highlight scroll (#214): ref the active row of each completion list so
+  // arrowing keeps it in view — same pattern as FilePanel's search results
+  // (activeRowRef + scrollIntoView({ block: "nearest" })). The mention ref also
+  // covers the "go up one level" row, which is active when mentionIdx === -1.
+  const slashActiveRef = useRef<HTMLButtonElement | null>(null);
+  const mentionActiveRef = useRef<HTMLButtonElement | null>(null);
 
   const slashQuery = useMemo(() => {
     if (!value.startsWith("/")) return null;
@@ -511,6 +517,16 @@ useEffect(() => {
     }, 150);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [mentionInfo, sessionId, slashOpen]);
+  // Keep the keyboard-active row in view while arrowing through the completion
+  // lists (#214) — same as FilePanel's search list: scrollIntoView on active
+  // index / list change. Mention deps include mentionScope because the go-up
+  // row's presence is gated on it (drill state), shifting the list DOM.
+  useEffect(() => {
+    slashActiveRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [slashIdx, filtered]);
+  useEffect(() => {
+    mentionActiveRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [mentionIdx, mentionItems, mentionScope]);
 
   const baseName = (p: string) => p.split(/[/\\]/).pop() || p;
   const empty = !value.trim() && attachments.length === 0 && mentions.length === 0 && images.length === 0 && audios.length === 0 && pasteSnippets.length === 0;
@@ -892,7 +908,7 @@ useEffect(() => {
       {slashOpen && (
         <div className="slash-popover" data-testid="slash-popover">
           {filtered.map((c, i) => (
-            <button key={c.name} className={`slash-item ${i === slashIdx ? "active" : ""}`} onMouseEnter={() => setSlashIdx(i)} onClick={() => pickSlash(c)} title={c.description}>
+            <button key={c.name} ref={i === slashIdx ? (el: HTMLButtonElement | null) => { slashActiveRef.current = el; } : undefined} className={`slash-item ${i === slashIdx ? "active" : ""}`} onMouseEnter={() => setSlashIdx(i)} onClick={() => pickSlash(c)} title={c.description}>
               <span className="slash-cmd">/{c.name}</span>
               <span className="slash-desc">{c.description}</span>
               {c.inputHint && <span className="slash-hint">{c.inputHint}</span>}
@@ -905,6 +921,7 @@ useEffect(() => {
           {/* 返回上一级:scope 非空(drill 态)时显示,退到父目录。data-testid 供测试点击。 */}
           {mentionScope !== "" && (
             <button
+              ref={mentionIdx < 0 ? (el: HTMLButtonElement | null) => { mentionActiveRef.current = el; } : undefined}
               className={`slash-item mention-up ${mentionIdx < 0 ? "active" : ""}`}
               data-testid="mention-go-up"
               onMouseEnter={() => setMentionIdx(-1)}
@@ -922,6 +939,7 @@ useEffect(() => {
             return (
               <button
                 key={n.path}
+                ref={i === mentionIdx ? (el: HTMLButtonElement | null) => { mentionActiveRef.current = el; } : undefined}
                 className={`slash-item mention-item ${n.isDir ? "is-dir" : "is-file"} ${i === mentionIdx ? "active" : ""}`}
                 onMouseEnter={() => setMentionIdx(i)}
                 onClick={() => activateMention(n)}
