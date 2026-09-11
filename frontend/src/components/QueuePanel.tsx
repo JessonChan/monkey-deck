@@ -386,8 +386,17 @@ export default function QueuePanel({ queue, onInterrupt, onRevoke, onEdit, onSch
           className={`queue-item${overId === item.id ? " drag-over" : ""}`}
           data-testid="queue-item"
           data-id={item.id}
+          // Read-state hooks for the mobile three-tier rail colors (#148 phase 2):
+          // plain gray rail / cyan when a future schedule is armed / violet when a
+          // repeat loop is armed (repeat wins the rail when both are set). Booleans
+          // instead of a merged state so the two signals stay independently styled;
+          // desktop CSS ignores the attributes entirely.
+          data-scheduled={pending ? "true" : "false"}
+          data-repeat={(item.repeatEveryMs ?? 0) > 0 ? "true" : "false"}
           key={item.id}
           onDragOver={(e) => {
+            // No active internal drag (grip dragstart never fired) → external
+            // drag (Finder file / text selection): no highlight, no drop cursor.
             if (!dragId) return;
             e.preventDefault();
             if (overId !== item.id) setOverId(item.id);

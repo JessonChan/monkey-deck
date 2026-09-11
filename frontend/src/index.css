@@ -3481,6 +3481,10 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
      squeezed info): slash & history (typed "/" still opens the menu),
      model/mode/effort chips, usage meter, branch, MCP, ref-count, enqueue
      (send already queues while prompting).
+     #148 phase 2: the hidden cfg-triggers gained a replacement — one compact
+     chip (current model short name) opening a bottom sheet with all three
+     groups (JS-mount-gated by Composer's mdMobile). The desktop triggers stay
+     display:none here: the sheet is the single config entry on phones.
      Grid puts the input and the action column (image / stop / send) on ONE
      row — the desktop stacks them, which reads tall and empty on a phone. */
   .compose-card { display: grid; grid-template-columns: 1fr auto; align-items: end; column-gap: 8px; }
@@ -3493,6 +3497,64 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
   .compose-tools .tool-btn:not([data-testid="image-btn"]) { display: none; }
   .compose-branch, .compose-mcp, .composer-usage, .composer-count { display: none; }
   .compose-right .cfg-trigger, .compose-right .send-btn.enqueue { display: none; }
+
+  /* Config chip + bottom sheet (#148 phase 2). The chip is mount-gated by
+     Composer's mdMobile matchMedia flag — it never exists at >768px, so these
+     styles only dress the ≤768px presentation. 40px tap family (#126B parity);
+     form font sizes inherit the 16px iOS-zoom guard above; safe-area bottom
+     inset follows the M2 drawer convention. Sheet z-index = modal-overlay
+     level (65): above both drawers (60) it may be opened from. */
+  .cfg-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-family: var(--mono); font-size: 12px; color: var(--text-2);
+    background: var(--elev); border: 1px solid var(--sep-strong); border-radius: 15px;
+    min-height: 40px; padding: 0 12px; max-width: 132px;
+    outline: none; cursor: pointer;
+  }
+  .cfg-chip:disabled { opacity: 0.5; }
+  .cfg-chip-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .cfg-sheet-layer { position: fixed; inset: 0; z-index: 65; }
+  .cfg-sheet-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); }
+  .cfg-sheet {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    display: flex; flex-direction: column;
+    max-height: 70dvh;
+    background: var(--elev-2); border: 1px solid var(--sep-strong); border-bottom: none;
+    border-radius: 16px 16px 0 0; box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
+    padding: 0 16px calc(env(safe-area-inset-bottom) + 14px);
+    animation: cfg-sheet-in 0.18s ease-out;
+  }
+  @keyframes cfg-sheet-in { from { transform: translateY(40%); opacity: 0.5; } to { transform: none; opacity: 1; } }
+  .cfg-sheet-grab { width: 36px; height: 4px; border-radius: 2px; background: var(--sep-strong); margin: 8px auto 2px; flex-shrink: 0; }
+  .cfg-sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 0 2px; flex-shrink: 0; }
+  .cfg-sheet-title { font-size: 14px; font-weight: 600; color: var(--text); }
+  .cfg-sheet-close {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px; margin-right: -8px;
+    border: none; background: none; color: var(--text-3); cursor: pointer; border-radius: var(--r-sm);
+  }
+  .cfg-sheet-close:active { background: var(--hover); color: var(--text); }
+  .cfg-sheet-body { overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding-top: 4px; }
+  .cfg-sheet-section { display: flex; flex-direction: column; gap: 6px; }
+  .cfg-sheet-label { font-size: 12px; font-weight: 600; color: var(--text-3); }
+  .cfg-sheet-command { display: flex; flex-direction: column; }
+  /* Sticky search row: one scroll context (the sheet body), search stays put. */
+  .cfg-sheet-search {
+    position: sticky; top: 0; z-index: 1;
+    color: var(--text); background: var(--elev);
+    border: 1px solid var(--sep-strong); border-radius: var(--r-sm);
+    padding: 8px 10px; outline: none;
+  }
+  .cfg-sheet-search:focus { border-color: var(--accent-2); }
+  .cfg-sheet-list { display: flex; flex-direction: column; }
+  .cfg-sheet-select {
+    color: var(--text); background: var(--elev);
+    border: 1px solid var(--sep-strong); border-radius: var(--r-sm);
+    min-height: 44px; padding: 0 10px; outline: none;
+  }
+  /* Desktop list rows are 12.5px hover-density; touch rows grow to the 40px family. */
+  .cfg-sheet .cfg-option { font-size: 14px; padding: 10px 8px; }
+  .cfg-sheet .cfg-option-value { font-size: 11px; }
 
   /* QueuePanel (issue #126B): the single desktop row (idx + text + badge +
      4 buttons) is unreadable at ~370px. Items become TWO-ROW — row 1 keeps
@@ -3530,6 +3592,40 @@ pre.md-math-src { display: block; padding: 6px 9px; white-space: pre-wrap; word-
      2×6px padding = 22px there), same zero-jump contract as desktop (#182);
      line-height re-centers the glyph inside the taller box (clamp rule). */
   .queue-schedule-pending.placeholder { min-height: 22px; line-height: 22px; }
+
+  /* ─── QueuePanel mobile visual pass (#148 phase 2, screenshot-driven) ───
+     Before: every card wore the desktop 3px amber rail, and scheduled vs
+     repeat vs plain badges were all the same amber — a wall of amber with no
+     state hierarchy, prompts truncated to ~1 line while nowrap badges ate the
+     width, and uneven vertical rhythm (3 stacked rows in a repeat card).
+     After, ≤768px only (desktop keeps the amber rail and one-line text):
+     1. Three-tier rail + badge colors keyed off the row's data attributes:
+        gray = plain queued, cyan (--accent-2, the schedule-action family) =
+        future schedule armed, violet (empty-logo's #bf5af2 family) = repeat
+        loop armed. A row with both armed shows the violet rail (repeat is the
+        "louder" state; both badges stay visible with their own colors).
+     2. Text first: prompts wrap to a 3-line clamp instead of one nowrap line —
+        the queued prompt is the content the user is reviewing.
+     3. Rhythm: card padding 10×12 (was 7×10), gaps 10/8 to match the 40px tap
+        family; read badges bump 10→11px. */
+  .queue-list { gap: 8px; }
+  .queue-item { padding: 10px 12px; gap: 10px; border-left-color: var(--sep-strong); }
+  .queue-item[data-scheduled="true"] { border-left-color: var(--accent-2); }
+  .queue-item[data-repeat="true"] { border-left-color: rgba(191, 90, 242, 0.8); }
+  .queue-item-text {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    line-height: 1.45;
+  }
+  /* Width floor: when a nowrap badge would squeeze the prompt under 140px, the
+     badge wraps to its own line instead (flex-wrap above) — text stays the
+     widest thing on the card; short prompts with narrow badges stay inline. */
+  .queue-item-text { min-width: 140px; }
+  .queue-scheduled.future { color: var(--accent-2); }
+  .queue-repeat-badge { color: rgb(191, 90, 242); }
+  .queue-scheduled.future, .queue-repeat-badge { font-size: 11px; }
 
   /* Header: session title + status only. Project name, terminal / model /
      branch / merge chips are desktop density on a phone. */

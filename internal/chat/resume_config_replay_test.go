@@ -2,9 +2,11 @@ package chat
 
 // resume_config_replay_test.go — #183 resume 配置重放的两层测试(§5.1:单测 mock 优先)。
 //
-// Layer 1 — unit (fakeChat,不启真 harness):replayResumeConfigGaps 的契约——
-// D2 键集计算(缺失键才重放 / 已报键以响应为准 / model 永不重放)、D3 调用参数
-// (=快照当前值)、D4 单键失败继续下一键、防拉锯(全量响应零重放)。
+// Layer 1 — unit (fakeChat, no real harness): the replayResumeConfigGaps
+// contract — D2 replay-set computation (missing keys only / reported non-model
+// keys win / model is value-difference driven per #183r), D3 call args
+// (= snapshot current value), D4 per-key best-effort, anti tug-of-war
+// (full resume → zero replay).
 //
 // Layer 2 — e2e(in-binary fake ACP agent,同 fork_fakeagent_test.go 的
 // helper-process 模式):真实 startLive 的 resume 分支——重放发生在 emit +
@@ -47,7 +49,9 @@ func resumeSnapshot() []acp.ConfigOption {
 }
 
 // modelOnlyResume mirrors the real-omp session/resume response shape: the model
-// option only — thought/mode dropped (the #183 root cause).
+// option only — thought/mode dropped (the #183 root cause). The model's
+// currentValue equals the cache (omp self-recovers), so under the #183r
+// value-difference rule it is naturally skipped, not suppressed by key-hit.
 func modelOnlyResume() []acp.ConfigOption {
 	return []acp.ConfigOption{resumeSnapshot()[0]}
 }
@@ -79,7 +83,8 @@ func TestResumeConfigReplayRestoresMissingKeys(t *testing.T) {
 
 	svc.replayResumeConfigGaps(fc, sid)
 
-	// D2/D3:重放键恰为缺失键,调用参数 = 快照当前值,顺序 = 快照序;model 已报,不重放。
+	// D2/D3: replay set is exactly the missing keys, args = snapshot current
+	// values, order = snapshot order; model reported with its cached value → skipped.
 	want := []string{"thought=high", "mode=code"}
 	if got := recordedSets(fc); !reflect.DeepEqual(got, want) {
 		t.Fatalf("replay calls = %v, want %v", got, want)
@@ -143,9 +148,10 @@ func TestResumeConfigReplayFullResumeNoReplay(t *testing.T) {
 	}
 }
 
-// TestResumeConfigReplayReportedKeyWinsOverSnapshot:D2 的防拉锯另一面——resume
-// 已报键即使值与快照不同也以响应为准,不回设快照旧值(harness 才是自己 session
-// 配置状态的权威)。
+// TestResumeConfigReplayReportedKeyWinsOverSnapshot: the other anti tug-of-war
+// side of D3 — a reported NON-model key wins over the snapshot even when the
+// values differ (the harness owns its own session state; #183r made model the
+// sole value-difference-driven exception).
 func TestResumeConfigReplayReportedKeyWinsOverSnapshot(t *testing.T) {
 	svc, _, sid := newLazyTestService(t)
 	snap := resumeSnapshot()
@@ -158,6 +164,62 @@ func TestResumeConfigReplayReportedKeyWinsOverSnapshot(t *testing.T) {
 
 	if sets := recordedSets(fc); len(sets) != 0 {
 		t.Fatalf("resume-reported keys are authoritative and must never be re-set, got %v", sets)
+	}
+}
+
+// TestResumeConfigReplayModelValueDiffReplays (#183r D2, unit): codebuddy
+// resume shape (wire-verified: set glm-5.2, fresh-process resume still reports
+// the hy3 default with the full options list) — the model option IS reported,
+// but its currentValue differs from the cache and the cached value is still in
+// the reported options list → replay set_config_option("model") with the
+// cached value; missing thought/mode replay unchanged.
+func TestResumeConfigReplayModelValueDiffReplays(t *testing.T) {
+	svc, _, sid := newLazyTestService(t)
+	snap := resumeSnapshot()
+	snap[0].CurrentValue = "glm-5.2" // user picked a non-default model
+	snap[0].Options = append(snap[0].Options, acp.ConfigOptionEntry{Value: "glm-5.2", Name: "GLM 5.2"})
+	seedConfigCache(t, svc, sid, snap)
+	fc := newFakeChat()
+	reported := modelOnlyResume()
+	reported[0].CurrentValue = "fake-model" // harness self-reports its default
+	reported[0].Options = append(reported[0].Options, acp.ConfigOptionEntry{Value: "glm-5.2", Name: "GLM 5.2"})
+	fc.configOpts = reported
+
+	svc.replayResumeConfigGaps(fc, sid)
+
+	// Model first (snapshot order) with the cached value as the set arg.
+	want := []string{"model=glm-5.2", "thought=high", "mode=code"}
+	if got := recordedSets(fc); !reflect.DeepEqual(got, want) {
+		t.Fatalf("replay calls = %v, want %v (differing cached model must be replayed)", got, want)
+	}
+	// Post-replay state: the set value landed in FlatConfigOptions.
+	byID := map[string]string{}
+	for _, o := range fc.FlatConfigOptions() {
+		byID[o.ID] = o.CurrentValue
+	}
+	if byID["model"] != "glm-5.2" {
+		t.Fatalf("model state = %q, want glm-5.2 after replay", byID["model"])
+	}
+}
+
+// TestResumeConfigReplayModelValueNotInListKeepsReported (#183r D2, unit): the
+// cached model value is absent from the reported options list (delisted) →
+// silent skip (warn log only): no set call for model, resume unaffected, and
+// missing thought/mode replay unchanged (D5 semantics: never force an illegal set).
+func TestResumeConfigReplayModelValueNotInListKeepsReported(t *testing.T) {
+	svc, _, sid := newLazyTestService(t)
+	seedConfigCache(t, svc, sid, resumeSnapshot()) // cached model = fake-model
+	fc := newFakeChat()
+	reported := modelOnlyResume()
+	reported[0].CurrentValue = "fake-model-v2" // harness default, menu no longer lists fake-model
+	reported[0].Options = []acp.ConfigOptionEntry{{Value: "fake-model-v2", Name: "Fake Model v2"}}
+	fc.configOpts = reported
+
+	svc.replayResumeConfigGaps(fc, sid)
+
+	want := []string{"thought=high", "mode=code"}
+	if got := recordedSets(fc); !reflect.DeepEqual(got, want) {
+		t.Fatalf("replay calls = %v, want %v (delisted cached model must not be set)", got, want)
 	}
 }
 
@@ -175,12 +237,12 @@ func TestResumeConfigReplaySkipsNothingToRestore(t *testing.T) {
 	})
 	t.Run("model-only snapshot", func(t *testing.T) {
 		svc, _, sid := newLazyTestService(t)
-		seedConfigCache(t, svc, sid, modelOnlyResume()) // 只有 model,而 model 永不重放
+		seedConfigCache(t, svc, sid, modelOnlyResume()) // model reported equal to cache → skipped (#183r value-difference rule)
 		fc := newFakeChat()
 		fc.configOpts = modelOnlyResume()
 		svc.replayResumeConfigGaps(fc, sid)
 		if sets := recordedSets(fc); len(sets) != 0 {
-			t.Fatalf("model must never be replayed, got %v", sets)
+			t.Fatalf("model reported equal to cache must not be replayed, got %v", sets)
 		}
 	})
 	t.Run("empty current value skipped", func(t *testing.T) {

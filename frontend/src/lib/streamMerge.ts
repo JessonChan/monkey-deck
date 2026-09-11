@@ -46,7 +46,11 @@ export function applyEventToItems(cur: ChatItem[], ev: SessionEvent): ChatItem[]
       // 回退:已有 user(无 messageId 时去重)。
       if (!key && last && last.type === "user") return next;
       finalizeLast();
-      next.push({ type: "user", id: `u-${Date.now()}`, text: ev.text || "", ts: Date.now(), messageId: ev.messageId });
+      // #213: id derives from the protocol messageId (same shape as the agent
+      // branch) instead of a wall-clock stamp — `u-${Date.now()}` collided when
+      // two user messages landed in the same millisecond, and restoreScroll's
+      // findIndex then matched the wrong row, yanking the scroll position.
+      next.push({ type: "user", id: `u-${ev.messageId || Date.now()}`, text: ev.text || "", ts: Date.now(), messageId: ev.messageId });
       return next;
     }
     case "agent_message_chunk":

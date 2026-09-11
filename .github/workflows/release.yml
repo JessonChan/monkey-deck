@@ -40,7 +40,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # 需完整历史让 git describe 解析版本
 
@@ -82,7 +82,7 @@ jobs:
     timeout-minutes: 45
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - uses: actions/setup-go@v5
@@ -95,6 +95,11 @@ jobs:
         run: |
           go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha2.106
           choco install nsis -y
+          # choco only updates the machine-level (registry) PATH; the job's
+          # live process env was captured at runner start, so makensis stays
+          # invisible to later steps. Export the install dir via GITHUB_PATH
+          # (default shell here is pwsh, so use Add-Content).
+          Add-Content $env:GITHUB_PATH "C:\Program Files (x86)\NSIS"
 
       - name: Generate bindings
         run: wails3 generate bindings
@@ -124,7 +129,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - uses: actions/setup-go@v5
@@ -177,7 +182,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 

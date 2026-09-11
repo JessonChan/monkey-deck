@@ -865,8 +865,13 @@ export default forwardRef<ChatViewHandle, Props>(function ChatView(props: Props,
             } else {
               // duration 挂最后一条 agent 回复(非 user,需求钉死 #68):仅 agent 行查 map。
               const durationMs = row.kind === "agent" ? agentTurnDuration.get(row.first) : undefined;
+              // #213: forkBusy is only meaningful on the fork-capable row. Scoping the
+              // status-derived boolean to that single row keeps every other ChatRow's
+              // memo intact across status flips (idle→prompting→idle re-rendered the
+              // whole visible window before); canFork rows flip at most once per turn.
+              const rowCanFork = (props.canFork ?? false) && row.kind === "agent" && row.first === lastAgentIdx;
               content = (
-                <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} durationMs={durationMs} canFork={(props.canFork ?? false) && row.kind === "agent" && row.first === lastAgentIdx} forkBusy={props.status === "prompting"} onFork={onForkSessionStable} />
+                <ChatRow item={items[row.first]} sessionId={props.sessionId} onOpenFilePreview={openFilePreview} durationMs={durationMs} canFork={rowCanFork} forkBusy={rowCanFork ? props.status === "prompting" : false} onFork={onForkSessionStable} />
               );
             }
             return (
@@ -1988,7 +1993,11 @@ function AnchorRenderer(props: ComponentPropsWithoutRef<"a"> & MdComponentProps)
 // math (#135 wiring 1/3): remarkMath parses $...$ / $$...$$ into
 // code.language-math hast nodes; routing to KaTeX happens in CodeRenderer /
 // PreRenderer below.
-function AgentMarkdown({ sessionId, text, onOpenFilePreview, streaming = false }: { sessionId: string; text: string; onOpenFilePreview: (path: string, line?: number) => void; streaming?: boolean }) {
+// memo (#213): ChatRow re-renders that don't change the text (status flips,
+// duration attachments, streaming-flag finalization on sibling rows) used to
+// re-run the full remark parse per visible message. Shallow text/session/
+// streaming equality skips ReactMarkdown entirely for unchanged content.
+const AgentMarkdown = memo(function AgentMarkdown({ sessionId, text, onOpenFilePreview, streaming = false }: { sessionId: string; text: string; onOpenFilePreview: (path: string, line?: number) => void; streaming?: boolean }) {
   const components = useMemo(
     () => ({
       code: CodeRenderer,
@@ -2031,7 +2040,7 @@ function AgentMarkdown({ sessionId, text, onOpenFilePreview, streaming = false }
       </ReactMarkdown>
     </TableSessionContext.Provider>
   );
-}
+});
 
 // Source-span anchor factory (#177): renders `tag` unchanged plus the
 // data-md-s/e offsets from the hast node, so DOM selections inside the element

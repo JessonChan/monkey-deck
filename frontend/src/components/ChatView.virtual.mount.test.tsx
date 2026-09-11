@@ -639,6 +639,58 @@ describe("ChatView 虚拟化(W 不变量:DOM 平台期)", () => {
     rowHeights.clear();
     root.unmount();
   });
+
+  // #213: repeat-item "Send Now" replays a burst of App commits (2× chat:status
+  // flips + queue snapshots + appended drained messages). A reader scrolled up
+  // into history must not be yanked: the anchor (A invariant) holds scrollTop
+  // across every stage, and the FAB stays up the whole time.
+  test("#213 Send Now 事件爆发(状态翻转+追加)不打断上翻阅读位置", async () => {
+    const { host, root } = mount(makeItems(30));
+    await flush();
+    await settle();
+    const body = host.querySelector('[data-testid="chat-body"]') as HTMLElement;
+    // Scroll up to the middle, then give the scroll rAF a turn to flip stick
+    // and record the anchor (rowsRef/layoutRef mirrors).
+    body.scrollTop = 700;
+    await flush();
+    expect(body.querySelector('[data-testid="scroll-bottom-btn"]')).not.toBeNull();
+    const before = body.scrollTop;
+
+    // Burst stage 1-2: queue snapshots arrive (queue prop identity changes).
+    const queue = [{ id: "qr", text: "tick", scheduledAt: Date.now() + 60_000, repeatEveryMs: 60_000, sentCount: 1 }];
+    root.render(<ChatView {...({ ...baseProps(makeItems(30)), queue } as never)} />);
+    await flush();
+    expect(body.scrollTop).toBe(before);
+    root.render(<ChatView {...({ ...baseProps(makeItems(30)), queue: [] } as never)} />);
+    await flush();
+    expect(body.scrollTop).toBe(before);
+
+    // Burst stage 3: turn starts (status flip) — forkBusy/canFork inputs churn.
+    root.render(<ChatView {...({ ...baseProps(makeItems(30)), status: "prompting", canFork: true } as never)} />);
+    await flush();
+    expect(body.scrollTop).toBe(before);
+
+    // Burst stage 4-5: the drained user message lands, then the reply streams.
+    const items = makeItems(30);
+    items.push({ type: "user", id: "u-drain", text: "tick", ts: 9000 });
+    root.render(<ChatView {...({ ...baseProps(items), status: "prompting", canFork: true } as never)} />);
+    await flush();
+    expect(body.scrollTop).toBe(before);
+    items.push({ type: "agent", id: "a-drain", text: "reply", streaming: true, ts: 9001 });
+    root.render(<ChatView {...({ ...baseProps(items), status: "prompting", canFork: true } as never)} />);
+    await flush();
+    expect(body.scrollTop).toBe(before);
+
+    // Burst stage 6: turn ends — streaming flags finalize, status back to idle.
+    const done = items.map((it) => (it.type === "agent" ? { ...it, streaming: false } : it));
+    root.render(<ChatView {...({ ...baseProps(done), status: "idle", canFork: true } as never)} />);
+    await flush();
+    expect(body.scrollTop).toBe(before);
+    // Still scrolled up: FAB must remain visible after the whole burst.
+    expect(body.querySelector('[data-testid="scroll-bottom-btn"]')).not.toBeNull();
+
+    root.unmount();
+  });
 });
 // Reproduction test for the mermaid remount-flicker bug: App.tsx passes an inline
 // `onOpenFile` arrow (new identity every render). If ChatView forwarded that

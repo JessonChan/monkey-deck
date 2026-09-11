@@ -1,9 +1,11 @@
 // Mount-test QueuePanel drag-and-drop reorder (Task #22135).
 //
-// Pins:
 //  1. dragstart on a grip sets dragId; dragover on another row highlights it (drag-over class).
 //  2. drop on a target row calls onReorder(activeId, overId).
 //  3. Dropping on the same item is a no-op (onReorder not called).
+//  4. dragover with NO prior dragstart (external drag: Finder file / text selection) is
+//     ignored — no drag-over highlight, no preventDefault (review #29245: the guard was
+//     silently dropped in 32a4d57 and had zero test coverage, which is how it regressed).
 //
 // happy-dom lacks a full DragEvent; our handlers only need native event dispatch + state,
 // so we synthesize "dragstart"/"dragover"/"drop" via window.Event. dataTransfer access is
@@ -126,5 +128,41 @@ describe("QueuePanel drag-reorder (Task #22135)", () => {
     await flush();
 
     expect(calls).toEqual([]);
+  });
+
+  test("dragover with no prior dragstart (external drag) is ignored: no highlight, no preventDefault", async () => {
+    const { host } = mount(
+      <QueuePanel
+        queue={[item("q1", "one"), item("q2", "two")]}
+        onInterrupt={() => {}}
+        onRevoke={() => {}}
+        onEdit={() => {}}
+        onSchedule={() => {}}
+        onReorder={() => {
+          throw new Error("external drag must never trigger reorder");
+        }}
+      />
+    );
+    await flush();
+
+    const rows = host.querySelectorAll('[data-testid="queue-item"]');
+    expect(rows.length).toBe(2);
+
+    // External drag hovering a row: no grip dragstart happened, so dragId is
+    // null — the handler must bail BEFORE preventDefault (drop cursor stays
+    // rejected) and never light the drag-over highlight.
+    const evt = new window.Event("dragover", { bubbles: true, cancelable: true });
+    let prevented = false;
+    const origPreventDefault = evt.preventDefault.bind(evt);
+    evt.preventDefault = () => {
+      prevented = true;
+      origPreventDefault();
+    };
+    rows[1].dispatchEvent(evt);
+    await flush();
+
+    expect(prevented).toBe(false);
+    expect(rows[1].className).not.toContain("drag-over");
+    expect(rows[0].className).not.toContain("drag-over");
   });
 });
